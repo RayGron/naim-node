@@ -1,9 +1,11 @@
 #include "comet/import_bundle.h"
+#include "comet/scheduling_policy.h"
 
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -36,9 +38,36 @@ std::string RequiredString(const json& value, const char* key, const std::string
   return value.at(key).get<std::string>();
 }
 
+std::string JoinStrings(const std::vector<std::string>& values, const char* delimiter) {
+  std::string result;
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    if (index > 0) {
+      result += delimiter;
+    }
+    result += values[index];
+  }
+  return result;
+}
+
+bool IsDirectFitAction(const std::string& action) {
+  return action == "upgrade-to-exclusive" ||
+         action == "move-equivalent" ||
+         action == "move-with-current-fraction";
+}
+
 int OptionalInt(const json& value, const char* key, int default_value) {
   if (!value.contains(key)) {
     return default_value;
+  }
+  if (!value.at(key).is_number_integer()) {
+    throw std::runtime_error(std::string("field '") + key + "' must be an integer");
+  }
+  return value.at(key).get<int>();
+}
+
+std::optional<int> OptionalIntOpt(const json& value, const char* key) {
+  if (!value.contains(key) || value.at(key).is_null()) {
+    return std::nullopt;
   }
   if (!value.at(key).is_number_integer()) {
     throw std::runtime_error(std::string("field '") + key + "' must be an integer");
@@ -74,6 +103,16 @@ std::optional<std::string> OptionalStringOpt(const json& value, const char* key)
     throw std::runtime_error(std::string("field '") + key + "' must be a string");
   }
   return value.at(key).get<std::string>();
+}
+
+bool OptionalBool(const json& value, const char* key, bool default_value) {
+  if (!value.contains(key)) {
+    return default_value;
+  }
+  if (!value.at(key).is_boolean()) {
+    throw std::runtime_error(std::string("field '") + key + "' must be a boolean");
+  }
+  return value.at(key).get<bool>();
 }
 
 DiskSpec MakeDisk(
@@ -121,14 +160,153 @@ void ValidateGpuExists(
   }
 }
 
+struct PlacementUsage {
+  double allocated_fraction = 0.0;
+  int allocated_memory_mb = 0;
+};
+
+struct AutoPlacementDecision {
+  std::string node_name;
+  std::string gpu_device;
+  int score = 0;
+  bool idle_target = false;
+  bool upgrade_to_exclusive = false;
+};
+
+constexpr int kMovableRelocationThreshold = 10;
+
+int ScoreAutoPlacementCandidate(
+    const NodeInventory& node,
+    const std::string& gpu_device,
+    const PlacementUsage& usage,
+    const InferenceRuntimeSettings& inference,
+    const std::optional<std::string>& preferred_node_name,
+    const std::optional<std::string>& preferred_gpu_device) {
+  int score = 0;
+  if (usage.allocated_fraction <= 1e-9) {
+    score += 60;
+  }
+  if (node.name == inference.primary_infer_node) {
+    score += 10;
+  }
+  if (preferred_node_name.has_value() && node.name == *preferred_node_name) {
+    score += 20;
+  }
+  if (preferred_gpu_device.has_value() && gpu_device == *preferred_gpu_device) {
+    score += 10;
+  }
+  score += static_cast<int>((1.0 - usage.allocated_fraction) * 20.0);
+  const auto memory_it = node.gpu_memory_mb.find(gpu_device);
+  if (memory_it != node.gpu_memory_mb.end()) {
+    score += std::max(0, memory_it->second - usage.allocated_memory_mb) / 1024;
+  }
+  return score;
+}
+
+std::optional<AutoPlacementDecision> SelectAutoPlacement(
+    const std::vector<NodeInventory>& nodes,
+    const std::map<std::pair<std::string, std::string>, PlacementUsage>& placement_usage,
+    const InstanceSpec& worker,
+    const InferenceRuntimeSettings& inference,
+    const std::optional<std::string>& requested_node_name,
+    const std::optional<std::string>& requested_gpu_device,
+    bool strict_node_constraint,
+    bool strict_gpu_constraint) {
+  std::optional<AutoPlacementDecision> best;
+  std::optional<AutoPlacementDecision> current_target;
+  const bool has_current_target =
+      requested_node_name.has_value() && requested_gpu_device.has_value();
+  const std::optional<std::string> scoring_preferred_node_name =
+      worker.placement_mode == PlacementMode::Movable ? std::nullopt : requested_node_name;
+  const std::optional<std::string> scoring_preferred_gpu_device =
+      worker.placement_mode == PlacementMode::Movable ? std::nullopt : requested_gpu_device;
+
+  for (const auto& node : nodes) {
+    if (strict_node_constraint && requested_node_name.has_value() && node.name != *requested_node_name) {
+      continue;
+    }
+
+    for (const auto& gpu_device : node.gpu_devices) {
+      if (strict_gpu_constraint && requested_gpu_device.has_value() &&
+          gpu_device != *requested_gpu_device) {
+        continue;
+      }
+      const auto usage_it = placement_usage.find({node.name, gpu_device});
+      const PlacementUsage usage =
+          usage_it == placement_usage.end() ? PlacementUsage{} : usage_it->second;
+      const double free_fraction = 1.0 - usage.allocated_fraction;
+      if (free_fraction + 1e-9 < worker.gpu_fraction) {
+        continue;
+      }
+
+      const auto memory_it = node.gpu_memory_mb.find(gpu_device);
+      if (worker.memory_cap_mb.has_value() && memory_it != node.gpu_memory_mb.end() &&
+          *worker.memory_cap_mb > memory_it->second - usage.allocated_memory_mb) {
+        continue;
+      }
+
+      AutoPlacementDecision candidate;
+      candidate.node_name = node.name;
+      candidate.gpu_device = gpu_device;
+      candidate.score =
+          ScoreAutoPlacementCandidate(
+              node,
+              gpu_device,
+              usage,
+              inference,
+              scoring_preferred_node_name,
+              scoring_preferred_gpu_device);
+      candidate.idle_target = usage.allocated_fraction <= 1e-9;
+      candidate.upgrade_to_exclusive =
+          candidate.idle_target &&
+          (worker.share_mode != GpuShareMode::Exclusive || worker.gpu_fraction < 1.0 - 1e-9);
+
+      if (has_current_target && node.name == *requested_node_name &&
+          gpu_device == *requested_gpu_device) {
+        current_target = candidate;
+      }
+
+      if (!best.has_value() || candidate.score > best->score ||
+          (candidate.score == best->score &&
+           (candidate.node_name < best->node_name ||
+            (candidate.node_name == best->node_name &&
+             candidate.gpu_device < best->gpu_device)))) {
+        best = candidate;
+      }
+    }
+  }
+
+  if (worker.placement_mode == PlacementMode::Movable &&
+      best.has_value() &&
+      current_target.has_value() &&
+      (best->node_name != current_target->node_name ||
+       best->gpu_device != current_target->gpu_device) &&
+      best->score < current_target->score + kMovableRelocationThreshold) {
+    return current_target;
+  }
+
+  return best;
+}
+
+void ReservePlacement(
+    std::map<std::pair<std::string, std::string>, PlacementUsage>* placement_usage,
+    const InstanceSpec& worker) {
+  if (!worker.gpu_device.has_value()) {
+    return;
+  }
+  auto& usage = (*placement_usage)[{worker.node_name, *worker.gpu_device}];
+  usage.allocated_fraction += worker.gpu_fraction;
+  usage.allocated_memory_mb += worker.memory_cap_mb.value_or(0);
+}
+
 std::vector<NodeInventory> ParseNodes(const json& plane_json) {
   std::vector<NodeInventory> nodes;
   std::set<std::string> node_names;
 
   if (!plane_json.contains("nodes")) {
     nodes = {
-        NodeInventory{"node-a", "linux", {"0", "1"}},
-        NodeInventory{"node-b", "linux", {"0"}},
+        NodeInventory{"node-a", "linux", {"0", "1"}, {{"0", 24576}, {"1", 24576}}},
+        NodeInventory{"node-b", "linux", {"0"}, {{"0", 24576}}},
     };
     return nodes;
   }
@@ -157,6 +335,27 @@ std::vector<NodeInventory> ParseNodes(const json& plane_json) {
       }
     }
 
+    if (node_json.contains("gpu_memory_mb")) {
+      if (!node_json.at("gpu_memory_mb").is_object()) {
+        throw std::runtime_error("plane node field 'gpu_memory_mb' must be an object");
+      }
+      for (auto it = node_json.at("gpu_memory_mb").begin(); it != node_json.at("gpu_memory_mb").end();
+           ++it) {
+        if (!it.value().is_number_integer()) {
+          throw std::runtime_error("plane node gpu_memory_mb values must be integers");
+        }
+        node.gpu_memory_mb[it.key()] = it.value().get<int>();
+      }
+    }
+
+    for (const auto& [gpu_device, _] : node.gpu_memory_mb) {
+      const auto gpu_it = std::find(node.gpu_devices.begin(), node.gpu_devices.end(), gpu_device);
+      if (gpu_it == node.gpu_devices.end()) {
+        throw std::runtime_error(
+            "plane node '" + node.name + "' defines gpu_memory_mb for unknown gpu '" + gpu_device + "'");
+      }
+    }
+
     nodes.push_back(std::move(node));
   }
 
@@ -175,6 +374,60 @@ std::optional<json> OptionalObject(const json& value, const char* key) {
     throw std::runtime_error(std::string("field '") + key + "' must be an object");
   }
   return json(value.at(key));
+}
+
+void ApplyMovableSchedulerDecisions(DesiredState* state) {
+  if (state == nullptr) {
+    return;
+  }
+
+  const SchedulingPolicyReport final_report = EvaluateSchedulingPolicy(*state);
+  for (auto& instance : state->instances) {
+    if (instance.role != InstanceRole::Worker ||
+        instance.placement_mode != PlacementMode::Movable) {
+      continue;
+    }
+    instance.labels.erase("comet.placement.decision");
+    instance.labels.erase("comet.placement.next_action");
+    instance.labels.erase("comet.placement.next_target");
+    instance.labels.erase("comet.placement.defer_reason");
+    instance.labels.erase("comet.preemption.victims");
+  }
+
+  for (const auto& recommendation : final_report.placement_recommendations) {
+    auto instance_it = std::find_if(
+        state->instances.begin(),
+        state->instances.end(),
+        [&](const InstanceSpec& instance) {
+          return instance.role == InstanceRole::Worker &&
+                 instance.name == recommendation.worker_name &&
+                 instance.placement_mode == PlacementMode::Movable;
+        });
+    if (instance_it == state->instances.end() || recommendation.candidates.empty()) {
+      continue;
+    }
+
+    const auto& candidate = recommendation.candidates.front();
+    instance_it->labels["comet.placement.decision"] =
+        candidate.preemption_required ? "deferred"
+                                      : (IsDirectFitAction(candidate.action) ? "proposed"
+                                                                             : "hold");
+    instance_it->labels["comet.placement.next_action"] = candidate.action;
+    instance_it->labels["comet.placement.next_target"] =
+        candidate.node_name + ":" + candidate.gpu_device;
+    instance_it->labels["comet.placement.score"] = std::to_string(candidate.score);
+    if (candidate.preemption_required) {
+      instance_it->labels["comet.placement.defer_reason"] =
+          "requires-controlled-preemption";
+      if (!candidate.preemption_victims.empty()) {
+        instance_it->labels["comet.preemption.victims"] =
+            JoinStrings(candidate.preemption_victims, ",");
+      }
+    } else {
+      instance_it->labels.erase("comet.placement.defer_reason");
+      instance_it->labels.erase("comet.preemption.victims");
+    }
+  }
 }
 
 }  // namespace
@@ -283,6 +536,7 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       {"COMET_PLANE_NAME", state.plane_name},
       {"COMET_INSTANCE_NAME", infer.name},
       {"COMET_INSTANCE_ROLE", "infer"},
+      {"COMET_NODE_NAME", infer.node_name},
       {"COMET_INFER_BOOT_MODE", "launch-runtime"},
       {"COMET_INFER_RUNTIME_BACKEND", "auto"},
       {"COMET_CONTROLLER_URL", "http://controller.internal:8080"},
@@ -321,8 +575,8 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     throw std::runtime_error("bundle must contain at least one worker json file");
   }
 
-  std::size_t worker_index = 0;
   std::set<std::string> instance_names;
+  std::map<std::pair<std::string, std::string>, PlacementUsage> placement_usage;
   if (!instance_names.insert(infer.name).second) {
     throw std::runtime_error("duplicate instance name '" + infer.name + "'");
   }
@@ -335,13 +589,6 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     }
     worker.role = InstanceRole::Worker;
     worker.plane_name = state.plane_name;
-    worker.node_name = OptionalString(
-        worker_json,
-        "node",
-        state.nodes[worker_index % state.nodes.size()].name);
-    ValidateNodeExists(nodes_by_name, worker.node_name, worker_file.string());
-    const NodeInventory& node = nodes_by_name.at(worker.node_name);
-
     worker.image = RequiredString(worker_json, "image", worker_file.string());
     worker.command = "/runtime/worker/entrypoint.sh";
     worker.private_disk_name = worker.name + "-private";
@@ -349,7 +596,82 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     worker.private_disk_size_gb = OptionalInt(worker_json, "private_disk_gb", 40);
     worker.gpu_fraction = OptionalDouble(worker_json, "gpu_fraction", 1.0);
     worker.gpu_device = OptionalStringOpt(worker_json, "gpu_device");
-    ValidateGpuExists(node, worker.gpu_device, worker_file.string());
+    worker.placement_mode =
+        worker_json.contains("placement_mode")
+            ? ParsePlacementMode(RequiredString(worker_json, "placement_mode", worker_file.string()))
+            : (worker.gpu_device.has_value() ? PlacementMode::Manual : PlacementMode::Auto);
+    worker.share_mode = worker_json.contains("share_mode")
+                            ? ParseGpuShareMode(RequiredString(worker_json, "share_mode", worker_file.string()))
+                            : (worker.gpu_fraction < 1.0 ? GpuShareMode::Shared : GpuShareMode::Exclusive);
+    worker.priority = OptionalInt(worker_json, "priority", 100);
+    worker.preemptible = OptionalBool(worker_json, "preemptible", false);
+    worker.memory_cap_mb = OptionalIntOpt(worker_json, "memory_cap_mb");
+
+    const std::optional<std::string> requested_node_name =
+        OptionalStringOpt(worker_json, "node");
+    const std::optional<std::string> requested_gpu_device = worker.gpu_device;
+    const bool node_explicit = requested_node_name.has_value();
+    const bool gpu_explicit = requested_gpu_device.has_value();
+
+    if (gpu_explicit && !node_explicit) {
+      throw std::runtime_error(
+          worker_file.string() +
+          " sets gpu_device without node; explicit gpu_device requires an explicit node");
+    }
+
+    std::string placement_origin = "manual";
+    int auto_placement_score = 0;
+    std::string placement_action = "manual";
+    if (worker.placement_mode == PlacementMode::Manual) {
+      if (!node_explicit || !gpu_explicit) {
+        throw std::runtime_error(
+            worker_file.string() +
+            " uses placement_mode=manual but does not specify both node and gpu_device");
+      }
+      worker.node_name = *requested_node_name;
+      ValidateNodeExists(nodes_by_name, worker.node_name, worker_file.string());
+      const NodeInventory& node = nodes_by_name.at(worker.node_name);
+      ValidateGpuExists(node, worker.gpu_device, worker_file.string());
+    } else if (worker.placement_mode == PlacementMode::Movable && node_explicit && gpu_explicit) {
+      worker.node_name = *requested_node_name;
+      ValidateNodeExists(nodes_by_name, worker.node_name, worker_file.string());
+      const NodeInventory& node = nodes_by_name.at(worker.node_name);
+      ValidateGpuExists(node, worker.gpu_device, worker_file.string());
+      placement_origin = "requested";
+      placement_action = "requested";
+    } else {
+      const bool strict_node_constraint = worker.placement_mode == PlacementMode::Auto && node_explicit;
+      const bool strict_gpu_constraint = worker.placement_mode == PlacementMode::Auto && gpu_explicit;
+      const auto placement = SelectAutoPlacement(
+          state.nodes,
+          placement_usage,
+          worker,
+          state.inference,
+          requested_node_name,
+          requested_gpu_device,
+          strict_node_constraint,
+          strict_gpu_constraint);
+      if (!placement.has_value()) {
+        throw std::runtime_error(
+            worker_file.string() +
+            " could not be auto-placed onto any node/gpu that satisfies current scheduler constraints");
+      }
+      worker.node_name = placement->node_name;
+      worker.gpu_device = placement->gpu_device;
+      placement_origin = "auto";
+      auto_placement_score = placement->score;
+      const bool relocated =
+          requested_node_name.has_value() && requested_gpu_device.has_value() &&
+          (*requested_node_name != worker.node_name || *requested_gpu_device != *worker.gpu_device);
+      if (placement->upgrade_to_exclusive) {
+        worker.share_mode = GpuShareMode::Exclusive;
+        worker.gpu_fraction = 1.0;
+        placement_action = relocated ? "relocate-and-upgrade-to-exclusive"
+                                     : "upgrade-to-exclusive";
+      } else {
+        placement_action = relocated ? "relocate" : "auto-assign";
+      }
+    }
 
     if (worker.node_name == infer.node_name) {
       worker.depends_on.push_back(infer.name);
@@ -359,15 +681,31 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         {"COMET_PLANE_NAME", state.plane_name},
         {"COMET_INSTANCE_NAME", worker.name},
         {"COMET_INSTANCE_ROLE", "worker"},
+        {"COMET_NODE_NAME", worker.node_name},
+        {"COMET_GPU_DEVICE", worker.gpu_device.value_or("")},
+        {"COMET_WORKER_BOOT_MODE", "llama-load"},
         {"COMET_CONTROL_ROOT", state.control_root},
         {"COMET_SHARED_DISK_PATH", "/comet/shared"},
         {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
+        {"COMET_WORKER_RUNTIME_STATUS_PATH", "/comet/private/worker-runtime-status.json"},
     };
     worker.labels = {
         {"comet.plane", state.plane_name},
         {"comet.role", "worker"},
         {"comet.node", worker.node_name},
+        {"comet.placement", placement_origin},
+        {"comet.placement.mode", ToString(worker.placement_mode)},
+        {"comet.placement.action", placement_action},
     };
+    if (placement_origin == "auto") {
+      worker.labels["comet.placement.score"] = std::to_string(auto_placement_score);
+    }
+    if (requested_node_name.has_value()) {
+      worker.labels["comet.requested.node"] = *requested_node_name;
+    }
+    if (requested_gpu_device.has_value()) {
+      worker.labels["comet.requested.gpu"] = *requested_gpu_device;
+    }
 
     state.disks.push_back(MakeDisk(
         worker.private_disk_name,
@@ -384,12 +722,18 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
             worker.name,
             worker.node_name,
             worker.gpu_device.value_or(""),
+            worker.placement_mode,
+            worker.share_mode,
             worker.gpu_fraction,
+            worker.priority,
+            worker.preemptible,
+            worker.memory_cap_mb,
             true,
         });
-    ++worker_index;
+    ReservePlacement(&placement_usage, worker);
   }
 
+  ApplyMovableSchedulerDecisions(&state);
   return state;
 }
 

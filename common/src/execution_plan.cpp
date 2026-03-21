@@ -44,7 +44,10 @@ std::string MapSignature(const std::map<std::string, std::string>& values) {
 std::string InstanceSignature(const InstanceSpec& instance) {
   return instance.node_name + "|" + instance.image + "|" + instance.command + "|" +
          instance.private_disk_name + "|" + instance.shared_disk_name + "|" +
-         OptionalValue(instance.gpu_device) + "|" + std::to_string(instance.gpu_fraction) + "|" +
+         OptionalValue(instance.gpu_device) + "|" + ToString(instance.share_mode) + "|" +
+         std::to_string(instance.gpu_fraction) + "|" + std::to_string(instance.priority) + "|" +
+         std::to_string(instance.preemptible ? 1 : 0) + "|" +
+         std::to_string(instance.memory_cap_mb.value_or(0)) + "|" +
          MapSignature(instance.environment) + "|" + MapSignature(instance.labels);
 }
 

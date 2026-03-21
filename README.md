@@ -46,12 +46,37 @@ Build them with:
 ./scripts/build-runtime-images.sh
 ```
 
+Run a live Docker/NVIDIA safe-direct scheduler check with a real GGUF:
+
+```bash
+./scripts/check-live-scheduler.sh --gguf /path/to/model.gguf
+```
+
+That script deploys a movable-worker plane, stages the GGUF on the shared disk, waits for
+worker runtimes to consume real GPU memory through embedded `llama.cpp`, materializes one
+safe-direct rebalance, and drives `scheduler-tick` until the move reaches `verified`.
+It currently targets the cross-GPU safe-direct scenario and expects at least two visible
+NVIDIA GPUs on the host.
+
+Run a live Docker/NVIDIA single-GPU deferred-preemption check with a real GGUF:
+
+```bash
+./scripts/check-live-scheduler-single-gpu.sh --gguf /path/to/model.gguf
+```
+
+That script exercises the one-GPU scheduler shape: a movable worker competes with a
+best-effort worker on the same GPU, controller enqueues a real `evict-workers` assignment,
+`hostd` verifies that the victim really disappears from the GPU, and the rollout finishes by
+materializing `retry-placement` onto the same device. This is the live harness to use on a host
+with a single visible NVIDIA GPU.
+
 ## Dependencies
 
 External C/C++ dependencies are managed through `vcpkg` in manifest mode.
 
 Current manifest dependencies:
 
+- `llama-cpp`
 - `sqlite3`
 - `nlohmann-json`
 
@@ -134,6 +159,194 @@ Validate a plane bundle without applying it:
 ```bash
 ./build/linux/x64/comet-controller validate-bundle --bundle config/demo-plane
 ```
+
+## GPU Scheduling Policy
+
+Worker bundle entries can now declare scheduler-facing GPU policy fields:
+
+- `placement_mode`: `manual`, `auto`, or `movable`
+- `share_mode`: `exclusive`, `shared`, or `best-effort`
+- `gpu_fraction`
+- `priority`
+- `preemptible`
+- `memory_cap_mb`
+
+Placement rules now work like this:
+
+- `placement_mode=manual`: worker must specify both `node` and `gpu_device`
+- `placement_mode=auto`: scheduler fills missing placement and can normalize the worker onto an
+  idle GPU as `share_mode=exclusive` with `gpu_fraction=1`
+- `placement_mode=movable`: scheduler may override the requested placement when there is a better
+  candidate, but it keeps the current placement unless the alternative is materially better; the
+  resulting direct-fit move is now controller-managed and must be materialized explicitly rather
+  than being applied silently during import
+
+Plane node inventory can also declare `gpu_memory_mb` per GPU so the controller can reject
+GPU memory oversubscription before rollout. The current controller-side scheduler validates:
+
+- explicit GPU pinning for workers
+- legal `share_mode` and `gpu_fraction` combinations
+- per-GPU fraction oversubscription
+- per-GPU memory oversubscription when node inventory exposes `gpu_memory_mb`
+- exclusive/shared/best-effort mixing rules
+- per-GPU capacity/headroom summaries for idle GPUs, free fraction, and free VRAM
+- rebalance hints when a partial/shared worker could move onto an idle GPU and run exclusively
+- preemption hints that order `best-effort` workers as first eviction candidates under pressure
+- ranked placement recommendations with per-candidate fit/score details for rollout decisions
+- preemption-aware placement candidates that distinguish:
+  - direct fit on free capacity
+  - fit only after controlled eviction of `best-effort` workers
+
+The current scheduler uses those preemption-aware candidates for controller-side admission and
+operator guidance. It does not silently evict running work during bundle import or apply.
+
+For `placement_mode=movable`, the controller now distinguishes:
+
+- decisions it can apply immediately from full-state scheduler analysis
+- deferred decisions that require controlled preemption before rollout can continue
+
+Those decisions are surfaced in controller output as `scheduler-decisions` with
+`decision=proposed` or `decision=deferred`, plus `next_target`, `next_action`, and `victims`.
+They also produce explicit `rollout-actions` steps such as `evict-best-effort` and
+`retry-placement`, so the operator-facing plan is no longer implicit.
+Controller output now also derives a separate `rollout-lifecycle` view for each affected worker,
+so the rollout path is visible as explicit phases such as `planned`,
+`eviction-enqueued`, `eviction-applied`, `retry-materialized`, and `rollout-applied`.
+For movable and auto-placed workers, the controller also exposes a separate `rebalance-plan`
+surface that summarizes the best currently admissible move or upgrade, while honoring observed
+health gates on target nodes. That surface now includes explicit controller-side decisions such as
+`propose`, `hold`, and `defer`, so rebalance output distinguishes "good candidate, can propose",
+"target is gated, hold", and "candidate only works after controlled preemption".
+Each rebalance entry also carries an explicit class:
+
+- `safe-direct`: direct-fit move or in-place upgrade that can be materialized without preemption
+- `rollout-class`: worker currently tied to rollout/preemption workflow
+- `gated`: move blocked by in-flight assignments or host observation gates
+- `stable`: worker should stay where it is
+- `no-candidate`: no admissible target exists
+
+Safe-direct moves are also subject to a controller-side usefulness threshold. If a direct-fit move
+is technically possible but too weak to justify churn, the worker is reported as
+`state=below-threshold` instead of becoming actionable.
+
+It also prints a `rebalance-policy` summary with actionable workers, workers blocked by active
+rollouts, workers blocked by in-flight host assignments, observation-gated targets, stable holds,
+deferred moves, and no-candidate cases, so the operator can tell whether the cluster is ready for
+rebalance or still waiting on rollout/host/health gates.
+When a movable worker reaches `decision=propose`, the controller can materialize that direct-fit
+move with `comet-controller apply-rebalance-proposal --worker <name> --db ... [--artifacts-root ...]`.
+There is also a controller-managed pass `comet-controller reconcile-rebalance-proposals --db ...`
+that picks the highest-scoring actionable proposal once rollout and host-assignment gates clear.
+That command now exposes a `rebalance-controller-gate` summary, so it is obvious when rebalance is
+blocked because the cluster still has active rollout lifecycle, pending/claimed host assignments,
+or schedulable nodes that have not yet converged to the current desired generation.
+It also emits a `rebalance-loop-status` summary with coarse loop states such as
+`waiting-for-convergence`, `waiting-for-rollout`, `actionable`, and `complete`, so it is clear
+whether the scheduler is still blocked on rollout/convergence or has already drained all
+worthwhile direct-fit moves for the current generation.
+The controller now also uses observed GPU telemetry directly when evaluating a target GPU:
+
+- a candidate can be held with `gate_reason=compute-pressure` when the observed target GPU is
+  already under foreign live compute load
+- a candidate can be held with `gate_reason=observed-insufficient-vram` when observed free VRAM is
+  lower than the worker memory budget plus reserve
+
+Drain state is now also a placement input, not only a host lifecycle input:
+
+- when a worker currently sits on a `draining` node, same-node rebalance targets on that node are
+  no longer preferred
+- if an active off-node target exists, the scheduler now surfaces `state=ready-drain-move`
+- if the only available targets stay on the draining node, the worker is held with
+  `state=draining-source`
+
+On top of that, the controller now persists a `rebalance-iteration-budget` for safe-direct moves.
+Fresh bundle imports and rollout-materialized generations reset that budget to `0`, while each
+materialized direct rebalance increments it. Once the configured budget is exhausted, additional
+safe-direct proposals remain visible in `show-rebalance-plan` but `reconcile-rebalance-proposals`
+will stop and report `blocked by iteration budget` until a fresh non-rebalance generation resets
+the loop.
+The controller now also persists scheduler runtime metadata in SQLite:
+
+- one plane-level active scheduler action
+- per-worker `last_move_at`, `last_eviction_at`, and `manual_intervention_required`
+- per-node `last_move_at` and `last_verified_generation`
+
+That state is printed as `scheduler-runtime` in controller output and feeds anti-flap policy
+directly. A rebalance candidate can now be held not only because of rollout or host gates, but
+also because of:
+
+- `min-residency`
+- `cooldown`
+- `active-scheduler-action`
+- `manual-intervention-required`
+- `telemetry-degraded`
+
+`scheduler-tick` is now the stepwise controller-managed loop for this layer. One tick advances one
+safe orchestration step in priority order:
+
+1. active scheduler action verification / rollback
+2. deferred rollout reconciliation
+3. safe-direct rebalance reconciliation
+
+Safe-direct rebalance is therefore no longer treated as “done” immediately after a new desired
+generation is emitted. The controller records that move as an active scheduler action with
+`phase=verifying-move` and waits for observed state to confirm:
+
+- target node has applied the new desired generation
+- target runtime reports the worker as `ready`
+- target GPU telemetry shows owned process data for that worker
+- source node no longer reports the worker on its previous GPU
+- three stable verification samples in a row confirm the state
+
+If that verification times out, the controller first records `phase=rollback-planned`, and the
+next `scheduler-tick` materializes rollback from the previously persisted desired state into
+`phase=rollback-applied`. If rollback also fails to verify, the worker is marked
+`manual_intervention_required=yes` and automatic rebalance for that worker is blocked until an
+operator resolves it.
+
+When those deferred actions target a node, the corresponding `apply-node-state` host assignment is
+now annotated with a scheduler-gate message so controller-side assignment planning stays aligned
+with scheduler state.
+You can inspect the persisted rollout workflow directly with
+`comet-controller show-rollout-actions --db ...`.
+Those persisted rollout actions now have their own lifecycle:
+
+- `pending`
+- `acknowledged`
+- `ready-to-retry`
+
+Use `comet-controller set-rollout-action-status --id ... --status ...` to move a deferred rollout
+step through that controller-managed workflow.
+Once the eviction step is complete and the retry step reaches `ready-to-retry`, you can materialize
+the next scheduler generation with
+`comet-controller apply-ready-rollout-action --id ... --db ... [--artifacts-root ...]`.
+That controller command removes the recorded best-effort victims from desired state, applies the
+deferred placement retry, bumps desired generation, regenerates rollout actions for the new
+generation, and emits fresh host assignments without the old scheduler gate.
+
+There is now an explicit controller/hostd eviction path for those deferred scheduler decisions:
+
+- `comet-controller enqueue-rollout-eviction --id ... --db ...` enqueues node-local
+  `evict-workers` host assignments for the recorded victim workers
+- `comet-hostd apply-next-assignment --node ...` applies that temporary eviction state on the
+  affected node
+- `comet-controller reconcile-rollout-actions --db ... [--artifacts-root ...]` observes applied
+  eviction assignments, advances rollout action lifecycle automatically, and materializes the
+  deferred `retry-placement` once the eviction step is complete
+
+That means the scheduler rollout path is no longer only a controller-side state transition: it now
+has an explicit orchestration seam between persisted rollout actions and node-level host
+assignments, with controller-managed progression after the eviction step has actually been applied.
+
+Preemption selection is also stricter now: placement and rollout logic no longer assumes "evict
+all best-effort workers on the GPU". Instead, the scheduler computes an ordered victim set and
+chooses the minimal set of best-effort workers needed to satisfy fraction and memory requirements
+for the candidate placement.
+
+This is still a controller-side admission layer, not a full dynamic balancer yet, but it means
+soft-share policy is now encoded in desired state rather than inferred only from `gpu_fraction`,
+and the controller can already surface idle capacity next to active soft-share groups plus
+candidate moves that would reduce sharing pressure.
 
 Show the reconcile plan against the current SQLite state:
 

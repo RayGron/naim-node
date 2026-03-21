@@ -1,9 +1,9 @@
-FROM debian:bookworm-slim AS inferctl-builder
+FROM nvidia/cuda:13.0.1-devel-ubuntu24.04 AS inferctl-builder
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential \
       ca-certificates \
       cmake \
@@ -19,6 +19,9 @@ RUN git clone https://github.com/microsoft/vcpkg.git /opt/vcpkg \
     && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
 
 WORKDIR /src
+
+ENV VCPKG_MAX_CONCURRENCY=6
+ENV CMAKE_BUILD_PARALLEL_LEVEL=6
 
 COPY CMakeLists.txt /src/CMakeLists.txt
 COPY vcpkg.json /src/vcpkg.json
@@ -45,7 +48,7 @@ FROM comet/base-runtime:dev
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 

@@ -28,7 +28,14 @@ std::string OptionalValue(const std::optional<std::string>& value) {
 }
 
 std::string NodeSignature(const NodeInventory& node) {
-  return node.platform + "|" + JoinStrings(node.gpu_devices, ",");
+  std::vector<std::string> gpu_memory_entries;
+  for (const auto& gpu_device : node.gpu_devices) {
+    const auto it = node.gpu_memory_mb.find(gpu_device);
+    gpu_memory_entries.push_back(
+        gpu_device + ":" + std::to_string(it == node.gpu_memory_mb.end() ? 0 : it->second));
+  }
+  return node.platform + "|" + JoinStrings(node.gpu_devices, ",") + "|" +
+         JoinStrings(gpu_memory_entries, ",");
 }
 
 std::string DiskKey(const DiskSpec& disk) {
@@ -65,6 +72,10 @@ std::string InstanceSignature(const InstanceSpec& instance) {
   return ToString(instance.role) + "|" + instance.plane_name + "|" + instance.node_name + "|" +
          instance.image + "|" + instance.command + "|" + instance.private_disk_name + "|" +
          instance.shared_disk_name + "|" + OptionalValue(instance.gpu_device) + "|" +
+         ToString(instance.placement_mode) + "|" +
+         ToString(instance.share_mode) + "|" + std::to_string(instance.priority) + "|" +
+         std::to_string(instance.preemptible ? 1 : 0) + "|" +
+         std::to_string(instance.memory_cap_mb.value_or(0)) + "|" +
          std::to_string(instance.gpu_fraction) + "|" +
          std::to_string(instance.private_disk_size_gb) + "|" +
          JoinStrings(dependencies, ",") + "|" + MapSignature(instance.environment) + "|" +
@@ -129,6 +140,11 @@ void AppendDesiredStateWarnings(const DesiredState& state, ReconcilePlan* plan) 
       plan->warnings.push_back(
           "worker '" + instance.name + "' requests gpu_fraction=" +
           std::to_string(instance.gpu_fraction) + ", so soft GPU sharing will be required");
+    }
+    if (instance.role == InstanceRole::Worker && !instance.memory_cap_mb.has_value()) {
+      plan->warnings.push_back(
+          "worker '" + instance.name +
+          "' does not set memory_cap_mb, so memory-aware GPU admission cannot be enforced");
     }
   }
 }

@@ -92,6 +92,9 @@ target_compile_options(comet-controller PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(comet-hostd hostd/src/main.cpp)
 target_link_libraries(comet-hostd PRIVATE comet-common)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(comet-hostd PRIVATE dl)
+endif()
 target_compile_options(comet-hostd PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(
@@ -107,3 +110,17 @@ target_link_libraries(
     llama
 )
 target_compile_options(comet-inferctl PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(
+  comet-workerd
+  runtime/worker/src/main.cpp
+  common/src/runtime_status.cpp
+)
+target_include_directories(comet-workerd PRIVATE common/include)
+target_link_libraries(
+  comet-workerd
+  PRIVATE
+    nlohmann_json::nlohmann_json
+    llama
+)
+target_compile_options(comet-workerd PRIVATE -Wall -Wextra -Wpedantic)

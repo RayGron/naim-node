@@ -18,6 +18,18 @@ enum class DiskKind {
   WorkerPrivate,
 };
 
+enum class GpuShareMode {
+  Exclusive,
+  Shared,
+  BestEffort,
+};
+
+enum class PlacementMode {
+  Manual,
+  Auto,
+  Movable,
+};
+
 struct DiskSpec {
   std::string name;
   DiskKind kind;
@@ -42,7 +54,12 @@ struct InstanceSpec {
   std::map<std::string, std::string> environment;
   std::map<std::string, std::string> labels;
   std::optional<std::string> gpu_device;
+  PlacementMode placement_mode = PlacementMode::Manual;
+  GpuShareMode share_mode = GpuShareMode::Exclusive;
   double gpu_fraction = 0.0;
+  int priority = 100;
+  bool preemptible = false;
+  std::optional<int> memory_cap_mb;
   int private_disk_size_gb = 0;
 };
 
@@ -50,13 +67,19 @@ struct NodeInventory {
   std::string name;
   std::string platform;
   std::vector<std::string> gpu_devices;
+  std::map<std::string, int> gpu_memory_mb;
 };
 
 struct RuntimeGpuNode {
   std::string name;
   std::string node_name;
   std::string gpu_device;
+  PlacementMode placement_mode = PlacementMode::Manual;
+  GpuShareMode share_mode = GpuShareMode::Exclusive;
   double gpu_fraction = 0.0;
+  int priority = 100;
+  bool preemptible = false;
+  std::optional<int> memory_cap_mb;
   bool enabled = true;
 };
 
@@ -119,5 +142,9 @@ struct NodeComposePlan {
 
 std::string ToString(InstanceRole role);
 std::string ToString(DiskKind kind);
+std::string ToString(GpuShareMode mode);
+GpuShareMode ParseGpuShareMode(const std::string& value);
+std::string ToString(PlacementMode mode);
+PlacementMode ParsePlacementMode(const std::string& value);
 
 }  // namespace comet

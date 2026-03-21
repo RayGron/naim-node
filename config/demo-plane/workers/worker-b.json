@@ -2,7 +2,11 @@
   "name": "worker-b",
   "node": "node-b",
   "gpu_device": "0",
+  "share_mode": "shared",
   "gpu_fraction": 0.5,
+  "priority": 100,
+  "preemptible": true,
+  "memory_cap_mb": 8192,
   "private_disk_gb": 40,
   "image": "comet/worker-runtime:dev"
 }

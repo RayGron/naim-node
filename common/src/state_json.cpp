@@ -40,17 +40,26 @@ json ToJson(const NodeInventory& node) {
       {"name", node.name},
       {"platform", node.platform},
       {"gpu_devices", node.gpu_devices},
+      {"gpu_memory_mb", node.gpu_memory_mb},
   };
 }
 
 json ToJson(const RuntimeGpuNode& gpu_node) {
-  return json{
+  json result = json{
       {"name", gpu_node.name},
       {"node_name", gpu_node.node_name},
       {"gpu_device", gpu_node.gpu_device},
+      {"placement_mode", ToString(gpu_node.placement_mode)},
+      {"share_mode", ToString(gpu_node.share_mode)},
       {"gpu_fraction", gpu_node.gpu_fraction},
+      {"priority", gpu_node.priority},
+      {"preemptible", gpu_node.preemptible},
       {"enabled", gpu_node.enabled},
   };
+  if (gpu_node.memory_cap_mb.has_value()) {
+    result["memory_cap_mb"] = *gpu_node.memory_cap_mb;
+  }
+  return result;
 }
 
 json ToJson(const DiskSpec& disk) {
@@ -67,7 +76,7 @@ json ToJson(const DiskSpec& disk) {
 }
 
 json ToJson(const InstanceSpec& instance) {
-  json result = {
+  json result = json{
       {"name", instance.name},
       {"role", ToString(instance.role)},
       {"plane_name", instance.plane_name},
@@ -79,11 +88,18 @@ json ToJson(const InstanceSpec& instance) {
       {"depends_on", instance.depends_on},
       {"environment", instance.environment},
       {"labels", instance.labels},
+      {"placement_mode", ToString(instance.placement_mode)},
+      {"share_mode", ToString(instance.share_mode)},
       {"gpu_fraction", instance.gpu_fraction},
+      {"priority", instance.priority},
+      {"preemptible", instance.preemptible},
       {"private_disk_size_gb", instance.private_disk_size_gb},
   };
   if (instance.gpu_device.has_value()) {
     result["gpu_device"] = *instance.gpu_device;
+  }
+  if (instance.memory_cap_mb.has_value()) {
+    result["memory_cap_mb"] = *instance.memory_cap_mb;
   }
   return result;
 }
@@ -93,6 +109,7 @@ NodeInventory NodeInventoryFromJson(const json& value) {
   node.name = value.at("name").get<std::string>();
   node.platform = value.at("platform").get<std::string>();
   node.gpu_devices = value.value("gpu_devices", std::vector<std::string>{});
+  node.gpu_memory_mb = value.value("gpu_memory_mb", std::map<std::string, int>{});
   return node;
 }
 
@@ -101,7 +118,16 @@ RuntimeGpuNode RuntimeGpuNodeFromJson(const json& value) {
   gpu_node.name = value.at("name").get<std::string>();
   gpu_node.node_name = value.at("node_name").get<std::string>();
   gpu_node.gpu_device = value.value("gpu_device", std::string{});
+  gpu_node.placement_mode =
+      ParsePlacementMode(value.value("placement_mode", std::string("manual")));
+  gpu_node.share_mode =
+      ParseGpuShareMode(value.value("share_mode", std::string("exclusive")));
   gpu_node.gpu_fraction = value.value("gpu_fraction", 0.0);
+  gpu_node.priority = value.value("priority", 100);
+  gpu_node.preemptible = value.value("preemptible", false);
+  if (value.contains("memory_cap_mb") && !value.at("memory_cap_mb").is_null()) {
+    gpu_node.memory_cap_mb = value.at("memory_cap_mb").get<int>();
+  }
   gpu_node.enabled = value.value("enabled", true);
   return gpu_node;
 }
@@ -135,7 +161,16 @@ InstanceSpec InstanceSpecFromJson(const json& value) {
   if (value.contains("gpu_device") && !value.at("gpu_device").is_null()) {
     instance.gpu_device = value.at("gpu_device").get<std::string>();
   }
+  instance.placement_mode =
+      ParsePlacementMode(value.value("placement_mode", std::string("manual")));
+  instance.share_mode =
+      ParseGpuShareMode(value.value("share_mode", std::string("exclusive")));
   instance.gpu_fraction = value.value("gpu_fraction", 0.0);
+  instance.priority = value.value("priority", 100);
+  instance.preemptible = value.value("preemptible", false);
+  if (value.contains("memory_cap_mb") && !value.at("memory_cap_mb").is_null()) {
+    instance.memory_cap_mb = value.at("memory_cap_mb").get<int>();
+  }
   instance.private_disk_size_gb = value.value("private_disk_size_gb", 0);
   return instance;
 }

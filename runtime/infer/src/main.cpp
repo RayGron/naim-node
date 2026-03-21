@@ -445,6 +445,14 @@ std::vector<std::string> SplitCsv(const std::string& value) {
 }
 
 bool CommandExists(const std::string& command) {
+  if (command == "docker") {
+    const std::string windows_docker =
+        "/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe";
+    if (fs::exists(windows_docker) &&
+        std::system(("'" + windows_docker + "' version >/dev/null 2>&1").c_str()) == 0) {
+      return true;
+    }
+  }
   const char* path = std::getenv("PATH");
   if (path == nullptr) {
     return false;
@@ -493,11 +501,22 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.control_root = config.control_root;
   status.controller_url = config.controller_url;
   status.primary_infer_node = config.primary_infer_node;
+  if (const char* instance_name = std::getenv("COMET_INSTANCE_NAME")) {
+    status.instance_name = instance_name;
+  }
+  if (const char* instance_role = std::getenv("COMET_INSTANCE_ROLE")) {
+    status.instance_role = instance_role;
+  }
+  if (const char* node_name = std::getenv("COMET_NODE_NAME")) {
+    status.node_name = node_name;
+  }
   status.runtime_backend = backend;
   status.runtime_phase = phase;
   status.enabled_gpu_nodes = EnabledGpuNodeCount(config);
   status.registry_entries = static_cast<int>(registry.value("entries", json::array()).size());
   status.supervisor_pid = supervisor_pid;
+  status.runtime_pid = supervisor_pid;
+  status.engine_pid = supervisor_pid;
   status.active_model_id = active_model.value("model_id", std::string{});
   status.active_served_model_name =
       active_model.value("served_model_name", std::string{});
@@ -507,6 +526,7 @@ comet::RuntimeStatus BuildRuntimeStatus(
       active_model.value(
           "cached_runtime_model_path",
           active_model.value("cached_local_model_path", std::string{}));
+  status.model_path = status.cached_local_model_path;
   status.gateway_listen =
       config.gateway_listen_host + ":" + std::to_string(config.gateway_listen_port);
   status.upstream_models_url =
@@ -516,6 +536,8 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.gateway_health_url =
       "http://127.0.0.1:" + std::to_string(config.gateway_listen_port) + "/health";
   status.started_at = started_at;
+  status.last_activity_at = started_at;
+  status.ready = inference_ready && gateway_ready;
   status.active_model_ready = !active_model.empty();
   status.gateway_plan_ready = !gateway_plan.empty();
   status.inference_ready = inference_ready;

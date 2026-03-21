@@ -24,12 +24,19 @@
     {
       "name": "node-a",
       "platform": "linux",
-      "gpus": ["0", "1"]
+      "gpus": ["0", "1"],
+      "gpu_memory_mb": {
+        "0": 24576,
+        "1": 24576
+      }
     },
     {
       "name": "node-b",
       "platform": "linux",
-      "gpus": ["0"]
+      "gpus": ["0"],
+      "gpu_memory_mb": {
+        "0": 24576
+      }
     }
   ]
 }

@@ -25,15 +25,40 @@ const DiskSpec& FindDiskByName(
 
 ComposeService BuildComposeService(
     const InstanceSpec& instance,
-    const std::vector<DiskSpec>& disks) {
+    const std::vector<DiskSpec>& disks,
+    const std::vector<InstanceSpec>& node_instances) {
   ComposeService service;
   service.name = instance.name;
   service.image = instance.image;
   service.command = instance.command;
-  service.depends_on = instance.depends_on;
+  for (const auto& dependency : instance.depends_on) {
+    const auto dependency_it = std::find_if(
+        node_instances.begin(),
+        node_instances.end(),
+        [&](const InstanceSpec& candidate) { return candidate.name == dependency; });
+    if (dependency_it != node_instances.end()) {
+      service.depends_on.push_back(dependency);
+    }
+  }
   service.environment = instance.environment;
   service.labels = instance.labels;
   service.gpu_device = instance.gpu_device;
+  if (!service.gpu_device.has_value() && instance.role == InstanceRole::Infer) {
+    const auto local_gpu_worker = std::find_if(
+        node_instances.begin(),
+        node_instances.end(),
+        [&](const InstanceSpec& candidate) {
+          return candidate.role == InstanceRole::Worker &&
+                 candidate.gpu_device.has_value();
+        });
+    if (local_gpu_worker != node_instances.end()) {
+      service.gpu_device = local_gpu_worker->gpu_device;
+    }
+  }
+  if (service.gpu_device.has_value()) {
+    service.environment["NVIDIA_VISIBLE_DEVICES"] = *service.gpu_device;
+    service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
+  }
   service.healthcheck = instance.role == InstanceRole::Infer
                             ? "CMD-SHELL /runtime/infer/inferctl.sh probe-url "
                               "http://127.0.0.1:${COMET_INFERENCE_PORT:-8000}/health"
@@ -62,6 +87,7 @@ std::vector<NodeComposePlan> BuildNodeComposePlans(const DesiredState& state) {
     NodeComposePlan plan;
     plan.plane_name = state.plane_name;
     plan.node_name = node.name;
+    std::vector<InstanceSpec> node_instances;
 
     for (const auto& disk : state.disks) {
       if (disk.node_name == node.name) {
@@ -71,8 +97,12 @@ std::vector<NodeComposePlan> BuildNodeComposePlans(const DesiredState& state) {
 
     for (const auto& instance : state.instances) {
       if (instance.node_name == node.name) {
-        plan.services.push_back(BuildComposeService(instance, state.disks));
+        node_instances.push_back(instance);
       }
+    }
+
+    for (const auto& instance : node_instances) {
+      plan.services.push_back(BuildComposeService(instance, state.disks, node_instances));
     }
 
     plans.push_back(std::move(plan));
@@ -115,6 +145,56 @@ std::string ToString(DiskKind kind) {
       return "worker-private";
   }
   return "unknown";
+}
+
+std::string ToString(GpuShareMode mode) {
+  switch (mode) {
+    case GpuShareMode::Exclusive:
+      return "exclusive";
+    case GpuShareMode::Shared:
+      return "shared";
+    case GpuShareMode::BestEffort:
+      return "best-effort";
+  }
+  return "unknown";
+}
+
+GpuShareMode ParseGpuShareMode(const std::string& value) {
+  if (value == "exclusive") {
+    return GpuShareMode::Exclusive;
+  }
+  if (value == "shared") {
+    return GpuShareMode::Shared;
+  }
+  if (value == "best-effort") {
+    return GpuShareMode::BestEffort;
+  }
+  throw std::runtime_error("unknown gpu share mode '" + value + "'");
+}
+
+std::string ToString(PlacementMode mode) {
+  switch (mode) {
+    case PlacementMode::Manual:
+      return "manual";
+    case PlacementMode::Auto:
+      return "auto";
+    case PlacementMode::Movable:
+      return "movable";
+  }
+  return "unknown";
+}
+
+PlacementMode ParsePlacementMode(const std::string& value) {
+  if (value == "manual") {
+    return PlacementMode::Manual;
+  }
+  if (value == "auto") {
+    return PlacementMode::Auto;
+  }
+  if (value == "movable") {
+    return PlacementMode::Movable;
+  }
+  throw std::runtime_error("unknown placement mode '" + value + "'");
 }
 
 }  // namespace comet

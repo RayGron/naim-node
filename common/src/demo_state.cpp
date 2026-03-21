@@ -41,6 +41,7 @@ InstanceSpec MakeInfer() {
       {"COMET_PLANE_NAME", "alpha"},
       {"COMET_INSTANCE_NAME", "infer-main"},
       {"COMET_INSTANCE_ROLE", "infer"},
+      {"COMET_NODE_NAME", "node-a"},
       {"COMET_INFER_BOOT_MODE", "launch-runtime"},
       {"COMET_INFER_RUNTIME_BACKEND", "auto"},
       {"COMET_CONTROLLER_URL", "http://controller.internal:8080"},
@@ -65,6 +66,10 @@ InstanceSpec MakeWorker(
     std::string node_name,
     std::string gpu_device,
     double gpu_fraction,
+    GpuShareMode share_mode,
+    int priority,
+    bool preemptible,
+    std::optional<int> memory_cap_mb,
     std::vector<std::string> depends_on) {
   InstanceSpec instance;
   instance.name = std::move(name);
@@ -80,9 +85,13 @@ InstanceSpec MakeWorker(
       {"COMET_PLANE_NAME", "alpha"},
       {"COMET_INSTANCE_NAME", instance.name},
       {"COMET_INSTANCE_ROLE", "worker"},
+      {"COMET_NODE_NAME", instance.node_name},
+      {"COMET_GPU_DEVICE", gpu_device},
+      {"COMET_WORKER_BOOT_MODE", "llama-load"},
       {"COMET_CONTROL_ROOT", "/comet/shared/control/alpha"},
       {"COMET_SHARED_DISK_PATH", "/comet/shared"},
       {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
+      {"COMET_WORKER_RUNTIME_STATUS_PATH", "/comet/private/worker-runtime-status.json"},
   };
   instance.labels = {
       {"comet.plane", "alpha"},
@@ -90,7 +99,12 @@ InstanceSpec MakeWorker(
       {"comet.node", instance.node_name},
   };
   instance.gpu_device = std::move(gpu_device);
+  instance.placement_mode = PlacementMode::Manual;
+  instance.share_mode = share_mode;
   instance.gpu_fraction = gpu_fraction;
+  instance.priority = priority;
+  instance.preemptible = preemptible;
+  instance.memory_cap_mb = memory_cap_mb;
   instance.private_disk_size_gb = 40;
   return instance;
 }
@@ -108,8 +122,8 @@ DesiredState BuildDemoState() {
   state.gateway.server_name = "alpha.local";
 
   state.nodes = {
-      NodeInventory{"node-a", "linux", {"0", "1"}},
-      NodeInventory{"node-b", "linux", {"0"}},
+      NodeInventory{"node-a", "linux", {"0", "1"}, {{"0", 24576}, {"1", 24576}}},
+      NodeInventory{"node-b", "linux", {"0"}, {{"0", 24576}}},
   };
 
   state.disks = {
@@ -162,13 +176,31 @@ DesiredState BuildDemoState() {
 
   state.instances = {
       MakeInfer(),
-      MakeWorker("worker-a", "node-a", "0", 1.0, {"infer-main"}),
-      MakeWorker("worker-b", "node-b", "0", 0.5, {}),
+      MakeWorker(
+          "worker-a",
+          "node-a",
+          "0",
+          1.0,
+          GpuShareMode::Exclusive,
+          200,
+          false,
+          16384,
+          {"infer-main"}),
+      MakeWorker(
+          "worker-b",
+          "node-b",
+          "0",
+          0.5,
+          GpuShareMode::Shared,
+          100,
+          true,
+          8192,
+          {}),
   };
 
   state.runtime_gpu_nodes = {
-      RuntimeGpuNode{"worker-a", "node-a", "0", 1.0, true},
-      RuntimeGpuNode{"worker-b", "node-b", "0", 0.5, true},
+      RuntimeGpuNode{"worker-a", "node-a", "0", PlacementMode::Manual, GpuShareMode::Exclusive, 1.0, 200, false, 16384, true},
+      RuntimeGpuNode{"worker-b", "node-b", "0", PlacementMode::Manual, GpuShareMode::Shared, 0.5, 100, true, 8192, true},
   };
 
   return state;

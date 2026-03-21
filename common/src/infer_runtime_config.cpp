@@ -1,6 +1,7 @@
 #include "comet/infer_runtime_config.h"
 
 #include <stdexcept>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -23,14 +24,21 @@ json BuildGpuNodesJson(const DesiredState& state) {
   json gpu_nodes = json::array();
   if (!state.runtime_gpu_nodes.empty()) {
     for (const auto& gpu_node : state.runtime_gpu_nodes) {
-      gpu_nodes.push_back(
-          {
-              {"name", gpu_node.name},
-              {"node_name", gpu_node.node_name},
-              {"gpu_device", gpu_node.gpu_device},
-              {"gpu_fraction", gpu_node.gpu_fraction},
-              {"enabled", gpu_node.enabled},
-          });
+      json gpu_node_json = {
+          {"name", gpu_node.name},
+          {"node_name", gpu_node.node_name},
+          {"gpu_device", gpu_node.gpu_device},
+          {"placement_mode", ToString(gpu_node.placement_mode)},
+          {"share_mode", ToString(gpu_node.share_mode)},
+          {"gpu_fraction", gpu_node.gpu_fraction},
+          {"priority", gpu_node.priority},
+          {"preemptible", gpu_node.preemptible},
+          {"enabled", gpu_node.enabled},
+      };
+      if (gpu_node.memory_cap_mb.has_value()) {
+        gpu_node_json["memory_cap_mb"] = *gpu_node.memory_cap_mb;
+      }
+      gpu_nodes.push_back(std::move(gpu_node_json));
     }
     return gpu_nodes;
   }
@@ -39,14 +47,21 @@ json BuildGpuNodesJson(const DesiredState& state) {
     if (instance.role != InstanceRole::Worker) {
       continue;
     }
-    gpu_nodes.push_back(
-        {
-            {"name", instance.name},
-            {"node_name", instance.node_name},
-            {"gpu_device", instance.gpu_device.value_or("")},
-            {"gpu_fraction", instance.gpu_fraction},
-            {"enabled", true},
-        });
+    json gpu_node_json = {
+        {"name", instance.name},
+        {"node_name", instance.node_name},
+        {"gpu_device", instance.gpu_device.value_or("")},
+        {"placement_mode", ToString(instance.placement_mode)},
+        {"share_mode", ToString(instance.share_mode)},
+        {"gpu_fraction", instance.gpu_fraction},
+        {"priority", instance.priority},
+        {"preemptible", instance.preemptible},
+        {"enabled", true},
+    };
+    if (instance.memory_cap_mb.has_value()) {
+      gpu_node_json["memory_cap_mb"] = *instance.memory_cap_mb;
+    }
+    gpu_nodes.push_back(std::move(gpu_node_json));
   }
   return gpu_nodes;
 }

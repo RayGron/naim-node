@@ -89,6 +89,9 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
     }
 
     if (service.gpu_device.has_value()) {
+      out << "    gpus:\n";
+      out << "      - driver: nvidia\n";
+      out << "        device_ids: [\"" << *service.gpu_device << "\"]\n";
       out << "    deploy:\n";
       out << "      resources:\n";
       out << "        reservations:\n";

@@ -1,15 +1,24 @@
 #include <chrono>
+#include <cctype>
+#include <cstdio>
+#include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
 #include <exception>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <cstdlib>
 #include <sstream>
+#include <set>
 #include <thread>
 #include <vector>
+#include <array>
+#include <algorithm>
+
+#include <nlohmann/json.hpp>
 
 #include "comet/compose_renderer.h"
 #include "comet/demo_state.h"
@@ -22,6 +31,8 @@
 #include "comet/state_json.h"
 
 namespace {
+
+using nlohmann::json;
 
 std::string DefaultDbPath() {
   return (std::filesystem::path("var") / "controller.sqlite").string();
@@ -39,6 +50,11 @@ enum class ComposeMode {
   Skip,
   Exec,
 };
+
+std::string ResolvedDockerCommand();
+std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
+    const std::string& state_root,
+    const std::string& node_name);
 
 void PrintUsage() {
   std::cout
@@ -136,15 +152,20 @@ ComposeMode ResolveComposeMode(const std::optional<std::string>& compose_mode_ar
 
 std::string RebaseManagedPath(
     const std::string& path,
-    const std::optional<std::string>& runtime_root) {
+    const std::optional<std::string>& runtime_root,
+    const std::optional<std::string>& node_name = std::nullopt) {
   if (!runtime_root.has_value()) {
     return path;
   }
 
   const std::filesystem::path original(path);
   const std::filesystem::path base(*runtime_root);
-  return original.is_absolute() ? (base / original.relative_path()).string()
-                                : (base / original).string();
+  const std::filesystem::path rebased =
+      original.is_absolute() ? (base / original.relative_path()) : (base / original);
+  if (node_name.has_value() && !node_name->empty()) {
+    return (base / "nodes" / *node_name / rebased.lexically_relative(base)).string();
+  }
+  return rebased.string();
 }
 
 comet::DesiredState RebaseStateForRuntimeRoot(
@@ -155,7 +176,13 @@ comet::DesiredState RebaseStateForRuntimeRoot(
   }
 
   for (auto& disk : state.disks) {
-    disk.host_path = RebaseManagedPath(disk.host_path, runtime_root);
+    const bool node_local_disk =
+        disk.kind == comet::DiskKind::InferPrivate ||
+        disk.kind == comet::DiskKind::WorkerPrivate;
+    disk.host_path = RebaseManagedPath(
+        disk.host_path,
+        runtime_root,
+        node_local_disk ? std::optional<std::string>(disk.node_name) : std::nullopt);
   }
   return state;
 }
@@ -430,8 +457,12 @@ void RunComposeCommand(
     return;
   }
 
+  std::string effective_subcommand = subcommand;
+  if (subcommand == "up -d") {
+    effective_subcommand += " --remove-orphans";
+  }
   const std::string command =
-      "docker compose -f '" + compose_file_path + "' " + subcommand;
+      ResolvedDockerCommand() + " compose -f '" + compose_file_path + "' " + effective_subcommand;
   const int rc = std::system(command.c_str());
   if (rc != 0) {
     throw std::runtime_error(
@@ -511,6 +542,36 @@ void WaitForLocalRuntimeStatus(
   }
 }
 
+std::size_t ExpectedRuntimeStatusCountForNode(
+    const comet::DesiredState& desired_node_state,
+    const std::string& node_name) {
+  std::size_t count = 0;
+  for (const auto& instance : desired_node_state.instances) {
+    if (instance.node_name == node_name) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+void WaitForLocalInstanceRuntimeStatuses(
+    const std::string& state_root,
+    const std::string& node_name,
+    std::size_t expected_count,
+    std::chrono::seconds timeout) {
+  if (expected_count == 0) {
+    return;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name);
+    if (statuses.size() >= expected_count) {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  }
+}
+
 void PrintLocalStateSummary(
     const comet::DesiredState& state,
     const std::string& state_path,
@@ -549,6 +610,557 @@ void PrintAssignmentSummary(const comet::HostAssignment& assignment) {
   std::cout << "assignment_artifacts_root=" << assignment.artifacts_root << "\n";
 }
 
+std::string Trim(const std::string& value) {
+  std::size_t start = 0;
+  while (start < value.size() &&
+         std::isspace(static_cast<unsigned char>(value[start])) != 0) {
+    ++start;
+  }
+  std::size_t end = value.size();
+  while (end > start &&
+         std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+    --end;
+  }
+  return value.substr(start, end - start);
+}
+
+std::vector<std::string> SplitCsvRow(const std::string& line) {
+  std::vector<std::string> result;
+  std::string current;
+  bool in_quotes = false;
+  for (char ch : line) {
+    if (ch == '"') {
+      in_quotes = !in_quotes;
+      continue;
+    }
+    if (ch == ',' && !in_quotes) {
+      result.push_back(Trim(current));
+      current.clear();
+      continue;
+    }
+    current.push_back(ch);
+  }
+  result.push_back(Trim(current));
+  return result;
+}
+
+std::string RunCommandCapture(const std::string& command) {
+  std::array<char, 512> buffer{};
+  std::string output;
+  FILE* pipe = popen(command.c_str(), "r");
+  if (pipe == nullptr) {
+    return output;
+  }
+  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+    output.append(buffer.data());
+  }
+  pclose(pipe);
+  return output;
+}
+
+std::string ResolvedDockerCommand() {
+  static const std::string resolved = []() -> std::string {
+    if (std::system("docker version >/dev/null 2>&1") == 0) {
+      return "docker";
+    }
+    const std::string windows_docker =
+        "/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe";
+    if (std::filesystem::exists(windows_docker) &&
+        std::system(("'" + windows_docker + "' version >/dev/null 2>&1").c_str()) == 0) {
+      return "'" + windows_docker + "'";
+    }
+    return "docker";
+  }();
+  return resolved;
+}
+
+std::optional<std::string> WorkerRuntimeStatusPathForInstance(
+    const comet::DesiredState& state,
+    const comet::InstanceSpec& instance) {
+  if (instance.role != comet::InstanceRole::Worker) {
+    return std::nullopt;
+  }
+  for (const auto& disk : state.disks) {
+    if (disk.kind == comet::DiskKind::WorkerPrivate &&
+        disk.owner_name == instance.name &&
+        disk.node_name == instance.node_name) {
+      return (std::filesystem::path(disk.host_path) / "worker-runtime-status.json").string();
+    }
+  }
+  return std::nullopt;
+}
+
+comet::RuntimeProcessStatus ToProcessStatus(
+    comet::RuntimeStatus status,
+    const comet::InstanceSpec& instance) {
+  if (status.instance_name.empty()) {
+    status.instance_name = instance.name;
+  }
+  if (status.instance_role.empty()) {
+    status.instance_role = comet::ToString(instance.role);
+  }
+  if (status.node_name.empty()) {
+    status.node_name = instance.node_name;
+  }
+  if (status.gpu_device.empty() && instance.gpu_device.has_value()) {
+    status.gpu_device = *instance.gpu_device;
+  }
+  comet::RuntimeProcessStatus process;
+  process.instance_name = status.instance_name;
+  process.instance_role = status.instance_role;
+  process.node_name = status.node_name;
+  process.model_path = status.model_path.empty() ? status.cached_local_model_path : status.model_path;
+  process.gpu_device = status.gpu_device;
+  process.runtime_phase = status.runtime_phase;
+  process.started_at = status.started_at;
+  process.last_activity_at = status.last_activity_at;
+  process.runtime_pid = status.runtime_pid;
+  process.engine_pid = status.engine_pid;
+  process.ready = status.ready || status.launch_ready || status.inference_ready;
+  return process;
+}
+
+std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
+    const std::string& state_root,
+    const std::string& node_name) {
+  std::vector<comet::RuntimeProcessStatus> result;
+  const auto local_state = LoadLocalAppliedState(state_root, node_name);
+  if (!local_state.has_value()) {
+    return result;
+  }
+
+  for (const auto& instance : local_state->instances) {
+    if (instance.node_name != node_name) {
+      continue;
+    }
+    std::optional<std::string> status_path;
+    if (instance.role == comet::InstanceRole::Infer) {
+      status_path = RuntimeStatusPathForNode(*local_state, node_name);
+    } else {
+      status_path = WorkerRuntimeStatusPathForInstance(*local_state, instance);
+    }
+    if (!status_path.has_value() || !std::filesystem::exists(*status_path)) {
+      continue;
+    }
+    const auto status = comet::LoadRuntimeStatusJson(*status_path);
+    if (!status.has_value()) {
+      continue;
+    }
+    result.push_back(ToProcessStatus(*status, instance));
+  }
+  return result;
+}
+
+std::optional<std::string> ResolveComposeContainerIdForService(const std::string& service_name) {
+  const std::string output =
+      RunCommandCapture(
+          ResolvedDockerCommand() +
+          " ps --filter label=com.docker.compose.service=" + service_name +
+          " --format '{{.ID}}' 2>/dev/null");
+  std::istringstream input(output);
+  std::string container_id;
+  while (std::getline(input, container_id)) {
+    container_id = Trim(container_id);
+    if (!container_id.empty()) {
+      return container_id;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<int> ResolveServiceHostPid(const std::string& service_name) {
+  const auto container_id = ResolveComposeContainerIdForService(service_name);
+  if (!container_id.has_value()) {
+    return std::nullopt;
+  }
+  const std::string output =
+      RunCommandCapture(
+          ResolvedDockerCommand() + " top " + *container_id + " -eo pid,comm,args 2>/dev/null");
+  std::istringstream input(output);
+  std::string line;
+  bool first = true;
+  std::optional<int> fallback_pid;
+  while (std::getline(input, line)) {
+    if (first) {
+      first = false;
+      continue;
+    }
+    line = Trim(line);
+    if (line.empty()) {
+      continue;
+    }
+    std::istringstream row(line);
+    int pid = 0;
+    std::string comm;
+    row >> pid >> comm;
+    std::string args;
+    std::getline(row, args);
+    args = Trim(args);
+    if (pid <= 0) {
+      continue;
+    }
+    if (args.find("comet-workerd") != std::string::npos ||
+        args.find("comet-inferctl") != std::string::npos) {
+      return pid;
+    }
+    if (comm != "tini" && comm != "bash" && comm != "sh" && !fallback_pid.has_value()) {
+      fallback_pid = pid;
+    }
+  }
+  return fallback_pid;
+}
+
+void ResolveInstanceHostPids(std::vector<comet::RuntimeProcessStatus>* statuses) {
+  if (statuses == nullptr) {
+    return;
+  }
+  for (auto& status : *statuses) {
+    const auto host_pid = ResolveServiceHostPid(status.instance_name);
+    if (host_pid.has_value()) {
+      status.runtime_pid = *host_pid;
+      status.engine_pid = *host_pid;
+    }
+  }
+}
+
+std::optional<std::string> ParseTaggedValue(
+    const std::string& text,
+    const std::string& key) {
+  const std::string needle = key + "=";
+  const std::size_t begin = text.find(needle);
+  if (begin == std::string::npos) {
+    return std::nullopt;
+  }
+  std::size_t end = text.find(' ', begin + needle.size());
+  if (end == std::string::npos) {
+    end = text.size();
+  }
+  return text.substr(begin + needle.size(), end - (begin + needle.size()));
+}
+
+std::vector<std::string> ParseTaggedCsv(
+    const std::string& text,
+    const std::string& key) {
+  const auto value = ParseTaggedValue(text, key);
+  if (!value.has_value()) {
+    return {};
+  }
+  std::vector<std::string> items;
+  std::stringstream stream(*value);
+  std::string item;
+  while (std::getline(stream, item, ',')) {
+    item = Trim(item);
+    if (!item.empty()) {
+      items.push_back(item);
+    }
+  }
+  return items;
+}
+
+std::map<std::string, int> CaptureServiceHostPids(const std::vector<std::string>& service_names) {
+  std::map<std::string, int> result;
+  for (const auto& service_name : service_names) {
+    const auto pid = ResolveServiceHostPid(service_name);
+    if (pid.has_value()) {
+      result.emplace(service_name, *pid);
+    }
+  }
+  return result;
+}
+
+struct NvmlMemoryInfo {
+  unsigned long long total = 0;
+  unsigned long long free = 0;
+  unsigned long long used = 0;
+};
+
+struct NvmlUtilizationInfo {
+  unsigned int gpu = 0;
+  unsigned int memory = 0;
+};
+
+std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvml(
+    const comet::DesiredState& state,
+    const std::string& node_name) {
+  void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
+  if (lib == nullptr) {
+    return std::nullopt;
+  }
+
+  using nvmlReturn_t = int;
+  using nvmlDevice_t = void*;
+  constexpr nvmlReturn_t kNvmlSuccess = 0;
+  using NvmlInitFn = nvmlReturn_t (*)();
+  using NvmlShutdownFn = nvmlReturn_t (*)();
+  using NvmlGetHandleFn = nvmlReturn_t (*)(unsigned int, nvmlDevice_t*);
+  using NvmlMemoryInfoFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlMemoryInfo*);
+  using NvmlUtilizationFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlUtilizationInfo*);
+
+  const auto init = reinterpret_cast<NvmlInitFn>(dlsym(lib, "nvmlInit_v2"));
+  const auto shutdown = reinterpret_cast<NvmlShutdownFn>(dlsym(lib, "nvmlShutdown"));
+  const auto get_handle =
+      reinterpret_cast<NvmlGetHandleFn>(dlsym(lib, "nvmlDeviceGetHandleByIndex_v2"));
+  const auto get_memory =
+      reinterpret_cast<NvmlMemoryInfoFn>(dlsym(lib, "nvmlDeviceGetMemoryInfo"));
+  const auto get_utilization =
+      reinterpret_cast<NvmlUtilizationFn>(dlsym(lib, "nvmlDeviceGetUtilizationRates"));
+  if (init == nullptr || shutdown == nullptr || get_handle == nullptr ||
+      get_memory == nullptr || get_utilization == nullptr) {
+    dlclose(lib);
+    return std::nullopt;
+  }
+
+  if (init() != kNvmlSuccess) {
+    dlclose(lib);
+    return std::nullopt;
+  }
+
+  comet::GpuTelemetrySnapshot snapshot;
+  snapshot.degraded = false;
+  snapshot.source = "nvml";
+  for (const auto& node : state.nodes) {
+    if (node.name != node_name) {
+      continue;
+    }
+    for (const auto& gpu_device : node.gpu_devices) {
+      unsigned int index = 0;
+      try {
+        index = static_cast<unsigned int>(std::stoul(gpu_device));
+      } catch (const std::exception&) {
+        continue;
+      }
+      nvmlDevice_t handle = nullptr;
+      if (get_handle(index, &handle) != kNvmlSuccess || handle == nullptr) {
+        continue;
+      }
+      NvmlMemoryInfo memory{};
+      NvmlUtilizationInfo utilization{};
+      if (get_memory(handle, &memory) != kNvmlSuccess ||
+          get_utilization(handle, &utilization) != kNvmlSuccess) {
+        continue;
+      }
+      comet::GpuDeviceTelemetry device;
+      device.gpu_device = gpu_device;
+      device.total_vram_mb = static_cast<int>(memory.total / (1024 * 1024));
+      device.used_vram_mb = static_cast<int>(memory.used / (1024 * 1024));
+      device.free_vram_mb = static_cast<int>(memory.free / (1024 * 1024));
+      device.gpu_utilization_pct = static_cast<int>(utilization.gpu);
+      snapshot.devices.push_back(std::move(device));
+    }
+  }
+
+  shutdown();
+  dlclose(lib);
+  return snapshot;
+}
+
+void PopulateGpuProcessesFromNvidiaSmi(
+    comet::GpuTelemetrySnapshot* snapshot,
+    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
+  if (snapshot == nullptr) {
+    return;
+  }
+  std::map<int, std::string> pid_to_instance_name;
+  for (const auto& status : instance_statuses) {
+    if (status.engine_pid > 0) {
+      pid_to_instance_name[status.engine_pid] = status.instance_name;
+    }
+    if (status.runtime_pid > 0) {
+      pid_to_instance_name[status.runtime_pid] = status.instance_name;
+    }
+  }
+
+  std::map<std::string, std::string> uuid_to_gpu_device;
+  {
+    const std::string output =
+        RunCommandCapture(
+            "nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits 2>/dev/null");
+    std::istringstream input(output);
+    std::string line;
+    while (std::getline(input, line)) {
+      const auto columns = SplitCsvRow(line);
+      if (columns.size() >= 2) {
+        uuid_to_gpu_device[columns[1]] = columns[0];
+      }
+    }
+  }
+
+  const std::string output =
+      RunCommandCapture(
+          "nvidia-smi --query-compute-apps=gpu_uuid,pid,used_gpu_memory "
+          "--format=csv,noheader,nounits 2>/dev/null");
+  std::istringstream input(output);
+  std::string line;
+  while (std::getline(input, line)) {
+    const auto columns = SplitCsvRow(line);
+    if (columns.size() < 3) {
+      continue;
+    }
+    const auto gpu_it = uuid_to_gpu_device.find(columns[0]);
+    if (gpu_it == uuid_to_gpu_device.end()) {
+      continue;
+    }
+    int pid = 0;
+    int used_vram_mb = 0;
+    try {
+      pid = std::stoi(columns[1]);
+      used_vram_mb = std::stoi(columns[2]);
+    } catch (const std::exception&) {
+      continue;
+    }
+    for (auto& device : snapshot->devices) {
+      if (device.gpu_device != gpu_it->second) {
+        continue;
+      }
+      comet::GpuProcessTelemetry process;
+      process.pid = pid;
+      process.used_vram_mb = used_vram_mb;
+      const auto owner_it = pid_to_instance_name.find(pid);
+      if (owner_it != pid_to_instance_name.end()) {
+        process.instance_name = owner_it->second;
+      }
+      device.processes.push_back(std::move(process));
+      break;
+    }
+  }
+}
+
+std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvidiaSmi(
+    const comet::DesiredState& state,
+    const std::string& node_name,
+    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
+  const std::string output =
+      RunCommandCapture(
+          "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu "
+          "--format=csv,noheader,nounits 2>/dev/null");
+  if (output.empty()) {
+    return std::nullopt;
+  }
+
+  std::set<std::string> allowed_devices;
+  for (const auto& node : state.nodes) {
+    if (node.name != node_name) {
+      continue;
+    }
+    allowed_devices.insert(node.gpu_devices.begin(), node.gpu_devices.end());
+  }
+
+  comet::GpuTelemetrySnapshot snapshot;
+  snapshot.degraded = true;
+  snapshot.source = "nvidia-smi";
+  std::istringstream input(output);
+  std::string line;
+  while (std::getline(input, line)) {
+    const auto columns = SplitCsvRow(line);
+    if (columns.size() < 5 || allowed_devices.find(columns[0]) == allowed_devices.end()) {
+      continue;
+    }
+    try {
+      comet::GpuDeviceTelemetry device;
+      device.gpu_device = columns[0];
+      device.total_vram_mb = std::stoi(columns[1]);
+      device.used_vram_mb = std::stoi(columns[2]);
+      device.free_vram_mb = std::stoi(columns[3]);
+      device.gpu_utilization_pct = std::stoi(columns[4]);
+      snapshot.devices.push_back(std::move(device));
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+  PopulateGpuProcessesFromNvidiaSmi(&snapshot, instance_statuses);
+  return snapshot;
+}
+
+comet::GpuTelemetrySnapshot CollectGpuTelemetry(
+    const comet::DesiredState& state,
+    const std::string& node_name,
+    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
+  if (const auto nvml_snapshot = TryCollectGpuTelemetryWithNvml(state, node_name);
+      nvml_snapshot.has_value()) {
+    comet::GpuTelemetrySnapshot snapshot = *nvml_snapshot;
+    PopulateGpuProcessesFromNvidiaSmi(&snapshot, instance_statuses);
+    return snapshot;
+  }
+  if (const auto smi_snapshot =
+          TryCollectGpuTelemetryWithNvidiaSmi(state, node_name, instance_statuses);
+      smi_snapshot.has_value()) {
+    return *smi_snapshot;
+  }
+  comet::GpuTelemetrySnapshot snapshot;
+  snapshot.degraded = true;
+  snapshot.source = "unavailable";
+  return snapshot;
+}
+
+bool IsContainerAbsentForService(const std::string& service_name) {
+  return !ResolveComposeContainerIdForService(service_name).has_value();
+}
+
+bool VerifyEvictionAssignment(
+    const comet::DesiredState& local_state,
+    const std::string& node_name,
+    const std::string& state_root,
+    const std::string& status_message,
+    const std::map<std::string, int>& victim_host_pids) {
+  const auto victim_names = ParseTaggedCsv(status_message, "victims");
+  const auto target_gpu = ParseTaggedValue(status_message, "target_gpu");
+  const int required_memory_cap_mb =
+      ParseTaggedValue(status_message, "required_memory_cap_mb").has_value()
+          ? std::stoi(*ParseTaggedValue(status_message, "required_memory_cap_mb"))
+          : 0;
+  constexpr int kReserveMemoryMb = 1024;
+  constexpr int kStableSamples = 3;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  int stable_samples = 0;
+
+  while (std::chrono::steady_clock::now() < deadline) {
+    bool victims_gone = true;
+    for (const auto& victim_name : victim_names) {
+      if (!IsContainerAbsentForService(victim_name)) {
+        victims_gone = false;
+        break;
+      }
+    }
+
+    auto instance_statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name);
+    ResolveInstanceHostPids(&instance_statuses);
+    const auto telemetry = CollectGpuTelemetry(local_state, node_name, instance_statuses);
+
+    bool victims_released_gpu = true;
+    bool memory_ready = target_gpu.has_value() ? false : true;
+    for (const auto& device : telemetry.devices) {
+      if (target_gpu.has_value() && device.gpu_device == *target_gpu) {
+        memory_ready =
+            device.free_vram_mb >= required_memory_cap_mb + kReserveMemoryMb;
+      }
+      for (const auto& process : device.processes) {
+        if (std::find(victim_names.begin(), victim_names.end(), process.instance_name) !=
+            victim_names.end()) {
+          victims_released_gpu = false;
+        }
+        for (const auto& [victim_name, victim_pid] : victim_host_pids) {
+          (void)victim_name;
+          if (process.pid == victim_pid) {
+            victims_released_gpu = false;
+          }
+        }
+      }
+    }
+
+    if (victims_gone && victims_released_gpu && memory_ready) {
+      ++stable_samples;
+      if (stable_samples >= kStableSamples) {
+        return true;
+      }
+    } else {
+      stable_samples = 0;
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+  }
+
+  return false;
+}
+
 comet::HostObservation BuildObservedStateSnapshot(
     const std::string& node_name,
     const std::string& state_root,
@@ -570,6 +1182,17 @@ comet::HostObservation BuildObservedStateSnapshot(
   const auto runtime_status = LoadLocalRuntimeStatus(state_root, node_name);
   if (runtime_status.has_value()) {
     observation.runtime_status_json = comet::SerializeRuntimeStatusJson(*runtime_status);
+  }
+  auto instance_statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name);
+  ResolveInstanceHostPids(&instance_statuses);
+  if (!instance_statuses.empty()) {
+    observation.instance_runtime_json =
+        comet::SerializeRuntimeStatusListJson(instance_statuses);
+  }
+  if (local_state.has_value()) {
+    observation.gpu_telemetry_json =
+        comet::SerializeGpuTelemetryJson(
+            CollectGpuTelemetry(*local_state, node_name, instance_statuses));
   }
 
   return observation;
@@ -923,8 +1546,15 @@ void ApplyDesiredNodeState(
   if (desired_generation.has_value()) {
     SaveLocalAppliedGeneration(state_root, node_name, *desired_generation);
   }
-  if (compose_mode == ComposeMode::Exec && NodeHasInferInstance(desired_node_state)) {
-    WaitForLocalRuntimeStatus(state_root, node_name, std::chrono::seconds(20));
+  if (compose_mode == ComposeMode::Exec) {
+    if (NodeHasInferInstance(desired_node_state)) {
+      WaitForLocalRuntimeStatus(state_root, node_name, std::chrono::seconds(20));
+    }
+    WaitForLocalInstanceRuntimeStatuses(
+        state_root,
+        node_name,
+        ExpectedRuntimeStatusCountForNode(desired_node_state, node_name),
+        std::chrono::seconds(20));
   }
 }
 
@@ -1004,10 +1634,13 @@ void ApplyNextAssignment(
   std::cout << "state_root=" << state_root << "\n";
   std::cout << "compose_mode="
             << (compose_mode == ComposeMode::Exec ? "exec" : "skip") << "\n";
+  const std::string assignment_context =
+      assignment->status_message.empty() ? "" : " [" + assignment->status_message + "]";
 
   try {
     if (assignment->assignment_type != "apply-node-state" &&
-        assignment->assignment_type != "drain-node-state") {
+        assignment->assignment_type != "drain-node-state" &&
+        assignment->assignment_type != "evict-workers") {
       throw std::runtime_error(
           "unsupported assignment type '" + assignment->assignment_type + "'");
     }
@@ -1016,6 +1649,13 @@ void ApplyNextAssignment(
         comet::DeserializeDesiredStateJson(assignment->desired_state_json),
         runtime_root);
     const bool is_drain_assignment = assignment->assignment_type == "drain-node-state";
+    const bool is_eviction_assignment = assignment->assignment_type == "evict-workers";
+    const auto victim_names =
+        is_eviction_assignment ? ParseTaggedCsv(assignment->status_message, "victims")
+                               : std::vector<std::string>{};
+    const auto victim_host_pids =
+        is_eviction_assignment ? CaptureServiceHostPids(victim_names)
+                               : std::map<std::string, int>{};
     ReportObservedState(
         db_path,
         BuildObservedStateSnapshot(
@@ -1023,8 +1663,10 @@ void ApplyNextAssignment(
             state_root,
             comet::HostObservationStatus::Applying,
             (is_drain_assignment ? "draining node for desired generation "
-                                 : "applying desired generation ") +
-                std::to_string(assignment->desired_generation),
+                                 : (is_eviction_assignment
+                                        ? "evicting rollout workers for desired generation "
+                                        : "applying desired generation ")) +
+                std::to_string(assignment->desired_generation) + assignment_context,
             assignment->id),
         "hostd observed-state-update");
     ApplyDesiredNodeState(
@@ -1035,8 +1677,21 @@ void ApplyNextAssignment(
         compose_mode,
         is_drain_assignment
             ? "hostd drain-assignment-ops"
-            : "hostd apply-assignment-ops",
+            : (is_eviction_assignment
+                   ? "hostd eviction-assignment-ops"
+                   : "hostd apply-assignment-ops"),
         assignment->desired_generation);
+    if (is_eviction_assignment &&
+        compose_mode == ComposeMode::Exec &&
+        !VerifyEvictionAssignment(
+            rebased_state,
+            node_name,
+            state_root,
+            assignment->status_message,
+            victim_host_pids)) {
+      throw std::runtime_error(
+          "eviction verification timed out; gpu resources were not released");
+    }
     ReportObservedState(
         db_path,
         BuildObservedStateSnapshot(
@@ -1044,16 +1699,21 @@ void ApplyNextAssignment(
             state_root,
             comet::HostObservationStatus::Applied,
             (is_drain_assignment ? "drained node for desired generation "
-                                 : "applied desired generation ") +
-                std::to_string(assignment->desired_generation),
+                                 : (is_eviction_assignment
+                                        ? "evicted rollout workers for desired generation "
+                                        : "applied desired generation ")) +
+                std::to_string(assignment->desired_generation) + assignment_context,
             assignment->id),
         "hostd observed-state-update");
     if (!store.TransitionClaimedHostAssignment(
         assignment->id,
         comet::HostAssignmentStatus::Applied,
         (is_drain_assignment ? "drained node for desired generation "
-                             : "applied desired generation ") +
+                             : (is_eviction_assignment
+                                    ? "evicted rollout workers for desired generation "
+                                    : "applied desired generation ")) +
             std::to_string(assignment->desired_generation) +
+            assignment_context +
             " on attempt " + std::to_string(assignment->attempt_count) + "/" +
             std::to_string(assignment->max_attempts))) {
       std::cout << "assignment transition skipped for id=" << assignment->id
@@ -1076,7 +1736,7 @@ void ApplyNextAssignment(
               comet::HostAssignmentStatus::Pending,
               "attempt " + std::to_string(assignment->attempt_count) + "/" +
                   std::to_string(assignment->max_attempts) + " failed: " +
-                  error_message)) {
+                  error_message + assignment_context)) {
         std::cout << "assignment retry transition skipped for id=" << assignment->id
                   << " because it is no longer claimed\n";
       }
@@ -1086,7 +1746,7 @@ void ApplyNextAssignment(
               comet::HostAssignmentStatus::Failed,
               "attempt " + std::to_string(assignment->attempt_count) + "/" +
                   std::to_string(assignment->max_attempts) + " exhausted: " +
-                  error_message)) {
+                  error_message + assignment_context)) {
         std::cout << "assignment failure transition skipped for id=" << assignment->id
                   << " because it is no longer claimed\n";
       }
