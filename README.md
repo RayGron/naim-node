@@ -22,7 +22,8 @@ This first slice intentionally focuses on:
 4. a SQLite-backed controller state store
 5. the first migration step for legacy infer runtime configuration
 
-REST API and Docker execution are the next layers.
+Docker execution is now live, and Phase F has started with a native controller HTTP seam for
+health/readiness. The broader REST surface and operator compatibility CLI are the next layers.
 
 ## Runtime Images
 
@@ -412,6 +413,70 @@ Render the infer runtime manifest from SQLite-backed desired state:
 ```bash
 ./build/linux/x64/comet-controller render-infer-runtime --db var/controller.sqlite
 ```
+
+Run the controller in HTTP server mode and query the first health endpoints:
+
+```bash
+./build/linux/x64/comet-controller serve --db var/controller.sqlite --listen-host 127.0.0.1 --listen-port 18080
+curl http://127.0.0.1:18080/health
+curl http://127.0.0.1:18080/api/v1/health
+curl http://127.0.0.1:18080/api/v1/state
+curl http://127.0.0.1:18080/api/v1/host-assignments
+curl http://127.0.0.1:18080/api/v1/host-observations
+curl http://127.0.0.1:18080/api/v1/host-health
+curl http://127.0.0.1:18080/api/v1/node-availability
+curl http://127.0.0.1:18080/api/v1/disk-state
+curl http://127.0.0.1:18080/api/v1/rollout-actions
+curl http://127.0.0.1:18080/api/v1/rebalance-plan
+curl -X POST "http://127.0.0.1:18080/api/v1/scheduler-tick?artifacts_root=$(pwd)/var/artifacts"
+curl -X POST "http://127.0.0.1:18080/api/v1/reconcile-rebalance-proposals?artifacts_root=$(pwd)/var/artifacts"
+curl -X POST "http://127.0.0.1:18080/api/v1/reconcile-rollout-actions?artifacts_root=$(pwd)/var/artifacts"
+curl -X POST "http://127.0.0.1:18080/api/v1/bundles/validate?bundle=$(pwd)/config/demo-plane"
+curl -X POST "http://127.0.0.1:18080/api/v1/bundles/preview?bundle=$(pwd)/config/demo-plane&node=node-a"
+curl -X POST "http://127.0.0.1:18080/api/v1/bundles/import?bundle=$(pwd)/config/demo-plane"
+curl -X POST "http://127.0.0.1:18080/api/v1/bundles/apply?bundle=$(pwd)/config/demo-plane&artifacts_root=$(pwd)/var/artifacts"
+curl -X POST "http://127.0.0.1:18080/api/v1/apply-rebalance-proposal?worker=worker-b&artifacts_root=$(pwd)/var/artifacts"
+curl -X POST "http://127.0.0.1:18080/api/v1/set-rollout-action-status?id=1&status=acknowledged&message=api-http"
+curl -X POST "http://127.0.0.1:18080/api/v1/enqueue-rollout-eviction?id=1"
+curl -X POST "http://127.0.0.1:18080/api/v1/apply-ready-rollout-action?id=2&artifacts_root=$(pwd)/var/artifacts"
+curl -X POST "http://127.0.0.1:18080/api/v1/node-availability?node=node-b&availability=unavailable&message=api-http"
+curl -X POST "http://127.0.0.1:18080/api/v1/retry-host-assignment?id=7"
+```
+
+This is the first Phase F API seam: a native HTTP listener inside `comet-controller` with JSON
+health output plus read-only controller surfaces for state, assignments, observations, health,
+storage, rollout actions, and rebalance state. It now also exposes the first safe orchestration
+mutations over HTTP for `scheduler-tick`, `reconcile-rebalance-proposals`,
+`reconcile-rollout-actions`, bundle `validate/preview/import/apply`, `apply-rebalance-proposal`,
+`set-rollout-action-status`, `enqueue-rollout-eviction`, `apply-ready-rollout-action`,
+`node-availability`, and `retry-host-assignment`. The broader mutating REST surface still follows
+in later Phase F slices.
+
+The same binary now also works as a thin operator CLI over HTTP for the common inspection and
+mutation flows:
+
+```bash
+./build/linux/x64/comet-controller show-state --controller http://127.0.0.1:18080
+./build/linux/x64/comet-controller show-host-assignments --controller http://127.0.0.1:18080 --node node-a
+./build/linux/x64/comet-controller show-node-availability --controller http://127.0.0.1:18080 --node node-b
+./build/linux/x64/comet-controller validate-bundle --controller http://127.0.0.1:18080 --bundle "$(pwd)/config/demo-plane"
+./build/linux/x64/comet-controller set-node-availability --controller http://127.0.0.1:18080 --node node-b --availability draining --message cli-http
+COMET_CONTROLLER=http://127.0.0.1:18080 ./build/linux/x64/comet-controller show-state
+```
+
+Target resolution order is:
+
+- `--controller <http://host:port>`
+- `COMET_CONTROLLER`
+- `~/.config/comet/controller`
+
+If `--db` is provided, the command stays local and does not route through HTTP.
+
+The current API contract now also includes:
+
+- `api_version` on JSON responses
+- `request.path` and `request.method` on JSON responses
+- normalized error payloads through `status=error`, `error.code`, and `error.message`
 
 Inspect the per-node assignments queued for `hostd`:
 

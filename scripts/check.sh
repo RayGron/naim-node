@@ -39,6 +39,18 @@ compute_db_path="${PWD}/var/controller-compute.sqlite"
 compute_artifacts_root="${PWD}/var/artifacts-compute"
 compute_runtime_root="${PWD}/var/runtime-compute"
 compute_state_root="${PWD}/var/hostd-state-compute"
+api_db_path="${PWD}/var/controller-api.sqlite"
+api_artifacts_root="${PWD}/var/artifacts-api"
+http_server_pid=""
+
+cleanup() {
+  if [[ -n "${http_server_pid}" ]]; then
+    kill "${http_server_pid}" >/dev/null 2>&1 || true
+    wait "${http_server_pid}" >/dev/null 2>&1 || true
+  fi
+}
+
+trap cleanup EXIT
 
 cmake -E rm -f "${db_path}"
 cmake -E rm -f "${parallel_db_path}"
@@ -47,6 +59,7 @@ cmake -E rm -f "${threshold_db_path}"
 cmake -E rm -f "${budget_db_path}"
 cmake -E rm -f "${drain_db_path}"
 cmake -E rm -f "${compute_db_path}"
+cmake -E rm -f "${api_db_path}"
 cmake -E remove_directory "${artifacts_root}"
 cmake -E remove_directory "${parallel_artifacts_root}"
 cmake -E remove_directory "${rebalance_artifacts_root}"
@@ -54,6 +67,7 @@ cmake -E remove_directory "${threshold_artifacts_root}"
 cmake -E remove_directory "${budget_artifacts_root}"
 cmake -E remove_directory "${drain_artifacts_root}"
 cmake -E remove_directory "${compute_artifacts_root}"
+cmake -E remove_directory "${api_artifacts_root}"
 cmake -E remove_directory "${runtime_root}"
 cmake -E remove_directory "${parallel_runtime_root}"
 cmake -E remove_directory "${rebalance_runtime_root}"
@@ -78,6 +92,99 @@ cmake -E rm -f "${bad_state_root}"
 
 "${build_dir}/comet-controller" show-demo-plan >/dev/null
 "${build_dir}/comet-controller" render-demo-compose --node node-a >/dev/null
+"${build_dir}/comet-controller" init-db --db "${db_path}" >/dev/null
+http_port="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" >/tmp/comet-controller-serve.log 2>&1 &
+http_server_pid="$!"
+for _ in $(seq 1 50); do
+  if curl -fsS "http://127.0.0.1:${http_port}/health" >/tmp/comet-controller-health.json 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+curl -fsS "http://127.0.0.1:${http_port}/health" | grep -F '"service":"comet-controller"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/health" | grep -F '"status":"ok"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/state" | grep -F '"desired_generation":null' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/state" | grep -F '"desired_state":null' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-assignments" | grep -F '"assignments":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations" | grep -F '"observations":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health" | grep -F '"items":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state" | grep -F '"items":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions" | grep -F '"actions":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan" | grep -F '"rebalance_plan":[]' >/dev/null
+kill "${http_server_pid}" >/dev/null 2>&1 || true
+wait "${http_server_pid}" >/dev/null 2>&1 || true
+http_server_pid=""
+"${build_dir}/comet-controller" init-db --db "${api_db_path}" >/dev/null
+http_api_port="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+"${build_dir}/comet-controller" serve --db "${api_db_path}" --listen-host 127.0.0.1 --listen-port "${http_api_port}" >/tmp/comet-controller-api-mutations.log 2>&1 &
+http_server_pid="$!"
+for _ in $(seq 1 50); do
+  if curl -fsS "http://127.0.0.1:${http_api_port}/health" >/tmp/comet-controller-api-mutations-health.json 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+api_validate_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/validate?bundle=${PWD}/config/demo-plane")"
+printf '%s' "${api_validate_output}" | grep -F '"action":"validate-bundle"' >/dev/null
+printf '%s' "${api_validate_output}" | grep -F 'bundle validation: OK' >/dev/null
+api_preview_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/preview?bundle=${PWD}/config/demo-plane&node=node-a")"
+printf '%s' "${api_preview_output}" | grep -F '"action":"preview-bundle"' >/dev/null
+printf '%s' "${api_preview_output}" | grep -F 'preview:' >/dev/null
+api_import_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/import?bundle=${PWD}/config/demo-plane")"
+printf '%s' "${api_import_output}" | grep -F '"action":"import-bundle"' >/dev/null
+printf '%s' "${api_import_output}" | grep -F "imported bundle '${PWD}/config/demo-plane'" >/dev/null
+api_apply_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/apply?bundle=${PWD}/config/demo-plane&artifacts_root=${api_artifacts_root}")"
+printf '%s' "${api_apply_output}" | grep -F '"action":"apply-bundle"' >/dev/null
+printf '%s' "${api_apply_output}" | grep -F "applied bundle '${PWD}/config/demo-plane'" >/dev/null
+api_availability_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/node-availability?node=node-b&availability=unavailable&message=api-http")"
+printf '%s' "${api_availability_output}" | grep -F '"action":"set-node-availability"' >/dev/null
+printf '%s' "${api_availability_output}" | grep -F 'updated node availability for node-b' >/dev/null
+api_failed_assignment_id="$(python3 - <<'PY' "${api_db_path}"
+import sqlite3, sys
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+row = conn.execute(
+    "SELECT id FROM host_assignments WHERE status='pending' ORDER BY id LIMIT 1"
+).fetchone()
+if row is None:
+    raise SystemExit("no pending assignment found for retry fixture")
+conn.execute(
+    "UPDATE host_assignments SET status='failed', status_message='api-fixture failed assignment' WHERE id=?",
+    (row[0],),
+)
+conn.commit()
+conn.close()
+print(row[0])
+PY
+)"
+test -n "${api_failed_assignment_id}"
+api_retry_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/retry-host-assignment?id=${api_failed_assignment_id}")"
+printf '%s' "${api_retry_output}" | grep -F '"action":"retry-host-assignment"' >/dev/null
+printf '%s' "${api_retry_output}" | grep -F "requeued host assignment id=${api_failed_assignment_id}" >/dev/null
+"${build_dir}/comet-controller" show-state --controller "http://127.0.0.1:${http_api_port}" | grep -F '"desired_generation": 2' >/dev/null
+"${build_dir}/comet-controller" show-host-assignments --controller "http://127.0.0.1:${http_api_port}" --node node-a | grep -F '"assignments"' >/dev/null
+"${build_dir}/comet-controller" show-node-availability --controller "http://127.0.0.1:${http_api_port}" --node node-b | grep -F '"availability": "unavailable"' >/dev/null
+"${build_dir}/comet-controller" validate-bundle --controller "http://127.0.0.1:${http_api_port}" --bundle "${PWD}/config/demo-plane" | grep -F 'bundle validation: OK' >/dev/null
+"${build_dir}/comet-controller" set-node-availability --controller "http://127.0.0.1:${http_api_port}" --node node-a --availability draining --message cli-http | grep -F 'updated node availability for node-a' >/dev/null
+COMET_CONTROLLER="http://127.0.0.1:${http_api_port}" "${build_dir}/comet-controller" show-node-availability --node node-a | grep -F '"availability": "draining"' >/dev/null
+kill "${http_server_pid}" >/dev/null 2>&1 || true
+wait "${http_server_pid}" >/dev/null 2>&1 || true
+http_server_pid=""
 "${build_dir}/comet-controller" validate-bundle --bundle "${PWD}/config/demo-plane" >/dev/null
 invalid_bundle_dir="$(mktemp -d "${PWD}/var/invalid-bundle.XXXXXX")"
 cp -R "${PWD}/config/demo-plane/." "${invalid_bundle_dir}"
@@ -126,11 +233,34 @@ first_rollout_action_id="$("${build_dir}/comet-controller" show-rollout-actions 
 second_rollout_action_id="$("${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" --node node-a | sed -n 's/^  - id=\([0-9][0-9]*\).*/\1/p' | sed -n '2p')"
 test -n "${first_rollout_action_id}"
 test -n "${second_rollout_action_id}"
-"${build_dir}/comet-controller" enqueue-rollout-eviction --db "${preemption_db_path}" --id "${first_rollout_action_id}" | grep -F "status=acknowledged" >/dev/null
+http_preemption_port="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+"${build_dir}/comet-controller" serve --db "${preemption_db_path}" --listen-host 127.0.0.1 --listen-port "${http_preemption_port}" >/tmp/comet-controller-preemption-serve.log 2>&1 &
+http_server_pid="$!"
+for _ in $(seq 1 50); do
+  if curl -fsS "http://127.0.0.1:${http_preemption_port}/api/v1/rollout-actions?node=node-a" >/tmp/comet-controller-preemption-api.json 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+preemption_set_output="$(curl -fsS -X POST "http://127.0.0.1:${http_preemption_port}/api/v1/set-rollout-action-status?id=${first_rollout_action_id}&status=acknowledged&message=api-http")"
+printf '%s' "${preemption_set_output}" | grep -F '"action":"set-rollout-action-status"' >/dev/null
+printf '%s' "${preemption_set_output}" | grep -F 'updated rollout action id='"${first_rollout_action_id}" >/dev/null
+preemption_enqueue_output="$(curl -fsS -X POST "http://127.0.0.1:${http_preemption_port}/api/v1/enqueue-rollout-eviction?id=${first_rollout_action_id}")"
+printf '%s' "${preemption_enqueue_output}" | grep -F '"action":"enqueue-rollout-eviction"' >/dev/null
+printf '%s' "${preemption_enqueue_output}" | grep -F 'enqueued rollout eviction action id='"${first_rollout_action_id}" >/dev/null
 "${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "type=evict-workers status=pending" >/dev/null
 "${build_dir}/comet-hostd" apply-next-assignment --db "${preemption_db_path}" --node node-a --runtime-root "${preemption_runtime_root}" --state-root "${preemption_state_root}" --compose-mode skip >/dev/null
 "${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "type=evict-workers status=applied" >/dev/null
-"${build_dir}/comet-controller" reconcile-rollout-actions --db "${preemption_db_path}" --artifacts-root "${preemption_artifacts_root}" | grep -F "applied ready rollout action id=${second_rollout_action_id}" >/dev/null
+preemption_reconcile_output="$(curl -fsS -X POST "http://127.0.0.1:${http_preemption_port}/api/v1/reconcile-rollout-actions?artifacts_root=${preemption_artifacts_root}")"
+printf '%s' "${preemption_reconcile_output}" | grep -F '"action":"reconcile-rollout-actions"' >/dev/null
+printf '%s' "${preemption_reconcile_output}" | grep -F "applied ready rollout action id=${second_rollout_action_id}" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "desired generation: 2" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "worker-a role=worker node=node-a gpu=0 fraction=1 placement_mode=movable share_mode=exclusive priority=200 preemptible=false memory_cap_mb=12288 placement=auto placement_action=materialized-retry-placement placement_score=22 placement_decision=applied" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "decision=applied" >/dev/null
@@ -145,6 +275,9 @@ if "${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_p
   echo "check: expected rollout gate message to disappear after materialized retry placement" >&2
   exit 1
 fi
+kill "${http_server_pid}" >/dev/null 2>&1 || true
+wait "${http_server_pid}" >/dev/null 2>&1 || true
+http_server_pid=""
 "${build_dir}/comet-hostd" apply-next-assignment --db "${preemption_db_path}" --node node-a --runtime-root "${preemption_runtime_root}" --state-root "${preemption_state_root}" --compose-mode skip >/dev/null
 "${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "generation=2 attempts=1/3 type=apply-node-state status=applied" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "phase=rollout-applied" >/dev/null
@@ -164,7 +297,28 @@ perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "mo
 "${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "cluster_ready=yes active_rollouts=0 blocking_assignment_nodes=0 unconverged_nodes=0" >/dev/null
 "${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "state=actionable reason=safe-direct-workers=1" >/dev/null
 "${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "actionable=1 safe_direct=1 rollout_class=0 gated=0 blocked_active_rollouts=0 assignment_busy=0 observation_gated=0 stable_holds=0 below_threshold=0 deferred=0 no_candidate=0" >/dev/null
-"${build_dir}/comet-controller" reconcile-rebalance-proposals --db "${rebalance_db_path}" --artifacts-root "${rebalance_artifacts_root}" | grep -F "applied rebalance proposal for worker 'worker-b'" >/dev/null
+http_rebalance_port="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+"${build_dir}/comet-controller" serve --db "${rebalance_db_path}" --listen-host 127.0.0.1 --listen-port "${http_rebalance_port}" >/tmp/comet-controller-rebalance-serve.log 2>&1 &
+http_server_pid="$!"
+for _ in $(seq 1 50); do
+  if curl -fsS "http://127.0.0.1:${http_rebalance_port}/api/v1/rebalance-plan" >/tmp/comet-controller-rebalance-api.json 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+rebalance_apply_output="$(curl -fsS -X POST "http://127.0.0.1:${http_rebalance_port}/api/v1/apply-rebalance-proposal?worker=worker-b&artifacts_root=${rebalance_artifacts_root}")"
+printf '%s' "${rebalance_apply_output}" | grep -F '"action":"apply-rebalance-proposal"' >/dev/null
+printf '%s' "${rebalance_apply_output}" | grep -F "applied rebalance proposal for worker 'worker-b'" >/dev/null
+kill "${http_server_pid}" >/dev/null 2>&1 || true
+wait "${http_server_pid}" >/dev/null 2>&1 || true
+http_server_pid=""
 "${build_dir}/comet-controller" show-state --db "${rebalance_db_path}" | grep -F "desired generation: 2" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${rebalance_db_path}" | grep -F "worker-b role=worker node=node-a gpu=1 fraction=1 placement_mode=movable share_mode=exclusive priority=100 preemptible=true memory_cap_mb=8192 placement=auto placement_action=materialized-rebalance-upgrade-to-exclusive placement_score=145 placement_decision=applied" >/dev/null
 "${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "plane_action=rebalance phase=verifying-move worker=worker-b generation=2 stable_samples=0/3 rollback_attempts=0" >/dev/null
@@ -380,6 +534,32 @@ PY
 "${build_dir}/comet-controller" show-host-observations --db "${db_path}" >/dev/null
 "${build_dir}/comet-controller" show-host-health --db "${db_path}" | grep -F "health=unknown" >/dev/null
 "${build_dir}/comet-controller" show-state --db "${db_path}" >/dev/null
+"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" >/tmp/comet-controller-serve.log 2>&1 &
+http_server_pid="$!"
+for _ in $(seq 1 50); do
+  if curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-assignments?node=node-a" >/tmp/comet-controller-api.json 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-assignments?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"observations":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health?node=node-a" | grep -F '"health":"unknown"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?node=node-a" | grep -F '"disk_name":"plane-alpha-shared"' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions?node=node-a" | grep -F '"actions":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan?node=node-a" | grep -F '"rebalance_plan":[]' >/dev/null
+curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan?node=node-a" | grep -F '"controller_gate"' >/dev/null
+curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/scheduler-tick?artifacts_root=${artifacts_root}" | grep -F '"action":"scheduler-tick"' >/dev/null
+curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/scheduler-tick?artifacts_root=${artifacts_root}" | grep -F 'step=rebalance-reconcile' >/dev/null
+curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rebalance-proposals?artifacts_root=${artifacts_root}" | grep -F '"action":"reconcile-rebalance-proposals"' >/dev/null
+curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rebalance-proposals?artifacts_root=${artifacts_root}" | grep -F 'blocked by controller gate' >/dev/null
+curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rollout-actions?artifacts_root=${artifacts_root}" | grep -F '"action":"reconcile-rollout-actions"' >/dev/null
+curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rollout-actions?artifacts_root=${artifacts_root}" | grep -F 'no rollout actions for current generation' >/dev/null
+kill "${http_server_pid}" >/dev/null 2>&1 || true
+wait "${http_server_pid}" >/dev/null 2>&1 || true
+http_server_pid=""
 "${build_dir}/comet-controller" render-infer-runtime --db "${db_path}" | grep -F '"gpu_nodes"' >/dev/null
 "${build_dir}/comet-controller" render-compose --db "${db_path}" --node node-a >/dev/null
 test -f "${artifacts_root}/alpha/node-a/docker-compose.yml"

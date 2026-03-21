@@ -7,6 +7,9 @@
 - disk declarations and realized disk runtime state are now stored separately, so controller/hostd can compare the desired disk inventory with the current realized host-side lifecycle instead of overloading one state model for both
 - the host agent now has a privileged Linux disk lifecycle path (`image -> loop -> mkfs -> mount`) plus an explicit unprivileged directory-backed fallback for local development and smoke scenarios
 - controller reporting can now show both declared disk inventory and realized disk lifecycle separately, including node-scoped disk views for operator inspection
+- the controller now also has a native HTTP server seam (`serve`) with JSON health, state, host-assignment, host-observation, host-health, node-availability, disk-state, rollout-action, and rebalance-plan endpoints, plus the first safe mutating orchestration endpoints for `scheduler-tick`, `reconcile-rebalance-proposals`, `reconcile-rollout-actions`, `apply-rebalance-proposal`, `set-rollout-action-status`, `enqueue-rollout-eviction`, and `apply-ready-rollout-action`
+- `comet-controller` can now also operate as a thin remote operator CLI for the common controller workflows through `--controller`, `COMET_CONTROLLER`, and `~/.config/comet/controller`, so the first Phase F bridge now covers both REST and CLI-over-HTTP
+- the current Phase F API contract also injects `api_version` plus `request.path` / `request.method` into JSON responses and normalizes API errors under `status=error` with `error.code` / `error.message`
 
 ## Current Implementation Boundary
 
