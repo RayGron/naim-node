@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -24,12 +25,14 @@
 #include <sys/statvfs.h>
 #include <sys/types.h>
 #include <thread>
+#include <future>
 #include <unistd.h>
 #include <vector>
 #include <array>
 #include <algorithm>
 
 #include <nlohmann/json.hpp>
+#include <openssl/sha.h>
 
 #include "comet/compose_renderer.h"
 #include "comet/crypto_utils.h"
@@ -62,6 +65,8 @@ enum class ComposeMode {
   Skip,
   Exec,
 };
+
+class HostdBackend;
 
 std::string ResolvedDockerCommand();
 std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
@@ -737,7 +742,14 @@ std::optional<comet::DesiredState> LoadLocalAppliedState(
 }
 
 void RewriteAggregateLocalState(const std::string& state_root, const std::string& node_name) {
-  const auto states = LoadAllLocalAppliedStates(state_root, node_name);
+  std::vector<comet::DesiredState> states;
+  for (const auto& plane_name : ListLocalPlaneNames(state_root, node_name)) {
+    const auto plane_state =
+        LoadStateFromPath(LocalPlaneStatePath(state_root, node_name, plane_name));
+    if (plane_state.has_value()) {
+      states.push_back(*plane_state);
+    }
+  }
   if (states.empty()) {
     RemoveStateFileIfExists(LocalStatePath(state_root, node_name));
     return;
@@ -975,6 +987,614 @@ std::string ShellQuote(const std::string& value) {
   }
   quoted += "'";
   return quoted;
+}
+
+bool RunCommandOk(const std::string& command);
+
+bool HasSuffix(const std::string& value, const std::string& suffix) {
+  return value.size() >= suffix.size() &&
+         value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string NormalizeLowercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+std::optional<std::filesystem::path> FindRepoRootFromPath(std::filesystem::path current) {
+  while (!current.empty()) {
+    if (std::filesystem::exists(current / "scripts" / "build-runtime-images.sh") &&
+        std::filesystem::exists(current / "runtime" / "base" / "Dockerfile")) {
+      return current;
+    }
+    const auto parent = current.parent_path();
+    if (parent.empty() || parent == current) {
+      break;
+    }
+    current = parent;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::filesystem::path> DetectCometRepoRoot() {
+  try {
+    if (const auto from_cwd = FindRepoRootFromPath(std::filesystem::current_path());
+        from_cwd.has_value()) {
+      return from_cwd;
+    }
+  } catch (...) {
+  }
+
+  std::array<char, 4096> buffer{};
+  const auto size = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+  if (size <= 0) {
+    return std::nullopt;
+  }
+  buffer[static_cast<std::size_t>(size)] = '\0';
+  return FindRepoRootFromPath(std::filesystem::path(buffer.data()).parent_path());
+}
+
+bool LocalRuntimeBinaryExists(
+    const std::filesystem::path& repo_root,
+    const std::string& image) {
+  if (image == "comet/infer-runtime:dev") {
+    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "comet-inferctl");
+  }
+  if (image == "comet/worker-runtime:dev") {
+    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "comet-workerd");
+  }
+  return true;
+}
+
+void EnsureLocalRuntimeBinary(
+    const std::filesystem::path& repo_root,
+    const std::string& image) {
+  if (LocalRuntimeBinaryExists(repo_root, image)) {
+    return;
+  }
+
+  const std::filesystem::path build_script = repo_root / "scripts" / "build-target.sh";
+  if (!std::filesystem::exists(build_script)) {
+    throw std::runtime_error(
+        "runtime image requires local binary, but build-target.sh is unavailable");
+  }
+
+  const std::string command =
+      "cd " + ShellQuote(repo_root.string()) +
+      " && " + ShellQuote(build_script.string()) + " linux x64 Debug";
+  if (!RunCommandOk(command)) {
+    throw std::runtime_error(
+        "failed to auto-build local comet binaries required for " + image);
+  }
+
+  if (!LocalRuntimeBinaryExists(repo_root, image)) {
+    throw std::runtime_error(
+        "local runtime binary is still missing after build for " + image);
+  }
+}
+
+bool DockerImageExists(const std::string& image) {
+  return RunCommandOk(
+      ResolvedDockerCommand() + " image inspect " + ShellQuote(image) + " >/dev/null 2>&1");
+}
+
+void BuildCometRuntimeImage(
+    const std::filesystem::path& repo_root,
+    const std::string& image) {
+  const std::string repo_root_quoted = ShellQuote(repo_root.string());
+  const std::string docker = ResolvedDockerCommand();
+
+  auto build_base = [&]() {
+    const std::string command =
+        docker + " build -f " + ShellQuote((repo_root / "runtime" / "base" / "Dockerfile").string()) +
+        " -t " + ShellQuote("comet/base-runtime:dev") + " " + repo_root_quoted;
+    if (!RunCommandOk(command)) {
+      throw std::runtime_error("failed to auto-build comet/base-runtime:dev");
+    }
+  };
+
+  auto build_runtime = [&](const std::string& dockerfile, const std::string& target_image) {
+    const std::string command =
+        docker + " build " +
+        " -f " + ShellQuote((repo_root / dockerfile).string()) +
+        " -t " + ShellQuote(target_image) + " " + repo_root_quoted;
+    if (!RunCommandOk(command)) {
+      throw std::runtime_error("failed to auto-build " + target_image);
+    }
+  };
+
+  if (image == "comet/base-runtime:dev") {
+    build_base();
+    return;
+  }
+  if (image == "comet/infer-runtime:dev") {
+    if (!DockerImageExists("comet/base-runtime:dev")) {
+      build_base();
+    }
+    EnsureLocalRuntimeBinary(repo_root, image);
+    build_runtime("runtime/infer/Dockerfile", image);
+    return;
+  }
+  if (image == "comet/worker-runtime:dev") {
+    if (!DockerImageExists("comet/base-runtime:dev")) {
+      build_base();
+    }
+    EnsureLocalRuntimeBinary(repo_root, image);
+    build_runtime("runtime/worker/Dockerfile", image);
+    return;
+  }
+  if (image == "comet/web-ui:dev") {
+    const std::string command =
+        docker + " build -f " +
+        ShellQuote((repo_root / "runtime" / "web-ui" / "Dockerfile").string()) +
+        " -t " + ShellQuote(image) + " " + repo_root_quoted;
+    if (!RunCommandOk(command)) {
+      throw std::runtime_error("failed to auto-build " + image);
+    }
+    return;
+  }
+
+  throw std::runtime_error("unsupported auto-build image '" + image + "'");
+}
+
+void EnsureRuntimeImageAvailable(const std::string& image) {
+  static std::set<std::string> ensured_images;
+  if (image.empty() || ensured_images.count(image) > 0 || DockerImageExists(image)) {
+    if (!image.empty()) {
+      ensured_images.insert(image);
+    }
+    return;
+  }
+
+  if (image.rfind("comet/", 0) == 0 && HasSuffix(image, ":dev")) {
+    if (const auto repo_root = DetectCometRepoRoot(); repo_root.has_value()) {
+      BuildCometRuntimeImage(*repo_root, image);
+      if (DockerImageExists(image)) {
+        ensured_images.insert(image);
+        return;
+      }
+    }
+  }
+
+  if (!RunCommandOk(ResolvedDockerCommand() + " pull " + ShellQuote(image))) {
+    throw std::runtime_error(
+        "required runtime image is unavailable locally and auto-build/pull failed: " + image);
+  }
+  if (!DockerImageExists(image)) {
+    throw std::runtime_error("required runtime image is still unavailable after pull: " + image);
+  }
+  ensured_images.insert(image);
+}
+
+void EnsureComposeImagesAvailable(const comet::NodeComposePlan& compose_plan, ComposeMode compose_mode) {
+  if (compose_mode != ComposeMode::Exec) {
+    return;
+  }
+  std::set<std::string> images;
+  for (const auto& service : compose_plan.services) {
+    if (!service.image.empty()) {
+      images.insert(service.image);
+    }
+  }
+  for (const auto& image : images) {
+    EnsureRuntimeImageAvailable(image);
+  }
+}
+
+json BuildAssignmentProgressPayload(
+    const std::string& phase,
+    const std::string& title,
+    const std::string& detail,
+    int percent,
+    const std::string& plane_name,
+    const std::string& node_name,
+    const std::optional<std::uintmax_t>& bytes_done = std::nullopt,
+    const std::optional<std::uintmax_t>& bytes_total = std::nullopt) {
+  json payload{
+      {"phase", phase},
+      {"title", title},
+      {"detail", detail},
+      {"percent", std::max(0, std::min(100, percent))},
+      {"plane_name", plane_name},
+      {"node_name", node_name},
+  };
+  if (bytes_done.has_value()) {
+    payload["bytes_done"] = *bytes_done;
+  }
+  if (bytes_total.has_value()) {
+    payload["bytes_total"] = *bytes_total;
+  }
+  return payload;
+}
+
+void PublishAssignmentProgress(
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id,
+    const json& progress);
+
+const comet::DiskSpec& RequirePlaneSharedDiskForNode(
+    const comet::DesiredState& state,
+    const std::string& node_name) {
+  for (const auto& disk : state.disks) {
+    if (disk.node_name == node_name && disk.kind == comet::DiskKind::PlaneShared) {
+      return disk;
+    }
+  }
+  throw std::runtime_error(
+      "plane '" + state.plane_name + "' is missing a plane-shared disk for node '" + node_name + "'");
+}
+
+std::string SharedDiskHostPathForContainerPath(
+    const comet::DiskSpec& shared_disk,
+    const std::string& container_path,
+    const std::string& fallback_relative_path) {
+  const std::filesystem::path shared_container_path(shared_disk.container_path);
+  const std::filesystem::path requested_path(container_path);
+  std::filesystem::path relative_path(fallback_relative_path);
+  if (!container_path.empty() &&
+      shared_container_path.is_absolute() &&
+      requested_path.is_absolute()) {
+    const auto shared_text = shared_container_path.generic_string();
+    const auto requested_text = requested_path.generic_string();
+    if (requested_text == shared_text) {
+      relative_path = ".";
+    } else if (requested_text.size() > shared_text.size() &&
+               requested_text.compare(0, shared_text.size(), shared_text) == 0 &&
+               requested_text[shared_text.size()] == '/') {
+      relative_path = requested_path.lexically_relative(shared_container_path);
+    }
+  }
+  return (std::filesystem::path(shared_disk.host_path) / relative_path).string();
+}
+
+std::string BootstrapModelTargetPath(
+    const comet::DesiredState& state,
+    const std::string& node_name) {
+  const auto& shared_disk = RequirePlaneSharedDiskForNode(state, node_name);
+  std::string filename = "model.gguf";
+  if (state.bootstrap_model.has_value()) {
+    const auto& bootstrap_model = *state.bootstrap_model;
+    if (bootstrap_model.target_filename.has_value() && !bootstrap_model.target_filename->empty()) {
+      filename = *bootstrap_model.target_filename;
+    } else if (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) {
+      filename = std::filesystem::path(*bootstrap_model.local_path).filename().string();
+    } else if (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) {
+      filename = std::filesystem::path(*bootstrap_model.source_url).filename().string();
+    }
+  }
+  if (filename.empty()) {
+    filename = "model.gguf";
+  }
+  return (std::filesystem::path(
+              SharedDiskHostPathForContainerPath(
+                  shared_disk,
+                  state.inference.gguf_cache_dir,
+                  "models/gguf")) /
+          filename)
+      .string();
+}
+
+std::string ActiveModelPathForNode(
+    const comet::DesiredState& state,
+    const std::string& node_name) {
+  const auto active_model_path = ControlFilePathForNode(state, node_name, "active-model.json");
+  if (!active_model_path.has_value()) {
+    throw std::runtime_error(
+        "plane '" + state.plane_name + "' is missing infer control path for node '" + node_name + "'");
+  }
+  return *active_model_path;
+}
+
+std::string BootstrapRuntimeModelPath(
+    const comet::DesiredState& state,
+    const std::string& target_host_path) {
+  const auto& shared_disk = RequirePlaneSharedDiskForNode(state, RequireSingleNodeName(state));
+  const std::filesystem::path target_path(target_host_path);
+  const std::filesystem::path shared_root(shared_disk.host_path);
+  std::string relative = target_path.lexically_relative(shared_root).generic_string();
+  if (relative.empty() || relative == ".") {
+    relative = target_path.filename().string();
+  }
+  return (std::filesystem::path(shared_disk.container_path) / relative).generic_string();
+}
+
+std::optional<std::uintmax_t> FileSizeIfExists(const std::string& path) {
+  std::error_code error;
+  const auto size = std::filesystem::file_size(path, error);
+  if (error) {
+    return std::nullopt;
+  }
+  return size;
+}
+
+std::string ComputeFileSha256Hex(const std::string& path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open file for sha256: " + path);
+  }
+  SHA256_CTX context;
+  SHA256_Init(&context);
+  std::array<char, 1024 * 1024> buffer{};
+  while (input.good()) {
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count > 0) {
+      SHA256_Update(&context, buffer.data(), static_cast<std::size_t>(count));
+    }
+  }
+  unsigned char digest[SHA256_DIGEST_LENGTH];
+  SHA256_Final(digest, &context);
+  std::ostringstream out;
+  out << std::hex << std::setfill('0');
+  for (unsigned char byte : digest) {
+    out << std::setw(2) << static_cast<int>(byte);
+  }
+  return out.str();
+}
+
+std::optional<std::uintmax_t> ProbeContentLength(const std::string& source_url) {
+  const std::string output = RunCommandCapture(
+      "/usr/bin/curl -fsSLI " + ShellQuote(source_url) + " 2>/dev/null || true");
+  std::optional<std::uintmax_t> content_length;
+  std::istringstream input(output);
+  std::string line;
+  while (std::getline(input, line)) {
+    const std::string trimmed = Trim(line);
+    if (trimmed.empty()) {
+      continue;
+    }
+    const auto colon = trimmed.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    const std::string key = NormalizeLowercase(Trim(trimmed.substr(0, colon)));
+    if (key != "content-length") {
+      continue;
+    }
+    try {
+      content_length = static_cast<std::uintmax_t>(std::stoull(Trim(trimmed.substr(colon + 1))));
+    } catch (...) {
+      content_length = std::nullopt;
+    }
+  }
+  return content_length;
+}
+
+void CopyFileWithProgress(
+    const std::string& source_path,
+    const std::string& target_path,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id,
+    const std::string& plane_name,
+    const std::string& node_name) {
+  const auto total_size = FileSizeIfExists(source_path);
+  EnsureParentDirectory(target_path);
+  const std::string temp_path = target_path + ".part";
+  std::ifstream input(source_path, std::ios::binary);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open bootstrap model source: " + source_path);
+  }
+  std::ofstream output(temp_path, std::ios::binary | std::ios::trunc);
+  if (!output.is_open()) {
+    throw std::runtime_error("failed to open bootstrap model target: " + temp_path);
+  }
+  std::array<char, 1024 * 1024> buffer{};
+  std::uintmax_t copied = 0;
+  while (input.good()) {
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count <= 0) {
+      break;
+    }
+    output.write(buffer.data(), count);
+    copied += static_cast<std::uintmax_t>(count);
+    int percent = total_size.has_value() && *total_size > 0
+                      ? 20 + static_cast<int>((static_cast<double>(copied) / *total_size) * 40.0)
+                      : 40;
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        BuildAssignmentProgressPayload(
+            "acquiring-model",
+            "Acquiring model",
+            "Copying bootstrap model into the plane shared disk.",
+            percent,
+            plane_name,
+            node_name,
+            copied,
+            total_size));
+  }
+  output.close();
+  if (!output.good()) {
+    throw std::runtime_error("failed to write bootstrap model target: " + temp_path);
+  }
+  std::filesystem::rename(temp_path, target_path);
+}
+
+void DownloadFileWithProgress(
+    const std::string& source_url,
+    const std::string& target_path,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id,
+    const std::string& plane_name,
+    const std::string& node_name) {
+  EnsureParentDirectory(target_path);
+  const std::string temp_path = target_path + ".part";
+  std::filesystem::remove(temp_path);
+  const auto content_length = ProbeContentLength(source_url);
+  auto future = std::async(
+      std::launch::async,
+      [command = "/usr/bin/curl -fL --silent --show-error --output " + ShellQuote(temp_path) +
+                     " " + ShellQuote(source_url)]() {
+        return std::system(command.c_str());
+      });
+  while (future.wait_for(std::chrono::milliseconds(500)) != std::future_status::ready) {
+    const auto bytes_done = FileSizeIfExists(temp_path).value_or(0);
+    int percent = 40;
+    if (content_length.has_value() && *content_length > 0) {
+      percent = 20 + static_cast<int>((static_cast<double>(bytes_done) / *content_length) * 40.0);
+    }
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        BuildAssignmentProgressPayload(
+            "acquiring-model",
+            "Acquiring model",
+            "Downloading bootstrap model into the plane shared disk.",
+            percent,
+            plane_name,
+            node_name,
+            bytes_done,
+            content_length));
+  }
+  const int rc = future.get();
+  if (rc != 0) {
+    throw std::runtime_error("failed to download bootstrap model from " + source_url);
+  }
+  std::filesystem::rename(temp_path, target_path);
+}
+
+void WriteBootstrapActiveModel(
+    const comet::DesiredState& state,
+    const std::string& node_name,
+    const std::string& target_host_path) {
+  const auto& bootstrap_model = *state.bootstrap_model;
+  const std::string runtime_model_path = BootstrapRuntimeModelPath(state, target_host_path);
+  WriteTextFile(
+      ActiveModelPathForNode(state, node_name),
+      json{
+          {"version", 1},
+          {"plane_name", state.plane_name},
+          {"model_id", bootstrap_model.model_id},
+          {"served_model_name",
+           bootstrap_model.served_model_name.has_value()
+               ? *bootstrap_model.served_model_name
+               : bootstrap_model.model_id},
+          {"cached_local_model_path", target_host_path},
+          {"cached_runtime_model_path", runtime_model_path},
+          {"runtime_model_path", runtime_model_path},
+      }
+          .dump(2));
+}
+
+void BootstrapPlaneModelIfNeeded(
+    const comet::DesiredState& state,
+    const std::string& node_name,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) {
+  if (state.instances.empty()) {
+    return;
+  }
+
+  const auto& shared_disk = RequirePlaneSharedDiskForNode(state, node_name);
+  if (!std::filesystem::exists(shared_disk.host_path)) {
+    throw std::runtime_error(
+        "plane shared disk path does not exist after ensure-disk: " + shared_disk.host_path);
+  }
+
+  PublishAssignmentProgress(
+      backend,
+      assignment_id,
+      BuildAssignmentProgressPayload(
+          "ensuring-shared-disk",
+          "Ensuring shared disk",
+          "Plane shared disk is mounted and ready for model/bootstrap data.",
+          12,
+          state.plane_name,
+          node_name));
+
+  const std::string active_model_path = ActiveModelPathForNode(state, node_name);
+  if (!state.bootstrap_model.has_value()) {
+    RemoveFileIfExists(active_model_path);
+    return;
+  }
+
+  const auto& bootstrap_model = *state.bootstrap_model;
+  const std::string target_path = BootstrapModelTargetPath(state, node_name);
+  bool already_present = std::filesystem::exists(target_path);
+  if (already_present && bootstrap_model.sha256.has_value()) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        BuildAssignmentProgressPayload(
+            "verifying-model",
+            "Verifying model",
+            "Checking the existing shared-disk model checksum.",
+            68,
+            state.plane_name,
+            node_name));
+    already_present = NormalizeLowercase(ComputeFileSha256Hex(target_path)) ==
+                      NormalizeLowercase(*bootstrap_model.sha256);
+  } else if (already_present && bootstrap_model.local_path.has_value()) {
+    const auto source_size = FileSizeIfExists(*bootstrap_model.local_path);
+    const auto target_size = FileSizeIfExists(target_path);
+    already_present = source_size.has_value() && target_size.has_value() &&
+                      *source_size == *target_size;
+  } else if (already_present && bootstrap_model.source_url.has_value()) {
+    const auto remote_size = ProbeContentLength(*bootstrap_model.source_url);
+    const auto target_size = FileSizeIfExists(target_path);
+    already_present = remote_size.has_value() && target_size.has_value() &&
+                      *remote_size == *target_size;
+  }
+
+  if (!already_present) {
+    if (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) {
+      CopyFileWithProgress(
+          *bootstrap_model.local_path,
+          target_path,
+          backend,
+          assignment_id,
+          state.plane_name,
+          node_name);
+    } else if (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) {
+      DownloadFileWithProgress(
+          *bootstrap_model.source_url,
+          target_path,
+          backend,
+          assignment_id,
+          state.plane_name,
+          node_name);
+    }
+  }
+
+  if (bootstrap_model.sha256.has_value()) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        BuildAssignmentProgressPayload(
+            "verifying-model",
+            "Verifying model",
+            "Verifying the model checksum in the shared disk.",
+            72,
+            state.plane_name,
+            node_name));
+    if (NormalizeLowercase(ComputeFileSha256Hex(target_path)) !=
+        NormalizeLowercase(*bootstrap_model.sha256)) {
+      throw std::runtime_error(
+          "bootstrap model checksum mismatch for " + target_path);
+    }
+  }
+
+  if ((!bootstrap_model.local_path.has_value() || bootstrap_model.local_path->empty()) &&
+      (!bootstrap_model.source_url.has_value() || bootstrap_model.source_url->empty()) &&
+      !std::filesystem::exists(target_path)) {
+    RemoveFileIfExists(active_model_path);
+    return;
+  }
+
+  PublishAssignmentProgress(
+      backend,
+      assignment_id,
+      BuildAssignmentProgressPayload(
+          "activating-model",
+          "Activating model",
+          "Writing active-model.json for infer and worker runtime.",
+          80,
+          state.plane_name,
+          node_name));
+  WriteBootstrapActiveModel(state, node_name, target_path);
 }
 
 bool RunCommandOk(const std::string& command) {
@@ -1227,6 +1847,31 @@ std::string CurrentTimestampString() {
   return buffer;
 }
 
+std::optional<std::tm> ParseDisplayTimestamp(const std::string& value) {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  for (const char* format : {"%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"}) {
+    std::tm tm{};
+    std::istringstream input(value);
+    input >> std::get_time(&tm, format);
+    if (!input.fail()) {
+      return tm;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string FormatDisplayTimestamp(const std::string& value) {
+  const auto parsed = ParseDisplayTimestamp(value);
+  if (!parsed.has_value()) {
+    return value.empty() ? "(empty)" : value;
+  }
+  std::ostringstream output;
+  output << std::put_time(&*parsed, "%d/%m/%Y %H:%M:%S");
+  return output.str();
+}
+
 std::string SerializeEventPayload(const json& payload) {
   return payload.dump();
 }
@@ -1241,6 +1886,9 @@ class HostdBackend {
       int assignment_id,
       comet::HostAssignmentStatus status,
       const std::string& status_message) = 0;
+  virtual bool UpdateHostAssignmentProgress(
+      int assignment_id,
+      const json& progress) = 0;
   virtual void UpsertHostObservation(const comet::HostObservation& observation) = 0;
   virtual void AppendEvent(const comet::EventRecord& event) = 0;
   virtual void UpsertDiskRuntimeState(const comet::DiskRuntimeState& state) = 0;
@@ -1476,6 +2124,9 @@ comet::HostAssignment ParseAssignmentPayload(const json& payload) {
   assignment.status =
       comet::ParseHostAssignmentStatus(payload.value("status", std::string("pending")));
   assignment.status_message = payload.value("status_message", std::string{});
+  if (payload.contains("progress") && !payload.at("progress").is_null()) {
+    assignment.progress_json = payload.at("progress").dump();
+  }
   return assignment;
 }
 
@@ -1556,6 +2207,12 @@ class LocalDbHostdBackend final : public HostdBackend {
     return store_.TransitionClaimedHostAssignment(assignment_id, status, status_message);
   }
 
+  bool UpdateHostAssignmentProgress(
+      int assignment_id,
+      const json& progress) override {
+    return store_.UpdateHostAssignmentProgress(assignment_id, progress.dump());
+  }
+
   void UpsertHostObservation(const comet::HostObservation& observation) override {
     store_.UpsertHostObservation(observation);
   }
@@ -1623,6 +2280,16 @@ class HttpHostdBackend final : public HostdBackend {
       return true;
     }
     throw std::runtime_error("unsupported remote assignment transition");
+  }
+
+  bool UpdateHostAssignmentProgress(
+      int assignment_id,
+      const json& progress) override {
+    SendEncryptedControllerJsonRequest(
+        "/api/v1/hostd/assignments/" + std::to_string(assignment_id) + "/progress",
+        progress,
+        "assignments/" + std::to_string(assignment_id) + "/progress");
+    return true;
   }
 
   void UpsertHostObservation(const comet::HostObservation& observation) override {
@@ -1818,6 +2485,16 @@ class HttpHostdBackend final : public HostdBackend {
   std::uint64_t host_sequence_ = 0;
   std::uint64_t controller_sequence_ = 0;
 };
+
+void PublishAssignmentProgress(
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id,
+    const json& progress) {
+  if (backend == nullptr || !assignment_id.has_value()) {
+    return;
+  }
+  backend->UpdateHostAssignmentProgress(*assignment_id, progress);
+}
 
 std::unique_ptr<HostdBackend> CreateHostdBackend(
     const std::optional<std::string>& db_path,
@@ -2887,6 +3564,7 @@ void ApplyNodePlan(
     const comet::NodeComposePlan& compose_plan,
     const std::optional<std::string>& runtime_root,
     ComposeMode compose_mode,
+    const std::optional<int>& assignment_id,
     HostdBackend* backend) {
   std::cout << "applying node=" << plan.node_name << "\n";
   std::cout << "compose=" << plan.compose_file_path << "\n";
@@ -2965,6 +3643,16 @@ void ApplyNodePlan(
         PrintOperationApplied(operation, "planned");
         break;
       case comet::HostOperationKind::WriteInferRuntimeConfig:
+        PublishAssignmentProgress(
+            backend,
+            assignment_id,
+            BuildAssignmentProgressPayload(
+                "rendering-runtime",
+                "Rendering runtime",
+                "Writing infer runtime configuration.",
+                84,
+                desired_node_state.plane_name,
+                plan.node_name));
         EnsureParentDirectory(operation.target);
         WriteTextFile(operation.target, comet::RenderInferRuntimeConfigJson(desired_node_state));
         PrintOperationApplied(operation, "applied");
@@ -2974,6 +3662,16 @@ void ApplyNodePlan(
         PrintOperationApplied(operation, "applied");
         break;
       case comet::HostOperationKind::WriteComposeFile:
+        PublishAssignmentProgress(
+            backend,
+            assignment_id,
+            BuildAssignmentProgressPayload(
+                "rendering-runtime",
+                "Rendering runtime",
+                "Writing docker compose plan for the node.",
+                88,
+                desired_node_state.plane_name,
+                plan.node_name));
         WriteTextFile(operation.target, comet::RenderComposeYaml(compose_plan));
         PrintOperationApplied(operation, "applied");
         break;
@@ -2982,6 +3680,17 @@ void ApplyNodePlan(
         PrintOperationApplied(operation, "applied");
         break;
       case comet::HostOperationKind::ComposeUp:
+        PublishAssignmentProgress(
+            backend,
+            assignment_id,
+            BuildAssignmentProgressPayload(
+                "starting-runtime",
+                "Starting runtime",
+                "Starting infer and worker services on the node.",
+                92,
+                desired_node_state.plane_name,
+                plan.node_name));
+        EnsureComposeImagesAvailable(compose_plan, compose_mode);
         RunComposeCommand(operation.target, "up -d", compose_mode);
         PrintOperationApplied(
             operation,
@@ -3153,7 +3862,7 @@ void ShowRuntimeStatus(
             << "\n";
   std::cout << "supervisor_pid=" << runtime_status->supervisor_pid << "\n";
   std::cout << "started_at="
-            << (runtime_status->started_at.empty() ? "(empty)" : runtime_status->started_at)
+            << FormatDisplayTimestamp(runtime_status->started_at)
             << "\n";
   std::cout << "enabled_gpu_nodes=" << runtime_status->enabled_gpu_nodes << "\n";
   std::cout << "registry_entries=" << runtime_status->registry_entries << "\n";
@@ -3282,6 +3991,19 @@ void PersistDiskRuntimeStateForDesiredDisks(
   }
 }
 
+void EnsureDesiredDisksReady(
+    HostdBackend* backend,
+    const comet::DesiredState& desired_node_state,
+    const std::optional<std::string>& runtime_root) {
+  for (const auto& disk : desired_node_state.disks) {
+    const auto realized_state =
+        EnsureDesiredDiskRuntimeState(disk, disk.name + "@" + disk.node_name, runtime_root);
+    if (backend != nullptr) {
+      backend->UpsertDiskRuntimeState(realized_state);
+    }
+  }
+}
+
 void PersistDiskRuntimeStateForRemovedDisks(
     HostdBackend* backend,
     const std::optional<comet::DesiredState>& previous_state,
@@ -3373,6 +4095,7 @@ void ApplyDesiredNodeState(
     ComposeMode compose_mode,
     const std::string& source_label,
     const std::optional<int>& desired_generation,
+    const std::optional<int>& assignment_id,
     HostdBackend* backend) {
   const std::string node_name = RequireSingleNodeName(desired_node_state);
   const std::string& plane_name = desired_node_state.plane_name;
@@ -3422,8 +4145,21 @@ void ApplyDesiredNodeState(
     }
     RewriteAggregateLocalState(state_root, node_name);
     RewriteAggregateLocalGeneration(state_root, node_name);
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        BuildAssignmentProgressPayload(
+            "completed",
+            "Assignment complete",
+            "No local changes were required for the node.",
+            100,
+            plane_name,
+            node_name));
     return;
   }
+
+  EnsureDesiredDisksReady(backend, desired_node_state, runtime_root);
+  BootstrapPlaneModelIfNeeded(desired_node_state, node_name, backend, assignment_id);
 
   ApplyNodePlan(
       execution_plan,
@@ -3431,6 +4167,7 @@ void ApplyDesiredNodeState(
       compose_plan,
       runtime_root,
       compose_mode,
+      assignment_id,
       backend);
   PersistDiskRuntimeStateForRemovedDisks(backend, current_local_state, execution_plan);
   PersistDiskRuntimeStateForDesiredDisks(
@@ -3451,6 +4188,16 @@ void ApplyDesiredNodeState(
   RewriteAggregateLocalState(state_root, node_name);
   RewriteAggregateLocalGeneration(state_root, node_name);
   if (compose_mode == ComposeMode::Exec) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        BuildAssignmentProgressPayload(
+            "waiting-runtime-ready",
+            "Waiting for runtime readiness",
+            "Runtime was started; waiting for infer and worker observation to converge.",
+            97,
+            plane_name,
+            node_name));
     if (NodeHasInferInstance(desired_node_state)) {
       WaitForLocalRuntimeStatus(state_root, node_name, plane_name, std::chrono::seconds(20));
     }
@@ -3461,6 +4208,16 @@ void ApplyDesiredNodeState(
         ExpectedRuntimeStatusCountForNode(desired_node_state, node_name),
         std::chrono::seconds(20));
   }
+  PublishAssignmentProgress(
+      backend,
+      assignment_id,
+      BuildAssignmentProgressPayload(
+          "completed",
+          "Assignment complete",
+          "Desired runtime state was applied on the node.",
+          100,
+          plane_name,
+          node_name));
 }
 
 void ApplyStateOps(
@@ -3494,6 +4251,7 @@ void ApplyStateOps(
         compose_mode,
         "hostd apply-state-ops",
         desired_generation,
+        std::nullopt,
         &backend);
     ReportObservedState(
         backend,
@@ -3558,6 +4316,7 @@ void ApplyNextAssignment(
     if (assignment->assignment_type != "apply-node-state" &&
         assignment->assignment_type != "drain-node-state" &&
         assignment->assignment_type != "stop-plane-state" &&
+        assignment->assignment_type != "delete-plane-state" &&
         assignment->assignment_type != "evict-workers") {
       throw std::runtime_error(
           "unsupported assignment type '" + assignment->assignment_type + "'");
@@ -3568,6 +4327,7 @@ void ApplyNextAssignment(
         runtime_root);
     const bool is_drain_assignment = assignment->assignment_type == "drain-node-state";
     const bool is_stop_assignment = assignment->assignment_type == "stop-plane-state";
+    const bool is_delete_assignment = assignment->assignment_type == "delete-plane-state";
     const bool is_eviction_assignment = assignment->assignment_type == "evict-workers";
     const auto victim_names =
         is_eviction_assignment ? ParseTaggedCsv(assignment->status_message, "victims")
@@ -3575,19 +4335,33 @@ void ApplyNextAssignment(
     const auto victim_host_pids =
         is_eviction_assignment ? CaptureServiceHostPids(victim_names)
                                : std::map<std::string, int>{};
+    const std::string applying_status_message =
+        (is_drain_assignment ? "draining node for desired generation "
+                             : (is_stop_assignment
+                                    ? "stopping plane state for desired generation "
+                             : (is_delete_assignment
+                                    ? "deleting plane state for desired generation "
+                             : (is_eviction_assignment
+                                    ? "evicting rollout workers for desired generation "
+                                    : "applying desired generation ")))) +
+        std::to_string(assignment->desired_generation) + assignment_context;
+    const std::string apply_trace_label =
+        is_drain_assignment
+            ? "hostd drain-assignment-ops"
+            : (is_stop_assignment
+                   ? "hostd stop-plane-assignment-ops"
+                   : (is_delete_assignment
+                          ? "hostd delete-plane-assignment-ops"
+                          : (is_eviction_assignment
+                                 ? "hostd eviction-assignment-ops"
+                                 : "hostd apply-assignment-ops")));
     ReportObservedState(
         *backend,
         BuildObservedStateSnapshot(
             node_name,
             state_root,
             comet::HostObservationStatus::Applying,
-            (is_drain_assignment ? "draining node for desired generation "
-                                 : (is_stop_assignment
-                                        ? "stopping plane state for desired generation "
-                                 : (is_eviction_assignment
-                                        ? "evicting rollout workers for desired generation "
-                                        : "applying desired generation "))) +
-                std::to_string(assignment->desired_generation) + assignment_context,
+            applying_status_message,
             assignment->id),
         "hostd observed-state-update");
     ApplyDesiredNodeState(
@@ -3596,14 +4370,9 @@ void ApplyNextAssignment(
         runtime_root,
         state_root,
         compose_mode,
-        is_drain_assignment
-            ? "hostd drain-assignment-ops"
-            : (is_stop_assignment
-                   ? "hostd stop-plane-assignment-ops"
-            : (is_eviction_assignment
-                   ? "hostd eviction-assignment-ops"
-                   : "hostd apply-assignment-ops")),
+        apply_trace_label,
         assignment->desired_generation,
+        assignment->id,
         backend.get());
     if (is_eviction_assignment &&
         compose_mode == ComposeMode::Exec &&
@@ -3664,6 +4433,16 @@ void ApplyNextAssignment(
         assignment->id);
   } catch (const std::exception& error) {
     const std::string error_message = error.what();
+    PublishAssignmentProgress(
+        backend.get(),
+        assignment->id,
+        BuildAssignmentProgressPayload(
+            "failed",
+            "Assignment failed",
+            error_message,
+            100,
+            assignment->plane_name,
+            node_name));
     ReportObservedState(
         *backend,
         BuildObservedStateSnapshot(

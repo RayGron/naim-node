@@ -26,6 +26,28 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 190, 255, 0.7) rgba(6, 17, 34, 0.85);
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(6, 17, 34, 0.85);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(120, 190, 255, 0.92), rgba(255, 213, 94, 0.75));
+  border: 2px solid rgba(6, 17, 34, 0.9);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(160, 214, 255, 0.98), rgba(255, 224, 128, 0.82));
 }
 
 html,
@@ -65,16 +87,21 @@ body {
 .hero,
 .panel,
 .subpanel,
+.meta-card {
+  backdrop-filter: blur(18px);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-glow);
+}
+
 .summary-card,
 .plane-card,
 .instance-card,
 .node-card,
 .assignment-card,
 .list-card,
-.event-card,
-.meta-card {
-  backdrop-filter: blur(18px);
-  background: var(--panel);
+.event-card {
+  background: rgba(7, 22, 44, 0.88);
   border: 1px solid var(--panel-border);
   box-shadow: var(--panel-glow);
 }
@@ -191,6 +218,16 @@ body {
   color: var(--yellow);
 }
 
+.danger-button {
+  border-color: rgba(255, 104, 104, 0.3);
+  color: #ffd9d9;
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: rgba(255, 104, 104, 0.55);
+  color: #ff8c8c;
+}
+
 .ghost-button:disabled {
   opacity: 0.45;
   cursor: default;
@@ -259,6 +296,29 @@ body {
   border-color: rgba(255, 213, 94, 0.42);
 }
 
+.editor-textarea {
+  width: 100%;
+  min-height: 460px;
+  resize: vertical;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 190, 255, 0.2);
+  background: rgba(4, 15, 31, 0.86);
+  color: var(--text);
+  padding: 14px;
+  font: 0.9rem/1.5 var(--font-mono);
+}
+
+.editor-textarea:focus {
+  outline: 1px solid rgba(255, 213, 94, 0.42);
+  border-color: rgba(255, 213, 94, 0.42);
+}
+
+.editor-copy {
+  margin: 0 0 4px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
 .bundle-output {
   margin: 0;
   padding: 12px;
@@ -276,10 +336,11 @@ body {
 
 .plane-card {
   width: 100%;
-  text-align: left;
   padding: 14px;
   border-radius: var(--radius-lg);
-  cursor: pointer;
+  color: var(--text);
+  display: grid;
+  gap: 12px;
 }
 
 .plane-card.is-selected {
@@ -287,9 +348,47 @@ body {
   box-shadow: 0 0 0 1px rgba(255, 213, 94, 0.22), var(--panel-glow);
 }
 
+.plane-card-main {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plane-card-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.compact-button {
+  padding: 8px 12px;
+  font-size: 0.9rem;
+}
+
+.icon-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
 .plane-name {
   font-size: 1.05rem;
   font-weight: 700;
+  color: var(--text);
 }
 
 .plane-card-meta {
@@ -318,6 +417,49 @@ body {
 .summary-grid {
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   margin-bottom: 18px;
+}
+
+.action-progress-card {
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(120, 190, 255, 0.2);
+  background: rgba(8, 24, 48, 0.88);
+  box-shadow: var(--panel-glow);
+  display: grid;
+  gap: 12px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(120, 190, 255, 0.14);
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--blue-strong), var(--yellow));
+  box-shadow: 0 0 20px rgba(79, 166, 255, 0.28);
+  transition: width 220ms ease;
+}
+
+.progress-fill.is-complete {
+  background: linear-gradient(90deg, var(--green), #8af0bd);
+  box-shadow: 0 0 20px rgba(76, 213, 143, 0.24);
+}
+
+.progress-fill.is-failed {
+  background: linear-gradient(90deg, var(--red), #ffb36f);
+  box-shadow: 0 0 20px rgba(255, 99, 99, 0.22);
+}
+
+.progress-detail {
+  color: var(--text-dim);
+  font-size: 0.92rem;
 }
 
 .panel-grid {
@@ -373,6 +515,10 @@ body {
   margin-top: 12px;
 }
 
+.compact-metric-grid {
+  margin-top: 10px;
+}
+
 .metric-row {
   display: flex;
   justify-content: space-between;
@@ -387,6 +533,7 @@ body {
   color: var(--text);
   font-weight: 600;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .status-chip,
@@ -538,6 +685,32 @@ body {
   color: var(--text-dim);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(1, 8, 18, 0.72);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.modal-card {
+  width: min(1100px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--panel-border);
+  background: rgba(6, 18, 39, 0.96);
+  box-shadow: var(--panel-glow);
+  padding: 20px;
+}
+
+.plane-editor-modal {
+  display: grid;
+  gap: 14px;
+}
+
 @media (max-width: 1200px) {
   .main-grid {
     grid-template-columns: 1fr;
@@ -569,6 +742,16 @@ body {
 @media (max-width: 640px) {
   .app-shell {
     padding: 14px;
+  }
+
+  .modal-backdrop {
+    padding: 14px;
+  }
+
+  .modal-card {
+    width: calc(100vw - 28px);
+    max-height: calc(100vh - 28px);
+    padding: 16px;
   }
 
   .summary-grid {

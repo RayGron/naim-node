@@ -5,10 +5,13 @@ CREATE TABLE planes (
     name TEXT PRIMARY KEY,
     shared_disk_name TEXT NOT NULL,
     control_root TEXT NOT NULL DEFAULT '',
+    artifacts_root TEXT NOT NULL DEFAULT '',
+    bootstrap_model_json TEXT NOT NULL DEFAULT '',
     inference_config_json TEXT NOT NULL DEFAULT '',
     gateway_config_json TEXT NOT NULL DEFAULT '',
     runtime_gpu_nodes_json TEXT NOT NULL DEFAULT '',
     generation INTEGER NOT NULL DEFAULT 1,
+    applied_generation INTEGER NOT NULL DEFAULT 0,
     rebalance_iteration INTEGER NOT NULL DEFAULT 0,
     state TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -150,6 +153,7 @@ CREATE TABLE host_assignments (
     artifacts_root TEXT NOT NULL,
     status TEXT NOT NULL,
     status_message TEXT NOT NULL DEFAULT '',
+    progress_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

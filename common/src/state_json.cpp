@@ -62,6 +62,28 @@ json ToJson(const RuntimeGpuNode& gpu_node) {
   return result;
 }
 
+json ToJson(const BootstrapModelSpec& bootstrap_model) {
+  json result = {
+      {"model_id", bootstrap_model.model_id},
+  };
+  if (bootstrap_model.served_model_name.has_value()) {
+    result["served_model_name"] = *bootstrap_model.served_model_name;
+  }
+  if (bootstrap_model.local_path.has_value()) {
+    result["local_path"] = *bootstrap_model.local_path;
+  }
+  if (bootstrap_model.source_url.has_value()) {
+    result["source_url"] = *bootstrap_model.source_url;
+  }
+  if (bootstrap_model.target_filename.has_value()) {
+    result["target_filename"] = *bootstrap_model.target_filename;
+  }
+  if (bootstrap_model.sha256.has_value()) {
+    result["sha256"] = *bootstrap_model.sha256;
+  }
+  return result;
+}
+
 json ToJson(const DiskSpec& disk) {
   return json{
       {"name", disk.name},
@@ -175,6 +197,27 @@ InstanceSpec InstanceSpecFromJson(const json& value) {
   return instance;
 }
 
+BootstrapModelSpec BootstrapModelSpecFromJson(const json& value) {
+  BootstrapModelSpec bootstrap_model;
+  bootstrap_model.model_id = value.value("model_id", std::string{});
+  if (value.contains("served_model_name") && !value.at("served_model_name").is_null()) {
+    bootstrap_model.served_model_name = value.at("served_model_name").get<std::string>();
+  }
+  if (value.contains("local_path") && !value.at("local_path").is_null()) {
+    bootstrap_model.local_path = value.at("local_path").get<std::string>();
+  }
+  if (value.contains("source_url") && !value.at("source_url").is_null()) {
+    bootstrap_model.source_url = value.at("source_url").get<std::string>();
+  }
+  if (value.contains("target_filename") && !value.at("target_filename").is_null()) {
+    bootstrap_model.target_filename = value.at("target_filename").get<std::string>();
+  }
+  if (value.contains("sha256") && !value.at("sha256").is_null()) {
+    bootstrap_model.sha256 = value.at("sha256").get<std::string>();
+  }
+  return bootstrap_model;
+}
+
 json DesiredStateToJson(const DesiredState& state) {
   json result = {
       {"plane_name", state.plane_name},
@@ -206,6 +249,9 @@ json DesiredStateToJson(const DesiredState& state) {
       {"disks", json::array()},
       {"instances", json::array()},
   };
+  if (state.bootstrap_model.has_value()) {
+    result["bootstrap_model"] = ToJson(*state.bootstrap_model);
+  }
 
   for (const auto& gpu_node : state.runtime_gpu_nodes) {
     result["runtime_gpu_nodes"].push_back(ToJson(gpu_node));
@@ -229,6 +275,9 @@ DesiredState DesiredStateFromJson(const json& value) {
   state.plane_shared_disk_name = value.at("plane_shared_disk_name").get<std::string>();
   state.control_root =
       value.value("control_root", "/comet/shared/control/" + state.plane_name);
+  if (value.contains("bootstrap_model") && value.at("bootstrap_model").is_object()) {
+    state.bootstrap_model = BootstrapModelSpecFromJson(value.at("bootstrap_model"));
+  }
 
   if (value.contains("inference") && value.at("inference").is_object()) {
     const auto& inference = value.at("inference");
@@ -292,6 +341,7 @@ DesiredState SliceDesiredStateForNode(
   result.plane_name = state.plane_name;
   result.plane_shared_disk_name = state.plane_shared_disk_name;
   result.control_root = state.control_root;
+  result.bootstrap_model = state.bootstrap_model;
   result.inference = state.inference;
   result.gateway = state.gateway;
   result.runtime_gpu_nodes = state.runtime_gpu_nodes;

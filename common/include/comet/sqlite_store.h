@@ -48,6 +48,7 @@ struct HostAssignment {
   std::string artifacts_root;
   HostAssignmentStatus status = HostAssignmentStatus::Pending;
   std::string status_message;
+  std::string progress_json = "{}";
 };
 
 struct HostObservation {
@@ -162,7 +163,9 @@ struct PlaneRecord {
   std::string name;
   std::string shared_disk_name;
   std::string control_root;
+  std::string artifacts_root;
   int generation = 0;
+  int applied_generation = 0;
   int rebalance_iteration = 0;
   std::string state;
   std::string created_at;
@@ -212,6 +215,7 @@ class ControllerStore {
   std::optional<int> LoadRebalanceIteration(const std::string& plane_name) const;
   std::vector<PlaneRecord> LoadPlanes() const;
   std::optional<PlaneRecord> LoadPlane(const std::string& plane_name) const;
+  void DeletePlane(const std::string& plane_name);
   void UpsertRegisteredHost(const RegisteredHostRecord& host);
   std::optional<RegisteredHostRecord> LoadRegisteredHost(const std::string& node_name) const;
   std::vector<RegisteredHostRecord> LoadRegisteredHosts(
@@ -219,6 +223,12 @@ class ControllerStore {
   bool UpdatePlaneState(
       const std::string& plane_name,
       const std::string& state);
+  bool UpdatePlaneAppliedGeneration(
+      const std::string& plane_name,
+      int applied_generation);
+  bool UpdatePlaneArtifactsRoot(
+      const std::string& plane_name,
+      const std::string& artifacts_root);
   int SupersedeHostAssignmentsForPlane(
       const std::string& plane_name,
       const std::string& status_message);
@@ -284,6 +294,9 @@ class ControllerStore {
       const std::optional<HostAssignmentStatus>& status = std::nullopt,
       const std::optional<std::string>& plane_name = std::nullopt) const;
   std::optional<HostAssignment> ClaimNextHostAssignment(const std::string& node_name);
+  bool UpdateHostAssignmentProgress(
+      int assignment_id,
+      const std::string& progress_json);
   bool TransitionClaimedHostAssignment(
       int assignment_id,
       HostAssignmentStatus status,

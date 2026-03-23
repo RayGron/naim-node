@@ -2,12 +2,6 @@
   "name": "comet-node",
   "version-string": "0.1.0",
   "dependencies": [
-    {
-      "name": "ggml",
-      "default-features": false,
-      "features": ["cuda"]
-    },
-    "llama-cpp",
     "nlohmann-json",
     "openssl",
     "sqlite3"

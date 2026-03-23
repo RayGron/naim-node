@@ -179,6 +179,19 @@ std::string HealthFromAge(
 std::optional<comet::RuntimeStatus> ParseRuntimeStatus(
     const comet::HostObservation& observation);
 
+std::vector<comet::HostObservation> FilterHostObservationsForPlane(
+    const std::vector<comet::HostObservation>& observations,
+    const std::string& plane_name);
+
+std::map<std::string, comet::HostAssignment> BuildLatestPlaneAssignmentsByNode(
+    const std::vector<comet::HostAssignment>& assignments);
+
+int ComputeEffectivePlaneAppliedGeneration(
+    const comet::PlaneRecord& plane,
+    const std::optional<comet::DesiredState>& desired_state,
+    const std::optional<int>& desired_generation,
+    const std::vector<comet::HostObservation>& observations);
+
 std::vector<comet::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
     const comet::HostObservation& observation);
 
@@ -218,6 +231,32 @@ SchedulerRuntimeView LoadSchedulerRuntimeView(
     comet::ControllerStore& store,
     const std::optional<comet::DesiredState>& desired_state);
 
+void PrintAssignmentDispatchSummary(
+    const comet::DesiredState& desired_state,
+    const std::map<std::string, comet::NodeAvailabilityOverride>& availability_overrides,
+    const std::vector<comet::HostObservation>& observations,
+    int stale_after_seconds);
+
+void PrintSchedulerDecisionSummary(const comet::DesiredState& state);
+
+void PrintRolloutGateSummary(const comet::SchedulingPolicyReport& scheduling_report);
+
+void MaterializeComposeArtifacts(
+    const comet::DesiredState& desired_state,
+    const std::vector<comet::NodeExecutionPlan>& host_plans);
+
+void MaterializeInferRuntimeArtifact(
+    const comet::DesiredState& desired_state,
+    const std::string& artifacts_root);
+
+std::vector<comet::HostAssignment> BuildHostAssignments(
+    const comet::DesiredState& desired_state,
+    const std::string& artifacts_root,
+    int desired_generation,
+    const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
+    const std::vector<comet::HostObservation>& observations,
+    const std::optional<comet::SchedulingPolicyReport>& scheduling_report);
+
 void PrintUsage() {
   std::cout
       << "Usage:\n"
@@ -252,6 +291,7 @@ void PrintUsage() {
       << "  comet-controller show-plane --plane <plane-name> [--db <path>]\n"
       << "  comet-controller start-plane --plane <plane-name> [--db <path>]\n"
       << "  comet-controller stop-plane --plane <plane-name> [--db <path>]\n"
+      << "  comet-controller delete-plane --plane <plane-name> [--db <path>]\n"
       << "  comet-controller show-hostd-hosts [--db <path>] [--node <node-name>]\n"
       << "  comet-controller revoke-hostd --node <node-name> [--db <path>] [--message <text>]\n"
       << "  comet-controller rotate-hostd-key --node <node-name> --public-key <pem-or-file> [--db <path>] [--message <text>]\n"
@@ -1022,6 +1062,12 @@ json BuildControllerHealthPayload(const std::string& db_path) {
   return payload;
 }
 
+bool ObservationMatchesPlane(
+    const comet::HostObservation& observation,
+    const std::string& plane_name);
+
+bool CanFinalizeDeletedPlane(comet::ControllerStore& store, const std::string& plane_name);
+
 json BuildControllerStatePayload(
     const std::string& db_path,
     const std::optional<std::string>& plane_name = std::nullopt) {
@@ -1051,6 +1097,8 @@ json BuildControllerStatePayload(
     plane_items.push_back(json{
         {"name", plane.name},
         {"generation", plane.generation},
+        {"applied_generation", plane.applied_generation},
+        {"staged_update", plane.generation > plane.applied_generation},
         {"rebalance_iteration", plane.rebalance_iteration},
         {"state", plane.state},
         {"created_at", plane.created_at},
@@ -1077,14 +1125,62 @@ json BuildControllerStatePayload(
 json BuildPlanesPayload(const std::string& db_path) {
   comet::ControllerStore store(db_path);
   store.Initialize();
+  for (const auto& plane : store.LoadPlanes()) {
+    if (plane.state != "deleting") {
+      continue;
+    }
+    if (!CanFinalizeDeletedPlane(store, plane.name)) {
+      continue;
+    }
+    store.DeletePlane(plane.name);
+    AppendControllerEvent(
+        store,
+        "plane",
+        "deleted",
+        "plane deleted from controller registry after cleanup convergence",
+        json{
+            {"plane_name", plane.name},
+            {"deleted_generation", plane.generation},
+        },
+        "");
+  }
 
   json items = json::array();
   for (const auto& plane : store.LoadPlanes()) {
     const auto desired_state = store.LoadDesiredState(plane.name);
+    const auto desired_generation = store.LoadDesiredGeneration(plane.name);
+    const auto observations =
+        FilterHostObservationsForPlane(store.LoadHostObservations(), plane.name);
+    const auto assignments = store.LoadHostAssignments(std::nullopt, std::nullopt, plane.name);
+    const int effective_applied_generation = ComputeEffectivePlaneAppliedGeneration(
+        plane,
+        desired_state,
+        desired_generation,
+        observations);
+    if (effective_applied_generation > plane.applied_generation) {
+      store.UpdatePlaneAppliedGeneration(plane.name, effective_applied_generation);
+    }
+    const auto latest_assignments_by_node = BuildLatestPlaneAssignmentsByNode(assignments);
+    int failed_assignments = 0;
+    int in_flight_assignments = 0;
+    for (const auto& [node_name, assignment] : latest_assignments_by_node) {
+      (void)node_name;
+      if (assignment.status == comet::HostAssignmentStatus::Failed) {
+        ++failed_assignments;
+      } else if (
+          assignment.status == comet::HostAssignmentStatus::Pending ||
+          assignment.status == comet::HostAssignmentStatus::Claimed) {
+        ++in_flight_assignments;
+      }
+    }
     items.push_back(json{
         {"name", plane.name},
         {"state", plane.state},
         {"generation", plane.generation},
+        {"applied_generation", effective_applied_generation},
+        {"staged_update", plane.generation > effective_applied_generation},
+        {"failed_assignments", failed_assignments},
+        {"in_flight_assignments", in_flight_assignments},
         {"rebalance_iteration", plane.rebalance_iteration},
         {"shared_disk_name", plane.shared_disk_name},
         {"control_root", plane.control_root},
@@ -1270,6 +1366,160 @@ std::vector<comet::HostObservation> FilterHostObservationsForPlane(
   return result;
 }
 
+bool ObservationBlocksPlaneDeletion(
+    const comet::HostObservation& observation,
+    const std::string& plane_name) {
+  if (!ObservationMatchesPlane(observation, plane_name)) {
+    return false;
+  }
+  if (observation.status != comet::HostObservationStatus::Idle) {
+    return true;
+  }
+  if (observation.observed_state_json.empty()) {
+    return false;
+  }
+  try {
+    const auto observed_state =
+        comet::DeserializeDesiredStateJson(observation.observed_state_json);
+    for (const auto& disk : observed_state.disks) {
+      if (disk.plane_name == plane_name) {
+        return true;
+      }
+    }
+    for (const auto& instance : observed_state.instances) {
+      if (instance.plane_name == plane_name) {
+        return true;
+      }
+    }
+    return false;
+  } catch (const std::exception&) {
+    return true;
+  }
+}
+
+bool HasBlockingPlaneObservations(
+    const std::vector<comet::HostObservation>& observations,
+    const std::string& plane_name) {
+  return std::any_of(
+      observations.begin(),
+      observations.end(),
+      [&](const auto& observation) {
+        return ObservationBlocksPlaneDeletion(observation, plane_name);
+      });
+}
+
+bool CanFinalizeDeletedPlane(comet::ControllerStore& store, const std::string& plane_name) {
+  const auto pending_assignments = store.LoadHostAssignments(
+      std::nullopt, comet::HostAssignmentStatus::Pending, plane_name);
+  const auto claimed_assignments = store.LoadHostAssignments(
+      std::nullopt, comet::HostAssignmentStatus::Claimed, plane_name);
+  if (!pending_assignments.empty() || !claimed_assignments.empty()) {
+    return false;
+  }
+  return !HasBlockingPlaneObservations(store.LoadHostObservations(), plane_name);
+}
+
+struct ObservedPlaneRuntimeSummary {
+  bool available = false;
+  int instance_count = 0;
+  int disk_count = 0;
+};
+
+ObservedPlaneRuntimeSummary SummarizeObservedPlaneRuntime(
+    const comet::HostObservation& observation,
+    const std::string& node_name,
+    const std::optional<std::string>& plane_name) {
+  if (observation.observed_state_json.empty()) {
+    return {};
+  }
+  try {
+    const auto observed_state =
+        comet::DeserializeDesiredStateJson(observation.observed_state_json);
+    const std::string target_plane =
+        plane_name.has_value() ? *plane_name : observed_state.plane_name;
+    if (target_plane.empty()) {
+      return {};
+    }
+
+    ObservedPlaneRuntimeSummary summary;
+    for (const auto& instance : observed_state.instances) {
+      if (instance.node_name == node_name && instance.plane_name == target_plane) {
+        ++summary.instance_count;
+      }
+    }
+    for (const auto& disk : observed_state.disks) {
+      if (disk.node_name == node_name && disk.plane_name == target_plane) {
+        ++summary.disk_count;
+      }
+    }
+    summary.available =
+        observed_state.plane_name == target_plane || summary.instance_count > 0 ||
+        summary.disk_count > 0;
+    return summary;
+  } catch (...) {
+    return {};
+  }
+}
+
+struct DashboardRuntimeFallback {
+  bool available = false;
+  bool launch_ready = false;
+  std::string runtime_phase;
+};
+
+DashboardRuntimeFallback DetermineDashboardRuntimeFallback(
+    const comet::HostObservation& observation,
+    const std::string& node_name,
+    const std::optional<std::string>& plane_name,
+    const std::optional<std::string>& plane_state,
+    int desired_generation,
+    int desired_instance_count,
+    int desired_disk_count,
+    const std::string& health) {
+  DashboardRuntimeFallback fallback;
+  if (health == "stale" || health == "failed") {
+    return fallback;
+  }
+
+  const auto observed_runtime =
+      SummarizeObservedPlaneRuntime(observation, node_name, plane_name);
+  const bool has_applied_generation =
+      observation.applied_generation.has_value() &&
+      *observation.applied_generation >= desired_generation;
+  const bool has_observed_runtime =
+      observed_runtime.available || has_applied_generation;
+  if (!has_observed_runtime) {
+    return fallback;
+  }
+
+  fallback.available = true;
+  const std::string state = plane_state.value_or("");
+  if (state == "stopped") {
+    const bool stop_converged =
+        has_applied_generation &&
+        observed_runtime.instance_count == 0 &&
+        (desired_disk_count == 0 || observed_runtime.disk_count >= desired_disk_count);
+    fallback.launch_ready = stop_converged;
+    fallback.runtime_phase = stop_converged ? "stopped" : "stopping";
+    return fallback;
+  }
+
+  if (state == "running") {
+    const bool start_converged =
+        has_applied_generation &&
+        (desired_instance_count == 0 ||
+         observed_runtime.instance_count >= desired_instance_count);
+    fallback.launch_ready = start_converged;
+    fallback.runtime_phase = start_converged ? "applied" : "starting";
+    return fallback;
+  }
+
+  fallback.launch_ready =
+      has_applied_generation && observed_runtime.instance_count >= desired_instance_count;
+  fallback.runtime_phase = fallback.launch_ready ? "applied" : "pending";
+  return fallback;
+}
+
 HostObservationsViewData LoadHostObservationsViewData(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
@@ -1395,6 +1645,10 @@ json BuildEventPayloadItem(const comet::EventRecord& event) {
 }
 
 json BuildAssignmentPayloadItem(const comet::HostAssignment& assignment) {
+  json progress = nullptr;
+  if (!assignment.progress_json.empty() && assignment.progress_json != "{}") {
+    progress = json::parse(assignment.progress_json);
+  }
   return json{
       {"id", assignment.id},
       {"node_name", assignment.node_name},
@@ -1407,7 +1661,34 @@ json BuildAssignmentPayloadItem(const comet::HostAssignment& assignment) {
       {"artifacts_root", assignment.artifacts_root},
       {"status", comet::ToString(assignment.status)},
       {"status_message", assignment.status_message},
+      {"progress", progress},
   };
+}
+
+json BuildBootstrapModelPayloadItem(
+    const std::optional<comet::BootstrapModelSpec>& bootstrap_model) {
+  if (!bootstrap_model.has_value()) {
+    return nullptr;
+  }
+  json item{
+      {"model_id", bootstrap_model->model_id},
+      {"served_model_name",
+       bootstrap_model->served_model_name.has_value() ? json(*bootstrap_model->served_model_name)
+                                                      : json(nullptr)},
+      {"local_path",
+       bootstrap_model->local_path.has_value() ? json(*bootstrap_model->local_path)
+                                               : json(nullptr)},
+      {"source_url",
+       bootstrap_model->source_url.has_value() ? json(*bootstrap_model->source_url)
+                                               : json(nullptr)},
+      {"target_filename",
+       bootstrap_model->target_filename.has_value()
+           ? json(*bootstrap_model->target_filename)
+           : json(nullptr)},
+      {"sha256",
+       bootstrap_model->sha256.has_value() ? json(*bootstrap_model->sha256) : json(nullptr)},
+  };
+  return item;
 }
 
 comet::HostObservation ParseHostObservationPayload(const json& payload) {
@@ -1489,6 +1770,10 @@ json BuildHostAssignmentsPayload(
         {"assignment_type", assignment.assignment_type},
         {"status", comet::ToString(assignment.status)},
         {"status_message", assignment.status_message},
+        {"progress",
+         (!assignment.progress_json.empty() && assignment.progress_json != "{}")
+             ? json::parse(assignment.progress_json)
+             : json(nullptr)},
         {"artifacts_root", assignment.artifacts_root},
         {"instance_count", desired_node_state.instances.size()},
     });
@@ -2217,6 +2502,31 @@ std::string SqlTimestampAfterSeconds(int seconds) {
   return out.str();
 }
 
+std::optional<std::tm> ParseDisplayTimestamp(const std::string& value) {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  for (const char* format : {"%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"}) {
+    std::tm tm{};
+    std::istringstream input(value);
+    input >> std::get_time(&tm, format);
+    if (!input.fail()) {
+      return tm;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string FormatDisplayTimestamp(const std::string& value) {
+  const auto parsed = ParseDisplayTimestamp(value);
+  if (!parsed.has_value()) {
+    return value.empty() ? "(empty)" : value;
+  }
+  std::ostringstream output;
+  output << std::put_time(&*parsed, "%d/%m/%Y %H:%M:%S");
+  return output.str();
+}
+
 json ParseEncryptedHostRequestBody(
     comet::ControllerStore& store,
     const HttpRequest& request,
@@ -2411,6 +2721,8 @@ int EmitControllerActionResult(const ControllerActionResult& result) {
   return result.exit_code;
 }
 
+int DeletePlane(const std::string& db_path, const std::string& plane_name);
+
 ControllerActionResult ExecuteValidateBundleAction(const std::string& bundle_dir) {
   return RunControllerActionResult(
       "validate-bundle",
@@ -2440,6 +2752,92 @@ ControllerActionResult ExecuteApplyBundleAction(
   return RunControllerActionResult(
       "apply-bundle",
       [&]() { return ApplyBundle(db_path, bundle_dir, artifacts_root); });
+}
+
+int ApplyDesiredState(
+    const std::string& db_path,
+    const comet::DesiredState& desired_state,
+    const std::string& artifacts_root,
+    const std::string& source_label) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto current_state = store.LoadDesiredState(desired_state.plane_name);
+  comet::RequireSchedulingPolicy(desired_state);
+  const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
+  const auto observations = store.LoadHostObservations();
+  const int desired_generation =
+      store.LoadDesiredGeneration(desired_state.plane_name).value_or(0) + 1;
+  const comet::ReconcilePlan plan =
+      comet::BuildReconcilePlan(current_state, desired_state);
+  const comet::SchedulingPolicyReport scheduling_report =
+      comet::EvaluateSchedulingPolicy(desired_state);
+  const auto host_plans =
+      comet::BuildNodeExecutionPlans(current_state, desired_state, artifacts_root);
+
+  std::cout << "apply-plan:\n";
+  std::cout << comet::RenderReconcilePlan(plan);
+  std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
+  PrintSchedulerDecisionSummary(desired_state);
+  PrintRolloutGateSummary(scheduling_report);
+  std::cout << comet::RenderNodeExecutionPlans(host_plans);
+
+  MaterializeComposeArtifacts(desired_state, host_plans);
+  MaterializeInferRuntimeArtifact(desired_state, artifacts_root);
+  store.ReplaceDesiredState(desired_state, desired_generation, 0);
+  store.UpdatePlaneArtifactsRoot(desired_state.plane_name, artifacts_root);
+  store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
+  store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
+
+  const bool existed = current_state.has_value();
+  AppendControllerEvent(
+      store,
+      "plane",
+      existed ? "staged-update" : "created",
+      existed ? "updated plane desired state; rollout is staged until explicit restart"
+             : "created plane desired state in stopped lifecycle state",
+      json{
+          {"source", source_label},
+          {"artifacts_root", artifacts_root},
+          {"desired_generation", desired_generation},
+          {"applied_generation",
+           current_state.has_value()
+               ? json(store.LoadPlane(desired_state.plane_name)->applied_generation)
+               : json(0)},
+          {"worker_count", desired_state.instances.size()},
+          {"disk_count", desired_state.disks.size()},
+      },
+      desired_state.plane_name);
+  std::cout << (existed ? "staged update for" : "created") << " plane '" << desired_state.plane_name
+            << "' in: " << db_path << "\n";
+  std::cout << "desired generation: " << desired_generation << "\n";
+  const auto plane = store.LoadPlane(desired_state.plane_name);
+  if (plane.has_value()) {
+    std::cout << "applied generation: " << plane->applied_generation << "\n";
+    std::cout << "plane state: " << plane->state << "\n";
+  }
+  std::cout << "artifacts written under: " << artifacts_root << "\n";
+  std::cout << "runtime rollout is staged; use start-plane to enqueue host assignments\n";
+  return 0;
+}
+
+ControllerActionResult ExecuteUpsertPlaneStateAction(
+    const std::string& db_path,
+    const std::string& desired_state_json,
+    const std::string& artifacts_root,
+    const std::optional<std::string>& expected_plane_name,
+    const std::string& source_label) {
+  return RunControllerActionResult(
+      "upsert-plane-state",
+      [&]() {
+        const auto desired_state = comet::DeserializeDesiredStateJson(desired_state_json);
+        if (expected_plane_name.has_value() &&
+            desired_state.plane_name != *expected_plane_name) {
+          throw std::runtime_error(
+              "plane name mismatch: expected '" + *expected_plane_name + "' but payload contains '" +
+              desired_state.plane_name + "'");
+        }
+        return ApplyDesiredState(db_path, desired_state, artifacts_root, source_label);
+      });
 }
 
 ControllerActionResult ExecuteSchedulerTickAction(
@@ -2536,6 +2934,14 @@ ControllerActionResult ExecuteStopPlaneAction(
       [&]() { return StopPlane(db_path, plane_name); });
 }
 
+ControllerActionResult ExecuteDeletePlaneAction(
+    const std::string& db_path,
+    const std::string& plane_name) {
+  return RunControllerActionResult(
+      "delete-plane",
+      [&]() { return DeletePlane(db_path, plane_name); });
+}
+
 ControllerActionResult ExecuteRevokeHostdAction(
     const std::string& db_path,
     const std::string& node_name,
@@ -2605,6 +3011,16 @@ int ExecuteRemoteControllerCommand(
             target,
             "POST",
             "/api/v1/planes/" + UrlEncode(*plane_name) + "/stop"));
+  }
+  if (command == "delete-plane") {
+    if (!plane_name.has_value()) {
+      throw std::runtime_error("missing required --plane for remote delete-plane");
+    }
+    return EmitRemoteControllerActionPayload(
+        SendControllerJsonRequest(
+            target,
+            "DELETE",
+            "/api/v1/planes/" + UrlEncode(*plane_name)));
   }
   if (command == "show-state") {
     return EmitRemoteJsonPayload(
@@ -3347,11 +3763,43 @@ HttpResponse HandleControllerRequest(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/" + action);
       const std::string status_message = body.value("status_message", std::string{});
+      if (action == "progress") {
+        const bool updated = store.UpdateHostAssignmentProgress(assignment_id, body.dump());
+        return BuildEncryptedHostResponse(
+            store,
+            &host,
+            "assignments/" + std::to_string(assignment_id) + "/progress",
+            json{{"service", "comet-controller"}, {"updated", updated}, {"assignment_id", assignment_id}});
+      }
       if (action == "applied") {
         const bool updated = store.TransitionClaimedHostAssignment(
             assignment_id,
             comet::HostAssignmentStatus::Applied,
             status_message);
+        if (updated && assignment->assignment_type == "apply-node-state") {
+          const auto plane_assignments =
+              store.LoadHostAssignments(std::nullopt, std::nullopt, assignment->plane_name);
+          const auto latest_assignments_by_node =
+              BuildLatestPlaneAssignmentsByNode(plane_assignments);
+          const bool converged_generation =
+              std::all_of(
+                  latest_assignments_by_node.begin(),
+                  latest_assignments_by_node.end(),
+                  [&](const auto& entry) {
+                    const auto& candidate = entry.second;
+                    if (candidate.assignment_type != "apply-node-state" ||
+                        candidate.desired_generation != assignment->desired_generation) {
+                      return true;
+                    }
+                    return candidate.status == comet::HostAssignmentStatus::Applied ||
+                           candidate.status == comet::HostAssignmentStatus::Superseded;
+                  });
+          if (converged_generation) {
+            store.UpdatePlaneAppliedGeneration(
+                assignment->plane_name,
+                assignment->desired_generation);
+          }
+        }
         return BuildEncryptedHostResponse(
             store,
             &host,
@@ -3414,16 +3862,6 @@ HttpResponse HandleControllerRequest(
             json{{"status", "forbidden"}, {"message", "node mismatch for host observation"}});
       }
       store.UpsertHostObservation(observation);
-      AppendControllerEvent(
-          store,
-          "host-observation",
-          "reported",
-          "reported host observation via host-agent API",
-          json{{"status", comet::ToString(observation.status)}},
-          observation.plane_name,
-          observation.node_name,
-          "",
-          observation.last_assignment_id);
       return BuildEncryptedHostResponse(
           store,
           &host,
@@ -3693,16 +4131,47 @@ HttpResponse HandleControllerRequest(
     }
   }
   if (request.path == "/api/v1/planes") {
-    if (request.method != "GET") {
-      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    if (request.method == "GET") {
+      try {
+        return BuildJsonResponse(200, BuildPlanesPayload(db_path));
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
     }
-    try {
-      return BuildJsonResponse(200, BuildPlanesPayload(db_path));
-    } catch (const std::exception& error) {
-      return BuildJsonResponse(
-          500,
-          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    if (request.method == "POST") {
+      try {
+        const json body = ParseJsonRequestBody(request);
+        const json desired_state_payload =
+            body.contains("desired_state") ? body.at("desired_state") : body;
+        if (!desired_state_payload.is_object()) {
+          return BuildJsonResponse(
+              400,
+              json{{"status", "bad_request"},
+                   {"message", "request body must contain desired_state object"}});
+        }
+        const std::string artifacts_root = ResolveArtifactsRoot(
+            body.contains("artifacts_root") && body["artifacts_root"].is_string()
+                ? std::optional<std::string>(body["artifacts_root"].get<std::string>())
+                : FindQueryString(request, "artifacts_root"),
+            default_artifacts_root);
+        return BuildJsonResponse(
+            200,
+            BuildControllerActionPayload(
+                ExecuteUpsertPlaneStateAction(
+                    db_path,
+                    desired_state_payload.dump(2),
+                    artifacts_root,
+                    std::nullopt,
+                    "api")));
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
     }
+    return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
   }
   if (StartsWithPath(request.path, "/api/v1/planes/")) {
     const std::string remainder = request.path.substr(std::string("/api/v1/planes/").size());
@@ -3739,6 +4208,49 @@ HttpResponse HandleControllerRequest(
             200,
             BuildControllerActionPayload(
                 ExecuteStopPlaneAction(db_path, plane_name)));
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    if (request.method == "DELETE" && remainder.find('/') == std::string::npos) {
+      try {
+        return BuildJsonResponse(
+            200,
+            BuildControllerActionPayload(
+                ExecuteDeletePlaneAction(db_path, remainder)));
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    if (request.method == "PUT" && remainder.find('/') == std::string::npos) {
+      try {
+        const json body = ParseJsonRequestBody(request);
+        const json desired_state_payload =
+            body.contains("desired_state") ? body.at("desired_state") : body;
+        if (!desired_state_payload.is_object()) {
+          return BuildJsonResponse(
+              400,
+              json{{"status", "bad_request"},
+                   {"message", "request body must contain desired_state object"}});
+        }
+        const std::string artifacts_root = ResolveArtifactsRoot(
+            body.contains("artifacts_root") && body["artifacts_root"].is_string()
+                ? std::optional<std::string>(body["artifacts_root"].get<std::string>())
+                : FindQueryString(request, "artifacts_root"),
+            default_artifacts_root);
+        return BuildJsonResponse(
+            200,
+            BuildControllerActionPayload(
+                ExecuteUpsertPlaneStateAction(
+                    db_path,
+                    desired_state_payload.dump(2),
+                    artifacts_root,
+                    remainder,
+                    "api")));
       } catch (const std::exception& error) {
         return BuildJsonResponse(
             500,
@@ -4183,7 +4695,7 @@ int ServeControllerApi(
   if (ui_root.has_value()) {
     std::cout << "ui_root=" << ui_root->string() << "\n";
   }
-  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key\n";
+  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key\n";
   std::cout.flush();
 
   while (!g_stop_requested.load()) {
@@ -5172,6 +5684,43 @@ std::optional<comet::HostObservation> FindHostObservationForNode(
     }
   }
   return std::nullopt;
+}
+
+std::map<std::string, comet::HostAssignment> BuildLatestPlaneAssignmentsByNode(
+    const std::vector<comet::HostAssignment>& assignments) {
+  std::map<std::string, comet::HostAssignment> latest_by_node;
+  for (const auto& assignment : assignments) {
+    auto it = latest_by_node.find(assignment.node_name);
+    if (it == latest_by_node.end() || assignment.id >= it->second.id) {
+      latest_by_node[assignment.node_name] = assignment;
+    }
+  }
+  return latest_by_node;
+}
+
+int ComputeEffectivePlaneAppliedGeneration(
+    const comet::PlaneRecord& plane,
+    const std::optional<comet::DesiredState>& desired_state,
+    const std::optional<int>& desired_generation,
+    const std::vector<comet::HostObservation>& observations) {
+  if (!desired_state.has_value() || !desired_generation.has_value()) {
+    return plane.applied_generation;
+  }
+  if (*desired_generation <= plane.applied_generation) {
+    return plane.applied_generation;
+  }
+  for (const auto& node : desired_state->nodes) {
+    const auto observation = FindHostObservationForNode(observations, node.name);
+    if (!observation.has_value()) {
+      return plane.applied_generation;
+    }
+    if (!observation->applied_generation.has_value() ||
+        *observation->applied_generation < *desired_generation ||
+        observation->status == comet::HostObservationStatus::Failed) {
+      return plane.applied_generation;
+    }
+  }
+  return *desired_generation;
 }
 
 std::vector<RolloutLifecycleEntry> BuildRolloutLifecycleEntries(
@@ -6524,14 +7073,46 @@ json BuildDashboardPayload(
   for (const auto& observation : view.observations) {
     observation_by_node.emplace(observation.node_name, observation);
   }
+  int effective_plane_applied_generation = 0;
+  std::optional<comet::PlaneRecord> dashboard_plane_record;
+  for (const auto& plane : view.planes) {
+    if (plane.name != view.desired_state->plane_name) {
+      continue;
+    }
+    dashboard_plane_record = plane;
+    effective_plane_applied_generation = ComputeEffectivePlaneAppliedGeneration(
+        plane,
+        view.desired_state,
+        view.desired_generation,
+        view.observations);
+    if (effective_plane_applied_generation > plane.applied_generation) {
+      store.UpdatePlaneAppliedGeneration(plane.name, effective_plane_applied_generation);
+    }
+    break;
+  }
   const auto availability_override_map =
       BuildAvailabilityOverrideMap(view.availability_overrides);
 
   payload["plane"] = {
       {"plane_name", view.desired_state->plane_name},
+      {"state",
+       [&]() -> json {
+         return dashboard_plane_record.has_value() ? json(dashboard_plane_record->state)
+                                                   : json(nullptr);
+       }()},
+      {"desired_generation", view.desired_generation.has_value() ? json(*view.desired_generation) : json(nullptr)},
+      {"applied_generation", dashboard_plane_record.has_value() ? json(effective_plane_applied_generation)
+                                                                 : json(nullptr)},
+      {"staged_update",
+       dashboard_plane_record.has_value()
+           ? dashboard_plane_record->generation > effective_plane_applied_generation
+           : false},
       {"node_count", view.desired_state->nodes.size()},
       {"instance_count", view.desired_state->instances.size()},
       {"disk_count", view.desired_state->disks.size()},
+      {"shared_disk_name", view.desired_state->plane_shared_disk_name},
+      {"control_root", view.desired_state->control_root},
+      {"bootstrap_model", BuildBootstrapModelPayloadItem(view.desired_state->bootstrap_model)},
   };
   json plane_items = json::array();
   for (const auto& plane : view.planes) {
@@ -6542,10 +7123,15 @@ json BuildDashboardPayload(
             [&](const comet::DesiredState& candidate) {
               return candidate.plane_name == plane.name;
             });
+    const int plane_applied_generation =
+        plane.name == view.desired_state->plane_name ? effective_plane_applied_generation
+                                                     : plane.applied_generation;
     plane_items.push_back(json{
         {"plane_name", plane.name},
         {"state", plane.state},
         {"generation", plane.generation},
+        {"applied_generation", plane_applied_generation},
+        {"staged_update", plane.generation > plane_applied_generation},
         {"rebalance_iteration", plane.rebalance_iteration},
         {"node_count",
          desired_state_it != view.desired_states.end() ? json(desired_state_it->nodes.size())
@@ -6565,6 +7151,17 @@ json BuildDashboardPayload(
   int ready_nodes = 0;
   int not_ready_nodes = 0;
   int degraded_gpu_nodes = 0;
+  const std::optional<std::string> selected_plane_state =
+      plane_name.has_value()
+          ? [&]() -> std::optional<std::string> {
+              for (const auto& plane : view.planes) {
+                if (plane.name == *plane_name) {
+                  return plane.state;
+                }
+              }
+              return std::nullopt;
+            }()
+          : std::nullopt;
   std::map<std::string, comet::NodeInventory> dashboard_nodes;
   if (plane_name.has_value()) {
     for (const auto& node : view.desired_state->nodes) {
@@ -6655,9 +7252,29 @@ json BuildDashboardPayload(
         ++not_ready_nodes;
       }
     } else {
-      item["runtime_launch_ready"] = nullptr;
-      item["runtime_phase"] = nullptr;
-      ++not_ready_nodes;
+      const auto fallback = DetermineDashboardRuntimeFallback(
+          observation_it->second,
+          node.name,
+          plane_name,
+          selected_plane_state,
+          view.desired_generation.value_or(0),
+          desired_instance_count,
+          desired_disk_count,
+          item.value("health", std::string("unknown")));
+      if (fallback.available) {
+        item["runtime_launch_ready"] = fallback.launch_ready;
+        item["runtime_phase"] =
+            fallback.runtime_phase.empty() ? json(nullptr) : json(fallback.runtime_phase);
+        if (fallback.launch_ready) {
+          ++ready_nodes;
+        } else {
+          ++not_ready_nodes;
+        }
+      } else {
+        item["runtime_launch_ready"] = nullptr;
+        item["runtime_phase"] = nullptr;
+        ++not_ready_nodes;
+      }
     }
     if (const auto gpu_telemetry = ParseGpuTelemetry(observation_it->second);
         gpu_telemetry.has_value()) {
@@ -6680,8 +7297,11 @@ json BuildDashboardPayload(
   int claimed_assignments = 0;
   int applied_assignments = 0;
   int failed_assignments = 0;
-  std::map<std::string, json> assignment_by_node;
-  for (const auto& assignment : view.assignments) {
+  const auto latest_assignments_by_node = BuildLatestPlaneAssignmentsByNode(view.assignments);
+  json latest_progress = nullptr;
+  int latest_progress_assignment_id = -1;
+  for (const auto& [node_name, assignment] : latest_assignments_by_node) {
+    (void)node_name;
     switch (assignment.status) {
       case comet::HostAssignmentStatus::Pending:
         ++pending_assignments;
@@ -6698,38 +7318,38 @@ json BuildDashboardPayload(
       default:
         break;
     }
-    auto& item = assignment_by_node[assignment.node_name];
-    if (item.is_null()) {
-      item = json{
-          {"node_name", assignment.node_name},
-          {"latest_assignment_id", assignment.id},
-          {"latest_status", comet::ToString(assignment.status)},
-          {"pending", 0},
-          {"claimed", 0},
-          {"failed", 0},
-      };
-    }
-    item["latest_assignment_id"] = std::max(item.value("latest_assignment_id", 0), assignment.id);
-    item["latest_status"] = comet::ToString(assignment.status);
-    if (assignment.status == comet::HostAssignmentStatus::Pending) {
-      item["pending"] = item.value("pending", 0) + 1;
-    } else if (assignment.status == comet::HostAssignmentStatus::Claimed) {
-      item["claimed"] = item.value("claimed", 0) + 1;
-    } else if (assignment.status == comet::HostAssignmentStatus::Failed) {
-      item["failed"] = item.value("failed", 0) + 1;
+    if ((assignment.status == comet::HostAssignmentStatus::Pending ||
+         assignment.status == comet::HostAssignmentStatus::Claimed) &&
+        !assignment.progress_json.empty() &&
+        assignment.progress_json != "{}" &&
+        assignment.id > latest_progress_assignment_id) {
+      latest_progress = json::parse(assignment.progress_json);
+      latest_progress_assignment_id = assignment.id;
     }
   }
   json assignment_nodes = json::array();
-  for (auto& [node_name, item] : assignment_by_node) {
+  for (const auto& [node_name, assignment] : latest_assignments_by_node) {
     (void)node_name;
-    assignment_nodes.push_back(std::move(item));
+    assignment_nodes.push_back(json{
+        {"node_name", assignment.node_name},
+        {"latest_assignment_id", assignment.id},
+        {"latest_status", comet::ToString(assignment.status)},
+        {"latest_progress",
+         (!assignment.progress_json.empty() && assignment.progress_json != "{}")
+             ? json::parse(assignment.progress_json)
+             : json(nullptr)},
+        {"pending", assignment.status == comet::HostAssignmentStatus::Pending ? 1 : 0},
+        {"claimed", assignment.status == comet::HostAssignmentStatus::Claimed ? 1 : 0},
+        {"failed", assignment.status == comet::HostAssignmentStatus::Failed ? 1 : 0},
+    });
   }
   payload["assignments"] = {
-      {"total", view.assignments.size()},
+      {"total", latest_assignments_by_node.size()},
       {"pending", pending_assignments},
       {"claimed", claimed_assignments},
       {"applied", applied_assignments},
       {"failed", failed_assignments},
+      {"latest_progress", latest_progress},
       {"by_node", std::move(assignment_nodes)},
   };
 
@@ -6790,7 +7410,8 @@ json BuildDashboardPayload(
         alert_items.push_back(std::move(item));
       };
 
-  for (const auto& assignment : view.assignments) {
+  for (const auto& [node_name, assignment] : latest_assignments_by_node) {
+    (void)node_name;
     if (assignment.status == comet::HostAssignmentStatus::Failed) {
       push_alert(
           "critical",
@@ -6860,12 +7481,36 @@ json BuildDashboardPayload(
             item.name);
       }
     } else {
-      push_alert(
-          "booting",
-          "runtime-missing",
-          "Runtime status missing",
-          "No runtime status has been reported yet for this node.",
-          item.name);
+      const auto fallback = DetermineDashboardRuntimeFallback(
+          observation_it->second,
+          item.name,
+          plane_name,
+          selected_plane_state,
+          view.desired_generation.value_or(0),
+          std::count_if(
+              view.desired_state->instances.begin(),
+              view.desired_state->instances.end(),
+              [&](const auto& instance) { return instance.node_name == item.name; }),
+          std::count_if(
+              view.desired_state->disks.begin(),
+              view.desired_state->disks.end(),
+              [&](const auto& disk) { return disk.node_name == item.name; }),
+          health);
+      if (!fallback.available) {
+        push_alert(
+            "booting",
+            "runtime-missing",
+            "Runtime status missing",
+            "No runtime status has been reported yet for this node.",
+            item.name);
+      } else if (!fallback.launch_ready) {
+        push_alert(
+            "booting",
+            "runtime-transition",
+            "Runtime transition in progress",
+            "Observed runtime state is converging even though low-level runtime status is not available yet.",
+            item.name);
+      }
     }
 
     if (const auto gpu_telemetry = ParseGpuTelemetry(observation_it->second);
@@ -7331,7 +7976,8 @@ void PrintNodeAvailabilityOverrides(
   for (const auto& availability_override : availability_overrides) {
     std::cout << "  - node=" << availability_override.node_name
               << " availability=" << comet::ToString(availability_override.availability)
-              << " updated_at=" << availability_override.updated_at << "\n";
+              << " updated_at=" << FormatDisplayTimestamp(availability_override.updated_at)
+              << "\n";
     if (!availability_override.status_message.empty()) {
       std::cout << "    message=" << availability_override.status_message << "\n";
     }
@@ -7813,6 +8459,17 @@ comet::DesiredState BuildStoppedPlaneNodeState(
   return stopped_state;
 }
 
+comet::DesiredState BuildDeletedPlaneNodeState(
+    const comet::DesiredState& desired_state,
+    const std::string& node_name) {
+  comet::DesiredState deleted_state = comet::SliceDesiredStateForNode(desired_state, node_name);
+  deleted_state.instances.clear();
+  deleted_state.disks.clear();
+  deleted_state.plane_shared_disk_name.clear();
+  deleted_state.control_root.clear();
+  return deleted_state;
+}
+
 std::vector<comet::HostAssignment> BuildStopPlaneAssignments(
     const comet::DesiredState& desired_state,
     int desired_generation,
@@ -7838,6 +8495,29 @@ std::vector<comet::HostAssignment> BuildStopPlaneAssignments(
     assignment.artifacts_root = artifacts_root;
     assignment.status = comet::HostAssignmentStatus::Pending;
     assignment.status_message = "plane stop lifecycle transition";
+    assignments.push_back(std::move(assignment));
+  }
+  return assignments;
+}
+
+std::vector<comet::HostAssignment> BuildDeletePlaneAssignments(
+    const comet::DesiredState& desired_state,
+    int desired_generation,
+    const std::string& artifacts_root) {
+  std::vector<comet::HostAssignment> assignments;
+  assignments.reserve(desired_state.nodes.size());
+  for (const auto& node : desired_state.nodes) {
+    comet::HostAssignment assignment;
+    assignment.node_name = node.name;
+    assignment.plane_name = desired_state.plane_name;
+    assignment.desired_generation = desired_generation;
+    assignment.assignment_type = "delete-plane-state";
+    assignment.desired_state_json =
+        comet::SerializeDesiredStateJson(
+            BuildDeletedPlaneNodeState(desired_state, node.name));
+    assignment.artifacts_root = artifacts_root;
+    assignment.status = comet::HostAssignmentStatus::Pending;
+    assignment.status_message = "plane delete lifecycle transition";
     assignments.push_back(std::move(assignment));
   }
   return assignments;
@@ -8256,7 +8936,7 @@ void PrintHostObservations(
     }
     std::cout << " disks=" << disk_count
               << " instances=" << instance_count
-              << " heartbeat_at=" << observation.heartbeat_at;
+              << " heartbeat_at=" << FormatDisplayTimestamp(observation.heartbeat_at);
     if (age_seconds.has_value()) {
       std::cout << " age_seconds=" << *age_seconds
                 << " health=" << HealthFromAge(age_seconds, stale_after_seconds);
@@ -8625,29 +9305,17 @@ int ImportBundle(const std::string& db_path, const std::string& bundle_dir) {
   store.Initialize();
   const comet::DesiredState desired_state = comet::ImportPlaneBundle(bundle_dir);
   comet::RequireSchedulingPolicy(desired_state);
-  const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(desired_state);
-  const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
-  const auto observations = store.LoadHostObservations();
   const int desired_generation =
       store.LoadDesiredGeneration(desired_state.plane_name).value_or(0) + 1;
   store.ReplaceDesiredState(desired_state, desired_generation, 0);
+  store.UpdatePlaneArtifactsRoot(desired_state.plane_name, DefaultArtifactsRoot());
   store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
-  store.ReplaceRolloutActions(
-      desired_state.plane_name, desired_generation, scheduling_report.rollout_actions);
-  store.ReplaceHostAssignments(
-      BuildHostAssignments(
-          desired_state,
-          DefaultArtifactsRoot(),
-          desired_generation,
-          availability_overrides,
-          observations,
-          scheduling_report));
+  store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
   AppendControllerEvent(
       store,
       "bundle",
       "imported",
-      "imported bundle into desired state",
+      "imported bundle into desired state; rollout is staged until explicit start",
       json{
           {"bundle_dir", bundle_dir},
           {"desired_generation", desired_generation},
@@ -8657,13 +9325,7 @@ int ImportBundle(const std::string& db_path, const std::string& bundle_dir) {
       desired_state.plane_name);
   std::cout << "imported bundle '" << bundle_dir << "' into: " << db_path << "\n";
   std::cout << "desired generation: " << desired_generation << "\n";
-  PrintSchedulerDecisionSummary(desired_state);
-  PrintRolloutGateSummary(scheduling_report);
-  PrintAssignmentDispatchSummary(
-      desired_state,
-      BuildAvailabilityOverrideMap(availability_overrides),
-      observations,
-      DefaultStaleAfterSeconds());
+  std::cout << "runtime rollout is staged; use start-plane to enqueue host assignments\n";
   return 0;
 }
 
@@ -8676,8 +9338,6 @@ int ApplyBundle(
   const comet::DesiredState desired_state = comet::ImportPlaneBundle(bundle_dir);
   const auto current_state = store.LoadDesiredState(desired_state.plane_name);
   comet::RequireSchedulingPolicy(desired_state);
-  const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
-  const auto observations = store.LoadHostObservations();
   const int desired_generation =
       store.LoadDesiredGeneration(desired_state.plane_name).value_or(0) + 1;
   const comet::ReconcilePlan plan =
@@ -8697,22 +9357,14 @@ int ApplyBundle(
   MaterializeComposeArtifacts(desired_state, host_plans);
   MaterializeInferRuntimeArtifact(desired_state, artifacts_root);
   store.ReplaceDesiredState(desired_state, desired_generation, 0);
+  store.UpdatePlaneArtifactsRoot(desired_state.plane_name, artifacts_root);
   store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
-  store.ReplaceRolloutActions(
-      desired_state.plane_name, desired_generation, scheduling_report.rollout_actions);
-  store.ReplaceHostAssignments(
-      BuildHostAssignments(
-          desired_state,
-          artifacts_root,
-          desired_generation,
-          availability_overrides,
-          observations,
-          scheduling_report));
+  store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
   AppendControllerEvent(
       store,
       "bundle",
       "applied",
-      "applied bundle into desired state",
+      "applied bundle into desired state; rollout is staged until explicit start",
       json{
           {"bundle_dir", bundle_dir},
           {"artifacts_root", artifacts_root},
@@ -8724,11 +9376,7 @@ int ApplyBundle(
   std::cout << "applied bundle '" << bundle_dir << "' into: " << db_path << "\n";
   std::cout << "desired generation: " << desired_generation << "\n";
   std::cout << "artifacts written under: " << artifacts_root << "\n";
-  PrintAssignmentDispatchSummary(
-      desired_state,
-      BuildAvailabilityOverrideMap(availability_overrides),
-      observations,
-      DefaultStaleAfterSeconds());
+  std::cout << "runtime rollout is staged; use start-plane to enqueue host assignments\n";
   return 0;
 }
 
@@ -8869,7 +9517,7 @@ void PrintEvents(const std::vector<comet::EventRecord>& events) {
     if (event.rollout_action_id.has_value()) {
       std::cout << " rollout_action_id=" << *event.rollout_action_id;
     }
-    std::cout << " at=" << (event.created_at.empty() ? "(empty)" : event.created_at)
+    std::cout << " at=" << FormatDisplayTimestamp(event.created_at)
               << " message="
               << (event.message.empty() ? "(empty)" : event.message)
               << "\n";
@@ -9933,7 +10581,7 @@ int ShowPlane(const std::string& db_path, const std::string& plane_name) {
   std::cout << "  state=" << plane->state << "\n";
   std::cout << "  generation=" << plane->generation << "\n";
   std::cout << "  rebalance_iteration=" << plane->rebalance_iteration << "\n";
-  std::cout << "  created_at=" << plane->created_at << "\n";
+  std::cout << "  created_at=" << FormatDisplayTimestamp(plane->created_at) << "\n";
   PrintStateSummary(*state);
   return 0;
 }
@@ -9960,6 +10608,9 @@ int StartPlane(const std::string& db_path, const std::string& plane_name) {
   const auto observations = store.LoadHostObservations();
   const auto scheduling_report = comet::EvaluateSchedulingPolicy(*desired_state);
   const std::string artifacts_root = [&]() {
+    if (!plane->artifacts_root.empty()) {
+      return plane->artifacts_root;
+    }
     const auto assignments = store.LoadHostAssignments();
     const auto plane_assignment = FindLatestHostAssignmentForPlane(assignments, plane_name);
     return plane_assignment.has_value() ? plane_assignment->artifacts_root : DefaultArtifactsRoot();
@@ -10011,6 +10662,9 @@ int StopPlane(const std::string& db_path, const std::string& plane_name) {
       "superseded by stop-plane controller lifecycle transition");
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const std::string artifacts_root = [&]() {
+    if (!plane->artifacts_root.empty()) {
+      return plane->artifacts_root;
+    }
     const auto assignments = store.LoadHostAssignments();
     const auto plane_assignment = FindLatestHostAssignmentForPlane(assignments, plane_name);
     return plane_assignment.has_value() ? plane_assignment->artifacts_root : DefaultArtifactsRoot();
@@ -10039,6 +10693,107 @@ int StopPlane(const std::string& db_path, const std::string& plane_name) {
       plane_name);
   std::cout << "plane stopped: " << plane_name
             << " superseded_assignments=" << superseded
+            << " desired_generation=" << plane->generation << "\n";
+  return 0;
+}
+
+int DeletePlane(const std::string& db_path, const std::string& plane_name) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  const auto plane = store.LoadPlane(plane_name);
+  const auto desired_state = store.LoadDesiredState(plane_name);
+  if (!plane.has_value()) {
+    throw std::runtime_error("plane '" + plane_name + "' not found");
+  }
+  if (!desired_state.has_value()) {
+    throw std::runtime_error("desired state for plane '" + plane_name + "' not found");
+  }
+  if (plane->state == "deleting" && CanFinalizeDeletedPlane(store, plane_name)) {
+    store.DeletePlane(plane_name);
+    AppendControllerEvent(
+        store,
+        "plane",
+        "deleted",
+        "plane deleted from controller registry after cleanup convergence",
+        json{
+            {"plane_name", plane_name},
+            {"deleted_generation", plane->generation},
+        },
+        "");
+    std::cout << "plane deleted: " << plane_name
+              << " desired_generation=" << plane->generation << "\n";
+    return 0;
+  }
+
+  const int superseded = store.SupersedeHostAssignmentsForPlane(
+      plane_name,
+      "superseded by delete-plane controller lifecycle transition");
+  const std::string artifacts_root = [&]() {
+    if (!plane->artifacts_root.empty()) {
+      return plane->artifacts_root;
+    }
+    const auto assignments = store.LoadHostAssignments(std::nullopt, std::nullopt, plane_name);
+    const auto plane_assignment = FindLatestHostAssignmentForPlane(assignments, plane_name);
+    return plane_assignment.has_value() ? plane_assignment->artifacts_root : DefaultArtifactsRoot();
+  }();
+  if (!store.UpdatePlaneState(plane_name, "deleting")) {
+    throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
+  }
+  const auto all_observations = store.LoadHostObservations();
+  const auto registered_hosts = store.LoadRegisteredHosts();
+  std::set<std::string> cleanup_nodes;
+  std::vector<std::string> skipped_nodes;
+  for (const auto& node : desired_state->nodes) {
+    const bool has_observation =
+        std::any_of(
+            all_observations.begin(),
+            all_observations.end(),
+            [&](const auto& observation) { return observation.node_name == node.name; });
+    const bool connected_host =
+        std::any_of(
+            registered_hosts.begin(),
+            registered_hosts.end(),
+            [&](const auto& host) {
+              return host.node_name == node.name &&
+                     host.registration_state == "registered" &&
+                     host.session_state == "connected";
+            });
+    if (has_observation || connected_host) {
+      cleanup_nodes.insert(node.name);
+    } else {
+      skipped_nodes.push_back(node.name);
+    }
+  }
+  store.ReplaceRolloutActions(plane_name, plane->generation, {});
+  store.ClearSchedulerPlaneRuntime(plane_name);
+  store.EnqueueHostAssignments(
+      [&]() {
+        comet::DesiredState cleanup_state = *desired_state;
+        std::vector<comet::NodeInventory> nodes;
+        for (const auto& node : cleanup_state.nodes) {
+          if (cleanup_nodes.count(node.name) > 0) {
+            nodes.push_back(node);
+          }
+        }
+        cleanup_state.nodes = std::move(nodes);
+        return BuildDeletePlaneAssignments(cleanup_state, plane->generation, artifacts_root);
+      }(),
+      "superseded by delete-plane lifecycle transition");
+  AppendControllerEvent(
+      store,
+      "plane",
+      "delete-requested",
+      "plane delete was requested and cleanup assignments were queued",
+      json{
+          {"previous_state", plane->state},
+          {"next_state", "deleting"},
+          {"superseded_assignments", superseded},
+          {"desired_generation", plane->generation},
+          {"cleanup_nodes", cleanup_nodes},
+          {"skipped_nodes", skipped_nodes},
+      },
+      plane_name);
+  std::cout << "plane delete started: " << plane_name
             << " desired_generation=" << plane->generation << "\n";
   return 0;
 }
@@ -10432,6 +11187,15 @@ int main(int argc, char** argv) {
         return 1;
       }
       return EmitControllerActionResult(ExecuteStopPlaneAction(db_path, *plane_name));
+    }
+
+    if (command == "delete-plane") {
+      const auto plane_name = ParsePlaneArg(argc, argv);
+      if (!plane_name.has_value()) {
+        std::cerr << "error: --plane is required\n";
+        return 1;
+      }
+      return EmitControllerActionResult(ExecuteDeletePlaneAction(db_path, *plane_name));
     }
 
     if (command == "ensure-web-ui") {

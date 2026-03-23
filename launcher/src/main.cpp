@@ -54,6 +54,16 @@ InstallLayout DefaultInstallLayout() {
         *root / "etc/systemd/system",
     };
   }
+  if (geteuid() != 0) {
+    const fs::path home = std::getenv("HOME") != nullptr ? fs::path(std::getenv("HOME"))
+                                                         : fs::current_path();
+    return InstallLayout{
+        home / ".config/comet-node/config.toml",
+        home / ".local/share/comet-node",
+        home / ".local/state/comet-node",
+        home / ".config/systemd/user",
+    };
+  }
   return InstallLayout{};
 }
 
@@ -157,6 +167,9 @@ struct GeneratedConfig {
   GeneratedHostdConfig hostd;
 };
 
+bool CommandExists(const std::string& command);
+int RunShellCommand(const std::string& command);
+
 void SignalHandler(int) {
   g_stop_requested.store(true);
   for (const pid_t pid : g_child_pids) {
@@ -217,6 +230,26 @@ bool ParseTomlBool(const std::string& value) {
     return false;
   }
   throw std::runtime_error("invalid boolean value '" + value + "'");
+}
+
+bool SystemdAvailable() {
+  if (!CommandExists("systemctl")) {
+    return false;
+  }
+  if (geteuid() == 0) {
+    return RunShellCommand("systemctl is-system-running >/dev/null 2>&1") == 0;
+  }
+  return RunShellCommand("systemctl --user is-system-running >/dev/null 2>&1") == 0;
+}
+
+bool RunningInManagedServiceMode() {
+  const char* value = std::getenv("COMET_SERVICE_MODE");
+  return value != nullptr && std::string(value) == "1";
+}
+
+bool IsUserServiceLayout(const InstallLayout& layout) {
+  const std::string rendered = layout.systemd_dir.string();
+  return rendered.find(".config/systemd/user") != std::string::npos;
 }
 
 std::optional<fs::path> ResolveConfigPathFromEnvOrDefault() {
@@ -540,10 +573,15 @@ std::string RenderConfigToml(
 std::string RenderControllerUnit(
     const ControllerInstallOptions& options,
     const fs::path& config_path) {
+  const bool user_service = IsUserServiceLayout(options.layout);
   std::ostringstream out;
   out << "[Unit]\n";
   out << "Description=Comet Node Controller\n";
-  out << "After=network-online.target docker.service\n";
+  out << "After=network-online.target";
+  if (!user_service) {
+    out << " docker.service";
+  }
+  out << "\n";
   out << "Wants=network-online.target\n\n";
   out << "[Service]\n";
   out << "Type=simple\n";
@@ -559,28 +597,31 @@ std::string RenderControllerUnit(
       << " --state-root " << (options.layout.state_root / "hostd-state").string()
       << " --node " << options.node_name
       << " --compose-mode " << options.compose_mode;
-  if (options.with_hostd) {
-    out << " --with-hostd";
-  }
   if (options.with_web_ui) {
     out << " --with-web-ui";
   }
   out << "\n";
   out << "Restart=always\n";
   out << "RestartSec=2\n";
-  out << "Environment=COMET_CONFIG=" << config_path.string() << "\n\n";
+  out << "Environment=COMET_CONFIG=" << config_path.string() << "\n";
+  out << "Environment=COMET_SERVICE_MODE=1\n\n";
   out << "[Install]\n";
-  out << "WantedBy=multi-user.target\n";
+  out << "WantedBy=" << (user_service ? "default.target" : "multi-user.target") << "\n";
   return out.str();
 }
 
 std::string RenderHostdUnit(
     const HostdInstallOptions& options,
     const fs::path& config_path) {
+  const bool user_service = IsUserServiceLayout(options.layout);
   std::ostringstream out;
   out << "[Unit]\n";
   out << "Description=Comet Node Host Agent\n";
-  out << "After=network-online.target docker.service\n";
+  out << "After=network-online.target";
+  if (!user_service) {
+    out << " docker.service";
+  }
+  out << "\n";
   out << "Wants=network-online.target\n\n";
   out << "[Service]\n";
   out << "Type=simple\n";
@@ -602,9 +643,10 @@ std::string RenderHostdUnit(
   out << "\n";
   out << "Restart=always\n";
   out << "RestartSec=2\n";
-  out << "Environment=COMET_CONFIG=" << config_path.string() << "\n\n";
+  out << "Environment=COMET_CONFIG=" << config_path.string() << "\n";
+  out << "Environment=COMET_SERVICE_MODE=1\n\n";
   out << "[Install]\n";
-  out << "WantedBy=multi-user.target\n";
+  out << "WantedBy=" << (user_service ? "default.target" : "multi-user.target") << "\n";
   return out.str();
 }
 
@@ -633,9 +675,15 @@ void MaybeRunSystemctl(
   }
   for (const std::string& action : actions) {
     std::ostringstream command;
-    command << "systemctl " << action;
-    for (const std::string& unit : units) {
-      command << " " << unit;
+    command << "systemctl";
+    if (geteuid() != 0) {
+      command << " --user";
+    }
+    command << " " << action;
+    if (action != "daemon-reload") {
+      for (const std::string& unit : units) {
+        command << " " << unit;
+      }
     }
     if (RunShellCommand(command.str()) != 0) {
       throw std::runtime_error("systemctl " + action + " failed");
@@ -986,9 +1034,10 @@ void InstallController(const fs::path& self_path, const std::vector<std::string>
             options.layout.config_path));
   }
 
-  MaybeRunSystemctl({"comet-node-controller.service"}, {"daemon-reload", "enable"}, skip_systemctl);
+  MaybeRunSystemctl({}, {"daemon-reload"}, skip_systemctl);
+  MaybeRunSystemctl({"comet-node-controller.service"}, {"enable", "restart"}, skip_systemctl);
   if (options.with_hostd) {
-    MaybeRunSystemctl({"comet-node-hostd.service"}, {"enable"}, skip_systemctl);
+    MaybeRunSystemctl({"comet-node-hostd.service"}, {"enable", "restart"}, skip_systemctl);
   }
 
   std::cout << "installed controller\n";
@@ -996,7 +1045,9 @@ void InstallController(const fs::path& self_path, const std::vector<std::string>
   if (options.with_web_ui) {
     std::cout << "web_ui_url=http://127.0.0.1:18081\n";
   }
-  std::cout << "next_step=comet-node run controller\n";
+  std::cout << "next_step="
+            << (IsUserServiceLayout(options.layout) ? "systemctl --user" : "systemctl")
+            << " status comet-node-controller.service\n";
 }
 
 void InstallHostd(const fs::path& self_path, const std::vector<std::string>& args) {
@@ -1036,7 +1087,8 @@ void InstallHostd(const fs::path& self_path, const std::vector<std::string>& arg
   WriteTextFile(
       options.layout.systemd_dir / "comet-node-hostd.service",
       RenderHostdUnit(options, options.layout.config_path));
-  MaybeRunSystemctl({"comet-node-hostd.service"}, {"daemon-reload", "enable"}, skip_systemctl);
+  MaybeRunSystemctl({}, {"daemon-reload"}, skip_systemctl);
+  MaybeRunSystemctl({"comet-node-hostd.service"}, {"enable", "restart"}, skip_systemctl);
   std::cout << "installed hostd\n";
   std::cout << "node=" << options.node_name << "\n";
   if (!options.controller_url.empty()) {
@@ -1046,7 +1098,9 @@ void InstallHostd(const fs::path& self_path, const std::vector<std::string>& arg
               << " --public-key " << (options.layout.state_root / "keys/hostd.pub.pem").string()
               << "\n";
   }
-  std::cout << "next_step=comet-node run hostd\n";
+  std::cout << "next_step="
+            << (IsUserServiceLayout(options.layout) ? "systemctl --user" : "systemctl")
+            << " status comet-node-hostd.service\n";
 }
 
 void ServiceCommand(const std::string& action, const std::string& role, const std::vector<std::string>& args) {
@@ -1285,16 +1339,63 @@ int main(int argc, char** argv) {
                 .value_or(loaded_config && loaded_config->hostd.state_root.has_value()
                               ? loaded_config->hostd.state_root->string()
                               : DefaultHostdStateRoot().string());
+        const bool config_local_hostd_enabled =
+            loaded_config && loaded_config->controller.local_hostd_enabled.value_or(false);
+        const bool managed_hostd_service_present =
+            RunningInManagedServiceMode() &&
+            fs::exists((ParseLayout(args)).systemd_dir / "comet-node-hostd.service");
         options.with_hostd =
-            HasFlag(args, "--with-hostd") ||
-            (!HasFlag(args, "--without-hostd") &&
-             loaded_config && loaded_config->controller.local_hostd_enabled.value_or(false));
+            (HasFlag(args, "--with-hostd") ||
+             (!HasFlag(args, "--without-hostd") && config_local_hostd_enabled)) &&
+            !managed_hostd_service_present;
         options.with_web_ui =
             HasFlag(args, "--with-web-ui") ||
             (!HasFlag(args, "--without-web-ui") &&
              loaded_config && loaded_config->controller.web_ui_enabled.value_or(false));
         options.hostd_poll_interval_sec =
             ParseInt(FindFlagValue(args, "--poll-interval-sec"), options.hostd_poll_interval_sec);
+        if (!RunningInManagedServiceMode() &&
+            !HasFlag(args, "--foreground") &&
+            !HasFlag(args, "--skip-systemctl") &&
+            SystemdAvailable()) {
+          const InstallLayout layout = ParseLayout(args);
+          std::vector<std::string> install_args;
+          if (layout.config_path != DefaultInstallLayout().config_path) {
+            install_args.insert(
+                install_args.end(), {"--config", layout.config_path.string()});
+          }
+          if (layout.state_root != DefaultInstallLayout().state_root) {
+            install_args.insert(
+                install_args.end(), {"--state-root", layout.state_root.string()});
+          }
+          if (layout.log_root != DefaultInstallLayout().log_root) {
+            install_args.insert(
+                install_args.end(), {"--log-root", layout.log_root.string()});
+          }
+          if (layout.systemd_dir != DefaultInstallLayout().systemd_dir) {
+            install_args.insert(
+                install_args.end(), {"--systemd-dir", layout.systemd_dir.string()});
+          }
+          install_args.insert(install_args.end(), {"--listen-host", options.listen_host});
+          install_args.insert(
+              install_args.end(), {"--listen-port", std::to_string(options.listen_port)});
+          install_args.insert(
+              install_args.end(), {"--compose-mode", options.hostd_compose_mode});
+          install_args.insert(install_args.end(), {"--node", options.node_name});
+          if (options.with_hostd) {
+            install_args.push_back("--with-hostd");
+          }
+          if (options.with_web_ui) {
+            install_args.push_back("--with-web-ui");
+          }
+          InstallController(self_path, install_args);
+          std::cout << "service_mode=systemd\n";
+          std::cout << "controller_service=comet-node-controller.service\n";
+          if (options.with_hostd) {
+            std::cout << "hostd_service=comet-node-hostd.service\n";
+          }
+          return 0;
+        }
         const fs::path controller_binary = ResolveSiblingBinary(self_path, "comet-controller");
         return RunControllerSupervisor(self_path, controller_binary, options);
       }
@@ -1340,6 +1441,45 @@ int main(int argc, char** argv) {
         options.compose_mode = FindFlagValue(args, "--compose-mode").value_or(options.compose_mode);
         options.poll_interval_sec =
             ParseInt(FindFlagValue(args, "--poll-interval-sec"), options.poll_interval_sec);
+        if (!RunningInManagedServiceMode() &&
+            !HasFlag(args, "--foreground") &&
+            !HasFlag(args, "--skip-systemctl") &&
+            SystemdAvailable()) {
+          const InstallLayout layout = ParseLayout(args);
+          std::vector<std::string> install_args;
+          if (layout.config_path != DefaultInstallLayout().config_path) {
+            install_args.insert(
+                install_args.end(), {"--config", layout.config_path.string()});
+          }
+          if (layout.state_root != DefaultInstallLayout().state_root) {
+            install_args.insert(
+                install_args.end(), {"--state-root", layout.state_root.string()});
+          }
+          if (layout.log_root != DefaultInstallLayout().log_root) {
+            install_args.insert(
+                install_args.end(), {"--log-root", layout.log_root.string()});
+          }
+          if (layout.systemd_dir != DefaultInstallLayout().systemd_dir) {
+            install_args.insert(
+                install_args.end(), {"--systemd-dir", layout.systemd_dir.string()});
+          }
+          if (!options.controller_url.empty()) {
+            install_args.insert(
+                install_args.end(), {"--controller", options.controller_url});
+          }
+          if (!options.controller_fingerprint.empty()) {
+            install_args.insert(
+                install_args.end(),
+                {"--controller-fingerprint", options.controller_fingerprint});
+          }
+          install_args.insert(install_args.end(), {"--node", options.node_name});
+          install_args.insert(
+              install_args.end(), {"--compose-mode", options.compose_mode});
+          InstallHostd(self_path, install_args);
+          std::cout << "service_mode=systemd\n";
+          std::cout << "hostd_service=comet-node-hostd.service\n";
+          return 0;
+        }
         const fs::path hostd_binary = ResolveSiblingBinary(self_path, "comet-hostd");
         return RunHostdLoop(hostd_binary, options);
       }

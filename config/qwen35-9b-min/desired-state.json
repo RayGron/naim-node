@@ -1,0 +1,169 @@
+{
+  "plane_name": "qwen35-9b-min",
+  "plane_shared_disk_name": "plane-qwen35-9b-min-shared",
+  "control_root": "/comet/shared/control/qwen35-9b-min",
+  "bootstrap_model": {
+    "model_id": "qwen3.5-9b-q4-k-m",
+    "served_model_name": "qwen3.5-9b",
+    "source_url": "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/Qwen_Qwen3.5-9B-Q4_K_M.gguf?download=true",
+    "target_filename": "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+  },
+  "inference": {
+    "primary_infer_node": "node-a",
+    "net_if": "eth0",
+    "models_root": "/comet/shared/models",
+    "gguf_cache_dir": "/comet/shared/models/gguf",
+    "infer_log_dir": "/comet/shared/logs/infer",
+    "llama_port": 8000,
+    "llama_ctx_size": 4096,
+    "llama_threads": 4,
+    "llama_gpu_layers": 99,
+    "inference_healthcheck_retries": 300,
+    "inference_healthcheck_interval_sec": 5
+  },
+  "gateway": {
+    "listen_host": "0.0.0.0",
+    "listen_port": 8080,
+    "server_name": "qwen35-9b-min.local"
+  },
+  "runtime_gpu_nodes": [
+    {
+      "name": "worker-qwen35-9b-min",
+      "node_name": "node-a",
+      "gpu_device": "0",
+      "placement_mode": "manual",
+      "share_mode": "exclusive",
+      "gpu_fraction": 1.0,
+      "priority": 100,
+      "preemptible": false,
+      "memory_cap_mb": 10240,
+      "enabled": true
+    }
+  ],
+  "nodes": [
+    {
+      "name": "node-a",
+      "platform": "linux",
+      "gpu_devices": [
+        "0"
+      ],
+      "gpu_memory_mb": {
+        "0": 24576
+      }
+    }
+  ],
+  "disks": [
+    {
+      "name": "plane-qwen35-9b-min-shared",
+      "kind": "plane-shared",
+      "plane_name": "qwen35-9b-min",
+      "owner_name": "qwen35-9b-min",
+      "node_name": "node-a",
+      "host_path": "/var/lib/comet/disks/planes/qwen35-9b-min/shared",
+      "container_path": "/comet/shared",
+      "size_gb": 20
+    },
+    {
+      "name": "infer-qwen35-9b-min-private",
+      "kind": "infer-private",
+      "plane_name": "qwen35-9b-min",
+      "owner_name": "infer-qwen35-9b-min",
+      "node_name": "node-a",
+      "host_path": "/var/lib/comet/disks/instances/infer-qwen35-9b-min/private",
+      "container_path": "/comet/private",
+      "size_gb": 8
+    },
+    {
+      "name": "worker-qwen35-9b-min-private",
+      "kind": "worker-private",
+      "plane_name": "qwen35-9b-min",
+      "owner_name": "worker-qwen35-9b-min",
+      "node_name": "node-a",
+      "host_path": "/var/lib/comet/disks/instances/worker-qwen35-9b-min/private",
+      "container_path": "/comet/private",
+      "size_gb": 8
+    }
+  ],
+  "instances": [
+    {
+      "name": "infer-qwen35-9b-min",
+      "role": "infer",
+      "plane_name": "qwen35-9b-min",
+      "node_name": "node-a",
+      "image": "comet/infer-runtime:dev",
+      "command": "/runtime/infer/entrypoint.sh",
+      "private_disk_name": "infer-qwen35-9b-min-private",
+      "shared_disk_name": "plane-qwen35-9b-min-shared",
+      "depends_on": [],
+      "environment": {
+        "COMET_PLANE_NAME": "qwen35-9b-min",
+        "COMET_INSTANCE_NAME": "infer-qwen35-9b-min",
+        "COMET_INSTANCE_ROLE": "infer",
+        "COMET_NODE_NAME": "node-a",
+        "COMET_INFER_BOOT_MODE": "launch-runtime",
+        "COMET_INFER_RUNTIME_BACKEND": "auto",
+        "COMET_CONTROLLER_URL": "http://controller.internal:8080",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-9b-min",
+        "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen35-9b-min/infer-runtime.json",
+        "COMET_INFERENCE_PORT": "8000",
+        "COMET_GATEWAY_PORT": "8080",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private"
+      },
+      "labels": {
+        "comet.plane": "qwen35-9b-min",
+        "comet.role": "infer",
+        "comet.node": "node-a"
+      },
+      "placement_mode": "manual",
+      "share_mode": "exclusive",
+      "gpu_fraction": 0.0,
+      "priority": 100,
+      "preemptible": false,
+      "private_disk_size_gb": 8
+    },
+    {
+      "name": "worker-qwen35-9b-min",
+      "role": "worker",
+      "plane_name": "qwen35-9b-min",
+      "node_name": "node-a",
+      "image": "comet/worker-runtime:dev",
+      "command": "/runtime/worker/entrypoint.sh",
+      "private_disk_name": "worker-qwen35-9b-min-private",
+      "shared_disk_name": "plane-qwen35-9b-min-shared",
+      "depends_on": [
+        "infer-qwen35-9b-min"
+      ],
+      "environment": {
+        "COMET_PLANE_NAME": "qwen35-9b-min",
+        "COMET_INSTANCE_NAME": "worker-qwen35-9b-min",
+        "COMET_INSTANCE_ROLE": "worker",
+        "COMET_NODE_NAME": "node-a",
+        "COMET_GPU_DEVICE": "0",
+        "COMET_WORKER_BOOT_MODE": "llama-load",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-9b-min",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private",
+        "COMET_WORKER_RUNTIME_STATUS_PATH": "/comet/private/worker-runtime-status.json"
+      },
+      "labels": {
+        "comet.plane": "qwen35-9b-min",
+        "comet.role": "worker",
+        "comet.node": "node-a",
+        "comet.placement": "manual",
+        "comet.placement.mode": "manual",
+        "comet.placement.action": "manual",
+        "comet.requested.node": "node-a",
+        "comet.requested.gpu": "0"
+      },
+      "gpu_device": "0",
+      "placement_mode": "manual",
+      "share_mode": "exclusive",
+      "gpu_fraction": 1.0,
+      "priority": 100,
+      "preemptible": false,
+      "memory_cap_mb": 10240,
+      "private_disk_size_gb": 8
+    }
+  ]
+}

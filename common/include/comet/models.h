@@ -103,10 +103,20 @@ struct GatewaySettings {
   std::string server_name = "_";
 };
 
+struct BootstrapModelSpec {
+  std::string model_id;
+  std::optional<std::string> served_model_name;
+  std::optional<std::string> local_path;
+  std::optional<std::string> source_url;
+  std::optional<std::string> target_filename;
+  std::optional<std::string> sha256;
+};
+
 struct DesiredState {
   std::string plane_name;
   std::string plane_shared_disk_name;
   std::string control_root;
+  std::optional<BootstrapModelSpec> bootstrap_model;
   InferenceRuntimeSettings inference;
   GatewaySettings gateway;
   std::vector<RuntimeGpuNode> runtime_gpu_nodes;

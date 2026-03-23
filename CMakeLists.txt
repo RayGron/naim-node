@@ -49,6 +49,8 @@ project(
   LANGUAGES CXX
 )
 
+include(FetchContent)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -58,10 +60,56 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+set(COMET_LLAMA_CPP_GIT_TAG "ec2b787ebe975cab1fa592c2505a6d3a9e4ff2e7" CACHE STRING
+    "Pinned ggml-org/llama.cpp revision used for comet runtime binaries")
+set(COMET_LLAMA_CPP_SOURCE_DIR "" CACHE PATH
+    "Optional local llama.cpp source directory override for comet runtime binaries")
+
+if(DEFINED BUILD_SHARED_LIBS)
+  set(_comet_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
+  set(_comet_restore_build_shared_libs ON)
+else()
+  set(_comet_restore_build_shared_libs OFF)
+endif()
+
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static llama.cpp for comet runtime binaries" FORCE)
+set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
+set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
+set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+if(DEFINED CUDAToolkit_ROOT OR DEFINED CMAKE_CUDA_COMPILER)
+  set(GGML_CUDA ON CACHE BOOL "" FORCE)
+endif()
+
+if(COMET_LLAMA_CPP_SOURCE_DIR AND EXISTS "${COMET_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
+  FetchContent_Declare(
+    llama_cpp
+    SOURCE_DIR "${COMET_LLAMA_CPP_SOURCE_DIR}"
+  )
+else()
+  FetchContent_Declare(
+    llama_cpp
+    GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+    GIT_TAG ${COMET_LLAMA_CPP_GIT_TAG}
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS TRUE
+  )
+endif()
+FetchContent_MakeAvailable(llama_cpp)
+
+if(_comet_restore_build_shared_libs)
+  set(BUILD_SHARED_LIBS "${_comet_saved_build_shared_libs}" CACHE BOOL "Build shared libs" FORCE)
+else()
+  unset(BUILD_SHARED_LIBS CACHE)
+endif()
+
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(llama CONFIG REQUIRED)
 
 add_library(
   comet-common
@@ -110,6 +158,12 @@ add_executable(
   common/src/runtime_status.cpp
 )
 target_include_directories(comet-inferctl PRIVATE common/include)
+target_include_directories(
+  comet-inferctl
+  BEFORE PRIVATE
+    "${llama_cpp_SOURCE_DIR}/include"
+    "${llama_cpp_SOURCE_DIR}/ggml/include"
+)
 target_link_libraries(
   comet-inferctl
   PRIVATE
@@ -124,6 +178,12 @@ add_executable(
   common/src/runtime_status.cpp
 )
 target_include_directories(comet-workerd PRIVATE common/include)
+target_include_directories(
+  comet-workerd
+  BEFORE PRIVATE
+    "${llama_cpp_SOURCE_DIR}/include"
+    "${llama_cpp_SOURCE_DIR}/ggml/include"
+)
 target_link_libraries(
   comet-workerd
   PRIVATE

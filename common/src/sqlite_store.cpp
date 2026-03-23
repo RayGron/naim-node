@@ -1,5 +1,6 @@
 #include "comet/sqlite_store.h"
 
+#include <array>
 #include <filesystem>
 #include <map>
 #include <set>
@@ -24,10 +25,13 @@ CREATE TABLE IF NOT EXISTS planes (
     name TEXT PRIMARY KEY,
     shared_disk_name TEXT NOT NULL,
     control_root TEXT NOT NULL DEFAULT '',
+    artifacts_root TEXT NOT NULL DEFAULT '',
+    bootstrap_model_json TEXT NOT NULL DEFAULT '',
     inference_config_json TEXT NOT NULL DEFAULT '',
     gateway_config_json TEXT NOT NULL DEFAULT '',
     runtime_gpu_nodes_json TEXT NOT NULL DEFAULT '',
     generation INTEGER NOT NULL DEFAULT 1,
+    applied_generation INTEGER NOT NULL DEFAULT 0,
     rebalance_iteration INTEGER NOT NULL DEFAULT 0,
     state TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -169,6 +173,7 @@ CREATE TABLE IF NOT EXISTS host_assignments (
     artifacts_root TEXT NOT NULL,
     status TEXT NOT NULL,
     status_message TEXT NOT NULL DEFAULT '',
+    progress_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -428,6 +433,60 @@ std::string SerializeInferenceSettings(const InferenceRuntimeSettings& settings)
       .dump();
 }
 
+std::string SerializeBootstrapModelSpec(
+    const std::optional<BootstrapModelSpec>& bootstrap_model) {
+  if (!bootstrap_model.has_value()) {
+    return "";
+  }
+  json value = {
+      {"model_id", bootstrap_model->model_id},
+  };
+  if (bootstrap_model->served_model_name.has_value()) {
+    value["served_model_name"] = *bootstrap_model->served_model_name;
+  }
+  if (bootstrap_model->local_path.has_value()) {
+    value["local_path"] = *bootstrap_model->local_path;
+  }
+  if (bootstrap_model->source_url.has_value()) {
+    value["source_url"] = *bootstrap_model->source_url;
+  }
+  if (bootstrap_model->target_filename.has_value()) {
+    value["target_filename"] = *bootstrap_model->target_filename;
+  }
+  if (bootstrap_model->sha256.has_value()) {
+    value["sha256"] = *bootstrap_model->sha256;
+  }
+  return value.dump();
+}
+
+std::optional<BootstrapModelSpec> DeserializeBootstrapModelSpec(const std::string& json_text) {
+  if (json_text.empty()) {
+    return std::nullopt;
+  }
+  const json value = json::parse(json_text);
+  if (!value.is_object()) {
+    return std::nullopt;
+  }
+  BootstrapModelSpec bootstrap_model;
+  bootstrap_model.model_id = value.value("model_id", std::string{});
+  if (value.contains("served_model_name") && !value.at("served_model_name").is_null()) {
+    bootstrap_model.served_model_name = value.at("served_model_name").get<std::string>();
+  }
+  if (value.contains("local_path") && !value.at("local_path").is_null()) {
+    bootstrap_model.local_path = value.at("local_path").get<std::string>();
+  }
+  if (value.contains("source_url") && !value.at("source_url").is_null()) {
+    bootstrap_model.source_url = value.at("source_url").get<std::string>();
+  }
+  if (value.contains("target_filename") && !value.at("target_filename").is_null()) {
+    bootstrap_model.target_filename = value.at("target_filename").get<std::string>();
+  }
+  if (value.contains("sha256") && !value.at("sha256").is_null()) {
+    bootstrap_model.sha256 = value.at("sha256").get<std::string>();
+  }
+  return bootstrap_model;
+}
+
 InferenceRuntimeSettings DeserializeInferenceSettings(const std::string& json_text) {
   InferenceRuntimeSettings settings;
   if (json_text.empty()) {
@@ -563,6 +622,7 @@ HostAssignment AssignmentFromStatement(sqlite3_stmt* statement) {
   assignment.artifacts_root = ToColumnText(statement, 8);
   assignment.status = ParseHostAssignmentStatus(ToColumnText(statement, 9));
   assignment.status_message = ToColumnText(statement, 10);
+  assignment.progress_json = ToColumnText(statement, 11);
   return assignment;
 }
 
@@ -698,10 +758,12 @@ PlaneRecord PlaneFromStatement(sqlite3_stmt* statement) {
   plane.name = ToColumnText(statement, 0);
   plane.shared_disk_name = ToColumnText(statement, 1);
   plane.control_root = ToColumnText(statement, 2);
-  plane.generation = sqlite3_column_int(statement, 3);
-  plane.rebalance_iteration = sqlite3_column_int(statement, 4);
-  plane.state = ToColumnText(statement, 5);
-  plane.created_at = ToColumnText(statement, 6);
+  plane.artifacts_root = ToColumnText(statement, 3);
+  plane.generation = sqlite3_column_int(statement, 4);
+  plane.applied_generation = sqlite3_column_int(statement, 5);
+  plane.rebalance_iteration = sqlite3_column_int(statement, 6);
+  plane.state = ToColumnText(statement, 7);
+  plane.created_at = ToColumnText(statement, 8);
   return plane;
 }
 
@@ -758,6 +820,12 @@ void ControllerStore::Initialize() {
   sqlite3* db = AsSqlite(db_);
   Exec(db, kBootstrapSql);
   EnsureColumn(db, "planes", "control_root", "control_root TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(db, "planes", "artifacts_root", "artifacts_root TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "planes",
+      "bootstrap_model_json",
+      "bootstrap_model_json TEXT NOT NULL DEFAULT ''");
   EnsureColumn(
       db,
       "planes",
@@ -776,8 +844,18 @@ void ControllerStore::Initialize() {
   EnsureColumn(
       db,
       "planes",
+      "applied_generation",
+      "applied_generation INTEGER NOT NULL DEFAULT 0");
+  EnsureColumn(
+      db,
+      "planes",
       "rebalance_iteration",
       "rebalance_iteration INTEGER NOT NULL DEFAULT 0");
+  EnsureColumn(
+      db,
+      "host_assignments",
+      "progress_json",
+      "progress_json TEXT NOT NULL DEFAULT '{}'");
   EnsureColumn(
       db,
       "host_observations",
@@ -964,29 +1042,38 @@ void ControllerStore::ReplaceDesiredState(
       Statement statement(
           db,
           "INSERT INTO planes("
-          "name, shared_disk_name, control_root, inference_config_json, gateway_config_json, "
-          "runtime_gpu_nodes_json, generation, rebalance_iteration, state"
-          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'ready') "
+          "name, shared_disk_name, control_root, artifacts_root, bootstrap_model_json, "
+          "inference_config_json, gateway_config_json, runtime_gpu_nodes_json, generation, applied_generation, "
+          "rebalance_iteration, state"
+          ") VALUES(?1, ?2, ?3, '', ?4, ?5, ?6, ?7, ?8, "
+          "COALESCE((SELECT applied_generation FROM planes WHERE name = ?1), 0), ?9, 'stopped') "
           "ON CONFLICT(name) DO UPDATE SET "
           "shared_disk_name = excluded.shared_disk_name, "
           "control_root = excluded.control_root, "
+          "artifacts_root = planes.artifacts_root, "
+          "bootstrap_model_json = excluded.bootstrap_model_json, "
           "inference_config_json = excluded.inference_config_json, "
           "gateway_config_json = excluded.gateway_config_json, "
           "runtime_gpu_nodes_json = excluded.runtime_gpu_nodes_json, "
           "generation = excluded.generation, "
           "rebalance_iteration = excluded.rebalance_iteration, "
-          "state = excluded.state;");
+          "state = CASE "
+          "  WHEN planes.state = 'deleting' THEN planes.state "
+          "  WHEN planes.state = 'running' THEN planes.state "
+          "  ELSE excluded.state "
+          "END;");
       statement.BindText(1, state.plane_name);
       statement.BindText(2, state.plane_shared_disk_name);
       statement.BindText(
           3,
           state.control_root.empty() ? "/comet/shared/control/" + state.plane_name
                                      : state.control_root);
-      statement.BindText(4, SerializeInferenceSettings(state.inference));
-      statement.BindText(5, SerializeGatewaySettings(state.gateway));
-      statement.BindText(6, SerializeRuntimeGpuNodes(state.runtime_gpu_nodes));
-      statement.BindInt(7, generation);
-      statement.BindInt(8, rebalance_iteration);
+      statement.BindText(4, SerializeBootstrapModelSpec(state.bootstrap_model));
+      statement.BindText(5, SerializeInferenceSettings(state.inference));
+      statement.BindText(6, SerializeGatewaySettings(state.gateway));
+      statement.BindText(7, SerializeRuntimeGpuNodes(state.runtime_gpu_nodes));
+      statement.BindInt(8, generation);
+      statement.BindInt(9, rebalance_iteration);
       statement.StepDone();
     }
 
@@ -1135,8 +1222,8 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState(const std::string&
   {
     Statement statement(
         db,
-        "SELECT name, shared_disk_name, control_root, inference_config_json, gateway_config_json, "
-        "runtime_gpu_nodes_json "
+        "SELECT name, shared_disk_name, control_root, bootstrap_model_json, inference_config_json, "
+        "gateway_config_json, runtime_gpu_nodes_json "
         "FROM planes WHERE name = ?1;");
     statement.BindText(1, plane_name);
     if (!statement.StepRow()) {
@@ -1148,9 +1235,10 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState(const std::string&
     if (state.control_root.empty()) {
       state.control_root = "/comet/shared/control/" + state.plane_name;
     }
-    state.inference = DeserializeInferenceSettings(ToColumnText(statement.raw(), 3));
-    state.gateway = DeserializeGatewaySettings(ToColumnText(statement.raw(), 4));
-    state.runtime_gpu_nodes = DeserializeRuntimeGpuNodes(ToColumnText(statement.raw(), 5));
+    state.bootstrap_model = DeserializeBootstrapModelSpec(ToColumnText(statement.raw(), 3));
+    state.inference = DeserializeInferenceSettings(ToColumnText(statement.raw(), 4));
+    state.gateway = DeserializeGatewaySettings(ToColumnText(statement.raw(), 5));
+    state.runtime_gpu_nodes = DeserializeRuntimeGpuNodes(ToColumnText(statement.raw(), 6));
     for (const auto& runtime_node : state.runtime_gpu_nodes) {
       plane_node_names.insert(runtime_node.node_name);
     }
@@ -1432,8 +1520,8 @@ std::vector<PlaneRecord> ControllerStore::LoadPlanes() const {
   std::vector<PlaneRecord> planes;
   Statement statement(
       db,
-      "SELECT name, shared_disk_name, control_root, generation, rebalance_iteration, state, "
-      "created_at FROM planes ORDER BY name ASC;");
+      "SELECT name, shared_disk_name, control_root, artifacts_root, generation, applied_generation, "
+      "rebalance_iteration, state, created_at FROM planes ORDER BY name ASC;");
   while (statement.StepRow()) {
     planes.push_back(PlaneFromStatement(statement.raw()));
   }
@@ -1444,8 +1532,8 @@ std::optional<PlaneRecord> ControllerStore::LoadPlane(const std::string& plane_n
   sqlite3* db = AsSqlite(db_);
   Statement statement(
       db,
-      "SELECT name, shared_disk_name, control_root, generation, rebalance_iteration, state, "
-      "created_at FROM planes WHERE name = ?1;");
+      "SELECT name, shared_disk_name, control_root, artifacts_root, generation, applied_generation, "
+      "rebalance_iteration, state, created_at FROM planes WHERE name = ?1;");
   statement.BindText(1, plane_name);
   if (!statement.StepRow()) {
     return std::nullopt;
@@ -1627,6 +1715,64 @@ bool ControllerStore::UpdatePlaneState(
   statement.BindText(2, state);
   statement.StepDone();
   return sqlite3_changes(db) > 0;
+}
+
+bool ControllerStore::UpdatePlaneAppliedGeneration(
+    const std::string& plane_name,
+    int applied_generation) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE planes SET applied_generation = ?2 WHERE name = ?1;");
+  statement.BindText(1, plane_name);
+  statement.BindInt(2, applied_generation);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
+}
+
+bool ControllerStore::UpdatePlaneArtifactsRoot(
+    const std::string& plane_name,
+    const std::string& artifacts_root) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE planes SET artifacts_root = ?2 WHERE name = ?1;");
+  statement.BindText(1, plane_name);
+  statement.BindText(2, artifacts_root);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
+}
+
+void ControllerStore::DeletePlane(const std::string& plane_name) {
+  sqlite3* db = AsSqlite(db_);
+  Exec(db, "BEGIN IMMEDIATE TRANSACTION;");
+  try {
+    const std::array<std::string, 9> delete_sql = {
+        "DELETE FROM host_assignments WHERE plane_name = ?1;",
+        "DELETE FROM rollout_actions WHERE plane_name = ?1;",
+        "DELETE FROM disk_runtime_state WHERE plane_name = ?1;",
+        "DELETE FROM event_log WHERE plane_name = ?1;",
+        "DELETE FROM scheduler_plane_runtime WHERE plane_name = ?1;",
+        "DELETE FROM scheduler_worker_runtime WHERE plane_name = ?1;",
+        "DELETE FROM scheduler_node_runtime WHERE plane_name = ?1;",
+        "UPDATE host_observations "
+        "SET plane_name = CASE WHEN plane_name = ?1 THEN '' ELSE plane_name END, "
+        "    applied_generation = CASE WHEN plane_name = ?1 THEN NULL ELSE applied_generation END, "
+        "    last_assignment_id = CASE WHEN plane_name = ?1 THEN NULL ELSE last_assignment_id END, "
+        "    updated_at = CURRENT_TIMESTAMP "
+        "WHERE plane_name = ?1;",
+        "DELETE FROM planes WHERE name = ?1;",
+    };
+    for (const auto& sql : delete_sql) {
+      Statement statement(db, sql);
+      statement.BindText(1, plane_name);
+      statement.StepDone();
+    }
+    Exec(db, "COMMIT;");
+  } catch (...) {
+    Exec(db, "ROLLBACK;");
+    throw;
+  }
 }
 
 int ControllerStore::SupersedeHostAssignmentsForPlane(
@@ -2304,9 +2450,9 @@ void ControllerStore::ReplaceHostAssignments(const std::vector<HostAssignment>& 
           db,
           "INSERT INTO host_assignments("
           "node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-          "assignment_type, desired_state_json, artifacts_root, status, status_message, "
+          "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json, "
           "updated_at"
-          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP);");
+          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP);");
       statement.BindText(1, assignment.node_name);
       statement.BindText(2, assignment.plane_name);
       statement.BindInt(3, assignment.desired_generation);
@@ -2317,6 +2463,7 @@ void ControllerStore::ReplaceHostAssignments(const std::vector<HostAssignment>& 
       statement.BindText(8, assignment.artifacts_root);
       statement.BindText(9, ToString(assignment.status));
       statement.BindText(10, assignment.status_message);
+      statement.BindText(11, assignment.progress_json.empty() ? "{}" : assignment.progress_json);
       statement.StepDone();
     }
 
@@ -2360,9 +2507,9 @@ void ControllerStore::EnqueueHostAssignments(
           db,
           "INSERT INTO host_assignments("
           "node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-          "assignment_type, desired_state_json, artifacts_root, status, status_message, "
+          "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json, "
           "updated_at"
-          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP);");
+          ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP);");
       insert_statement.BindText(1, assignment.node_name);
       insert_statement.BindText(2, assignment.plane_name);
       insert_statement.BindInt(3, assignment.desired_generation);
@@ -2373,6 +2520,9 @@ void ControllerStore::EnqueueHostAssignments(
       insert_statement.BindText(8, assignment.artifacts_root);
       insert_statement.BindText(9, ToString(assignment.status));
       insert_statement.BindText(10, assignment.status_message);
+      insert_statement.BindText(
+          11,
+          assignment.progress_json.empty() ? "{}" : assignment.progress_json);
       insert_statement.StepDone();
     }
 
@@ -2388,7 +2538,7 @@ std::optional<HostAssignment> ControllerStore::LoadHostAssignment(int assignment
   Statement statement(
       db,
       "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-      "assignment_type, desired_state_json, artifacts_root, status, status_message "
+      "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
       "FROM host_assignments WHERE id = ?1;");
   statement.BindInt(1, assignment_id);
   if (!statement.StepRow()) {
@@ -2410,7 +2560,7 @@ std::vector<HostAssignment> ControllerStore::LoadHostAssignments(
 
   std::string sql =
       "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-      "assignment_type, desired_state_json, artifacts_root, status, status_message "
+      "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
       "FROM host_assignments";
   int bind_index = 1;
   if (has_node || has_status || has_plane) {
@@ -2463,7 +2613,7 @@ std::optional<HostAssignment> ControllerStore::ClaimNextHostAssignment(
       Statement statement(
           db,
           "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
-          "assignment_type, desired_state_json, artifacts_root, status, status_message "
+          "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
           "FROM host_assignments "
           "WHERE node_name = ?1 AND status = 'pending' AND attempt_count < max_attempts "
           "ORDER BY id ASC LIMIT 1;");
@@ -2484,6 +2634,7 @@ std::optional<HostAssignment> ControllerStore::ClaimNextHostAssignment(
           "UPDATE host_assignments "
           "SET status = 'claimed', "
           "status_message = '', "
+          "progress_json = '{\"phase\":\"queued\",\"title\":\"Assignment claimed\",\"detail\":\"Hostd accepted the assignment and is starting work.\",\"percent\":5}', "
           "attempt_count = attempt_count + 1, "
           "updated_at = CURRENT_TIMESTAMP "
           "WHERE id = ?1 AND status = 'pending';");
@@ -2494,11 +2645,29 @@ std::optional<HostAssignment> ControllerStore::ClaimNextHostAssignment(
     Exec(db, "COMMIT;");
     assignment->status = HostAssignmentStatus::Claimed;
     assignment->attempt_count += 1;
+    assignment->progress_json =
+        "{\"phase\":\"queued\",\"title\":\"Assignment claimed\",\"detail\":"
+        "\"Hostd accepted the assignment and is starting work.\",\"percent\":5}";
     return assignment;
   } catch (...) {
     Exec(db, "ROLLBACK;");
     throw;
   }
+}
+
+bool ControllerStore::UpdateHostAssignmentProgress(
+    int assignment_id,
+    const std::string& progress_json) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE host_assignments "
+      "SET progress_json = ?2, updated_at = CURRENT_TIMESTAMP "
+      "WHERE id = ?1 AND status = 'claimed';");
+  statement.BindInt(1, assignment_id);
+  statement.BindText(2, progress_json.empty() ? "{}" : progress_json);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
 }
 
 bool ControllerStore::TransitionClaimedHostAssignment(

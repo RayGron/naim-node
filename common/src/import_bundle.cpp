@@ -449,6 +449,26 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       plane_json,
       "control_root",
       "/comet/shared/control/" + state.plane_name);
+  if (const auto bootstrap_model = OptionalObject(plane_json, "bootstrap_model")) {
+    BootstrapModelSpec spec;
+    spec.model_id = OptionalString(*bootstrap_model, "model_id", "");
+    if (const auto served_model_name = OptionalStringOpt(*bootstrap_model, "served_model_name")) {
+      spec.served_model_name = *served_model_name;
+    }
+    if (const auto local_path = OptionalStringOpt(*bootstrap_model, "local_path")) {
+      spec.local_path = *local_path;
+    }
+    if (const auto source_url = OptionalStringOpt(*bootstrap_model, "source_url")) {
+      spec.source_url = *source_url;
+    }
+    if (const auto target_filename = OptionalStringOpt(*bootstrap_model, "target_filename")) {
+      spec.target_filename = *target_filename;
+    }
+    if (const auto sha256 = OptionalStringOpt(*bootstrap_model, "sha256")) {
+      spec.sha256 = *sha256;
+    }
+    state.bootstrap_model = std::move(spec);
+  }
   const int shared_disk_gb = OptionalInt(plane_json, "shared_disk_gb", 200);
 
   if (plane_json.contains("runtime") &&

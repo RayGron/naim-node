@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, startTransition } from "react";
 
 const REFRESH_DEBOUNCE_MS = 350;
+const AUTO_REFRESH_MS = 5000;
 const EVENT_LIMIT = 24;
 
 function fetchJson(path, init = {}) {
@@ -42,6 +43,86 @@ function queryPath(path, query) {
   return rendered ? `${path}?${rendered}` : path;
 }
 
+function ActionIcon({ kind }) {
+  if (kind === "view") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path
+          d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <circle
+          cx="12"
+          cy="12"
+          r="3.2"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+        />
+      </svg>
+    );
+  }
+  if (kind === "edit") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path
+          d="M4 20l4.2-1 9.1-9.1a1.9 1.9 0 0 0 0-2.7l-.5-.5a1.9 1.9 0 0 0-2.7 0L5 15.8 4 20Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M13.5 7.5l3 3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M5 7h14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7 7l.8 11a2 2 0 0 0 2 1.8h4.4a2 2 0 0 0 2-1.8L17 7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10 11v5M14 11v5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function formatTimestamp(value) {
   if (!value) {
     return "n/a";
@@ -50,10 +131,12 @@ function formatTimestamp(value) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "short",
-    timeStyle: "medium",
-  }).format(date);
+  const pad = (part) => String(part).padStart(2, "0");
+  return [
+    pad(date.getDate()),
+    pad(date.getMonth() + 1),
+    date.getFullYear(),
+  ].join("/") + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function yesNo(value) {
@@ -123,6 +206,107 @@ function planeStateClass(state) {
   return "is-healthy";
 }
 
+function planeDisplayState(plane) {
+  if (!plane) {
+    return "unknown";
+  }
+  if ((plane.failed_assignments ?? 0) > 0) {
+    return "failed bootstrap";
+  }
+  if (plane.staged_update) {
+    return "staged update";
+  }
+  return plane.state || "unknown";
+}
+
+function planeDisplayStateClass(plane) {
+  const label = planeDisplayState(plane);
+  if (label === "failed bootstrap") {
+    return "is-critical";
+  }
+  if (label === "staged update") {
+    return "is-warning";
+  }
+  return planeStateClass(label);
+}
+
+function bootstrapModelTargetPath(desiredState) {
+  const bootstrapModel = desiredState?.bootstrap_model;
+  if (!bootstrapModel) {
+    return "n/a";
+  }
+  const targetFilename =
+    bootstrapModel.target_filename ||
+    bootstrapModel.local_path?.split("/").pop() ||
+    bootstrapModel.source_url?.split("/").pop() ||
+    "model.gguf";
+  return `${desiredState?.inference?.gguf_cache_dir || "/comet/shared/models/gguf"}/${targetFilename}`;
+}
+
+function observedStateForObservation(observation) {
+  return observation?.observed_state || {};
+}
+
+function observedInstancesForObservation(observation) {
+  const state = observedStateForObservation(observation);
+  return Array.isArray(state.instances) ? state.instances : [];
+}
+
+function deriveObservedRuntime(observationItems, nodeItems) {
+  const observedInstances = [];
+  const nodeRuntime = new Map();
+
+  for (const observation of observationItems) {
+    const instances = observedInstancesForObservation(observation);
+    const hasObservedRuntime =
+      observation?.runtime_status?.available === true ||
+      observation?.instance_runtimes?.available === true ||
+      observation?.applied_generation !== null && observation?.applied_generation !== undefined ||
+      instances.length > 0;
+    const isHealthyNode =
+      observation?.status !== "stale" &&
+      observation?.status !== "failed" &&
+      observation?.status !== "error";
+    const runtimeLaunchReady = hasObservedRuntime ? isHealthyNode : false;
+    const runtimePhase = observation?.runtime_status?.snapshot?.phase || (hasObservedRuntime ? "applied" : "pending");
+    observedInstances.push(...instances);
+    nodeRuntime.set(observation.node_name, {
+      runtimeLaunchReady,
+      runtimePhase,
+      observedInstanceCount: instances.length,
+      appliedGeneration: observation?.applied_generation,
+      observationStatus: observation?.status || "unknown",
+    });
+  }
+
+  let readyNodes = 0;
+  let notReadyNodes = 0;
+  for (const node of nodeItems) {
+    const derived = nodeRuntime.get(node.node_name);
+    const ready =
+      node.runtime_launch_ready === true ||
+      (node.runtime_launch_ready === null || node.runtime_launch_ready === undefined
+        ? derived?.runtimeLaunchReady === true
+        : false);
+    if (ready) {
+      readyNodes += 1;
+    } else {
+      notReadyNodes += 1;
+    }
+  }
+
+  return {
+    observedInstances,
+    readyNodes,
+    notReadyNodes,
+    nodeRuntime,
+  };
+}
+
+function instanceRole(instance) {
+  return instance?.kind || instance?.role || "instance";
+}
+
 function statusDot(className) {
   return <span className={`status-dot ${className}`} aria-hidden="true" />;
 }
@@ -177,11 +361,220 @@ function OnboardingCard({ bundlePath, setBundlePath, bundleBusy, executeBundleAc
           onClick={() => executeBundleAction("apply")}
           disabled={bundleBusy !== ""}
         >
-          Apply bundle
+          Stage bundle
         </button>
       </div>
       {bundleOutput ? <pre className="bundle-output">{bundleOutput}</pre> : null}
     </section>
+  );
+}
+
+function buildNewPlaneTemplate() {
+  return JSON.stringify(
+    {
+      plane_name: "new-plane",
+      plane_shared_disk_name: "plane-new-plane-shared",
+      control_root: "/comet/shared/control/new-plane",
+      bootstrap_model: {
+        model_id: "model-id",
+        served_model_name: "model-id",
+        local_path: "/abs/path/to/model.gguf",
+        source_url: null,
+        target_filename: "model.gguf",
+        sha256: null,
+      },
+      inference: {
+        primary_infer_node: "node-a",
+        net_if: "eth0",
+        models_root: "/comet/shared/models",
+        gguf_cache_dir: "/comet/shared/models/gguf",
+        infer_log_dir: "/comet/shared/logs/infer",
+        llama_port: 8000,
+        llama_ctx_size: 4096,
+        llama_threads: 4,
+        llama_gpu_layers: 50,
+        inference_healthcheck_retries: 120,
+        inference_healthcheck_interval_sec: 5,
+      },
+      gateway: {
+        listen_host: "0.0.0.0",
+        listen_port: 8080,
+        server_name: "new-plane.local",
+      },
+      runtime_gpu_nodes: [],
+      nodes: [
+        {
+          name: "node-a",
+          platform: "linux",
+          gpu_devices: ["0"],
+          gpu_memory_mb: {
+            "0": 24576,
+          },
+        },
+      ],
+      disks: [
+        {
+          name: "plane-new-plane-shared",
+          kind: "plane-shared",
+          plane_name: "new-plane",
+          owner_name: "",
+          node_name: "node-a",
+          host_path: "/comet/disks/new-plane/shared",
+          container_path: "/comet/shared",
+          size_gb: 40,
+        },
+        {
+          name: "infer-new-plane-private",
+          kind: "infer-private",
+          plane_name: "new-plane",
+          owner_name: "infer-new-plane",
+          node_name: "node-a",
+          host_path: "/comet/disks/new-plane/infer-private",
+          container_path: "/comet/infer-private",
+          size_gb: 20,
+        },
+        {
+          name: "worker-new-plane-private",
+          kind: "worker-private",
+          plane_name: "new-plane",
+          owner_name: "worker-a",
+          node_name: "node-a",
+          host_path: "/comet/disks/new-plane/worker-private",
+          container_path: "/comet/worker-private",
+          size_gb: 10,
+        },
+      ],
+      instances: [
+        {
+          name: "infer-new-plane",
+          role: "infer",
+          plane_name: "new-plane",
+          node_name: "node-a",
+          image: "comet/infer-runtime:dev",
+          command: "",
+          private_disk_name: "infer-new-plane-private",
+          shared_disk_name: "plane-new-plane-shared",
+          depends_on: [],
+          environment: {},
+          labels: {},
+          gpu_device: null,
+          placement_mode: "manual",
+          share_mode: "exclusive",
+          gpu_fraction: 0,
+          priority: 100,
+          preemptible: false,
+          memory_cap_mb: null,
+          private_disk_size_gb: 20,
+        },
+        {
+          name: "worker-a",
+          role: "worker",
+          plane_name: "new-plane",
+          node_name: "node-a",
+          image: "comet/worker-runtime:dev",
+          command: "",
+          private_disk_name: "worker-new-plane-private",
+          shared_disk_name: "plane-new-plane-shared",
+          depends_on: ["infer-new-plane"],
+          environment: {},
+          labels: {},
+          gpu_device: "0",
+          placement_mode: "manual",
+          share_mode: "shared",
+          gpu_fraction: 0.25,
+          priority: 100,
+          preemptible: true,
+          memory_cap_mb: 4096,
+          private_disk_size_gb: 10,
+        },
+      ],
+    },
+    null,
+    2,
+  );
+}
+
+function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
+  if (!dialog.open) {
+    return null;
+  }
+
+  const readOnly = dialog.mode === "view";
+  const title =
+    dialog.mode === "new"
+      ? "New plane"
+      : dialog.mode === "edit"
+        ? `Edit plane ${dialog.planeName}`
+        : `View plane ${dialog.planeName}`;
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="modal-card plane-editor-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plane-editor-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Plane registry</div>
+            <h2 id="plane-editor-title">{title}</h2>
+          </div>
+          <button className="ghost-button" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p className="editor-copy">
+          {readOnly
+            ? "Read-only desired state JSON for the selected plane."
+            : "Edit desired state JSON and stage it in the controller. Runtime changes are applied only after Start plane."}
+        </p>
+        {dialog.error ? <div className="error-banner">{dialog.error}</div> : null}
+        <label className="field-label" htmlFor="plane-editor-json">
+          Desired state JSON
+        </label>
+        <textarea
+          id="plane-editor-json"
+          className="editor-textarea"
+          value={dialog.text}
+          onChange={(event) =>
+            setDialog((current) => ({
+              ...current,
+              text: event.target.value,
+            }))
+          }
+          readOnly={readOnly}
+          spellCheck="false"
+        />
+        <div className="toolbar">
+          {readOnly ? (
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() =>
+                setDialog((current) => ({
+                  ...current,
+                  mode: "edit",
+                  error: "",
+                }))
+              }
+            >
+              Edit plane
+            </button>
+          ) : (
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={onSave}
+              disabled={dialog.busy}
+            >
+              {dialog.mode === "new" ? "Create plane" : "Save staged changes"}
+            </button>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -193,6 +586,237 @@ function SummaryCard({ label, value, meta }) {
       <div className="summary-meta">{meta}</div>
     </article>
   );
+}
+
+function progressPercent(value) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function inferProgressOperationKind(pendingOperation, planeRecord, inFlightAssignments) {
+  if (pendingOperation?.kind) {
+    return pendingOperation.kind;
+  }
+  if (inFlightAssignments <= 0 || !planeRecord) {
+    return "";
+  }
+  if (planeRecord.state === "running") {
+    return "start";
+  }
+  if (planeRecord.state === "stopped") {
+    return "stop";
+  }
+  return "apply";
+}
+
+function buildOperationProgressModel({
+  pendingOperation,
+  selectedPlaneName,
+  planeRecord,
+  inFlightAssignments,
+  failedAssignments,
+  failedAssignmentMessage,
+  observedInstanceCount,
+  desiredInstanceCount,
+  readyNodes,
+  structuredProgress,
+}) {
+  if (structuredProgress) {
+    const bytesDone =
+      structuredProgress.bytes_done !== null && structuredProgress.bytes_done !== undefined
+        ? compactBytes(structuredProgress.bytes_done)
+        : null;
+    const bytesTotal =
+      structuredProgress.bytes_total !== null && structuredProgress.bytes_total !== undefined
+        ? compactBytes(structuredProgress.bytes_total)
+        : null;
+    const transfer =
+      bytesDone && bytesTotal ? `${bytesDone} / ${bytesTotal}` : bytesDone || bytesTotal || "";
+    return {
+      kind: pendingOperation?.kind || structuredProgress.phase || "apply",
+      label: structuredProgress.title || "Applying plane state",
+      progress: progressPercent(structuredProgress.percent ?? 0),
+      detail: [structuredProgress.detail || "", transfer].filter(Boolean).join(" · "),
+      complete: structuredProgress.phase === "completed",
+      failed: structuredProgress.phase === "failed",
+    };
+  }
+
+  const kind = inferProgressOperationKind(pendingOperation, planeRecord, inFlightAssignments);
+  if (!kind) {
+    return null;
+  }
+
+  const noAssignmentsInFlight = inFlightAssignments === 0;
+  if (failedAssignments > 0) {
+    const label =
+      kind === "start"
+        ? "Starting plane"
+        : kind === "stop"
+          ? "Stopping plane"
+          : kind === "delete"
+            ? "Deleting plane"
+            : "Applying bundle";
+    return {
+      kind,
+      label,
+      progress: 100,
+      detail: failedAssignmentMessage || "Host assignment failed and requires operator action.",
+      complete: false,
+      failed: true,
+    };
+  }
+
+  if (kind === "start") {
+    let progress = 18;
+    let detail = "Controller accepted the start request.";
+    if (planeRecord?.state === "running") {
+      progress = 42;
+      detail = "Plane state switched to running.";
+    }
+    if (inFlightAssignments > 0) {
+      progress = 72;
+      detail = "Host assignments are being applied.";
+    }
+    if (noAssignmentsInFlight && readyNodes > 0 && observedInstanceCount >= desiredInstanceCount) {
+      progress = 100;
+      detail = "Plane start converged on the node.";
+    } else if (noAssignmentsInFlight && planeRecord?.state === "running") {
+      progress = 84;
+      detail = "Plane is running, waiting for final observation convergence.";
+    }
+    return {
+      kind,
+      label: "Starting plane",
+      progress: progressPercent(progress),
+      detail,
+      complete: progress >= 100,
+      failed: false,
+    };
+  }
+
+  if (kind === "stop") {
+    let progress = 18;
+    let detail = "Controller accepted the stop request.";
+    if (planeRecord?.state === "stopped") {
+      progress = 42;
+      detail = "Plane state switched to stopped.";
+    }
+    if (inFlightAssignments > 0) {
+      progress = 72;
+      detail = "Host assignments are removing runtime state.";
+    }
+    if (noAssignmentsInFlight && observedInstanceCount === 0) {
+      progress = 100;
+      detail = "Plane stop converged on the node.";
+    } else if (noAssignmentsInFlight && planeRecord?.state === "stopped") {
+      progress = 84;
+      detail = "Plane is stopped, waiting for final observation convergence.";
+    }
+    return {
+      kind,
+      label: "Stopping plane",
+      progress: progressPercent(progress),
+      detail,
+      complete: progress >= 100,
+      failed: false,
+    };
+  }
+
+  if (kind === "delete") {
+    let progress = 18;
+    let detail = "Controller accepted the delete request.";
+    const targetPlaneMissing =
+      pendingOperation?.planeName &&
+      pendingOperation.planeName !== selectedPlaneName;
+    if (targetPlaneMissing && noAssignmentsInFlight) {
+      return {
+        kind,
+        label: "Deleting plane",
+        progress: 100,
+        detail: "Plane cleanup converged and the plane was removed from the registry.",
+        complete: true,
+        failed: false,
+      };
+    }
+    if (planeRecord?.state === "deleting") {
+      progress = 46;
+      detail = "Plane state switched to deleting.";
+    }
+    if (inFlightAssignments > 0) {
+      progress = 74;
+      detail = "Host assignments are removing plane runtime and storage state.";
+    }
+    if (!planeRecord && noAssignmentsInFlight) {
+      progress = 100;
+      detail = "Plane cleanup converged and the plane was removed from the registry.";
+    } else if (noAssignmentsInFlight && planeRecord?.state === "deleting") {
+      progress = 88;
+      detail = "Cleanup assignments finished, waiting for final registry removal.";
+    }
+    return {
+      kind,
+      label: "Deleting plane",
+      progress: progressPercent(progress),
+      detail,
+      complete: progress >= 100,
+      failed: false,
+    };
+  }
+
+  let progress = 22;
+  let detail = "Bundle apply request accepted by the controller.";
+  if (planeRecord) {
+    progress = 46;
+    detail = "Plane record exists and desired state is persisted.";
+  }
+  if (inFlightAssignments > 0) {
+    progress = 74;
+    detail = "Host assignments are materializing the new plane state.";
+  }
+  if (noAssignmentsInFlight && readyNodes > 0 && observedInstanceCount >= desiredInstanceCount) {
+    progress = 100;
+    detail = "Bundle apply converged on the node.";
+  } else if (noAssignmentsInFlight && planeRecord) {
+    progress = 86;
+    detail = "Desired state is applied, waiting for final observation convergence.";
+  }
+  return {
+    kind,
+    label: "Applying bundle",
+    progress: progressPercent(progress),
+    detail,
+    complete: progress >= 100,
+    failed: false,
+  };
+}
+
+function isRoutineEvent(event) {
+  if (!event) {
+    return false;
+  }
+  const category = event.category || "";
+  const eventType = event.event_type || "";
+  const severity = event.severity || "info";
+  if (severity !== "info") {
+    return false;
+  }
+  if (category === "host-observation" && eventType === "reported") {
+    return true;
+  }
+  if (category === "host-registry" && eventType === "session-opened") {
+    return true;
+  }
+  return false;
+}
+
+function nodeStatusLabel(runtimeLaunchReady, runtimePhase, health) {
+  if (runtimeLaunchReady) {
+    return "ready";
+  }
+  if (runtimePhase === "starting" || runtimePhase === "stopping" || runtimePhase === "pending") {
+    return runtimePhase;
+  }
+  return health || "unknown";
 }
 
 function App() {
@@ -216,6 +840,15 @@ function App() {
   const [streamHealthy, setStreamHealthy] = useState(false);
   const [lastRefreshAt, setLastRefreshAt] = useState("");
   const [lastEventName, setLastEventName] = useState("none");
+  const [pendingOperation, setPendingOperation] = useState(null);
+  const [planeDialog, setPlaneDialog] = useState({
+    open: false,
+    mode: "new",
+    planeName: "",
+    text: "",
+    busy: false,
+    error: "",
+  });
 
   const refreshTimerRef = useRef(null);
   const eventSourceRef = useRef(null);
@@ -317,15 +950,24 @@ function App() {
     }, REFRESH_DEBOUNCE_MS);
   }
 
-  async function executePlaneAction(action) {
-    if (!selectedPlane) {
+  async function executePlaneAction(action, planeName = selectedPlane) {
+    if (!planeName) {
       return;
     }
     setActionBusy(action);
     setApiError("");
     try {
-      await fetchJson(planePath(selectedPlane, action), { method: "POST" });
-      await refreshAll(selectedPlane);
+      const request =
+        action === "delete"
+          ? fetchJson(planePath(planeName), { method: "DELETE" })
+          : fetchJson(planePath(planeName, action), { method: "POST" });
+      await request;
+      setPendingOperation({
+        kind: action,
+        planeName,
+        startedAt: new Date().toISOString(),
+      });
+      await refreshAll(planeName);
     } catch (error) {
       setApiError(error.message || String(error));
     } finally {
@@ -356,6 +998,83 @@ function App() {
     }
   }
 
+  async function openPlaneDialog(mode, planeName = "") {
+    setApiError("");
+    try {
+      if (mode === "new") {
+        setPlaneDialog({
+          open: true,
+          mode,
+          planeName: "",
+          text: buildNewPlaneTemplate(),
+          busy: false,
+          error: "",
+        });
+        return;
+      }
+      const payload =
+        planeName === selectedPlane && planeDetail
+          ? planeDetail
+          : await fetchJson(planePath(planeName));
+      setPlaneDialog({
+        open: true,
+        mode,
+        planeName,
+        text: JSON.stringify(payload.desired_state || {}, null, 2),
+        busy: false,
+        error: "",
+      });
+    } catch (error) {
+      setApiError(error.message || String(error));
+    }
+  }
+
+  async function savePlaneDialog() {
+    setPlaneDialog((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const desiredState = JSON.parse(planeDialog.text);
+      if (!desiredState?.plane_name) {
+        throw new Error("desired_state.plane_name is required.");
+      }
+      if (planeDialog.mode === "edit" && desiredState.plane_name !== planeDialog.planeName) {
+        throw new Error("Plane rename is not supported in edit mode.");
+      }
+      const method = planeDialog.mode === "edit" ? "PUT" : "POST";
+      const path =
+        planeDialog.mode === "edit"
+          ? planePath(planeDialog.planeName)
+          : "/api/v1/planes";
+      const payload = await fetchJson(path, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          desired_state: desiredState,
+        }),
+      });
+      setBundleOutput(payload.output || JSON.stringify(payload, null, 2));
+      setPlaneDialog({
+        open: false,
+        mode: "new",
+        planeName: "",
+        text: "",
+        busy: false,
+        error: "",
+      });
+      startTransition(() => {
+        setSelectedPlane(desiredState.plane_name);
+      });
+      await refreshAll(desiredState.plane_name);
+    } catch (error) {
+      setPlaneDialog((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
   useEffect(() => {
     refreshAll(initialPlane);
     return () => {
@@ -364,6 +1083,13 @@ function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      refreshAll(selectedPlane);
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [selectedPlane]);
 
   useEffect(() => {
     if (!selectedPlane) {
@@ -426,8 +1152,11 @@ function App() {
   const rebalanceItems = rebalancePlan?.rebalance_plan || [];
   const diskItems = diskState?.items || [];
   const instances = desiredState?.instances || [];
-  const inferItems = instances.filter((item) => item.kind === "infer");
-  const workerItems = instances.filter((item) => item.kind === "worker");
+  const observedRuntime = deriveObservedRuntime(observationItems, nodeItems);
+  const observedInstances = observedRuntime.observedInstances;
+  const displayedInstances = observedInstances.length > 0 ? observedInstances : instances;
+  const inferItems = displayedInstances.filter((item) => instanceRole(item) === "infer");
+  const workerItems = displayedInstances.filter((item) => instanceRole(item) === "worker");
   const alertSummary = dashboard?.alerts || {
     critical: 0,
     warning: 0,
@@ -436,6 +1165,57 @@ function App() {
     items: [],
   };
   const alertItems = Array.isArray(alertSummary.items) ? alertSummary.items : [];
+  const runtimeSummary = dashboard?.runtime || {};
+  const assignmentSummary = dashboard?.assignments || {};
+  const structuredProgress = assignmentSummary.latest_progress || null;
+  const inFlightAssignments =
+    (assignmentSummary.pending ?? 0) + (assignmentSummary.claimed ?? 0);
+  const failedAssignments = assignmentSummary.failed ?? 0;
+  const readyNodes =
+    observedRuntime.readyNodes > 0 || observationItems.length > 0
+      ? observedRuntime.readyNodes
+      : runtimeSummary.ready_nodes ?? 0;
+  const notReadyNodes =
+    observedRuntime.readyNodes > 0 || observationItems.length > 0
+      ? observedRuntime.notReadyNodes
+      : runtimeSummary.not_ready_nodes ?? 0;
+  const displayedInstanceCount =
+    observedInstances.length > 0 ? observedInstances.length : dashboard?.plane?.instance_count ?? 0;
+  const missingRuntimeNodes = observationItems.filter(
+    (observation) =>
+      observation?.runtime_status?.available !== true &&
+      observation?.instance_runtimes?.available !== true,
+  ).length;
+  const filteredEvents = events.filter((event) => !isRoutineEvent(event));
+  const failedAssignmentMessage =
+    alertItems.find((item) => item.kind === "failed-assignment")?.detail ||
+    filteredEvents.find(
+      (event) => event.category === "host-assignment" && event.event_type === "failed",
+    )?.message ||
+    "";
+  const operationProgress = buildOperationProgressModel({
+    pendingOperation,
+    selectedPlaneName: selectedPlane,
+    planeRecord,
+    inFlightAssignments,
+    failedAssignments,
+    failedAssignmentMessage,
+    observedInstanceCount: observedInstances.length,
+    desiredInstanceCount: instances.length,
+    readyNodes,
+    structuredProgress,
+  });
+  const selectedPlaneDeleting = planeRecord?.state === "deleting";
+
+  useEffect(() => {
+    if (!operationProgress?.complete || operationProgress?.failed) {
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      setPendingOperation(null);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [operationProgress?.complete]);
 
   return (
     <div className="app-shell">
@@ -479,10 +1259,9 @@ function App() {
             <button
               className="ghost-button"
               type="button"
-              onClick={() => refreshAll(selectedPlane)}
-              disabled={loading}
+              onClick={() => openPlaneDialog("new")}
             >
-              Refresh
+              New plane
             </button>
           </div>
           <div className="plane-list">
@@ -497,29 +1276,78 @@ function App() {
             ) : (
               planes.map((plane) => {
                 const selected = plane.name === selectedPlane;
+                const displayState = planeDisplayState(plane);
+                const displayStateClass = planeDisplayStateClass(plane);
                 return (
-                  <button
+                  <article
                     key={plane.name}
                     className={`plane-card ${selected ? "is-selected" : ""}`}
-                    type="button"
-                    onClick={() => {
-                      setSelectedPlane(plane.name);
-                      refreshAll(plane.name);
-                    }}
                   >
-                    <div className="plane-card-top">
-                      <div className="plane-name">{plane.name}</div>
-                      <div className={`pill ${planeStateClass(plane.state)}`}>
-                        {statusDot(planeStateClass(plane.state))}
-                        <span>{plane.state}</span>
+                    <button
+                      className="plane-card-main"
+                      type="button"
+                      aria-label={`plane ${plane.name} ${displayState} generation ${plane.generation ?? "n/a"}`}
+                      onClick={() => {
+                        setSelectedPlane(plane.name);
+                        refreshAll(plane.name);
+                      }}
+                    >
+                      <div className="plane-card-top">
+                        <div className="plane-name">{plane.name}</div>
+                        <div className={`pill ${displayStateClass}`}>
+                          {statusDot(displayStateClass)}
+                          <span>{displayState}</span>
+                        </div>
                       </div>
+                      <div className="plane-card-meta">
+                        <span>gen {plane.generation ?? "n/a"}</span>
+                        <span>applied {plane.applied_generation ?? 0}</span>
+                        <span>{plane.instance_count ?? 0} instances</span>
+                        <span>{plane.node_count ?? 0} nodes</span>
+                      </div>
+                    </button>
+                    <div className="plane-card-actions">
+                      <button
+                        className="ghost-button compact-button icon-button"
+                        type="button"
+                        aria-label={`View plane ${plane.name}`}
+                        title={`View plane ${plane.name}`}
+                        onClick={() => openPlaneDialog("view", plane.name)}
+                      >
+                        <ActionIcon kind="view" />
+                      </button>
+                      <button
+                        className="ghost-button compact-button icon-button"
+                        type="button"
+                        aria-label={`Edit plane ${plane.name}`}
+                        title={`Edit plane ${plane.name}`}
+                        onClick={() => openPlaneDialog("edit", plane.name)}
+                      >
+                        <ActionIcon kind="edit" />
+                      </button>
+                      <button
+                        className="ghost-button compact-button danger-button icon-button"
+                        type="button"
+                        disabled={actionBusy !== ""}
+                        aria-label={`Delete plane ${plane.name}`}
+                        title={`Delete plane ${plane.name}`}
+                        onClick={async () => {
+                          const confirmed = window.confirm(
+                            `Delete plane ${plane.name}? This will stop it, remove related infer and worker runtime, and then remove it from the controller registry.`,
+                          );
+                          if (!confirmed) {
+                            return;
+                          }
+                          startTransition(() => {
+                            setSelectedPlane(plane.name);
+                          });
+                          await executePlaneAction("delete", plane.name);
+                        }}
+                      >
+                        <ActionIcon kind="delete" />
+                      </button>
                     </div>
-                    <div className="plane-card-meta">
-                      <span>gen {plane.generation ?? "n/a"}</span>
-                      <span>{plane.instance_count ?? 0} instances</span>
-                      <span>{plane.node_count ?? 0} nodes</span>
-                    </div>
-                  </button>
+                  </article>
                 );
               })
             )}
@@ -554,7 +1382,7 @@ function App() {
                   onClick={() => executeBundleAction("apply")}
                   disabled={bundleBusy !== ""}
                 >
-                  Apply bundle
+                  Stage bundle
                 </button>
               </div>
               {bundleOutput ? <pre className="bundle-output">{bundleOutput}</pre> : null}
@@ -573,7 +1401,12 @@ function App() {
                 className="ghost-button"
                 type="button"
                 onClick={() => executePlaneAction("start")}
-                disabled={!selectedPlane || actionBusy !== "" || planeRecord?.state === "running"}
+                disabled={
+                  !selectedPlane ||
+                  actionBusy !== "" ||
+                  planeRecord?.state === "running" ||
+                  selectedPlaneDeleting
+                }
               >
                 Start plane
               </button>
@@ -581,7 +1414,12 @@ function App() {
                 className="ghost-button"
                 type="button"
                 onClick={() => executePlaneAction("stop")}
-                disabled={!selectedPlane || actionBusy !== "" || planeRecord?.state === "stopped"}
+                disabled={
+                  !selectedPlane ||
+                  actionBusy !== "" ||
+                  planeRecord?.state === "stopped" ||
+                  selectedPlaneDeleting
+                }
               >
                 Stop plane
               </button>
@@ -599,18 +1437,13 @@ function App() {
             <>
               <div className="summary-grid">
                 <SummaryCard
-                  label="Plane state"
-                  value={planeRecord.state}
-                  meta={`generation ${dashboard.desired_generation ?? "n/a"}`}
-                />
-                <SummaryCard
                   label="Nodes"
                   value={dashboard.plane?.node_count ?? 0}
-                  meta={`${dashboard.runtime?.ready_nodes ?? 0} ready / ${dashboard.runtime?.not_ready_nodes ?? 0} not ready`}
+                  meta={`${readyNodes} ready / ${notReadyNodes} not ready`}
                 />
                 <SummaryCard
                   label="Instances"
-                  value={dashboard.plane?.instance_count ?? 0}
+                  value={displayedInstanceCount}
                   meta={`${inferItems.length} infer / ${workerItems.length} worker`}
                 />
                 <SummaryCard
@@ -625,13 +1458,77 @@ function App() {
                 />
               </div>
 
+              {operationProgress ? (
+                <section className="action-progress-card">
+                  <div className="card-row">
+                    <div>
+                      <div className="section-label">Current action</div>
+                      <strong>{operationProgress.label}</strong>
+                    </div>
+                    <span
+                      className={`tag ${operationProgress.failed ? "is-critical" : operationProgress.complete ? "is-healthy" : "is-booting"}`}
+                    >
+                      {statusDot(
+                        operationProgress.failed
+                          ? "is-critical"
+                          : operationProgress.complete
+                            ? "is-healthy"
+                            : "is-booting",
+                      )}
+                      <span>{operationProgress.progress}%</span>
+                    </span>
+                  </div>
+                  <div className="progress-track" aria-hidden="true">
+                    <div
+                      className={`progress-fill ${operationProgress.failed ? "is-failed" : operationProgress.complete ? "is-complete" : ""}`}
+                      style={{ width: `${operationProgress.progress}%` }}
+                    />
+                  </div>
+                  <div className="progress-detail">{operationProgress.detail}</div>
+                </section>
+              ) : null}
+
               <div className="panel-grid">
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Plane config</h3>
+                    <span className="subpanel-meta">Desired config, applied config, and bootstrap model</span>
+                  </div>
+                  <div className="list-card">
+                    <div className="metric-grid compact-metric-grid">
+                      <div className="metric-row"><span>Lifecycle state</span><strong>{planeRecord.state || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Desired generation</span><strong>{planeRecord.generation ?? "n/a"}</strong></div>
+                      <div className="metric-row"><span>Applied generation</span><strong>{planeRecord.applied_generation ?? 0}</strong></div>
+                      <div className="metric-row"><span>Pending restart</span><strong>{planeRecord.staged_update ? "yes" : "no"}</strong></div>
+                      <div className="metric-row"><span>Shared disk</span><strong>{desiredState?.plane_shared_disk_name || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Control root</span><strong>{desiredState?.control_root || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Bootstrap source</span><strong>{desiredState?.bootstrap_model?.local_path || desiredState?.bootstrap_model?.source_url || "not configured"}</strong></div>
+                      <div className="metric-row"><span>Bootstrap target</span><strong>{bootstrapModelTargetPath(desiredState)}</strong></div>
+                    </div>
+                  </div>
+                </section>
+
                 <section className="subpanel">
                   <div className="subpanel-header">
                     <h3>Operational watch</h3>
                     <span className="subpanel-meta">Live rollout, failure, and readiness signals</span>
                   </div>
                   <div className="list-column">
+                    <article className="list-card">
+                      <div className="card-row">
+                        <strong>Runtime state</strong>
+                        <span className={`tag ${notReadyNodes > 0 ? "is-warning" : "is-healthy"}`}>
+                          {statusDot(notReadyNodes > 0 ? "is-warning" : "is-healthy")}
+                          <span>{notReadyNodes > 0 ? "degraded" : "stable"}</span>
+                        </span>
+                      </div>
+                      <div className="metric-grid compact-metric-grid">
+                        <div className="metric-row"><span>Observed nodes</span><strong>{runtimeSummary.observed_nodes ?? observationItems.length}</strong></div>
+                        <div className="metric-row"><span>Ready nodes</span><strong>{readyNodes}</strong></div>
+                        <div className="metric-row"><span>Observed instances</span><strong>{observedInstances.length}</strong></div>
+                        <div className="metric-row"><span>Missing runtime payload</span><strong>{missingRuntimeNodes}</strong></div>
+                      </div>
+                    </article>
                     {alertItems.length === 0 ? (
                       <EmptyState
                         title="No active alerts"
@@ -674,11 +1571,11 @@ function App() {
                     {instances.length === 0 ? (
                       <EmptyState title="No instances" />
                     ) : (
-                      instances.map((instance) => (
+                      displayedInstances.map((instance) => (
                         <article className="instance-card" key={instance.name}>
                           <div className="card-row">
                             <strong>{instance.name}</strong>
-                            <span className="tag">{instance.kind}</span>
+                            <span className="tag">{instanceRole(instance)}</span>
                           </div>
                           <div className="metric-grid">
                             <div className="metric-row"><span>Node</span><strong>{instance.node_name || "auto"}</strong></div>
@@ -704,23 +1601,38 @@ function App() {
                       <EmptyState title="No nodes in current plane" />
                     ) : (
                       nodeItems.map((node) => (
-                        <article className="node-card" key={node.node_name}>
-                          <div className="card-row">
-                            <strong>{node.node_name}</strong>
-                            <div className={`pill ${runtimeIndicatorClass(node.runtime_launch_ready, node.health)}`}>
-                              {statusDot(runtimeIndicatorClass(node.runtime_launch_ready, node.health))}
-                              <span>{node.health || "unknown"}</span>
-                            </div>
-                          </div>
-                          <div className="metric-grid">
-                            <div className="metric-row"><span>Availability</span><strong>{node.availability || "active"}</strong></div>
-                            <div className="metric-row"><span>Status</span><strong>{node.status || "n/a"}</strong></div>
-                            <div className="metric-row"><span>Runtime</span><strong>{node.runtime_phase || "n/a"}</strong></div>
-                            <div className="metric-row"><span>Launch ready</span><strong>{yesNo(node.runtime_launch_ready)}</strong></div>
-                            <div className="metric-row"><span>GPU count</span><strong>{node.gpu_count ?? "n/a"}</strong></div>
-                            <div className="metric-row"><span>Telemetry degraded</span><strong>{yesNo(node.telemetry_degraded)}</strong></div>
-                          </div>
-                        </article>
+                        (() => {
+                          const derivedRuntime = observedRuntime.nodeRuntime.get(node.node_name);
+                          const effectiveRuntimeLaunchReady =
+                            node.runtime_launch_ready !== null && node.runtime_launch_ready !== undefined
+                              ? node.runtime_launch_ready
+                              : derivedRuntime?.runtimeLaunchReady;
+                          const effectiveRuntimePhase =
+                            node.runtime_phase || derivedRuntime?.runtimePhase || "pending";
+                          const effectiveIndicatorClass = runtimeIndicatorClass(
+                            effectiveRuntimeLaunchReady,
+                            node.health,
+                          );
+                          return (
+                            <article className="node-card" key={node.node_name}>
+                              <div className="card-row">
+                                <strong>{node.node_name}</strong>
+                                <div className={`pill ${effectiveIndicatorClass}`}>
+                                  {statusDot(effectiveIndicatorClass)}
+                                  <span>{nodeStatusLabel(effectiveRuntimeLaunchReady, effectiveRuntimePhase, node.health)}</span>
+                                </div>
+                              </div>
+                              <div className="metric-grid">
+                                <div className="metric-row"><span>Availability</span><strong>{node.availability || "active"}</strong></div>
+                                <div className="metric-row"><span>Status</span><strong>{node.status || "n/a"}</strong></div>
+                                <div className="metric-row"><span>Runtime</span><strong>{effectiveRuntimePhase}</strong></div>
+                                <div className="metric-row"><span>Launch ready</span><strong>{yesNo(effectiveRuntimeLaunchReady)}</strong></div>
+                                <div className="metric-row"><span>GPU count</span><strong>{node.gpu_count ?? "n/a"}</strong></div>
+                                <div className="metric-row"><span>Telemetry degraded</span><strong>{yesNo(node.telemetry_degraded)}</strong></div>
+                              </div>
+                            </article>
+                          );
+                        })()
                       ))
                     )}
                   </div>
@@ -888,10 +1800,10 @@ function App() {
                     <span className="subpanel-meta">Plane-scoped persisted event log</span>
                   </div>
                   <div className="event-list">
-                    {events.length === 0 ? (
-                      <EmptyState title="No events" />
+                    {filteredEvents.length === 0 ? (
+                      <EmptyState title="No operator-facing events" detail="Routine host observation noise is hidden from this view." />
                     ) : (
-                      events.map((event) => (
+                      filteredEvents.map((event) => (
                         <article className={`event-card ${eventSeverityClass(event.severity)}`} key={event.id}>
                           <div className="card-row">
                             <strong>
@@ -915,6 +1827,21 @@ function App() {
           )}
         </section>
       </main>
+      <PlaneEditorDialog
+        dialog={planeDialog}
+        setDialog={setPlaneDialog}
+        onClose={() =>
+          setPlaneDialog({
+            open: false,
+            mode: "new",
+            planeName: "",
+            text: "",
+            busy: false,
+            error: "",
+          })
+        }
+        onSave={savePlaneDialog}
+      />
     </div>
   );
 }
