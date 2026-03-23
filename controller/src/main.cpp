@@ -13,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cctype>
 #include <cstdint>
 #include <ctime>
 #include <cstddef>
@@ -920,7 +921,8 @@ HttpResponse SendControllerHttpRequest(
     const ControllerEndpointTarget& target,
     const std::string& method,
     const std::string& path_and_query,
-    const std::string& body = "") {
+    const std::string& body = "",
+    const std::vector<std::pair<std::string, std::string>>& headers = {}) {
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
@@ -954,8 +956,16 @@ HttpResponse SendControllerHttpRequest(
   request << method << " " << request_path << " HTTP/1.1\r\n";
   request << "Host: " << target.host << ":" << target.port << "\r\n";
   request << "Connection: close\r\n";
+  for (const auto& [key, value] : headers) {
+    request << key << ": " << value << "\r\n";
+  }
   if (!body.empty()) {
-    request << "Content-Type: application/json\r\n";
+    if (std::none_of(
+            headers.begin(),
+            headers.end(),
+            [](const auto& header) { return Lowercase(header.first) == "content-type"; })) {
+      request << "Content-Type: application/json\r\n";
+    }
     request << "Content-Length: " << body.size() << "\r\n";
   }
   request << "\r\n";
@@ -1003,6 +1013,314 @@ json SendControllerJsonRequest(
   json payload = response.body.empty() ? json::object() : json::parse(response.body);
   payload["_http_status"] = response.status_code;
   return payload;
+}
+
+struct PlaneInteractionResolution {
+  comet::DesiredState desired_state;
+  std::optional<comet::PlaneRecord> plane_record;
+  std::optional<comet::HostObservation> observation;
+  std::optional<comet::RuntimeStatus> runtime_status;
+  std::optional<ControllerEndpointTarget> target;
+  json status_payload;
+};
+
+std::string NormalizeLanguageCode(const std::string& value) {
+  std::string normalized;
+  normalized.reserve(value.size());
+  for (unsigned char ch : value) {
+    if (ch == '-') {
+      normalized.push_back('_');
+    } else {
+      normalized.push_back(static_cast<char>(std::tolower(ch)));
+    }
+  }
+  return normalized;
+}
+
+std::string LanguageLabel(const std::string& code) {
+  const std::string normalized = NormalizeLanguageCode(code);
+  if (normalized == "ru") {
+    return "Russian";
+  }
+  if (normalized == "en") {
+    return "English";
+  }
+  if (normalized == "uk" || normalized == "uk_ua") {
+    return "Ukrainian";
+  }
+  if (normalized == "de" || normalized == "de_de") {
+    return "German";
+  }
+  return code.empty() ? std::string("English") : code;
+}
+
+std::optional<std::string> ResolveInteractionPreferredLanguage(
+    const comet::DesiredState& desired_state,
+    const json& payload) {
+  if (payload.contains("preferred_language") &&
+      payload.at("preferred_language").is_string()) {
+    const std::string preferred = payload.at("preferred_language").get<std::string>();
+    if (!preferred.empty()) {
+      return NormalizeLanguageCode(preferred);
+    }
+  }
+  if (desired_state.interaction.has_value() &&
+      !desired_state.interaction->default_response_language.empty()) {
+    return NormalizeLanguageCode(desired_state.interaction->default_response_language);
+  }
+  return std::nullopt;
+}
+
+std::string BuildLanguageInstruction(
+    const comet::DesiredState& desired_state,
+    const std::optional<std::string>& preferred_language) {
+  const std::string no_reasoning_instruction =
+      " Do not output chain-of-thought, hidden reasoning, analysis traces, or <think> blocks. Output only the final user-facing answer.";
+  if (preferred_language.has_value() && !preferred_language->empty()) {
+    return "Response language requirement: Reply in " + LanguageLabel(*preferred_language) +
+           ". Ignore the model's default language preferences. Never default to Chinese unless the user explicitly requests Chinese." +
+           no_reasoning_instruction;
+  }
+  if (desired_state.interaction.has_value()) {
+    if (desired_state.interaction->follow_user_language) {
+      return "Response language requirement: Reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese." +
+             no_reasoning_instruction;
+    }
+    if (!desired_state.interaction->default_response_language.empty()) {
+      return "Response language requirement: Reply in " +
+             LanguageLabel(desired_state.interaction->default_response_language) +
+             ". Ignore the model's default language preferences. Never default to Chinese unless the user explicitly requests Chinese." +
+             no_reasoning_instruction;
+    }
+  }
+  return "Response language requirement: Reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese." +
+         no_reasoning_instruction;
+}
+
+std::string BuildInteractionUpstreamBody(
+    const PlaneInteractionResolution& resolution,
+    const std::string& original_body,
+    bool force_stream) {
+  json payload = original_body.empty() ? json::object() : json::parse(original_body);
+  if (!payload.contains("messages") || !payload.at("messages").is_array()) {
+    payload["messages"] = json::array();
+  }
+  const auto preferred_language =
+      ResolveInteractionPreferredLanguage(resolution.desired_state, payload);
+
+  json system_messages = json::array();
+  if (resolution.desired_state.interaction.has_value() &&
+      resolution.desired_state.interaction->system_prompt.has_value() &&
+      !resolution.desired_state.interaction->system_prompt->empty()) {
+    system_messages.push_back(json{
+        {"role", "system"},
+        {"content", *resolution.desired_state.interaction->system_prompt},
+    });
+  }
+  system_messages.push_back(json{
+      {"role", "system"},
+      {"content", BuildLanguageInstruction(resolution.desired_state, preferred_language)},
+  });
+
+  json merged_messages = json::array();
+  for (const auto& message : system_messages) {
+    merged_messages.push_back(message);
+  }
+  for (const auto& message : payload.at("messages")) {
+    merged_messages.push_back(message);
+  }
+  payload["messages"] = merged_messages;
+
+  if (preferred_language.has_value()) {
+    payload["preferred_language"] = *preferred_language;
+  }
+  if (force_stream) {
+    payload["stream"] = true;
+  }
+  if (!payload.contains("max_tokens") && !payload.contains("max_completion_tokens")) {
+    payload["max_tokens"] = 256;
+  }
+  if (!payload.contains("temperature")) {
+    payload["temperature"] = 0.2;
+  }
+  if (!payload.contains("top_p")) {
+    payload["top_p"] = 0.8;
+  }
+  return payload.dump();
+}
+
+std::string NormalizeInteractionHost(const std::string& host) {
+  if (host.empty() || host == "0.0.0.0" || host == "::" || host == "[::]") {
+    return "127.0.0.1";
+  }
+  return host;
+}
+
+std::optional<ControllerEndpointTarget> ParseInteractionTarget(
+    const std::string& gateway_listen,
+    int fallback_port) {
+  std::string host = "127.0.0.1";
+  int port = fallback_port;
+  if (!gateway_listen.empty()) {
+    const std::size_t colon = gateway_listen.rfind(':');
+    if (colon != std::string::npos) {
+      host = NormalizeInteractionHost(gateway_listen.substr(0, colon));
+      port = std::stoi(gateway_listen.substr(colon + 1));
+    }
+  }
+  if (port <= 0) {
+    return std::nullopt;
+  }
+  return ParseControllerEndpointTarget(host + ":" + std::to_string(port));
+}
+
+PlaneInteractionResolution ResolvePlaneInteraction(
+    const std::string& db_path,
+    const std::string& plane_name) {
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+
+  const auto desired_state = store.LoadDesiredState(plane_name);
+  if (!desired_state.has_value()) {
+    throw std::runtime_error("plane '" + plane_name + "' not found");
+  }
+  PlaneInteractionResolution resolution;
+  resolution.desired_state = *desired_state;
+  resolution.plane_record = store.LoadPlane(plane_name);
+  const std::string primary_node = desired_state->inference.primary_infer_node;
+  if (!primary_node.empty()) {
+    resolution.observation = store.LoadHostObservation(primary_node);
+    if (resolution.observation.has_value() &&
+        resolution.observation->plane_name == plane_name &&
+        !resolution.observation->runtime_status_json.empty()) {
+      resolution.runtime_status =
+          comet::DeserializeRuntimeStatusJson(resolution.observation->runtime_status_json);
+      resolution.target = ParseInteractionTarget(
+          resolution.runtime_status->gateway_listen,
+          desired_state->gateway.listen_port);
+    }
+  }
+
+  const bool llm_plane = desired_state->plane_mode == comet::PlaneMode::Llm;
+  const bool running_plane =
+      resolution.plane_record.has_value() && resolution.plane_record->state == "running";
+  const bool observation_ready =
+      resolution.observation.has_value() && resolution.observation->plane_name == plane_name;
+  const bool runtime_ready =
+      resolution.runtime_status.has_value() &&
+      resolution.runtime_status->active_model_ready &&
+      resolution.runtime_status->inference_ready &&
+      resolution.runtime_status->gateway_ready &&
+      resolution.runtime_status->launch_ready;
+  std::string reason = "ready";
+  if (!llm_plane) {
+    reason = "plane_mode_compute";
+  } else if (!running_plane) {
+    reason = "plane_not_running";
+  } else if (!observation_ready) {
+    reason = "no_observation";
+  } else if (!resolution.runtime_status.has_value()) {
+    reason = "runtime_status_missing";
+  } else if (!resolution.runtime_status->active_model_ready) {
+    reason = "active_model_missing";
+  } else if (!resolution.runtime_status->gateway_ready) {
+    reason = "gateway_not_ready";
+  } else if (!resolution.runtime_status->inference_ready) {
+    reason = "inference_not_ready";
+  } else if (!resolution.target.has_value()) {
+    reason = "gateway_target_missing";
+  }
+
+  resolution.status_payload = json{
+      {"plane_name", plane_name},
+      {"plane_mode", comet::ToString(desired_state->plane_mode)},
+      {"interaction_enabled", llm_plane},
+      {"ready", llm_plane && running_plane && observation_ready && runtime_ready &&
+                    resolution.target.has_value()},
+      {"reason", reason},
+      {"plane_state",
+       resolution.plane_record.has_value() ? json(resolution.plane_record->state) : json(nullptr)},
+      {"primary_infer_node",
+       primary_node.empty() ? json(nullptr) : json(primary_node)},
+      {"active_model_id",
+       resolution.runtime_status.has_value() &&
+               !resolution.runtime_status->active_model_id.empty()
+           ? json(resolution.runtime_status->active_model_id)
+           : json(nullptr)},
+      {"served_model_name",
+       resolution.runtime_status.has_value() &&
+               !resolution.runtime_status->active_served_model_name.empty()
+           ? json(resolution.runtime_status->active_served_model_name)
+           : json(nullptr)},
+      {"default_response_language",
+       resolution.desired_state.interaction.has_value()
+           ? json(resolution.desired_state.interaction->default_response_language)
+           : json(nullptr)},
+      {"supported_response_languages",
+       resolution.desired_state.interaction.has_value()
+           ? json(resolution.desired_state.interaction->supported_response_languages)
+           : json(json::array())},
+      {"follow_user_language",
+       resolution.desired_state.interaction.has_value()
+           ? json(resolution.desired_state.interaction->follow_user_language)
+           : json(true)},
+      {"gateway_listen",
+       resolution.runtime_status.has_value() &&
+               !resolution.runtime_status->gateway_listen.empty()
+           ? json(resolution.runtime_status->gateway_listen)
+           : json(nullptr)},
+      {"gateway_target",
+       resolution.target.has_value()
+           ? json(resolution.target->host + ":" + std::to_string(resolution.target->port))
+           : json(nullptr)},
+      {"runtime_status",
+       resolution.runtime_status.has_value()
+           ? json::parse(comet::SerializeRuntimeStatusJson(*resolution.runtime_status))
+           : json(nullptr)},
+  };
+  return resolution;
+}
+
+HttpResponse BuildPlaneInteractionError(
+    int status_code,
+    const json& status_payload,
+    const std::string& message) {
+  json payload = status_payload;
+  payload["status"] = "error";
+  payload["message"] = message;
+  return HttpResponse{status_code, "application/json", payload.dump()};
+}
+
+HttpResponse ProxyInteractionJson(
+    const PlaneInteractionResolution& resolution,
+    const std::string& method,
+    const std::string& path,
+    const std::string& body = "") {
+  if (!resolution.status_payload.value("interaction_enabled", false)) {
+    return BuildPlaneInteractionError(
+        409,
+        resolution.status_payload,
+        "interaction is available only for plane_mode=llm");
+  }
+  if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
+    return BuildPlaneInteractionError(
+        409,
+        resolution.status_payload,
+        "plane interaction target is not ready");
+  }
+  try {
+    const std::string upstream_body =
+        method == "POST" ? BuildInteractionUpstreamBody(resolution, body, false) : body;
+    const HttpResponse upstream = SendControllerHttpRequest(
+        *resolution.target,
+        method,
+        path,
+        upstream_body,
+        {{"Accept", "application/json"}});
+    return upstream;
+  } catch (const std::exception& error) {
+    return BuildPlaneInteractionError(502, resolution.status_payload, error.what());
+  }
 }
 
 int CreateListenSocket(const std::string& host, int port) {
@@ -1096,6 +1414,7 @@ json BuildControllerStatePayload(
   for (const auto& plane : planes) {
     plane_items.push_back(json{
         {"name", plane.name},
+        {"plane_mode", plane.plane_mode},
         {"generation", plane.generation},
         {"applied_generation", plane.applied_generation},
         {"staged_update", plane.generation > plane.applied_generation},
@@ -1176,6 +1495,7 @@ json BuildPlanesPayload(const std::string& db_path) {
     items.push_back(json{
         {"name", plane.name},
         {"state", plane.state},
+        {"plane_mode", plane.plane_mode},
         {"generation", plane.generation},
         {"applied_generation", effective_applied_generation},
         {"staged_update", plane.generation > effective_applied_generation},
@@ -3415,6 +3735,193 @@ void StreamEventsSse(
   close(client_fd);
 }
 
+std::optional<std::string> ParseInteractionStreamPlaneName(const HttpRequest& request) {
+  if (request.method != "POST") {
+    return std::nullopt;
+  }
+  constexpr std::string_view kPrefix = "/api/v1/planes/";
+  constexpr std::string_view kSuffix = "/interaction/chat/completions/stream";
+  if (request.path.rfind(std::string(kPrefix), 0) != 0) {
+    return std::nullopt;
+  }
+  if (request.path.size() <= kPrefix.size() + kSuffix.size()) {
+    return std::nullopt;
+  }
+  if (request.path.substr(request.path.size() - kSuffix.size()) != kSuffix) {
+    return std::nullopt;
+  }
+  return request.path.substr(
+      kPrefix.size(),
+      request.path.size() - kPrefix.size() - kSuffix.size());
+}
+
+int ConnectHttpTarget(const ControllerEndpointTarget& target) {
+  addrinfo hints{};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* results = nullptr;
+  const std::string port_text = std::to_string(target.port);
+  const int lookup = getaddrinfo(target.host.c_str(), port_text.c_str(), &hints, &results);
+  if (lookup != 0) {
+    throw std::runtime_error(
+        "failed to resolve proxy target '" + target.raw + "': " + gai_strerror(lookup));
+  }
+  int fd = -1;
+  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
+    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+    if (fd < 0) {
+      continue;
+    }
+    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
+      break;
+    }
+    close(fd);
+    fd = -1;
+  }
+  freeaddrinfo(results);
+  if (fd < 0) {
+    throw std::runtime_error("failed to connect to proxy target '" + target.raw + "'");
+  }
+  return fd;
+}
+
+void StreamPlaneInteractionSse(
+    int client_fd,
+    const std::string& db_path,
+    const HttpRequest& request) {
+  const auto plane_name = ParseInteractionStreamPlaneName(request);
+  if (!plane_name.has_value()) {
+    SendHttpResponse(
+        client_fd,
+        BuildJsonResponse(
+            404,
+            json{{"status", "not_found"}, {"path", request.path}, {"method", request.method}}));
+    shutdown(client_fd, SHUT_RDWR);
+    close(client_fd);
+    return;
+  }
+
+  PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, *plane_name);
+  if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
+    SendHttpResponse(
+        client_fd,
+        BuildPlaneInteractionError(
+            409,
+            resolution.status_payload,
+            "plane interaction target is not ready"));
+    shutdown(client_fd, SHUT_RDWR);
+    close(client_fd);
+    return;
+  }
+
+  const std::string body = BuildInteractionUpstreamBody(resolution, request.body, true);
+
+  int upstream_fd = -1;
+  bool downstream_sse_started = false;
+  try {
+    upstream_fd = ConnectHttpTarget(*resolution.target);
+    std::ostringstream upstream_request;
+    upstream_request << "POST /v1/chat/completions HTTP/1.1\r\n";
+    upstream_request << "Host: " << resolution.target->host << ":" << resolution.target->port << "\r\n";
+    upstream_request << "Connection: close\r\n";
+    upstream_request << "Accept: text/event-stream\r\n";
+    upstream_request << "Content-Type: application/json\r\n";
+    upstream_request << "Content-Length: " << body.size() << "\r\n\r\n";
+    upstream_request << body;
+    if (!SendAll(upstream_fd, upstream_request.str())) {
+      throw std::runtime_error("failed to write upstream interaction request");
+    }
+
+    std::string response_text;
+    std::array<char, 8192> buffer{};
+    std::size_t header_end = std::string::npos;
+    while (header_end == std::string::npos) {
+      const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
+      if (read_count <= 0) {
+        break;
+      }
+      response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+      header_end = response_text.find("\r\n\r\n");
+    }
+    if (header_end == std::string::npos) {
+      throw std::runtime_error("upstream interaction response ended before headers");
+    }
+
+    const HttpResponse upstream = ParseHttpResponse(response_text);
+    if (upstream.status_code != 200 ||
+        upstream.content_type.find("text/event-stream") == std::string::npos) {
+      while (true) {
+        const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
+        if (read_count <= 0) {
+          break;
+        }
+        response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+      }
+      SendHttpResponse(client_fd, ParseHttpResponse(response_text));
+      shutdown(upstream_fd, SHUT_RDWR);
+      close(upstream_fd);
+      shutdown(client_fd, SHUT_RDWR);
+      close(client_fd);
+      return;
+    }
+
+    if (!SendSseHeaders(client_fd)) {
+      shutdown(upstream_fd, SHUT_RDWR);
+      close(upstream_fd);
+      shutdown(client_fd, SHUT_RDWR);
+      close(client_fd);
+      return;
+    }
+    downstream_sse_started = true;
+    if (!upstream.body.empty() && !SendAll(client_fd, upstream.body)) {
+      shutdown(upstream_fd, SHUT_RDWR);
+      close(upstream_fd);
+      shutdown(client_fd, SHUT_RDWR);
+      close(client_fd);
+      return;
+    }
+    while (true) {
+      const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
+      if (read_count <= 0) {
+        break;
+      }
+      if (!SendAll(client_fd, std::string(buffer.data(), static_cast<std::size_t>(read_count)))) {
+        break;
+      }
+    }
+    shutdown(upstream_fd, SHUT_RDWR);
+    close(upstream_fd);
+  } catch (const std::exception& error) {
+    if (upstream_fd >= 0) {
+      shutdown(upstream_fd, SHUT_RDWR);
+      close(upstream_fd);
+    }
+    if (downstream_sse_started) {
+      const json payload = {
+          {"message", error.what()},
+          {"plane_name", plane_name.value_or(std::string{})},
+      };
+      std::ostringstream frame;
+      frame << "event: error\n";
+      std::stringstream lines(payload.dump());
+      std::string line;
+      while (std::getline(lines, line)) {
+        frame << "data: " << line << "\n";
+      }
+      frame << "\n";
+      SendAll(client_fd, frame.str());
+      SendAll(client_fd, "data: [DONE]\n\n");
+    } else {
+      SendHttpResponse(
+          client_fd,
+          BuildPlaneInteractionError(502, resolution.status_payload, error.what()));
+    }
+  }
+
+  shutdown(client_fd, SHUT_RDWR);
+  close(client_fd);
+}
+
 HttpResponse HandleControllerRequest(
     const std::string& db_path,
     const std::string& default_artifacts_root,
@@ -4178,6 +4685,65 @@ HttpResponse HandleControllerRequest(
     if (remainder.empty()) {
       return BuildJsonResponse(404, json{{"status", "not_found"}});
     }
+    const auto interaction_status_pos = remainder.find("/interaction/status");
+    if (interaction_status_pos != std::string::npos &&
+        interaction_status_pos + std::string("/interaction/status").size() == remainder.size()) {
+      if (request.method != "GET") {
+        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+      }
+      const std::string plane_name = remainder.substr(0, interaction_status_pos);
+      try {
+        return BuildJsonResponse(200, ResolvePlaneInteraction(db_path, plane_name).status_payload);
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            404,
+            json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    const auto interaction_models_pos = remainder.find("/interaction/models");
+    if (interaction_models_pos != std::string::npos &&
+        interaction_models_pos + std::string("/interaction/models").size() == remainder.size()) {
+      if (request.method != "GET") {
+        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+      }
+      const std::string plane_name = remainder.substr(0, interaction_models_pos);
+      try {
+        return ProxyInteractionJson(
+            ResolvePlaneInteraction(db_path, plane_name),
+            "GET",
+            "/v1/models");
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            404,
+            json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    const auto interaction_chat_pos = remainder.find("/interaction/chat/completions");
+    if (interaction_chat_pos != std::string::npos &&
+        interaction_chat_pos + std::string("/interaction/chat/completions").size() ==
+            remainder.size()) {
+      if (request.method != "POST") {
+        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+      }
+      const std::string plane_name = remainder.substr(0, interaction_chat_pos);
+      try {
+        return ProxyInteractionJson(
+            ResolvePlaneInteraction(db_path, plane_name),
+            "POST",
+            "/v1/chat/completions",
+            request.body);
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            404,
+            json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+    const auto interaction_stream_pos = remainder.find("/interaction/chat/completions/stream");
+    if (interaction_stream_pos != std::string::npos &&
+        interaction_stream_pos + std::string("/interaction/chat/completions/stream").size() ==
+            remainder.size()) {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
     const auto start_pos = remainder.find("/start");
     if (start_pos != std::string::npos &&
         start_pos + std::string("/start").size() == remainder.size()) {
@@ -4695,7 +5261,7 @@ int ServeControllerApi(
   if (ui_root.has_value()) {
     std::cout << "ui_root=" << ui_root->string() << "\n";
   }
-  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key\n";
+  std::cout << "routes=/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key\n";
   std::cout.flush();
 
   while (!g_stop_requested.load()) {
@@ -4751,6 +5317,14 @@ int ServeControllerApi(
         std::thread(
             [client_fd, db_path, request]() {
               StreamEventsSse(client_fd, db_path, request);
+            })
+            .detach();
+        continue;
+      }
+      if (ParseInteractionStreamPlaneName(request).has_value()) {
+        std::thread(
+            [client_fd, db_path, request]() {
+              StreamPlaneInteractionSse(client_fd, db_path, request);
             })
             .detach();
         continue;
@@ -7095,6 +7669,7 @@ json BuildDashboardPayload(
 
   payload["plane"] = {
       {"plane_name", view.desired_state->plane_name},
+      {"plane_mode", comet::ToString(view.desired_state->plane_mode)},
       {"state",
        [&]() -> json {
          return dashboard_plane_record.has_value() ? json(dashboard_plane_record->state)
@@ -7128,6 +7703,10 @@ json BuildDashboardPayload(
                                                      : plane.applied_generation;
     plane_items.push_back(json{
         {"plane_name", plane.name},
+        {"plane_mode",
+         desired_state_it != view.desired_states.end()
+             ? json(comet::ToString(desired_state_it->plane_mode))
+             : json(plane.plane_mode)},
         {"state", plane.state},
         {"generation", plane.generation},
         {"applied_generation", plane_applied_generation},

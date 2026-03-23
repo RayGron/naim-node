@@ -2,11 +2,23 @@
   "plane_name": "qwen35-9b-min",
   "plane_shared_disk_name": "plane-qwen35-9b-min-shared",
   "control_root": "/comet/shared/control/qwen35-9b-min",
+  "plane_mode": "llm",
   "bootstrap_model": {
     "model_id": "qwen3.5-9b-q4-k-m",
     "served_model_name": "qwen3.5-9b",
     "source_url": "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/Qwen_Qwen3.5-9B-Q4_K_M.gguf?download=true",
     "target_filename": "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+  },
+  "interaction": {
+    "system_prompt": "You are Vesper QW35. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
+    "default_response_language": "en",
+    "supported_response_languages": [
+      "en",
+      "de",
+      "uk",
+      "ru"
+    ],
+    "follow_user_language": true
   },
   "inference": {
     "primary_infer_node": "node-a",

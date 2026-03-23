@@ -30,6 +30,11 @@ enum class PlacementMode {
   Movable,
 };
 
+enum class PlaneMode {
+  Compute,
+  Llm,
+};
+
 struct DiskSpec {
   std::string name;
   DiskKind kind;
@@ -112,17 +117,32 @@ struct BootstrapModelSpec {
   std::optional<std::string> sha256;
 };
 
+struct InteractionSettings {
+  std::optional<std::string> system_prompt;
+  std::string default_response_language = "en";
+  std::vector<std::string> supported_response_languages;
+  bool follow_user_language = true;
+};
+
 struct DesiredState {
   std::string plane_name;
   std::string plane_shared_disk_name;
   std::string control_root;
+  PlaneMode plane_mode = PlaneMode::Compute;
   std::optional<BootstrapModelSpec> bootstrap_model;
+  std::optional<InteractionSettings> interaction;
   InferenceRuntimeSettings inference;
   GatewaySettings gateway;
   std::vector<RuntimeGpuNode> runtime_gpu_nodes;
   std::vector<NodeInventory> nodes;
   std::vector<DiskSpec> disks;
   std::vector<InstanceSpec> instances;
+};
+
+struct PublishedPort {
+  std::string host_ip = "127.0.0.1";
+  int host_port = 0;
+  int container_port = 0;
 };
 
 struct ComposeVolume {
@@ -139,6 +159,7 @@ struct ComposeService {
   std::map<std::string, std::string> environment;
   std::map<std::string, std::string> labels;
   std::vector<ComposeVolume> volumes;
+  std::vector<PublishedPort> published_ports;
   std::optional<std::string> gpu_device;
   std::string healthcheck;
 };
@@ -156,5 +177,7 @@ std::string ToString(GpuShareMode mode);
 GpuShareMode ParseGpuShareMode(const std::string& value);
 std::string ToString(PlacementMode mode);
 PlacementMode ParsePlacementMode(const std::string& value);
+std::string ToString(PlaneMode mode);
+PlaneMode ParsePlaneMode(const std::string& value);
 
 }  // namespace comet

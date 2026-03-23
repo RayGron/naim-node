@@ -84,6 +84,18 @@ json ToJson(const BootstrapModelSpec& bootstrap_model) {
   return result;
 }
 
+json ToJson(const InteractionSettings& interaction) {
+  json result = {
+      {"default_response_language", interaction.default_response_language},
+      {"supported_response_languages", interaction.supported_response_languages},
+      {"follow_user_language", interaction.follow_user_language},
+  };
+  if (interaction.system_prompt.has_value()) {
+    result["system_prompt"] = *interaction.system_prompt;
+  }
+  return result;
+}
+
 json ToJson(const DiskSpec& disk) {
   return json{
       {"name", disk.name},
@@ -218,11 +230,26 @@ BootstrapModelSpec BootstrapModelSpecFromJson(const json& value) {
   return bootstrap_model;
 }
 
+InteractionSettings InteractionSettingsFromJson(const json& value) {
+  InteractionSettings interaction;
+  if (value.contains("system_prompt") && !value.at("system_prompt").is_null()) {
+    interaction.system_prompt = value.at("system_prompt").get<std::string>();
+  }
+  interaction.default_response_language =
+      value.value("default_response_language", interaction.default_response_language);
+  interaction.supported_response_languages =
+      value.value("supported_response_languages", std::vector<std::string>{});
+  interaction.follow_user_language =
+      value.value("follow_user_language", interaction.follow_user_language);
+  return interaction;
+}
+
 json DesiredStateToJson(const DesiredState& state) {
   json result = {
       {"plane_name", state.plane_name},
       {"plane_shared_disk_name", state.plane_shared_disk_name},
       {"control_root", state.control_root},
+      {"plane_mode", ToString(state.plane_mode)},
       {"inference",
        {
            {"primary_infer_node", state.inference.primary_infer_node},
@@ -252,6 +279,9 @@ json DesiredStateToJson(const DesiredState& state) {
   if (state.bootstrap_model.has_value()) {
     result["bootstrap_model"] = ToJson(*state.bootstrap_model);
   }
+  if (state.interaction.has_value()) {
+    result["interaction"] = ToJson(*state.interaction);
+  }
 
   for (const auto& gpu_node : state.runtime_gpu_nodes) {
     result["runtime_gpu_nodes"].push_back(ToJson(gpu_node));
@@ -275,8 +305,12 @@ DesiredState DesiredStateFromJson(const json& value) {
   state.plane_shared_disk_name = value.at("plane_shared_disk_name").get<std::string>();
   state.control_root =
       value.value("control_root", "/comet/shared/control/" + state.plane_name);
+  state.plane_mode = ParsePlaneMode(value.value("plane_mode", std::string("compute")));
   if (value.contains("bootstrap_model") && value.at("bootstrap_model").is_object()) {
     state.bootstrap_model = BootstrapModelSpecFromJson(value.at("bootstrap_model"));
+  }
+  if (value.contains("interaction") && value.at("interaction").is_object()) {
+    state.interaction = InteractionSettingsFromJson(value.at("interaction"));
   }
 
   if (value.contains("inference") && value.at("inference").is_object()) {
@@ -341,7 +375,9 @@ DesiredState SliceDesiredStateForNode(
   result.plane_name = state.plane_name;
   result.plane_shared_disk_name = state.plane_shared_disk_name;
   result.control_root = state.control_root;
+  result.plane_mode = state.plane_mode;
   result.bootstrap_model = state.bootstrap_model;
+  result.interaction = state.interaction;
   result.inference = state.inference;
   result.gateway = state.gateway;
   result.runtime_gpu_nodes = state.runtime_gpu_nodes;

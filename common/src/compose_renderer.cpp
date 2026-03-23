@@ -88,6 +88,14 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
       }
     }
 
+    if (!service.published_ports.empty()) {
+      out << "    ports:\n";
+      for (const auto& port : service.published_ports) {
+        out << "      - \"" << port.host_ip << ":" << port.host_port << ":"
+            << port.container_port << "\"\n";
+      }
+    }
+
     if (service.gpu_device.has_value()) {
       out << "    gpus:\n";
       out << "      - driver: nvidia\n";

@@ -3,6 +3,12 @@ import { useEffect, useRef, useState, startTransition } from "react";
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
 const EVENT_LIMIT = 24;
+const CHAT_LANGUAGE_OPTIONS = [
+  { value: "en", label: "English" },
+  { value: "de", label: "Deutsch" },
+  { value: "uk", label: "Українська" },
+  { value: "ru", label: "Русский" },
+];
 
 function fetchJson(path, init = {}) {
   return fetch(path, {
@@ -32,6 +38,10 @@ function planePath(planeName, suffix = "") {
     : `/api/v1/planes/${encoded}`;
 }
 
+function interactionPath(planeName, suffix) {
+  return planePath(planeName, `interaction/${suffix}`);
+}
+
 function queryPath(path, query) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -41,6 +51,49 @@ function queryPath(path, query) {
   }
   const rendered = params.toString();
   return rendered ? `${path}?${rendered}` : path;
+}
+
+function parseEventStreamChunk(chunk) {
+  const lines = chunk.split("\n");
+  let event = "message";
+  const data = [];
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      data.push(line.slice(5).trimStart());
+    }
+  }
+  return { event, data: data.join("\n") };
+}
+
+async function consumeEventStream(response, onFrame) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Streaming response body is unavailable.");
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      if (frame.trim()) {
+        onFrame(parseEventStreamChunk(frame));
+      }
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    onFrame(parseEventStreamChunk(buffer));
+  }
 }
 
 function ActionIcon({ kind }) {
@@ -160,6 +213,25 @@ function compactBytes(value) {
   return `${amount.toFixed(amount >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function normalizeChatLanguage(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return CHAT_LANGUAGE_OPTIONS.some((option) => option.value === normalized)
+    ? normalized
+    : "";
+}
+
+function supportedChatLanguageOptions(desiredState, interactionStatus) {
+  const allowed = Array.isArray(desiredState?.interaction?.supported_response_languages) &&
+    desiredState.interaction.supported_response_languages.length > 0
+    ? desiredState.interaction.supported_response_languages
+    : Array.isArray(interactionStatus?.supported_response_languages) &&
+        interactionStatus.supported_response_languages.length > 0
+      ? interactionStatus.supported_response_languages
+      : CHAT_LANGUAGE_OPTIONS.map((option) => option.value);
+  const allowedSet = new Set(allowed.map((item) => normalizeChatLanguage(item)).filter(Boolean));
+  return CHAT_LANGUAGE_OPTIONS.filter((option) => allowedSet.has(option.value));
+}
+
 function eventSeverityClass(severity) {
   if (severity === "error") {
     return "is-critical";
@@ -241,6 +313,35 @@ function bootstrapModelTargetPath(desiredState) {
     bootstrapModel.source_url?.split("/").pop() ||
     "model.gguf";
   return `${desiredState?.inference?.gguf_cache_dir || "/comet/shared/models/gguf"}/${targetFilename}`;
+}
+
+function interactionReasonMessage(status) {
+  const reason = status?.reason || "";
+  if (reason === "plane_mode_compute") {
+    return "Interaction is disabled for compute planes.";
+  }
+  if (reason === "plane_not_running") {
+    return "Start the plane to enable chat interaction.";
+  }
+  if (reason === "no_observation") {
+    return "Waiting for a fresh infer-node observation.";
+  }
+  if (reason === "runtime_status_missing") {
+    return "Runtime status is not available yet.";
+  }
+  if (reason === "active_model_missing") {
+    return "No active model is loaded yet.";
+  }
+  if (reason === "gateway_not_ready") {
+    return "Gateway is not ready yet.";
+  }
+  if (reason === "inference_not_ready") {
+    return "Inference runtime is not ready yet.";
+  }
+  if (reason === "gateway_target_missing") {
+    return "Controller could not resolve an interaction target.";
+  }
+  return "Interaction is available when the LLM plane is running and launch-ready.";
 }
 
 function observedStateForObservation(observation) {
@@ -375,6 +476,7 @@ function buildNewPlaneTemplate() {
       plane_name: "new-plane",
       plane_shared_disk_name: "plane-new-plane-shared",
       control_root: "/comet/shared/control/new-plane",
+      plane_mode: "compute",
       bootstrap_model: {
         model_id: "model-id",
         served_model_name: "model-id",
@@ -382,6 +484,13 @@ function buildNewPlaneTemplate() {
         source_url: null,
         target_filename: "model.gguf",
         sha256: null,
+      },
+      interaction: {
+        system_prompt:
+          "You are Cypher AI. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
+        default_response_language: "ru",
+        supported_response_languages: ["en", "de", "uk", "ru"],
+        follow_user_language: true,
       },
       inference: {
         primary_infer_node: "node-a",
@@ -830,6 +939,15 @@ function App() {
   const [rolloutState, setRolloutState] = useState(null);
   const [rebalancePlan, setRebalancePlan] = useState(null);
   const [events, setEvents] = useState([]);
+  const [interactionStatus, setInteractionStatus] = useState(null);
+  const [selectedTab, setSelectedTab] = useState("status");
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLanguage, setChatLanguage] = useState("ru");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const [interactionPaneWidth, setInteractionPaneWidth] = useState(34);
+  const [draggingDivider, setDraggingDivider] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState("");
   const [bundlePath, setBundlePath] = useState("");
@@ -852,6 +970,10 @@ function App() {
 
   const refreshTimerRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const chatAbortRef = useRef(null);
+  const interactionSplitRef = useRef(null);
+  const chatTranscriptRef = useRef(null);
+  const chatTranscriptEndRef = useRef(null);
 
   async function loadPlanes(preferredPlane = selectedPlane) {
     const payload = await fetchJson("/api/v1/planes");
@@ -885,6 +1007,7 @@ function App() {
         setRolloutState(null);
         setRebalancePlan(null);
         setEvents([]);
+        setInteractionStatus(null);
         setApiHealthy(true);
         setLastRefreshAt(new Date().toISOString());
         return;
@@ -898,6 +1021,7 @@ function App() {
         rolloutPayload,
         rebalancePayload,
         eventsPayload,
+        interactionPayload,
       ] = await Promise.all([
         fetchJson(planePath(planeName)),
         fetchJson(planePath(planeName, "dashboard")),
@@ -921,6 +1045,7 @@ function App() {
             limit: EVENT_LIMIT,
           }),
         ),
+        fetchJson(interactionPath(planeName, "status")),
       ]);
 
       setPlaneDetail(planePayload);
@@ -930,6 +1055,7 @@ function App() {
       setRolloutState(rolloutPayload);
       setRebalancePlan(rebalancePayload);
       setEvents(Array.isArray(eventsPayload.events) ? eventsPayload.events : []);
+      setInteractionStatus(interactionPayload);
       setApiHealthy(true);
       setLastRefreshAt(new Date().toISOString());
     } catch (error) {
@@ -1075,6 +1201,147 @@ function App() {
     }
   }
 
+  function stopChatStream() {
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+      chatAbortRef.current = null;
+    }
+    setChatBusy(false);
+  }
+
+  function handleChatInputKeyDown(event) {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    if (!chatBusy && chatInput.trim()) {
+      sendChatPrompt();
+    }
+  }
+
+  async function sendChatPrompt() {
+    if (!selectedPlane || !chatInput.trim() || chatBusy) {
+      return;
+    }
+    const prompt = chatInput.trim();
+    const userMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: prompt,
+    };
+    const assistantId = `assistant-${Date.now() + 1}`;
+    const nextMessages = [...chatMessages, userMessage];
+    setChatMessages([
+      ...nextMessages,
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        metrics: null,
+        error: "",
+      },
+    ]);
+    setChatInput("");
+    setChatError("");
+    setChatBusy(true);
+
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
+    const startedAt = performance.now();
+    try {
+      const response = await fetch(interactionPath(selectedPlane, "chat/completions/stream"), {
+        method: "POST",
+        headers: {
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          stream: true,
+          preferred_language: chatLanguage,
+          messages: nextMessages.map((item) => ({
+            role: item.role,
+            content: item.content,
+          })),
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(
+          payload?.message || payload?.error?.message || response.statusText,
+        );
+      }
+
+      await consumeEventStream(response, ({ event, data }) => {
+        if (data === "[DONE]") {
+          return;
+        }
+        if (!data) {
+          return;
+        }
+        const payload = JSON.parse(data);
+        if (event === "delta") {
+          setChatMessages((current) =>
+            current.map((item) =>
+              item.id === assistantId
+                ? { ...item, content: `${item.content}${payload.delta || ""}` }
+                : item,
+            ),
+          );
+          return;
+        }
+        if (event === "complete") {
+          const latencyMs =
+            payload.latency_ms ??
+            Math.max(1, Math.round(performance.now() - startedAt));
+          const usage = payload.usage || {};
+          const completionTokens = usage.completion_tokens ?? 0;
+          const totalTokens = usage.total_tokens ?? 0;
+          const tokensPerSecond =
+            latencyMs > 0 ? (completionTokens / (latencyMs / 1000)) : 0;
+          setChatMessages((current) =>
+            current.map((item) =>
+              item.id === assistantId
+                ? {
+                    ...item,
+                    metrics: {
+                      latencyMs,
+                      completionTokens,
+                      totalTokens,
+                      tokensPerSecond,
+                    },
+                  }
+                : item,
+            ),
+          );
+        }
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setChatMessages((current) =>
+          current.map((item) =>
+            item.id === assistantId
+              ? { ...item, error: "Stream stopped by operator." }
+              : item,
+          ),
+        );
+      } else {
+        const message = error.message || String(error);
+        setChatError(message);
+        setChatMessages((current) =>
+          current.map((item) =>
+            item.id === assistantId ? { ...item, error: message } : item,
+          ),
+        );
+      }
+    } finally {
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null;
+      }
+      setChatBusy(false);
+    }
+  }
+
   useEffect(() => {
     refreshAll(initialPlane);
     return () => {
@@ -1130,6 +1397,42 @@ function App() {
   }, [selectedPlane]);
 
   useEffect(() => {
+    setSelectedTab("status");
+    setChatMessages([]);
+    setChatError("");
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+      chatAbortRef.current = null;
+    }
+    setChatBusy(false);
+  }, [selectedPlane]);
+
+  useEffect(() => {
+    if (!draggingDivider) {
+      return undefined;
+    }
+    function handleMouseMove(event) {
+      const container = interactionSplitRef.current;
+      if (!container) {
+        return;
+      }
+      const bounds = container.getBoundingClientRect();
+      const offset = event.clientX - bounds.left;
+      const nextWidth = Math.min(58, Math.max(24, (offset / bounds.width) * 100));
+      setInteractionPaneWidth(nextWidth);
+    }
+    function handleMouseUp() {
+      setDraggingDivider(false);
+    }
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [draggingDivider]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (selectedPlane) {
       params.set("plane", selectedPlane);
@@ -1145,6 +1448,14 @@ function App() {
   const desiredState = planeDetail?.desired_state || null;
   const planeRecord =
     planeDetail?.planes?.find((item) => item.name === selectedPlane) || null;
+  const planeMode =
+    dashboard?.plane?.plane_mode ||
+    desiredState?.plane_mode ||
+    planeRecord?.plane_mode ||
+    "compute";
+  const llmPlane = planeMode === "llm";
+  const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
+  const interactionReady = interactionStatus?.ready === true;
   const nodeItems = dashboard?.nodes || [];
   const observationItems = hostObservations?.observations || [];
   const assignmentItems = dashboard?.assignments?.by_node || [];
@@ -1206,6 +1517,49 @@ function App() {
     structuredProgress,
   });
   const selectedPlaneDeleting = planeRecord?.state === "deleting";
+
+  useEffect(() => {
+    const nextDefault =
+      normalizeChatLanguage(desiredState?.interaction?.default_response_language) ||
+      normalizeChatLanguage(interactionStatus?.default_response_language) ||
+      "ru";
+    const options = supportedChatLanguageOptions(desiredState, interactionStatus);
+    const allowed = options.some((option) => option.value === nextDefault)
+      ? nextDefault
+      : options[0]?.value || "ru";
+    setChatLanguage((current) => (options.some((option) => option.value === current) ? current : allowed));
+  }, [desiredState, interactionStatus]);
+
+  useEffect(() => {
+    if (!llmPlane && selectedTab === "interaction") {
+      setSelectedTab("status");
+    }
+  }, [llmPlane, selectedTab]);
+
+  useEffect(() => {
+    if (selectedTab !== "interaction") {
+      return;
+    }
+    const transcript = chatTranscriptRef.current;
+    if (!transcript) {
+      return;
+    }
+    const scrollToBottom = () => {
+      if (chatTranscriptEndRef.current) {
+        chatTranscriptEndRef.current.scrollIntoView({
+          behavior: chatBusy ? "auto" : "smooth",
+          block: "end",
+        });
+        return;
+      }
+      transcript.scrollTo({
+        top: transcript.scrollHeight,
+        behavior: chatBusy ? "auto" : "smooth",
+      });
+    };
+    const frame = window.requestAnimationFrame(scrollToBottom);
+    return () => window.cancelAnimationFrame(frame);
+  }, [chatMessages, chatBusy, chatError, selectedTab]);
 
   useEffect(() => {
     if (!operationProgress?.complete || operationProgress?.failed) {
@@ -1426,6 +1780,33 @@ function App() {
             </div>
           </div>
 
+          {selectedPlane && planeRecord && dashboard ? (
+            <div className="tab-strip" role="tablist" aria-label="Plane detail tabs">
+              <button
+                className={`tab-button ${selectedTab === "status" ? "is-active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={selectedTab === "status"}
+                onClick={() => setSelectedTab("status")}
+              >
+                <span className="tab-button-title">Status</span>
+                <span className="tab-button-meta">Plane, nodes, rollout, events</span>
+              </button>
+              {llmPlane ? (
+                <button
+                  className={`tab-button ${selectedTab === "interaction" ? "is-active" : ""}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedTab === "interaction"}
+                  onClick={() => setSelectedTab("interaction")}
+                >
+                  <span className="tab-button-title">Interaction</span>
+                  <span className="tab-button-meta">Chat with the running model</span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
           {apiError ? <div className="error-banner">{apiError}</div> : null}
 
           {!selectedPlane || !planeRecord || !dashboard ? (
@@ -1435,6 +1816,8 @@ function App() {
             />
           ) : (
             <>
+              {selectedTab === "status" ? (
+                <>
               <div className="summary-grid">
                 <SummaryCard
                   label="Nodes"
@@ -1497,6 +1880,7 @@ function App() {
                   <div className="list-card">
                     <div className="metric-grid compact-metric-grid">
                       <div className="metric-row"><span>Lifecycle state</span><strong>{planeRecord.state || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Plane mode</span><strong>{planeMode}</strong></div>
                       <div className="metric-row"><span>Desired generation</span><strong>{planeRecord.generation ?? "n/a"}</strong></div>
                       <div className="metric-row"><span>Applied generation</span><strong>{planeRecord.applied_generation ?? 0}</strong></div>
                       <div className="metric-row"><span>Pending restart</span><strong>{planeRecord.staged_update ? "yes" : "no"}</strong></div>
@@ -1823,6 +2207,137 @@ function App() {
                   </div>
                 </section>
               </div>
+                </>
+              ) : (
+                <div
+                  className="interaction-layout"
+                  ref={interactionSplitRef}
+                  style={{ gridTemplateColumns: `${interactionPaneWidth}% 14px minmax(0, 1fr)` }}
+                >
+                  <section className="subpanel interaction-panel">
+                    <div className="subpanel-header">
+                      <h3>Interaction</h3>
+                      <span className="subpanel-meta">Controller-proxied chat with the active model</span>
+                    </div>
+                    <div className="list-card interaction-status-card">
+                      <div className="metric-grid compact-metric-grid">
+                        <div className="metric-row"><span>Plane mode</span><strong>{planeMode}</strong></div>
+                        <div className="metric-row"><span>Plane state</span><strong>{interactionStatus?.plane_state || planeRecord.state || "n/a"}</strong></div>
+                        <div className="metric-row"><span>Ready</span><strong>{interactionReady ? "yes" : "no"}</strong></div>
+                        <div className="metric-row"><span>Model</span><strong>{interactionStatus?.served_model_name || interactionStatus?.active_model_id || "n/a"}</strong></div>
+                        <div className="metric-row"><span>Default language</span><strong>{desiredState?.interaction?.default_response_language || interactionStatus?.default_response_language || "n/a"}</strong></div>
+                        <div className="metric-row"><span>Follow user language</span><strong>{yesNo(desiredState?.interaction?.follow_user_language ?? interactionStatus?.follow_user_language)}</strong></div>
+                      </div>
+                      <div className="metric-row"><span>System prompt</span><strong>{desiredState?.interaction?.system_prompt ? "configured" : "not configured"}</strong></div>
+                      {!interactionReady ? (
+                        <EmptyState
+                          title="Interaction unavailable"
+                          detail={interactionReasonMessage(interactionStatus)}
+                        />
+                      ) : null}
+                    </div>
+                  </section>
+
+                  <div
+                    className={`interaction-divider ${draggingDivider ? "is-dragging" : ""}`}
+                    role="separator"
+                    aria-orientation="vertical"
+                    onMouseDown={() => setDraggingDivider(true)}
+                  >
+                    <span className="interaction-divider-handle" />
+                  </div>
+
+                  <section className="subpanel chat-panel">
+                    <div className="subpanel-header">
+                      <h3>Chat</h3>
+                      <span className="subpanel-meta">Session-only transcript</span>
+                    </div>
+                    <div className="chat-transcript" ref={chatTranscriptRef}>
+                      {chatMessages.length === 0 ? (
+                        <EmptyState
+                          title="No chat turns yet"
+                          detail="Send a prompt to test the running model through the controller proxy."
+                        />
+                      ) : (
+                        chatMessages.map((message) => (
+                          <article
+                            className={`chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}
+                            key={message.id}
+                          >
+                            <div className="card-row">
+                              <strong>{message.role === "assistant" ? "Assistant" : "User"}</strong>
+                              {message.metrics ? (
+                                <span className="tag">
+                                  {Math.round(message.metrics.latencyMs)} ms /{" "}
+                                  {message.metrics.completionTokens} tok /{" "}
+                                  {message.metrics.tokensPerSecond.toFixed(1)} tok/s
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="chat-message-text">{message.content || (message.role === "assistant" && chatBusy ? "Streaming..." : "")}</p>
+                            {message.error ? (
+                              <div className="chat-error-line">{message.error}</div>
+                            ) : null}
+                            {message.metrics ? (
+                              <div className="chat-metrics-line">
+                                total {message.metrics.totalTokens} tokens
+                              </div>
+                            ) : null}
+                          </article>
+                        ))
+                      )}
+                      <div ref={chatTranscriptEndRef} aria-hidden="true" />
+                    </div>
+                    <div className="chat-composer">
+                      <div className="chat-toolbar">
+                        <label className="field-label chat-language-field">
+                          <span>Language</span>
+                          <select
+                            className="chat-language-select"
+                            value={chatLanguage}
+                            onChange={(event) => setChatLanguage(event.target.value)}
+                            disabled={chatBusy}
+                          >
+                            {chatLanguageOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <span className="composer-hint">Enter to send, Shift+Enter for a new line</span>
+                      </div>
+                      <textarea
+                        className="editor-textarea chat-input"
+                        value={chatInput}
+                        onChange={(event) => setChatInput(event.target.value)}
+                        onKeyDown={handleChatInputKeyDown}
+                        placeholder="Ask the running model a question"
+                        disabled={!interactionReady || chatBusy}
+                      />
+                      <div className="toolbar">
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          onClick={sendChatPrompt}
+                          disabled={!interactionReady || chatBusy || !chatInput.trim()}
+                        >
+                          Send
+                        </button>
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          onClick={stopChatStream}
+                          disabled={!chatBusy}
+                        >
+                          Stop
+                        </button>
+                      </div>
+                      {chatError ? <div className="error-banner">{chatError}</div> : null}
+                    </div>
+                  </section>
+                </div>
+              )}
             </>
           )}
         </section>

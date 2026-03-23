@@ -26,7 +26,8 @@ const DiskSpec& FindDiskByName(
 ComposeService BuildComposeService(
     const InstanceSpec& instance,
     const std::vector<DiskSpec>& disks,
-    const std::vector<InstanceSpec>& node_instances) {
+    const std::vector<InstanceSpec>& node_instances,
+    const DesiredState& state) {
   ComposeService service;
   service.name = instance.name;
   service.image = instance.image;
@@ -63,6 +64,12 @@ ComposeService BuildComposeService(
                             ? "CMD-SHELL /runtime/infer/inferctl.sh probe-url "
                               "http://127.0.0.1:${COMET_INFERENCE_PORT:-8000}/health"
                             : "CMD-SHELL test -f /tmp/comet-ready";
+  if (instance.role == InstanceRole::Infer) {
+    service.published_ports.push_back(
+        PublishedPort{"127.0.0.1", state.inference.llama_port, state.inference.llama_port});
+    service.published_ports.push_back(
+        PublishedPort{"127.0.0.1", state.gateway.listen_port, state.gateway.listen_port});
+  }
 
   const auto& shared_disk =
       FindDiskByName(disks, instance.node_name, instance.shared_disk_name);
@@ -102,7 +109,7 @@ std::vector<NodeComposePlan> BuildNodeComposePlans(const DesiredState& state) {
     }
 
     for (const auto& instance : node_instances) {
-      plan.services.push_back(BuildComposeService(instance, state.disks, node_instances));
+      plan.services.push_back(BuildComposeService(instance, state.disks, node_instances, state));
     }
 
     plans.push_back(std::move(plan));
@@ -195,6 +202,26 @@ PlacementMode ParsePlacementMode(const std::string& value) {
     return PlacementMode::Movable;
   }
   throw std::runtime_error("unknown placement mode '" + value + "'");
+}
+
+std::string ToString(PlaneMode mode) {
+  switch (mode) {
+    case PlaneMode::Compute:
+      return "compute";
+    case PlaneMode::Llm:
+      return "llm";
+  }
+  return "compute";
+}
+
+PlaneMode ParsePlaneMode(const std::string& value) {
+  if (value == "compute" || value.empty()) {
+    return PlaneMode::Compute;
+  }
+  if (value == "llm") {
+    return PlaneMode::Llm;
+  }
+  throw std::runtime_error("unknown plane mode '" + value + "'");
 }
 
 }  // namespace comet

@@ -449,6 +449,8 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       plane_json,
       "control_root",
       "/comet/shared/control/" + state.plane_name);
+  state.plane_mode =
+      ParsePlaneMode(OptionalString(plane_json, "plane_mode", "compute"));
   if (const auto bootstrap_model = OptionalObject(plane_json, "bootstrap_model")) {
     BootstrapModelSpec spec;
     spec.model_id = OptionalString(*bootstrap_model, "model_id", "");
@@ -468,6 +470,22 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       spec.sha256 = *sha256;
     }
     state.bootstrap_model = std::move(spec);
+  }
+  if (const auto interaction = OptionalObject(plane_json, "interaction")) {
+    InteractionSettings settings;
+    if (const auto system_prompt = OptionalStringOpt(*interaction, "system_prompt")) {
+      settings.system_prompt = *system_prompt;
+    }
+    settings.default_response_language =
+        OptionalString(*interaction, "default_response_language", settings.default_response_language);
+    if (interaction->contains("supported_response_languages") &&
+        (*interaction).at("supported_response_languages").is_array()) {
+      settings.supported_response_languages =
+          (*interaction).at("supported_response_languages").get<std::vector<std::string>>();
+    }
+    settings.follow_user_language =
+        interaction->value("follow_user_language", settings.follow_user_language);
+    state.interaction = std::move(settings);
   }
   const int shared_disk_gb = OptionalInt(plane_json, "shared_disk_gb", 200);
 

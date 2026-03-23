@@ -1,4 +1,5 @@
 #include "comet/sqlite_store.h"
+#include "comet/state_json.h"
 
 #include <array>
 #include <filesystem>
@@ -26,7 +27,10 @@ CREATE TABLE IF NOT EXISTS planes (
     shared_disk_name TEXT NOT NULL,
     control_root TEXT NOT NULL DEFAULT '',
     artifacts_root TEXT NOT NULL DEFAULT '',
+    plane_mode TEXT NOT NULL DEFAULT 'compute',
     bootstrap_model_json TEXT NOT NULL DEFAULT '',
+    interaction_settings_json TEXT NOT NULL DEFAULT '',
+    desired_state_json TEXT NOT NULL DEFAULT '',
     inference_config_json TEXT NOT NULL DEFAULT '',
     gateway_config_json TEXT NOT NULL DEFAULT '',
     runtime_gpu_nodes_json TEXT NOT NULL DEFAULT '',
@@ -487,6 +491,27 @@ std::optional<BootstrapModelSpec> DeserializeBootstrapModelSpec(const std::strin
   return bootstrap_model;
 }
 
+std::optional<InteractionSettings> DeserializeInteractionSettings(const std::string& json_text) {
+  if (json_text.empty()) {
+    return std::nullopt;
+  }
+  const json value = json::parse(json_text);
+  if (!value.is_object()) {
+    return std::nullopt;
+  }
+  InteractionSettings interaction;
+  if (value.contains("system_prompt") && !value.at("system_prompt").is_null()) {
+    interaction.system_prompt = value.at("system_prompt").get<std::string>();
+  }
+  interaction.default_response_language =
+      value.value("default_response_language", interaction.default_response_language);
+  interaction.supported_response_languages =
+      value.value("supported_response_languages", std::vector<std::string>{});
+  interaction.follow_user_language =
+      value.value("follow_user_language", interaction.follow_user_language);
+  return interaction;
+}
+
 InferenceRuntimeSettings DeserializeInferenceSettings(const std::string& json_text) {
   InferenceRuntimeSettings settings;
   if (json_text.empty()) {
@@ -759,11 +784,12 @@ PlaneRecord PlaneFromStatement(sqlite3_stmt* statement) {
   plane.shared_disk_name = ToColumnText(statement, 1);
   plane.control_root = ToColumnText(statement, 2);
   plane.artifacts_root = ToColumnText(statement, 3);
-  plane.generation = sqlite3_column_int(statement, 4);
-  plane.applied_generation = sqlite3_column_int(statement, 5);
-  plane.rebalance_iteration = sqlite3_column_int(statement, 6);
-  plane.state = ToColumnText(statement, 7);
-  plane.created_at = ToColumnText(statement, 8);
+  plane.plane_mode = ToColumnText(statement, 4);
+  plane.generation = sqlite3_column_int(statement, 5);
+  plane.applied_generation = sqlite3_column_int(statement, 6);
+  plane.rebalance_iteration = sqlite3_column_int(statement, 7);
+  plane.state = ToColumnText(statement, 8);
+  plane.created_at = ToColumnText(statement, 9);
   return plane;
 }
 
@@ -821,11 +847,22 @@ void ControllerStore::Initialize() {
   Exec(db, kBootstrapSql);
   EnsureColumn(db, "planes", "control_root", "control_root TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "artifacts_root", "artifacts_root TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(db, "planes", "plane_mode", "plane_mode TEXT NOT NULL DEFAULT 'compute'");
   EnsureColumn(
       db,
       "planes",
       "bootstrap_model_json",
       "bootstrap_model_json TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "planes",
+      "interaction_settings_json",
+      "interaction_settings_json TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "planes",
+      "desired_state_json",
+      "desired_state_json TEXT NOT NULL DEFAULT ''");
   EnsureColumn(
       db,
       "planes",
@@ -892,6 +929,31 @@ void ControllerStore::Initialize() {
       "host_observations",
       "cpu_telemetry_json",
       "cpu_telemetry_json TEXT NOT NULL DEFAULT ''");
+  {
+    Statement plane_statement(
+        db,
+        "SELECT name FROM planes WHERE desired_state_json = '' ORDER BY name ASC;");
+    std::vector<std::string> plane_names;
+    while (plane_statement.StepRow()) {
+      plane_names.push_back(ToColumnText(plane_statement.raw(), 0));
+    }
+    for (const auto& plane_name : plane_names) {
+      const auto desired_state = LoadDesiredState(plane_name);
+      if (!desired_state.has_value()) {
+        continue;
+      }
+      Statement update_statement(
+          db,
+          "UPDATE planes SET desired_state_json = ?2 WHERE name = ?1;");
+      update_statement.BindText(1, plane_name);
+      update_statement.BindText(2, SerializeDesiredStateJson(*desired_state));
+      update_statement.StepDone();
+    }
+    Statement clear_legacy_statement(
+        db,
+        "UPDATE planes SET interaction_settings_json = '' WHERE interaction_settings_json != '';");
+    clear_legacy_statement.StepDone();
+  }
   EnsureColumn(
       db,
       "rollout_actions",
@@ -1042,16 +1104,18 @@ void ControllerStore::ReplaceDesiredState(
       Statement statement(
           db,
           "INSERT INTO planes("
-          "name, shared_disk_name, control_root, artifacts_root, bootstrap_model_json, "
-          "inference_config_json, gateway_config_json, runtime_gpu_nodes_json, generation, applied_generation, "
+          "name, shared_disk_name, control_root, artifacts_root, plane_mode, bootstrap_model_json, "
+          "desired_state_json, inference_config_json, gateway_config_json, runtime_gpu_nodes_json, generation, applied_generation, "
           "rebalance_iteration, state"
-          ") VALUES(?1, ?2, ?3, '', ?4, ?5, ?6, ?7, ?8, "
-          "COALESCE((SELECT applied_generation FROM planes WHERE name = ?1), 0), ?9, 'stopped') "
+          ") VALUES(?1, ?2, ?3, '', ?4, ?5, ?6, ?7, ?8, ?9, ?10, "
+          "COALESCE((SELECT applied_generation FROM planes WHERE name = ?1), 0), ?11, 'stopped') "
           "ON CONFLICT(name) DO UPDATE SET "
           "shared_disk_name = excluded.shared_disk_name, "
           "control_root = excluded.control_root, "
           "artifacts_root = planes.artifacts_root, "
+          "plane_mode = excluded.plane_mode, "
           "bootstrap_model_json = excluded.bootstrap_model_json, "
+          "desired_state_json = excluded.desired_state_json, "
           "inference_config_json = excluded.inference_config_json, "
           "gateway_config_json = excluded.gateway_config_json, "
           "runtime_gpu_nodes_json = excluded.runtime_gpu_nodes_json, "
@@ -1068,12 +1132,14 @@ void ControllerStore::ReplaceDesiredState(
           3,
           state.control_root.empty() ? "/comet/shared/control/" + state.plane_name
                                      : state.control_root);
-      statement.BindText(4, SerializeBootstrapModelSpec(state.bootstrap_model));
-      statement.BindText(5, SerializeInferenceSettings(state.inference));
-      statement.BindText(6, SerializeGatewaySettings(state.gateway));
-      statement.BindText(7, SerializeRuntimeGpuNodes(state.runtime_gpu_nodes));
-      statement.BindInt(8, generation);
-      statement.BindInt(9, rebalance_iteration);
+      statement.BindText(4, ToString(state.plane_mode));
+      statement.BindText(5, SerializeBootstrapModelSpec(state.bootstrap_model));
+      statement.BindText(6, SerializeDesiredStateJson(state));
+      statement.BindText(7, SerializeInferenceSettings(state.inference));
+      statement.BindText(8, SerializeGatewaySettings(state.gateway));
+      statement.BindText(9, SerializeRuntimeGpuNodes(state.runtime_gpu_nodes));
+      statement.BindInt(10, generation);
+      statement.BindInt(11, rebalance_iteration);
       statement.StepDone();
     }
 
@@ -1216,13 +1282,31 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState() const {
 
 std::optional<DesiredState> ControllerStore::LoadDesiredState(const std::string& plane_name) const {
   sqlite3* db = AsSqlite(db_);
+  {
+    Statement statement(
+        db,
+        "SELECT desired_state_json FROM planes WHERE name = ?1;");
+    statement.BindText(1, plane_name);
+    if (!statement.StepRow()) {
+      return std::nullopt;
+    }
+    const auto desired_state_json = ToColumnText(statement.raw(), 0);
+    if (!desired_state_json.empty()) {
+      auto state = DeserializeDesiredStateJson(desired_state_json);
+      if (state.control_root.empty()) {
+        state.control_root = "/comet/shared/control/" + state.plane_name;
+      }
+      return state;
+    }
+  }
+
   DesiredState state;
   std::set<std::string> plane_node_names;
 
   {
     Statement statement(
         db,
-        "SELECT name, shared_disk_name, control_root, bootstrap_model_json, inference_config_json, "
+        "SELECT name, shared_disk_name, control_root, plane_mode, bootstrap_model_json, interaction_settings_json, inference_config_json, "
         "gateway_config_json, runtime_gpu_nodes_json "
         "FROM planes WHERE name = ?1;");
     statement.BindText(1, plane_name);
@@ -1232,13 +1316,15 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState(const std::string&
     state.plane_name = ToColumnText(statement.raw(), 0);
     state.plane_shared_disk_name = ToColumnText(statement.raw(), 1);
     state.control_root = ToColumnText(statement.raw(), 2);
+    state.plane_mode = ParsePlaneMode(ToColumnText(statement.raw(), 3));
     if (state.control_root.empty()) {
       state.control_root = "/comet/shared/control/" + state.plane_name;
     }
-    state.bootstrap_model = DeserializeBootstrapModelSpec(ToColumnText(statement.raw(), 3));
-    state.inference = DeserializeInferenceSettings(ToColumnText(statement.raw(), 4));
-    state.gateway = DeserializeGatewaySettings(ToColumnText(statement.raw(), 5));
-    state.runtime_gpu_nodes = DeserializeRuntimeGpuNodes(ToColumnText(statement.raw(), 6));
+    state.bootstrap_model = DeserializeBootstrapModelSpec(ToColumnText(statement.raw(), 4));
+    state.interaction = DeserializeInteractionSettings(ToColumnText(statement.raw(), 5));
+    state.inference = DeserializeInferenceSettings(ToColumnText(statement.raw(), 6));
+    state.gateway = DeserializeGatewaySettings(ToColumnText(statement.raw(), 7));
+    state.runtime_gpu_nodes = DeserializeRuntimeGpuNodes(ToColumnText(statement.raw(), 8));
     for (const auto& runtime_node : state.runtime_gpu_nodes) {
       plane_node_names.insert(runtime_node.node_name);
     }
@@ -1520,7 +1606,7 @@ std::vector<PlaneRecord> ControllerStore::LoadPlanes() const {
   std::vector<PlaneRecord> planes;
   Statement statement(
       db,
-      "SELECT name, shared_disk_name, control_root, artifacts_root, generation, applied_generation, "
+      "SELECT name, shared_disk_name, control_root, artifacts_root, plane_mode, generation, applied_generation, "
       "rebalance_iteration, state, created_at FROM planes ORDER BY name ASC;");
   while (statement.StepRow()) {
     planes.push_back(PlaneFromStatement(statement.raw()));
@@ -1532,7 +1618,7 @@ std::optional<PlaneRecord> ControllerStore::LoadPlane(const std::string& plane_n
   sqlite3* db = AsSqlite(db_);
   Statement statement(
       db,
-      "SELECT name, shared_disk_name, control_root, artifacts_root, generation, applied_generation, "
+      "SELECT name, shared_disk_name, control_root, artifacts_root, plane_mode, generation, applied_generation, "
       "rebalance_iteration, state, created_at FROM planes WHERE name = ?1;");
   statement.BindText(1, plane_name);
   if (!statement.StepRow()) {

@@ -113,6 +113,16 @@ struct HttpRequest {
   std::string body;
 };
 
+struct AssistantTextFilterState {
+  std::string raw_text;
+  std::string emitted_text;
+};
+
+std::string Trim(const std::string& value);
+std::string JsonString(const json& object, const char* key);
+
+void SendResponse(int client_fd, const SimpleResponse& response);
+
 std::atomic<bool> g_stop_requested{false};
 
 [[noreturn]] void Throw(const std::string& message) {
@@ -136,6 +146,15 @@ std::string ExpandUserPath(const std::string& value) {
   return value;
 }
 
+std::string ToLowerCopy(std::string value) {
+  std::transform(
+      value.begin(),
+      value.end(),
+      value.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
 json LoadJsonFile(const fs::path& path) {
   std::ifstream input(path);
   if (!input.is_open()) {
@@ -151,6 +170,209 @@ json LoadJsonOrDefault(const fs::path& path, json fallback) {
     return fallback;
   }
   return LoadJsonFile(path);
+}
+
+bool ActiveModelLooksLikeQwen(const json& active_model) {
+  const std::string model_id = ToLowerCopy(active_model.value("model_id", std::string{}));
+  const std::string served_model_name =
+      ToLowerCopy(active_model.value("served_model_name", std::string{}));
+  const std::string model_path = ToLowerCopy(active_model.value("model_path", std::string{}));
+  return model_id.find("qwen") != std::string::npos ||
+         served_model_name.find("qwen") != std::string::npos ||
+         model_path.find("qwen") != std::string::npos;
+}
+
+std::string NormalizeChatRole(const std::string& role) {
+  const std::string normalized = ToLowerCopy(role);
+  if (normalized == "system" || normalized == "user" || normalized == "assistant" ||
+      normalized == "tool") {
+    return normalized;
+  }
+  return "user";
+}
+
+std::string BuildLegacyChatPrompt(const json& payload) {
+  std::ostringstream prompt;
+  for (const auto& message : payload.at("messages")) {
+    if (!message.is_object()) {
+      continue;
+    }
+    const std::string role = message.value("role", std::string{"user"});
+    const std::string content = JsonString(message, "content");
+    if (!content.empty()) {
+      prompt << role << ": " << content << "\n";
+    }
+  }
+  prompt << "assistant: ";
+  return prompt.str();
+}
+
+std::string BuildQwenChatPrompt(const json& payload) {
+  std::ostringstream prompt;
+  for (const auto& message : payload.at("messages")) {
+    if (!message.is_object()) {
+      continue;
+    }
+    const std::string content = JsonString(message, "content");
+    if (content.empty()) {
+      continue;
+    }
+    prompt << "<|im_start|>" << NormalizeChatRole(message.value("role", std::string{"user"}))
+           << "\n"
+           << content << "<|im_end|>\n";
+  }
+  prompt << "<|im_start|>assistant\n";
+  return prompt.str();
+}
+
+std::string TrimLeadingWhitespace(std::string value) {
+  while (!value.empty() &&
+         std::isspace(static_cast<unsigned char>(value.front())) != 0) {
+    value.erase(value.begin());
+  }
+  return value;
+}
+
+std::string StripRepeatedAssistantPrefixes(std::string value) {
+  while (true) {
+    const std::string trimmed = TrimLeadingWhitespace(value);
+    if (trimmed.rfind("assistant:", 0) == 0) {
+      value = trimmed.substr(std::string("assistant:").size());
+      continue;
+    }
+    if (trimmed.rfind("assistant\n", 0) == 0) {
+      value = trimmed.substr(std::string("assistant\n").size());
+      continue;
+    }
+    if (trimmed.rfind("<|im_start|>assistant", 0) == 0) {
+      value = trimmed.substr(std::string("<|im_start|>assistant").size());
+      continue;
+    }
+    return TrimLeadingWhitespace(value);
+  }
+}
+
+bool StartsWithAssistantMarker(const std::string& line) {
+  const std::string trimmed = TrimLeadingWhitespace(line);
+  return trimmed.rfind("assistant:", 0) == 0 ||
+         trimmed.rfind("<|im_start|>assistant", 0) == 0 ||
+         trimmed == "assistant";
+}
+
+std::string StripAssistantMarkerFromLine(const std::string& line) {
+  std::string trimmed = TrimLeadingWhitespace(line);
+  if (trimmed.rfind("assistant:", 0) == 0) {
+    return Trim(trimmed.substr(std::string("assistant:").size()));
+  }
+  if (trimmed.rfind("<|im_start|>assistant", 0) == 0) {
+    return Trim(trimmed.substr(std::string("<|im_start|>assistant").size()));
+  }
+  if (trimmed == "assistant") {
+    return "";
+  }
+  return Trim(trimmed);
+}
+
+std::string CollapseAssistantTaggedTranscript(const std::string& value) {
+  std::stringstream stream(value);
+  std::string line;
+  std::vector<std::string> cleaned_lines;
+  bool saw_assistant_line = false;
+  while (std::getline(stream, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (StartsWithAssistantMarker(line)) {
+      saw_assistant_line = true;
+    }
+    if (!saw_assistant_line) {
+      continue;
+    }
+    const std::string cleaned = StripAssistantMarkerFromLine(line);
+    if (cleaned.empty()) {
+      continue;
+    }
+    if (!cleaned_lines.empty() && cleaned_lines.back() == cleaned) {
+      continue;
+    }
+    cleaned_lines.push_back(cleaned);
+  }
+  if (!saw_assistant_line || cleaned_lines.empty()) {
+    return value;
+  }
+  std::ostringstream out;
+  for (std::size_t index = 0; index < cleaned_lines.size(); ++index) {
+    if (index > 0) {
+      out << "\n";
+    }
+    out << cleaned_lines[index];
+  }
+  return out.str();
+}
+
+std::string TruncateAtFirstMarker(
+    const std::string& value,
+    const std::vector<std::string>& markers) {
+  std::size_t cut = value.size();
+  for (const auto& marker : markers) {
+    const std::size_t pos = value.find(marker);
+    if (pos != std::string::npos) {
+      cut = std::min(cut, pos);
+    }
+  }
+  return value.substr(0, cut);
+}
+
+std::string RemoveThinkBlocks(std::string value) {
+  while (true) {
+    const std::size_t begin = value.find("<think>");
+    if (begin == std::string::npos) {
+      return value;
+    }
+    const std::size_t end = value.find("</think>", begin);
+    if (end == std::string::npos) {
+      return value.substr(0, begin);
+    }
+    value.erase(begin, end + std::string("</think>").size() - begin);
+  }
+}
+
+std::string SanitizeAssistantText(const std::string& raw_text) {
+  std::string sanitized = raw_text;
+  sanitized = RemoveThinkBlocks(sanitized);
+  sanitized = TruncateAtFirstMarker(
+      sanitized,
+      {
+          "<|im_end|>",
+          "<|endoftext|>",
+          "<|eot_id|>",
+          "\nuser:",
+          "\nsystem:",
+          "\n<|im_start|>user",
+          "\n<|im_start|>system",
+      });
+  sanitized = CollapseAssistantTaggedTranscript(sanitized);
+  sanitized = StripRepeatedAssistantPrefixes(sanitized);
+  return sanitized;
+}
+
+std::string UpdateAssistantTextFilter(
+    AssistantTextFilterState& state,
+    const std::string& appended_piece) {
+  if (!appended_piece.empty()) {
+    state.raw_text += appended_piece;
+  }
+  const std::string sanitized = SanitizeAssistantText(state.raw_text);
+  if (sanitized.size() < state.emitted_text.size()) {
+    return "";
+  }
+  if (sanitized.compare(0, state.emitted_text.size(), state.emitted_text) != 0) {
+    state.emitted_text = sanitized;
+    return sanitized;
+  }
+  const std::string delta = sanitized.substr(state.emitted_text.size());
+  state.emitted_text = sanitized;
+  return delta;
 }
 
 void SaveJsonFile(const fs::path& path, const json& value) {
@@ -777,7 +999,10 @@ class LlamaLibraryEngine {
     return *gguf_path_;
   }
 
-  GenerationResult GenerateText(const std::string& prompt, int max_tokens) {
+  GenerationResult GenerateTextStream(
+      const std::string& prompt,
+      int max_tokens,
+      const std::function<void(const std::string&)>& on_piece) {
     std::lock_guard<std::mutex> guard(mutex_);
     const int bounded_max_tokens = std::max(1, std::min(max_tokens, 256));
     std::vector<llama_token> prompt_tokens = Tokenize(prompt, true);
@@ -822,6 +1047,7 @@ class LlamaLibraryEngine {
     std::string output;
     int n_pos = 0;
     int completion_tokens = 0;
+    std::string finish_reason = "stop";
     for (; n_pos + batch.n_tokens < static_cast<int>(prompt_tokens.size()) + bounded_max_tokens;) {
       if (llama_decode(ctx.get(), batch) != 0) {
         Throw("llama_decode failed");
@@ -831,17 +1057,29 @@ class LlamaLibraryEngine {
       if (llama_vocab_is_eog(vocab_, next_token)) {
         break;
       }
-      output += TokenToPiece(next_token);
+      const std::string piece = TokenToPiece(next_token);
+      output += piece;
       ++completion_tokens;
+      if (on_piece && !piece.empty()) {
+        on_piece(piece);
+      }
       batch = llama_batch_get_one(&next_token, 1);
+      if (completion_tokens >= bounded_max_tokens) {
+        finish_reason = "length";
+        break;
+      }
     }
 
     return GenerationResult{
         output,
         static_cast<int>(prompt_tokens.size()),
         completion_tokens,
-        "stop",
+        finish_reason,
     };
+  }
+
+  GenerationResult GenerateText(const std::string& prompt, int max_tokens) {
+    return GenerateTextStream(prompt, max_tokens, {});
   }
 
  private:
@@ -899,7 +1137,7 @@ class LlamaLibraryEngine {
   std::mutex mutex_;
 };
 
-std::string CompletionPromptFromRequest(const HttpRequest& request) {
+std::string CompletionPromptFromRequest(const RuntimeConfig& config, const HttpRequest& request) {
   if (request.body.empty()) {
     Throw("request body is empty");
   }
@@ -915,19 +1153,10 @@ std::string CompletionPromptFromRequest(const HttpRequest& request) {
     if (!payload.contains("messages") || !payload.at("messages").is_array()) {
       Throw("chat completion request is missing messages");
     }
-    std::ostringstream prompt;
-    for (const auto& message : payload.at("messages")) {
-      if (!message.is_object()) {
-        continue;
-      }
-      const std::string role = message.value("role", std::string{"user"});
-      const std::string content = JsonString(message, "content");
-      if (!content.empty()) {
-        prompt << role << ": " << content << "\n";
-      }
-    }
-    prompt << "assistant: ";
-    const std::string result = prompt.str();
+    const json active_model = LoadActiveModel(config);
+    const std::string result =
+        ActiveModelLooksLikeQwen(active_model) ? BuildQwenChatPrompt(payload)
+                                               : BuildLegacyChatPrompt(payload);
     if (result.empty()) {
       Throw("chat completion request contains no usable messages");
     }
@@ -961,7 +1190,9 @@ SimpleResponse BuildCompletionResponse(
             {"choices",
              json::array({json{
                  {"index", 0},
-                 {"message", json{{"role", "assistant"}, {"content", result.text}}},
+                 {"message",
+                  json{{"role", "assistant"},
+                       {"content", SanitizeAssistantText(result.text)}}},
                  {"finish_reason", result.finish_reason},
              }})},
             {"usage",
@@ -989,6 +1220,239 @@ SimpleResponse BuildCompletionResponse(
       });
 }
 
+json ParseRequestPayload(const HttpRequest& request) {
+  if (request.body.empty()) {
+    return json::object();
+  }
+  return json::parse(request.body);
+}
+
+bool RequestWantsStream(const HttpRequest& request) {
+  if (request.path != "/v1/chat/completions" || request.method != "POST") {
+    return false;
+  }
+  const json payload = ParseRequestPayload(request);
+  return payload.value("stream", false);
+}
+
+bool SendAll(int fd, const std::string& payload) {
+  const char* data = payload.c_str();
+  std::size_t remaining = payload.size();
+  while (remaining > 0) {
+    const ssize_t written = send(fd, data, remaining, 0);
+    if (written <= 0) {
+      return false;
+    }
+    data += written;
+    remaining -= static_cast<std::size_t>(written);
+  }
+  return true;
+}
+
+bool SendSseHeaders(int client_fd) {
+  std::ostringstream out;
+  out << "HTTP/1.1 200 OK\r\n";
+  out << "Content-Type: text/event-stream\r\n";
+  out << "Cache-Control: no-cache\r\n";
+  out << "Connection: close\r\n";
+  out << "X-Accel-Buffering: no\r\n\r\n";
+  return SendAll(client_fd, out.str());
+}
+
+bool IsUtf8ContinuationByte(unsigned char value) {
+  return (value & 0xC0) == 0x80;
+}
+
+std::size_t Utf8SequenceLength(unsigned char lead) {
+  if ((lead & 0x80) == 0) {
+    return 1;
+  }
+  if ((lead & 0xE0) == 0xC0) {
+    return 2;
+  }
+  if ((lead & 0xF0) == 0xE0) {
+    return 3;
+  }
+  if ((lead & 0xF8) == 0xF0) {
+    return 4;
+  }
+  return 0;
+}
+
+std::size_t ValidUtf8PrefixLength(const std::string& value) {
+  std::size_t index = 0;
+  while (index < value.size()) {
+    const unsigned char lead = static_cast<unsigned char>(value[index]);
+    const std::size_t sequence_length = Utf8SequenceLength(lead);
+    if (sequence_length == 0) {
+      break;
+    }
+    if (index + sequence_length > value.size()) {
+      break;
+    }
+    bool valid = true;
+    for (std::size_t offset = 1; offset < sequence_length; ++offset) {
+      if (!IsUtf8ContinuationByte(static_cast<unsigned char>(value[index + offset]))) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) {
+      break;
+    }
+    index += sequence_length;
+  }
+  return index;
+}
+
+bool CanEncodeJsonUtf8(const std::string& value) {
+  try {
+    json payload{{"delta", value}};
+    static_cast<void>(payload.dump());
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool SendSseEvent(int client_fd, const std::string& event_name, const json& payload) {
+  std::ostringstream frame;
+  frame << "event: " << event_name << "\n";
+  std::stringstream lines(payload.dump().append("\n"));
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    frame << "data: " << line << "\n";
+  }
+  frame << "\n";
+  return SendAll(client_fd, frame.str());
+}
+
+bool SendSseDone(int client_fd) {
+  return SendAll(client_fd, "data: [DONE]\n\n");
+}
+
+void SendErrorResponse(
+    int client_fd,
+    int status_code,
+    const std::string& message) {
+  const SimpleResponse response = BuildJsonResponse(
+      status_code,
+      json{{"status", "error"}, {"message", message}});
+  SendResponse(client_fd, response);
+}
+
+void HandleStreamingChatRequest(
+    int client_fd,
+    const RuntimeConfig& config,
+    const HttpRequest& request,
+    LlamaLibraryEngine* engine) {
+  if (engine == nullptr) {
+    SendErrorResponse(client_fd, 503, "llama engine is not loaded");
+    return;
+  }
+  bool sse_started = false;
+  try {
+    const std::string prompt = CompletionPromptFromRequest(config, request);
+    const int max_tokens = MaxTokensFromRequest(request);
+    const json active_model = LoadActiveModel(config);
+    const std::string served_model_name =
+        active_model.value(
+            "served_model_name",
+            active_model.value("model_id", std::string{"(unknown)"}));
+    if (!SendSseHeaders(client_fd)) {
+      return;
+    }
+    sse_started = true;
+    const auto started_at = std::chrono::steady_clock::now();
+    std::string pending_utf8;
+    AssistantTextFilterState filter_state;
+    const auto emit_delta = [&](const std::string& chunk) {
+      if (chunk.empty()) {
+        return;
+      }
+      SendSseEvent(
+          client_fd,
+          "delta",
+          json{
+              {"model", served_model_name},
+              {"delta", chunk},
+          });
+    };
+    const auto flush_pending = [&](bool final_flush) {
+      while (!pending_utf8.empty()) {
+        if (CanEncodeJsonUtf8(pending_utf8)) {
+          emit_delta(UpdateAssistantTextFilter(filter_state, pending_utf8));
+          pending_utf8.clear();
+          return;
+        }
+        const std::size_t valid_prefix_length = ValidUtf8PrefixLength(pending_utf8);
+        if (valid_prefix_length > 0) {
+          std::string prefix = pending_utf8.substr(0, valid_prefix_length);
+          while (!prefix.empty() && !CanEncodeJsonUtf8(prefix)) {
+            prefix.pop_back();
+          }
+          if (!prefix.empty()) {
+            emit_delta(UpdateAssistantTextFilter(filter_state, prefix));
+            pending_utf8.erase(0, prefix.size());
+            continue;
+          }
+        }
+        if (!final_flush) {
+          return;
+        }
+        emit_delta(UpdateAssistantTextFilter(filter_state, "?"));
+        pending_utf8.erase(0, 1);
+      }
+    };
+    const auto result = engine->GenerateTextStream(
+        prompt,
+        max_tokens,
+        [&](const std::string& piece) {
+          if (piece.empty()) {
+            return;
+          }
+          pending_utf8 += piece;
+          flush_pending(false);
+        });
+    flush_pending(true);
+    const auto finished_at = std::chrono::steady_clock::now();
+    const auto latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                finished_at - started_at)
+                                .count();
+    SendSseEvent(
+        client_fd,
+        "complete",
+        json{
+            {"model", served_model_name},
+            {"finish_reason", result.finish_reason},
+            {"latency_ms", latency_ms},
+            {"usage",
+             json{{"prompt_tokens", result.prompt_tokens},
+                  {"completion_tokens", result.completion_tokens},
+                  {"total_tokens", result.prompt_tokens + result.completion_tokens}}},
+        });
+    SendSseDone(client_fd);
+  } catch (const std::exception& error) {
+    if (sse_started) {
+      try {
+        SendSseEvent(
+            client_fd,
+            "error",
+            json{
+                {"message", error.what()},
+            });
+        SendSseDone(client_fd);
+      } catch (const std::exception&) {
+      }
+    } else {
+      SendErrorResponse(client_fd, 400, error.what());
+    }
+  }
+}
+
 SimpleResponse HandleLocalRequest(
     const RuntimeConfig& config,
     const HttpRequest& request,
@@ -1006,7 +1470,7 @@ SimpleResponse HandleLocalRequest(
       return BuildJsonResponse(503, json{{"status", "unavailable"}, {"reason", "llama engine is not loaded"}});
     }
     try {
-      const std::string prompt = CompletionPromptFromRequest(request);
+      const std::string prompt = CompletionPromptFromRequest(config, request);
       const int max_tokens = MaxTokensFromRequest(request);
       return BuildCompletionResponse(config, request, engine->GenerateText(prompt, max_tokens));
     } catch (const std::exception& error) {
@@ -1155,8 +1619,12 @@ class LocalHttpServer {
     }
     if (!request_data.empty()) {
       const HttpRequest request = ParseHttpRequest(request_data);
-      const SimpleResponse response = HandleLocalRequest(config_, request, service_name_, engine_);
-      SendResponse(client_fd, response);
+      if (RequestWantsStream(request)) {
+        HandleStreamingChatRequest(client_fd, config_, request, engine_);
+      } else {
+        const SimpleResponse response = HandleLocalRequest(config_, request, service_name_, engine_);
+        SendResponse(client_fd, response);
+      }
     }
     shutdown(client_fd, SHUT_RDWR);
     close(client_fd);

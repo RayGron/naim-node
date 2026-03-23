@@ -164,6 +164,7 @@ struct PlaneRecord {
   std::string shared_disk_name;
   std::string control_root;
   std::string artifacts_root;
+  std::string plane_mode = "compute";
   int generation = 0;
   int applied_generation = 0;
   int rebalance_iteration = 0;
