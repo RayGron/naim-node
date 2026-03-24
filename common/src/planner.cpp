@@ -59,6 +59,7 @@ ComposeService BuildComposeService(
   if (service.gpu_device.has_value()) {
     service.environment["NVIDIA_VISIBLE_DEVICES"] = *service.gpu_device;
     service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
+    service.security_opts.push_back("apparmor=unconfined");
   }
   service.healthcheck = instance.role == InstanceRole::Infer
                             ? "CMD-SHELL /runtime/infer/inferctl.sh probe-url "

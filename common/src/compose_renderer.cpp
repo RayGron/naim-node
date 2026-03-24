@@ -76,6 +76,13 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
       RenderKeyValueMap(out, "      ", service.labels);
     }
 
+    if (!service.security_opts.empty()) {
+      out << "    security_opt:\n";
+      for (const auto& security_opt : service.security_opts) {
+        out << "      - " << security_opt << "\n";
+      }
+    }
+
     if (!service.volumes.empty()) {
       out << "    volumes:\n";
       for (const auto& volume : service.volumes) {

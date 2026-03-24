@@ -174,6 +174,7 @@ struct ComposeService {
   std::map<std::string, std::string> labels;
   std::vector<ComposeVolume> volumes;
   std::vector<PublishedPort> published_ports;
+  std::vector<std::string> security_opts;
   std::optional<std::string> gpu_device;
   std::string healthcheck;
 };
