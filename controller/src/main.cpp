@@ -1927,9 +1927,9 @@ std::vector<std::string> SplitParagraphs(const std::string& value) {
 }
 
 bool StartsWithReasoningPreamble(const std::string& text) {
-  const std::string lowered = ToLowerCopy(Trim(text));
-  return StartsWith(lowered, "thinking process:") || StartsWith(lowered, "reasoning:") ||
-         StartsWith(lowered, "analysis:") || StartsWith(lowered, "chain of thought:");
+  const std::string lowered = Lowercase(Trim(text));
+  return lowered.rfind("thinking process:", 0) == 0 || lowered.rfind("reasoning:", 0) == 0 ||
+         lowered.rfind("analysis:", 0) == 0 || lowered.rfind("chain of thought:", 0) == 0;
 }
 
 std::string SanitizeInteractionText(std::string text) {
@@ -1942,10 +1942,10 @@ std::string SanitizeInteractionText(std::string text) {
       if (candidate.empty()) {
         continue;
       }
-      const std::string lowered = ToLowerCopy(candidate);
-      if (StartsWithReasoningPreamble(candidate) || StartsWith(lowered, "1.") ||
-          StartsWith(lowered, "2.") || StartsWith(lowered, "3.") ||
-          StartsWith(lowered, "* ")) {
+      const std::string lowered = Lowercase(candidate);
+      if (StartsWithReasoningPreamble(candidate) || lowered.rfind("1.", 0) == 0 ||
+          lowered.rfind("2.", 0) == 0 || lowered.rfind("3.", 0) == 0 ||
+          lowered.rfind("* ", 0) == 0) {
         continue;
       }
       return candidate;
