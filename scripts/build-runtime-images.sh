@@ -32,6 +32,7 @@ base_tag="${1:-comet/base-runtime:dev}"
 infer_tag="${2:-comet/infer-runtime:dev}"
 worker_tag="${3:-comet/worker-runtime:dev}"
 web_ui_tag="${4:-comet/web-ui:dev}"
+worker_vllm_base_image="${COMET_WORKER_VLLM_BASE_IMAGE:-vllm/vllm-openai:latest}"
 
 build_web_ui_image() {
   local temp_root
@@ -84,6 +85,7 @@ echo "building ${infer_tag}"
 
 echo "building ${worker_tag}"
 "${docker_cmd}" build \
+  --build-arg "VLLM_BASE_IMAGE=${worker_vllm_base_image}" \
   -f "${repo_root}/runtime/worker/Dockerfile" \
   -t "${worker_tag}" \
   "${repo_root}"
