@@ -1655,6 +1655,16 @@ std::string BuildInteractionUpstreamBody(
   payload.erase("max_total_completion_tokens");
   payload.erase("max_elapsed_time_ms");
   payload.erase("semantic_goal");
+  const bool uses_vllm_runtime =
+      resolution.runtime_status.has_value() &&
+      Lowercase(resolution.runtime_status->runtime_backend).find("vllm") != std::string::npos;
+  if (uses_vllm_runtime) {
+    if (!payload.contains("chat_template_kwargs") ||
+        !payload.at("chat_template_kwargs").is_object()) {
+      payload["chat_template_kwargs"] = json::object();
+    }
+    payload["chat_template_kwargs"]["enable_thinking"] = false;
+  }
   if (force_stream) {
     payload["stream"] = true;
   }
