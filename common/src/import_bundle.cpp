@@ -1,5 +1,6 @@
 #include "comet/import_bundle.h"
 #include "comet/scheduling_policy.h"
+#include "comet/state_json.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -305,7 +306,7 @@ std::vector<NodeInventory> ParseNodes(const json& plane_json) {
 
   if (!plane_json.contains("nodes")) {
     nodes = {
-        NodeInventory{"node-a", "linux", {"0", "1"}, {{"0", 24576}, {"1", 24576}}},
+        NodeInventory{"local-hostd", "linux", {"0", "1"}, {{"0", 24576}, {"1", 24576}}},
         NodeInventory{"node-b", "linux", {"0"}, {{"0", 24576}}},
     };
     return nodes;
@@ -451,6 +452,9 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       "/comet/shared/control/" + state.plane_name);
   state.plane_mode =
       ParsePlaneMode(OptionalString(plane_json, "plane_mode", "compute"));
+  if (const auto placement_target = OptionalStringOpt(plane_json, "placement_target")) {
+    state.placement_target = *placement_target;
+  }
   if (const auto bootstrap_model = OptionalObject(plane_json, "bootstrap_model")) {
     BootstrapModelSpec spec;
     spec.model_id = OptionalString(*bootstrap_model, "model_id", "");
@@ -462,6 +466,9 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     }
     if (const auto source_url = OptionalStringOpt(*bootstrap_model, "source_url")) {
       spec.source_url = *source_url;
+    }
+    if (bootstrap_model->contains("source_urls") && (*bootstrap_model)["source_urls"].is_array()) {
+      spec.source_urls = (*bootstrap_model)["source_urls"].get<std::vector<std::string>>();
     }
     if (const auto target_filename = OptionalStringOpt(*bootstrap_model, "target_filename")) {
       spec.target_filename = *target_filename;
@@ -485,6 +492,50 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     }
     settings.follow_user_language =
         interaction->value("follow_user_language", settings.follow_user_language);
+    if (const auto completion_policy = OptionalObject(*interaction, "completion_policy")) {
+      InteractionSettings::CompletionPolicy policy;
+      policy.response_mode =
+          OptionalString(*completion_policy, "response_mode", policy.response_mode);
+      policy.max_tokens = OptionalInt(*completion_policy, "max_tokens", policy.max_tokens);
+      if (const auto target_completion_tokens =
+              OptionalIntOpt(*completion_policy, "target_completion_tokens")) {
+        policy.target_completion_tokens = *target_completion_tokens;
+      }
+      policy.max_continuations =
+          OptionalInt(*completion_policy, "max_continuations", policy.max_continuations);
+      policy.max_total_completion_tokens = OptionalInt(
+          *completion_policy,
+          "max_total_completion_tokens",
+          policy.max_total_completion_tokens);
+      policy.max_elapsed_time_ms =
+          OptionalInt(*completion_policy, "max_elapsed_time_ms", policy.max_elapsed_time_ms);
+      if (const auto semantic_goal = OptionalStringOpt(*completion_policy, "semantic_goal")) {
+        policy.semantic_goal = *semantic_goal;
+      }
+      settings.completion_policy = std::move(policy);
+    }
+    if (const auto completion_policy = OptionalObject(*interaction, "long_completion_policy")) {
+      InteractionSettings::CompletionPolicy policy;
+      policy.response_mode =
+          OptionalString(*completion_policy, "response_mode", policy.response_mode);
+      policy.max_tokens = OptionalInt(*completion_policy, "max_tokens", policy.max_tokens);
+      if (const auto target_completion_tokens =
+              OptionalIntOpt(*completion_policy, "target_completion_tokens")) {
+        policy.target_completion_tokens = *target_completion_tokens;
+      }
+      policy.max_continuations =
+          OptionalInt(*completion_policy, "max_continuations", policy.max_continuations);
+      policy.max_total_completion_tokens = OptionalInt(
+          *completion_policy,
+          "max_total_completion_tokens",
+          policy.max_total_completion_tokens);
+      policy.max_elapsed_time_ms =
+          OptionalInt(*completion_policy, "max_elapsed_time_ms", policy.max_elapsed_time_ms);
+      if (const auto semantic_goal = OptionalStringOpt(*completion_policy, "semantic_goal")) {
+        policy.semantic_goal = *semantic_goal;
+      }
+      settings.long_completion_policy = std::move(policy);
+    }
     state.interaction = std::move(settings);
   }
   const int shared_disk_gb = OptionalInt(plane_json, "shared_disk_gb", 200);
@@ -772,7 +823,7 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   }
 
   ApplyMovableSchedulerDecisions(&state);
-  return state;
+  return ResolvePlacementTargetAliases(std::move(state));
 }
 
 }  // namespace comet

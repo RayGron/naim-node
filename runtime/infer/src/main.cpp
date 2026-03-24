@@ -1004,7 +1004,7 @@ class LlamaLibraryEngine {
       int max_tokens,
       const std::function<void(const std::string&)>& on_piece) {
     std::lock_guard<std::mutex> guard(mutex_);
-    const int bounded_max_tokens = std::max(1, std::min(max_tokens, 256));
+    const int bounded_max_tokens = std::max(1, std::min(max_tokens, 1024));
     std::vector<llama_token> prompt_tokens = Tokenize(prompt, true);
     if (prompt_tokens.empty()) {
       Throw("prompt tokenization produced zero tokens");

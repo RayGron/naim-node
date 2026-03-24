@@ -1,8 +1,9 @@
 {
   "name": "smoke",
   "control_root": "/comet/shared/control/smoke",
+  "placement_target": "local",
   "runtime": {
-    "primary_infer_node": "node-a",
+    "primary_infer_node": "local-hostd",
     "net_if": "eth0",
     "models_root": "/comet/shared/models",
     "gguf_cache_dir": "/comet/shared/models/gguf",
@@ -22,7 +23,7 @@
   "shared_disk_gb": 40,
   "nodes": [
     {
-      "name": "node-a",
+      "name": "local-hostd",
       "platform": "linux",
       "gpus": ["0"],
       "gpu_memory_mb": {

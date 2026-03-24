@@ -1,6 +1,6 @@
 {
   "name": "worker-a",
-  "node": "node-a",
+  "node": "local-hostd",
   "gpu_device": "0",
   "share_mode": "shared",
   "gpu_fraction": 0.25,

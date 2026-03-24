@@ -1,7 +1,9 @@
 #include "comet/state_json.h"
 
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <stdexcept>
 
 #include <nlohmann/json.hpp>
@@ -75,6 +77,9 @@ json ToJson(const BootstrapModelSpec& bootstrap_model) {
   if (bootstrap_model.source_url.has_value()) {
     result["source_url"] = *bootstrap_model.source_url;
   }
+  if (!bootstrap_model.source_urls.empty()) {
+    result["source_urls"] = bootstrap_model.source_urls;
+  }
   if (bootstrap_model.target_filename.has_value()) {
     result["target_filename"] = *bootstrap_model.target_filename;
   }
@@ -92,6 +97,43 @@ json ToJson(const InteractionSettings& interaction) {
   };
   if (interaction.system_prompt.has_value()) {
     result["system_prompt"] = *interaction.system_prompt;
+  }
+  if (interaction.completion_policy.has_value()) {
+    json completion_policy = {
+        {"response_mode", interaction.completion_policy->response_mode},
+        {"max_tokens", interaction.completion_policy->max_tokens},
+        {"max_continuations", interaction.completion_policy->max_continuations},
+        {"max_total_completion_tokens",
+         interaction.completion_policy->max_total_completion_tokens},
+        {"max_elapsed_time_ms", interaction.completion_policy->max_elapsed_time_ms},
+    };
+    if (interaction.completion_policy->target_completion_tokens.has_value()) {
+      completion_policy["target_completion_tokens"] =
+          *interaction.completion_policy->target_completion_tokens;
+    }
+    if (interaction.completion_policy->semantic_goal.has_value()) {
+      completion_policy["semantic_goal"] = *interaction.completion_policy->semantic_goal;
+    }
+    result["completion_policy"] = std::move(completion_policy);
+  }
+  if (interaction.long_completion_policy.has_value()) {
+    json long_completion_policy = {
+        {"response_mode", interaction.long_completion_policy->response_mode},
+        {"max_tokens", interaction.long_completion_policy->max_tokens},
+        {"max_continuations", interaction.long_completion_policy->max_continuations},
+        {"max_total_completion_tokens",
+         interaction.long_completion_policy->max_total_completion_tokens},
+        {"max_elapsed_time_ms", interaction.long_completion_policy->max_elapsed_time_ms},
+    };
+    if (interaction.long_completion_policy->target_completion_tokens.has_value()) {
+      long_completion_policy["target_completion_tokens"] =
+          *interaction.long_completion_policy->target_completion_tokens;
+    }
+    if (interaction.long_completion_policy->semantic_goal.has_value()) {
+      long_completion_policy["semantic_goal"] =
+          *interaction.long_completion_policy->semantic_goal;
+    }
+    result["long_completion_policy"] = std::move(long_completion_policy);
   }
   return result;
 }
@@ -221,6 +263,9 @@ BootstrapModelSpec BootstrapModelSpecFromJson(const json& value) {
   if (value.contains("source_url") && !value.at("source_url").is_null()) {
     bootstrap_model.source_url = value.at("source_url").get<std::string>();
   }
+  if (value.contains("source_urls") && value.at("source_urls").is_array()) {
+    bootstrap_model.source_urls = value.at("source_urls").get<std::vector<std::string>>();
+  }
   if (value.contains("target_filename") && !value.at("target_filename").is_null()) {
     bootstrap_model.target_filename = value.at("target_filename").get<std::string>();
   }
@@ -241,7 +286,78 @@ InteractionSettings InteractionSettingsFromJson(const json& value) {
       value.value("supported_response_languages", std::vector<std::string>{});
   interaction.follow_user_language =
       value.value("follow_user_language", interaction.follow_user_language);
+  if (value.contains("completion_policy") && value.at("completion_policy").is_object()) {
+    InteractionSettings::CompletionPolicy completion_policy;
+    const auto& policy_value = value.at("completion_policy");
+    completion_policy.response_mode =
+        policy_value.value("response_mode", completion_policy.response_mode);
+    completion_policy.max_tokens =
+        policy_value.value("max_tokens", completion_policy.max_tokens);
+    if (policy_value.contains("target_completion_tokens") &&
+        !policy_value.at("target_completion_tokens").is_null()) {
+      completion_policy.target_completion_tokens =
+          policy_value.at("target_completion_tokens").get<int>();
+    }
+    completion_policy.max_continuations =
+        policy_value.value("max_continuations", completion_policy.max_continuations);
+    completion_policy.max_total_completion_tokens = policy_value.value(
+        "max_total_completion_tokens",
+        completion_policy.max_total_completion_tokens);
+    completion_policy.max_elapsed_time_ms =
+        policy_value.value("max_elapsed_time_ms", completion_policy.max_elapsed_time_ms);
+    if (policy_value.contains("semantic_goal") &&
+        !policy_value.at("semantic_goal").is_null()) {
+      completion_policy.semantic_goal = policy_value.at("semantic_goal").get<std::string>();
+    }
+    interaction.completion_policy = std::move(completion_policy);
+  }
+  if (value.contains("long_completion_policy") && value.at("long_completion_policy").is_object()) {
+    InteractionSettings::CompletionPolicy completion_policy;
+    const auto& policy_value = value.at("long_completion_policy");
+    completion_policy.response_mode =
+        policy_value.value("response_mode", completion_policy.response_mode);
+    completion_policy.max_tokens =
+        policy_value.value("max_tokens", completion_policy.max_tokens);
+    if (policy_value.contains("target_completion_tokens") &&
+        !policy_value.at("target_completion_tokens").is_null()) {
+      completion_policy.target_completion_tokens =
+          policy_value.at("target_completion_tokens").get<int>();
+    }
+    completion_policy.max_continuations =
+        policy_value.value("max_continuations", completion_policy.max_continuations);
+    completion_policy.max_total_completion_tokens = policy_value.value(
+        "max_total_completion_tokens",
+        completion_policy.max_total_completion_tokens);
+    completion_policy.max_elapsed_time_ms =
+        policy_value.value("max_elapsed_time_ms", completion_policy.max_elapsed_time_ms);
+    if (policy_value.contains("semantic_goal") &&
+        !policy_value.at("semantic_goal").is_null()) {
+      completion_policy.semantic_goal = policy_value.at("semantic_goal").get<std::string>();
+    }
+    interaction.long_completion_policy = std::move(completion_policy);
+  }
   return interaction;
+}
+
+std::string ResolvePlacementTargetAliasValue(
+    const std::optional<std::string>& placement_target) {
+  if (!placement_target.has_value() || placement_target->empty()) {
+    return "";
+  }
+  if (*placement_target == "local") {
+    return "local-hostd";
+  }
+  constexpr const char* kNodePrefix = "node:";
+  if (placement_target->rfind(kNodePrefix, 0) == 0) {
+    const std::string node_name = placement_target->substr(std::strlen(kNodePrefix));
+    if (node_name.empty()) {
+      throw std::runtime_error("placement_target node alias is empty");
+    }
+    return node_name;
+  }
+  throw std::runtime_error(
+      "unsupported placement_target '" + *placement_target +
+      "' (expected 'local' or 'node:<name>')");
 }
 
 json DesiredStateToJson(const DesiredState& state) {
@@ -276,6 +392,9 @@ json DesiredStateToJson(const DesiredState& state) {
       {"disks", json::array()},
       {"instances", json::array()},
   };
+  if (state.placement_target.has_value()) {
+    result["placement_target"] = *state.placement_target;
+  }
   if (state.bootstrap_model.has_value()) {
     result["bootstrap_model"] = ToJson(*state.bootstrap_model);
   }
@@ -306,6 +425,9 @@ DesiredState DesiredStateFromJson(const json& value) {
   state.control_root =
       value.value("control_root", "/comet/shared/control/" + state.plane_name);
   state.plane_mode = ParsePlaneMode(value.value("plane_mode", std::string("compute")));
+  if (value.contains("placement_target") && !value.at("placement_target").is_null()) {
+    state.placement_target = value.at("placement_target").get<std::string>();
+  }
   if (value.contains("bootstrap_model") && value.at("bootstrap_model").is_object()) {
     state.bootstrap_model = BootstrapModelSpecFromJson(value.at("bootstrap_model"));
   }
@@ -376,6 +498,7 @@ DesiredState SliceDesiredStateForNode(
   result.plane_shared_disk_name = state.plane_shared_disk_name;
   result.control_root = state.control_root;
   result.plane_mode = state.plane_mode;
+  result.placement_target = state.placement_target;
   result.bootstrap_model = state.bootstrap_model;
   result.interaction = state.interaction;
   result.inference = state.inference;
@@ -405,12 +528,65 @@ DesiredState SliceDesiredStateForNode(
   return result;
 }
 
+DesiredState ResolvePlacementTargetAliases(DesiredState state) {
+  const std::string resolved_target = ResolvePlacementTargetAliasValue(state.placement_target);
+  if (resolved_target.empty()) {
+    return state;
+  }
+
+  std::set<std::string> referenced_nodes;
+  if (!state.inference.primary_infer_node.empty()) {
+    referenced_nodes.insert(state.inference.primary_infer_node);
+  }
+  for (const auto& node : state.nodes) {
+    if (!node.name.empty()) {
+      referenced_nodes.insert(node.name);
+    }
+  }
+  for (const auto& disk : state.disks) {
+    if (!disk.node_name.empty()) {
+      referenced_nodes.insert(disk.node_name);
+    }
+  }
+  for (const auto& instance : state.instances) {
+    if (!instance.node_name.empty()) {
+      referenced_nodes.insert(instance.node_name);
+    }
+  }
+  for (const auto& gpu_node : state.runtime_gpu_nodes) {
+    if (!gpu_node.node_name.empty()) {
+      referenced_nodes.insert(gpu_node.node_name);
+    }
+  }
+  if (referenced_nodes.size() > 1) {
+    throw std::runtime_error(
+        "plane-level placement_target supports only single-node desired states");
+  }
+
+  if (!state.inference.primary_infer_node.empty()) {
+    state.inference.primary_infer_node = resolved_target;
+  }
+  for (auto& node : state.nodes) {
+    node.name = resolved_target;
+  }
+  for (auto& disk : state.disks) {
+    disk.node_name = resolved_target;
+  }
+  for (auto& instance : state.instances) {
+    instance.node_name = resolved_target;
+  }
+  for (auto& gpu_node : state.runtime_gpu_nodes) {
+    gpu_node.node_name = resolved_target;
+  }
+  return state;
+}
+
 std::string SerializeDesiredStateJson(const DesiredState& state) {
   return DesiredStateToJson(state).dump(2);
 }
 
 DesiredState DeserializeDesiredStateJson(const std::string& json_text) {
-  return DesiredStateFromJson(json::parse(json_text));
+  return ResolvePlacementTargetAliases(DesiredStateFromJson(json::parse(json_text)));
 }
 
 std::optional<DesiredState> LoadDesiredStateJson(const std::string& path) {

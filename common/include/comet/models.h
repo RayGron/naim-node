@@ -113,15 +113,28 @@ struct BootstrapModelSpec {
   std::optional<std::string> served_model_name;
   std::optional<std::string> local_path;
   std::optional<std::string> source_url;
+  std::vector<std::string> source_urls;
   std::optional<std::string> target_filename;
   std::optional<std::string> sha256;
 };
 
 struct InteractionSettings {
+  struct CompletionPolicy {
+    std::string response_mode = "normal";
+    int max_tokens = 512;
+    std::optional<int> target_completion_tokens;
+    int max_continuations = 3;
+    int max_total_completion_tokens = 1536;
+    int max_elapsed_time_ms = 180000;
+    std::optional<std::string> semantic_goal;
+  };
+
   std::optional<std::string> system_prompt;
   std::string default_response_language = "en";
   std::vector<std::string> supported_response_languages;
   bool follow_user_language = true;
+  std::optional<CompletionPolicy> completion_policy;
+  std::optional<CompletionPolicy> long_completion_policy;
 };
 
 struct DesiredState {
@@ -129,6 +142,7 @@ struct DesiredState {
   std::string plane_shared_disk_name;
   std::string control_root;
   PlaneMode plane_mode = PlaneMode::Compute;
+  std::optional<std::string> placement_target;
   std::optional<BootstrapModelSpec> bootstrap_model;
   std::optional<InteractionSettings> interaction;
   InferenceRuntimeSettings inference;

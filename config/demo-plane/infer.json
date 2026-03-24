@@ -1,6 +1,6 @@
 {
   "name": "infer-main",
-  "node": "node-a",
+  "node": "local-hostd",
   "private_disk_gb": 80,
   "image": "comet/infer-runtime:dev"
 }

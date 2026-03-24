@@ -228,6 +228,10 @@ std::optional<long long> TimestampAgeSeconds(const std::string& timestamp_text);
 
 std::string Trim(const std::string& value);
 
+std::string NormalizeLanguageCode(const std::string& value);
+
+HttpResponse BuildJsonResponse(int status_code, const json& payload);
+
 SchedulerRuntimeView LoadSchedulerRuntimeView(
     comet::ControllerStore& store,
     const std::optional<comet::DesiredState>& desired_state);
@@ -1024,6 +1028,419 @@ struct PlaneInteractionResolution {
   json status_payload;
 };
 
+struct InteractionCompletionPolicy {
+  std::string response_mode = "normal";
+  int max_tokens = 512;
+  std::optional<int> target_completion_tokens;
+  int max_continuations = 3;
+  int max_total_completion_tokens = 1536;
+  int max_elapsed_time_ms = 180000;
+  std::string semantic_goal;
+  std::string completion_marker = "[[TASK_COMPLETE]]";
+  bool require_completion_marker = false;
+};
+
+struct ResolvedInteractionPolicy {
+  InteractionCompletionPolicy policy;
+  std::string mode = "default";
+};
+
+struct InteractionSegmentSummary {
+  int index = 0;
+  int continuation_index = 0;
+  std::string text;
+  std::string finish_reason = "stop";
+  int prompt_tokens = 0;
+  int completion_tokens = 0;
+  int total_tokens = 0;
+  int latency_ms = 0;
+  bool marker_seen = false;
+};
+
+struct InteractionSessionResult {
+  std::string session_id;
+  std::string model;
+  std::string content;
+  std::vector<InteractionSegmentSummary> segments;
+  int total_prompt_tokens = 0;
+  int total_completion_tokens = 0;
+  int total_tokens = 0;
+  int total_latency_ms = 0;
+  int continuation_count = 0;
+  std::string completion_status = "in_progress";
+  std::string stop_reason;
+  std::string final_finish_reason = "stop";
+  bool marker_seen = false;
+};
+
+struct CompletionMarkerFilterState {
+  std::string pending;
+  bool marker_seen = false;
+};
+
+struct InteractionSseFrame {
+  std::string event_name = "message";
+  std::string data;
+};
+
+struct StreamedInteractionSegmentResult {
+  InteractionSegmentSummary summary;
+  std::string cleaned_text;
+};
+
+int ClampInteractionPolicyValue(int value, int minimum_value, int maximum_value) {
+  return std::max(minimum_value, std::min(value, maximum_value));
+}
+
+InteractionCompletionPolicy NormalizeConfiguredInteractionCompletionPolicy(
+    const comet::InteractionSettings::CompletionPolicy& configured_policy) {
+  InteractionCompletionPolicy policy;
+  const std::string normalized_mode =
+      NormalizeLanguageCode(configured_policy.response_mode);
+  if (!normalized_mode.empty()) {
+    policy.response_mode = normalized_mode;
+  }
+  policy.max_tokens =
+      ClampInteractionPolicyValue(configured_policy.max_tokens, 1, 1024);
+  if (configured_policy.target_completion_tokens.has_value()) {
+    policy.target_completion_tokens = ClampInteractionPolicyValue(
+        *configured_policy.target_completion_tokens, 1, 8192);
+  }
+  policy.max_continuations =
+      ClampInteractionPolicyValue(configured_policy.max_continuations, 0, 8);
+  policy.max_total_completion_tokens = ClampInteractionPolicyValue(
+      configured_policy.max_total_completion_tokens,
+      policy.max_tokens,
+      8192);
+  policy.max_elapsed_time_ms = ClampInteractionPolicyValue(
+      configured_policy.max_elapsed_time_ms, 1000, 600000);
+  if (configured_policy.semantic_goal.has_value()) {
+    policy.semantic_goal = Trim(*configured_policy.semantic_goal);
+  }
+  if (policy.target_completion_tokens.has_value()) {
+    policy.max_total_completion_tokens = std::max(
+        policy.max_total_completion_tokens,
+        *policy.target_completion_tokens);
+  }
+  policy.require_completion_marker =
+      !policy.semantic_goal.empty() ||
+      policy.target_completion_tokens.has_value() ||
+      policy.response_mode == "long" ||
+      policy.response_mode == "very_long";
+  return policy;
+}
+
+InteractionCompletionPolicy DefaultChatInteractionCompletionPolicy() {
+  comet::InteractionSettings::CompletionPolicy configured_policy;
+  configured_policy.response_mode = "normal";
+  configured_policy.max_tokens = 512;
+  configured_policy.max_continuations = 0;
+  configured_policy.max_total_completion_tokens = 512;
+  configured_policy.max_elapsed_time_ms = 30000;
+  return NormalizeConfiguredInteractionCompletionPolicy(configured_policy);
+}
+
+std::string LastUserMessageContent(const json& payload) {
+  if (!payload.contains("messages") || !payload.at("messages").is_array()) {
+    return "";
+  }
+  const auto& messages = payload.at("messages");
+  for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+    if ((*it).is_object() &&
+        (*it).value("role", std::string{}) == "user" &&
+        (*it).contains("content") &&
+        (*it).at("content").is_string()) {
+      return (*it).at("content").get<std::string>();
+    }
+  }
+  return "";
+}
+
+bool ContainsAnySubstring(const std::string& haystack, const std::vector<std::string>& needles) {
+  for (const auto& needle : needles) {
+    if (!needle.empty() && haystack.find(needle) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool LooksLikeLongFormTaskRequest(const std::string& text) {
+  const std::string normalized = NormalizeLanguageCode(text);
+  const std::size_t text_length = normalized.size();
+  if (text_length >= 280) {
+    return true;
+  }
+  static const std::vector<std::string> explicit_long_markers = {
+      "несколько сообщений", "разбивай на несколько сообщений", "разбей на несколько сообщений",
+      "продолжай в нескольких сообщениях", "in several messages", "multiple messages",
+      "split across multiple messages", "continue in multiple messages",
+      "2048 слов", "1024 слов", "1536 слов", "2048 words", "1024 words", "1536 words",
+      "2048 токен", "1024 токен", "2048 token", "1024 token",
+  };
+  if (ContainsAnySubstring(normalized, explicit_long_markers)) {
+    return true;
+  }
+  static const std::vector<std::string> long_form_keywords = {
+      "напиши историю", "напиши рассказ", "напиши эссе", "напиши статью",
+      "подробный план", "подробно опиши", "развернуто опиши", "детально опиши",
+      "историю", "рассказ", "эссе", "статью", "гайд", "руководство",
+      "write a story", "write an essay", "write an article", "write a guide",
+      "detailed plan", "detailed analysis", "long-form", "long form",
+  };
+  return ContainsAnySubstring(normalized, long_form_keywords);
+}
+
+ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
+    const comet::DesiredState& desired_state,
+    const json& payload) {
+  ResolvedInteractionPolicy resolved;
+  const std::string last_user_message = LastUserMessageContent(payload);
+  const bool long_form_task = LooksLikeLongFormTaskRequest(last_user_message);
+  if (desired_state.interaction.has_value()) {
+    const auto& interaction = *desired_state.interaction;
+    if (long_form_task && interaction.long_completion_policy.has_value()) {
+      resolved.policy =
+          NormalizeConfiguredInteractionCompletionPolicy(*interaction.long_completion_policy);
+      resolved.mode = "long";
+      return resolved;
+    }
+    if (!long_form_task &&
+        interaction.completion_policy.has_value() &&
+        NormalizeLanguageCode(interaction.completion_policy->response_mode) != "long" &&
+        NormalizeLanguageCode(interaction.completion_policy->response_mode) != "very_long") {
+      resolved.policy =
+          NormalizeConfiguredInteractionCompletionPolicy(*interaction.completion_policy);
+      resolved.mode = "default";
+      return resolved;
+    }
+    if (long_form_task &&
+        interaction.completion_policy.has_value() &&
+        (NormalizeLanguageCode(interaction.completion_policy->response_mode) == "long" ||
+         NormalizeLanguageCode(interaction.completion_policy->response_mode) == "very_long")) {
+      resolved.policy =
+          NormalizeConfiguredInteractionCompletionPolicy(*interaction.completion_policy);
+      resolved.mode = "long";
+      return resolved;
+    }
+  }
+  resolved.policy = DefaultChatInteractionCompletionPolicy();
+  resolved.mode = long_form_task ? "long-fallback" : "default-fallback";
+  return resolved;
+}
+
+std::string GenerateInteractionSessionId() {
+  static std::atomic<unsigned long long> counter{0};
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  return "sess-" + std::to_string(now) + "-" + std::to_string(++counter);
+}
+
+std::string BuildSemanticCompletionInstruction(const InteractionCompletionPolicy& policy) {
+  std::ostringstream instruction;
+  instruction << "Semantic completion protocol:\n"
+              << "- You may need multiple assistant segments to finish this task.\n"
+              << "- End the final segment with the exact marker " << policy.completion_marker
+              << " on its own line only when the task is fully complete.\n"
+              << "- If the task is not complete in this segment, do not output the marker.\n"
+              << "- For continuation segments, continue exactly where you stopped without repeating prior text unless recap is explicitly requested.\n"
+              << "- Do not emit tool calls, tool requests, or waiting states in this phase.\n";
+  if (!policy.semantic_goal.empty()) {
+    instruction << "- Task completion goal: " << policy.semantic_goal << "\n";
+  }
+  if (policy.target_completion_tokens.has_value()) {
+    instruction << "- Aim for at least " << *policy.target_completion_tokens
+                << " completion tokens before marking the task complete.\n";
+  }
+  return instruction.str();
+}
+
+std::string BuildContinuationPrompt(
+    const InteractionCompletionPolicy& policy,
+    bool natural_stop_without_marker,
+    const std::string& trailing_excerpt = "") {
+  std::ostringstream prompt;
+  if (natural_stop_without_marker) {
+    prompt << "Your previous segment stopped before you proved the task was complete. "
+           << "If the task is already complete, reply with only " << policy.completion_marker
+           << ". Otherwise continue exactly where you stopped.";
+  } else {
+    prompt << "Continue exactly where you stopped.";
+  }
+  if (!trailing_excerpt.empty()) {
+    prompt << " The last visible excerpt from your previous segment was:\n"
+           << trailing_excerpt
+           << "\nContinue immediately after that excerpt.";
+  }
+  prompt << " Do not repeat prior text. Emit " << policy.completion_marker
+         << " on its own line only in the final segment when the task is fully complete.";
+  return prompt.str();
+}
+
+bool IsUtf8ContinuationByte(unsigned char value);
+
+std::string Utf8SafeSuffix(const std::string& value, std::size_t max_bytes) {
+  if (value.size() <= max_bytes) {
+    return value;
+  }
+  std::size_t start = value.size() - max_bytes;
+  while (start < value.size() &&
+         IsUtf8ContinuationByte(static_cast<unsigned char>(value[start]))) {
+    ++start;
+  }
+  return value.substr(start);
+}
+
+bool SessionReachedTargetLength(
+    const InteractionCompletionPolicy& policy,
+    int total_completion_tokens) {
+  return !policy.target_completion_tokens.has_value() ||
+         total_completion_tokens >= *policy.target_completion_tokens;
+}
+
+bool CanCompleteOnNaturalStop(
+    const InteractionCompletionPolicy& policy,
+    const InteractionSegmentSummary& summary) {
+  if (policy.require_completion_marker) {
+    return false;
+  }
+  return summary.finish_reason != "length" && !Trim(summary.text).empty();
+}
+
+std::string RemoveCompletionMarkers(
+    const std::string& input,
+    const std::string& marker,
+    bool* marker_seen) {
+  std::string output = input;
+  std::size_t position = std::string::npos;
+  while ((position = output.find(marker)) != std::string::npos) {
+    if (marker_seen != nullptr) {
+      *marker_seen = true;
+    }
+    output.erase(position, marker.size());
+  }
+  return output;
+}
+
+bool IsUtf8ContinuationByte(unsigned char value) {
+  return (value & 0xC0) == 0x80;
+}
+
+std::size_t Utf8SequenceLength(unsigned char lead) {
+  if ((lead & 0x80) == 0) {
+    return 1;
+  }
+  if ((lead & 0xE0) == 0xC0) {
+    return 2;
+  }
+  if ((lead & 0xF0) == 0xE0) {
+    return 3;
+  }
+  if ((lead & 0xF8) == 0xF0) {
+    return 4;
+  }
+  return 0;
+}
+
+std::size_t ValidUtf8PrefixLength(const std::string& value) {
+  std::size_t index = 0;
+  while (index < value.size()) {
+    const unsigned char lead = static_cast<unsigned char>(value[index]);
+    const std::size_t sequence_length = Utf8SequenceLength(lead);
+    if (sequence_length == 0) {
+      break;
+    }
+    if (index + sequence_length > value.size()) {
+      break;
+    }
+    bool valid = true;
+    for (std::size_t offset = 1; offset < sequence_length; ++offset) {
+      if (!IsUtf8ContinuationByte(static_cast<unsigned char>(value[index + offset]))) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) {
+      break;
+    }
+    index += sequence_length;
+  }
+  return index;
+}
+
+std::string ConsumeCompletionMarkerFilteredChunk(
+    CompletionMarkerFilterState& state,
+    const std::string& chunk,
+    const std::string& marker,
+    bool final_flush) {
+  state.pending += chunk;
+  std::string emitted;
+  while (true) {
+    const std::size_t marker_pos = state.pending.find(marker);
+    if (marker_pos != std::string::npos) {
+      emitted += state.pending.substr(0, marker_pos);
+      state.pending.erase(0, marker_pos + marker.size());
+      state.marker_seen = true;
+      continue;
+    }
+    if (final_flush) {
+      emitted += state.pending;
+      state.pending.clear();
+      break;
+    }
+    if (state.pending.size() > marker.size()) {
+      const std::size_t safe_prefix = state.pending.size() - marker.size() + 1;
+      const std::string candidate = state.pending.substr(0, safe_prefix);
+      const std::size_t valid_prefix = ValidUtf8PrefixLength(candidate);
+      if (valid_prefix == 0) {
+        break;
+      }
+      emitted += state.pending.substr(0, valid_prefix);
+      state.pending.erase(0, valid_prefix);
+    }
+    break;
+  }
+  return emitted;
+}
+
+bool TryConsumeSseFrame(std::string& buffer, InteractionSseFrame* frame) {
+  const std::size_t separator = buffer.find("\n\n");
+  if (separator == std::string::npos) {
+    return false;
+  }
+  const std::string raw_frame = buffer.substr(0, separator);
+  buffer.erase(0, separator + 2);
+  frame->event_name = "message";
+  frame->data.clear();
+  std::stringstream stream(raw_frame);
+  std::string line;
+  std::vector<std::string> data_lines;
+  while (std::getline(stream, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (line.empty() || line[0] == ':') {
+      continue;
+    }
+    if (line.rfind("event:", 0) == 0) {
+      frame->event_name = Trim(line.substr(6));
+      continue;
+    }
+    if (line.rfind("data:", 0) == 0) {
+      const std::size_t offset = line.size() > 5 && line[5] == ' ' ? 6 : 5;
+      data_lines.push_back(line.substr(offset));
+    }
+  }
+  for (std::size_t index = 0; index < data_lines.size(); ++index) {
+    if (index > 0) {
+      frame->data.push_back('\n');
+    }
+    frame->data += data_lines[index];
+  }
+  return true;
+}
+
 std::string NormalizeLanguageCode(const std::string& value) {
   std::string normalized;
   normalized.reserve(value.size());
@@ -1099,9 +1516,9 @@ std::string BuildLanguageInstruction(
 
 std::string BuildInteractionUpstreamBody(
     const PlaneInteractionResolution& resolution,
-    const std::string& original_body,
-    bool force_stream) {
-  json payload = original_body.empty() ? json::object() : json::parse(original_body);
+    json payload,
+    bool force_stream,
+    const InteractionCompletionPolicy& policy) {
   if (!payload.contains("messages") || !payload.at("messages").is_array()) {
     payload["messages"] = json::array();
   }
@@ -1121,6 +1538,12 @@ std::string BuildInteractionUpstreamBody(
       {"role", "system"},
       {"content", BuildLanguageInstruction(resolution.desired_state, preferred_language)},
   });
+  if (policy.require_completion_marker || policy.max_continuations > 0) {
+    system_messages.push_back(json{
+        {"role", "system"},
+        {"content", BuildSemanticCompletionInstruction(policy)},
+    });
+  }
 
   json merged_messages = json::array();
   for (const auto& message : system_messages) {
@@ -1134,18 +1557,23 @@ std::string BuildInteractionUpstreamBody(
   if (preferred_language.has_value()) {
     payload["preferred_language"] = *preferred_language;
   }
+  payload.erase("max_completion_tokens");
+  payload.erase("target_completion_tokens");
+  payload.erase("max_continuations");
+  payload.erase("max_total_completion_tokens");
+  payload.erase("max_elapsed_time_ms");
+  payload.erase("semantic_goal");
   if (force_stream) {
     payload["stream"] = true;
   }
-  if (!payload.contains("max_tokens") && !payload.contains("max_completion_tokens")) {
-    payload["max_tokens"] = 256;
-  }
+  payload["max_tokens"] = policy.max_tokens;
   if (!payload.contains("temperature")) {
     payload["temperature"] = 0.2;
   }
   if (!payload.contains("top_p")) {
     payload["top_p"] = 0.8;
   }
+  payload["response_mode"] = policy.response_mode;
   return payload.dump();
 }
 
@@ -1264,6 +1692,67 @@ PlaneInteractionResolution ResolvePlaneInteraction(
        resolution.desired_state.interaction.has_value()
            ? json(resolution.desired_state.interaction->follow_user_language)
            : json(true)},
+      {"completion_policy",
+       resolution.desired_state.interaction.has_value() &&
+               resolution.desired_state.interaction->completion_policy.has_value()
+           ? json{
+                 {"response_mode",
+                  resolution.desired_state.interaction->completion_policy->response_mode},
+                 {"max_tokens",
+                  resolution.desired_state.interaction->completion_policy->max_tokens},
+                 {"target_completion_tokens",
+                  resolution.desired_state.interaction->completion_policy
+                          ->target_completion_tokens.has_value()
+                      ? json(*resolution.desired_state.interaction->completion_policy
+                                  ->target_completion_tokens)
+                      : json(nullptr)},
+                 {"max_continuations",
+                  resolution.desired_state.interaction->completion_policy->max_continuations},
+                 {"max_total_completion_tokens",
+                  resolution.desired_state.interaction->completion_policy
+                      ->max_total_completion_tokens},
+                 {"max_elapsed_time_ms",
+                  resolution.desired_state.interaction->completion_policy
+                      ->max_elapsed_time_ms},
+                 {"semantic_goal",
+                  resolution.desired_state.interaction->completion_policy->semantic_goal
+                          .has_value()
+                      ? json(*resolution.desired_state.interaction->completion_policy
+                                  ->semantic_goal)
+                      : json(nullptr)},
+             }
+           : json(nullptr)},
+      {"long_completion_policy",
+       resolution.desired_state.interaction.has_value() &&
+               resolution.desired_state.interaction->long_completion_policy.has_value()
+           ? json{
+                 {"response_mode",
+                  resolution.desired_state.interaction->long_completion_policy->response_mode},
+                 {"max_tokens",
+                  resolution.desired_state.interaction->long_completion_policy->max_tokens},
+                 {"target_completion_tokens",
+                  resolution.desired_state.interaction->long_completion_policy
+                          ->target_completion_tokens.has_value()
+                      ? json(*resolution.desired_state.interaction->long_completion_policy
+                                  ->target_completion_tokens)
+                      : json(nullptr)},
+                 {"max_continuations",
+                  resolution.desired_state.interaction->long_completion_policy
+                      ->max_continuations},
+                 {"max_total_completion_tokens",
+                  resolution.desired_state.interaction->long_completion_policy
+                      ->max_total_completion_tokens},
+                 {"max_elapsed_time_ms",
+                  resolution.desired_state.interaction->long_completion_policy
+                      ->max_elapsed_time_ms},
+                 {"semantic_goal",
+                  resolution.desired_state.interaction->long_completion_policy->semantic_goal
+                          .has_value()
+                      ? json(*resolution.desired_state.interaction->long_completion_policy
+                                  ->semantic_goal)
+                      : json(nullptr)},
+             }
+           : json(nullptr)},
       {"gateway_listen",
        resolution.runtime_status.has_value() &&
                !resolution.runtime_status->gateway_listen.empty()
@@ -1291,6 +1780,247 @@ HttpResponse BuildPlaneInteractionError(
   return HttpResponse{status_code, "application/json", payload.dump()};
 }
 
+json ParseInteractionPayload(const std::string& body) {
+  return body.empty() ? json::object() : json::parse(body);
+}
+
+std::string ExtractInteractionText(const json& payload) {
+  if (!payload.contains("choices") || !payload.at("choices").is_array() ||
+      payload.at("choices").empty()) {
+    throw std::runtime_error("upstream interaction response did not include choices");
+  }
+  const json& choice = payload.at("choices").at(0);
+  if (choice.contains("message") && choice.at("message").is_object()) {
+    return choice.at("message").value("content", std::string{});
+  }
+  return choice.value("text", std::string{});
+}
+
+std::string ExtractInteractionFinishReason(const json& payload) {
+  if (!payload.contains("choices") || !payload.at("choices").is_array() ||
+      payload.at("choices").empty()) {
+    return "stop";
+  }
+  const json& choice = payload.at("choices").at(0);
+  return choice.value("finish_reason", std::string{"stop"});
+}
+
+json ExtractInteractionUsage(const json& payload) {
+  if (!payload.contains("usage") || !payload.at("usage").is_object()) {
+    return json{
+        {"prompt_tokens", 0},
+        {"completion_tokens", 0},
+        {"total_tokens", 0},
+    };
+  }
+  const json& usage = payload.at("usage");
+  return json{
+      {"prompt_tokens", usage.value("prompt_tokens", 0)},
+      {"completion_tokens", usage.value("completion_tokens", 0)},
+      {"total_tokens", usage.value("total_tokens", 0)},
+  };
+}
+
+json BuildContinuationPayload(
+    const json& original_payload,
+    const std::string& accumulated_text,
+    const InteractionCompletionPolicy& policy,
+    bool natural_stop_without_marker) {
+  json payload = original_payload;
+  json messages = json::array();
+  if (payload.contains("messages") && payload.at("messages").is_array()) {
+    for (const auto& message : payload.at("messages")) {
+      messages.push_back(message);
+    }
+  }
+  const std::string trailing_excerpt =
+      accumulated_text.empty() ? std::string{} : Utf8SafeSuffix(accumulated_text, 256);
+  messages.push_back(json{
+      {"role", "user"},
+      {"content", BuildContinuationPrompt(policy, natural_stop_without_marker, trailing_excerpt)},
+  });
+  payload["messages"] = messages;
+  return payload;
+}
+
+json BuildInteractionSessionPayload(const InteractionSessionResult& result) {
+  json segments = json::array();
+  for (const auto& segment : result.segments) {
+    segments.push_back(json{
+        {"index", segment.index},
+        {"continuation_index", segment.continuation_index},
+        {"finish_reason", segment.finish_reason},
+        {"usage",
+         json{
+             {"prompt_tokens", segment.prompt_tokens},
+             {"completion_tokens", segment.completion_tokens},
+             {"total_tokens", segment.total_tokens},
+         }},
+        {"latency_ms", segment.latency_ms},
+        {"marker_seen", segment.marker_seen},
+    });
+  }
+  return json{
+      {"id", result.session_id},
+      {"status", result.completion_status},
+      {"stop_reason", result.stop_reason},
+      {"segment_count", static_cast<int>(result.segments.size())},
+      {"continuation_count", result.continuation_count},
+      {"finish_reason", result.final_finish_reason},
+      {"usage",
+       json{
+           {"prompt_tokens", result.total_prompt_tokens},
+           {"completion_tokens", result.total_completion_tokens},
+           {"total_tokens", result.total_tokens},
+       }},
+      {"latency_ms", result.total_latency_ms},
+      {"marker_seen", result.marker_seen},
+      {"segments", std::move(segments)},
+  };
+}
+
+HttpResponse BuildInteractionSessionResponse(const InteractionSessionResult& result) {
+  const json session_payload = BuildInteractionSessionPayload(result);
+  return BuildJsonResponse(
+      200,
+      json{
+          {"id", "chatcmpl-comet-session"},
+          {"object", "chat.completion"},
+          {"model", result.model},
+          {"choices",
+           json::array({json{
+               {"index", 0},
+               {"message", json{{"role", "assistant"}, {"content", result.content}}},
+               {"finish_reason", result.completion_status == "completed" ? "stop" : "length"},
+           }})},
+          {"usage", session_payload.at("usage")},
+          {"session", session_payload},
+      });
+}
+
+InteractionSessionResult ExecuteInteractionSession(
+    const PlaneInteractionResolution& resolution,
+    const std::string& body) {
+  const json original_payload = ParseInteractionPayload(body);
+  const InteractionCompletionPolicy policy =
+      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload).policy;
+  InteractionSessionResult result;
+  result.session_id = GenerateInteractionSessionId();
+  const auto session_started_at = std::chrono::steady_clock::now();
+
+  json current_payload = original_payload;
+  for (int segment_index = 0;; ++segment_index) {
+    const auto segment_started_at = std::chrono::steady_clock::now();
+    const HttpResponse upstream = SendControllerHttpRequest(
+        *resolution.target,
+        "POST",
+        "/v1/chat/completions",
+        BuildInteractionUpstreamBody(resolution, current_payload, false, policy),
+        {{"Accept", "application/json"}});
+    if (upstream.status_code != 200) {
+      throw std::runtime_error(
+          "upstream interaction request failed with status " + std::to_string(upstream.status_code));
+    }
+    const json upstream_payload = upstream.body.empty() ? json::object() : json::parse(upstream.body);
+    const auto segment_finished_at = std::chrono::steady_clock::now();
+    const json usage = ExtractInteractionUsage(upstream_payload);
+    bool marker_seen_in_segment = false;
+    const std::string clean_text = RemoveCompletionMarkers(
+        ExtractInteractionText(upstream_payload),
+        policy.completion_marker,
+        &marker_seen_in_segment);
+    InteractionSegmentSummary summary;
+    summary.index = segment_index;
+    summary.continuation_index = segment_index;
+    summary.text = clean_text;
+    summary.finish_reason = ExtractInteractionFinishReason(upstream_payload);
+    summary.prompt_tokens = usage.value("prompt_tokens", 0);
+    summary.completion_tokens = usage.value("completion_tokens", 0);
+    summary.total_tokens = usage.value("total_tokens", 0);
+    summary.latency_ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            segment_finished_at - segment_started_at)
+            .count());
+    summary.marker_seen = marker_seen_in_segment;
+    result.model = upstream_payload.value("model", result.model);
+    result.content += clean_text;
+    result.segments.push_back(summary);
+    result.total_prompt_tokens += summary.prompt_tokens;
+    result.total_completion_tokens += summary.completion_tokens;
+    result.total_tokens += summary.total_tokens;
+    result.total_latency_ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            segment_finished_at - session_started_at)
+            .count());
+    result.final_finish_reason = summary.finish_reason;
+    result.marker_seen = result.marker_seen || marker_seen_in_segment;
+
+    if (result.marker_seen &&
+        SessionReachedTargetLength(policy, result.total_completion_tokens)) {
+      result.completion_status = "completed";
+      result.stop_reason = "semantic_completion_marker";
+      break;
+    }
+    if (CanCompleteOnNaturalStop(policy, summary) &&
+        SessionReachedTargetLength(policy, result.total_completion_tokens)) {
+      result.completion_status = "completed";
+      result.stop_reason = "natural_stop";
+      break;
+    }
+
+    if (result.total_completion_tokens >= policy.max_total_completion_tokens) {
+      result.completion_status = "incomplete_due_to_limits";
+      result.stop_reason = "max_total_completion_tokens_reached";
+      break;
+    }
+    if (result.total_latency_ms >= policy.max_elapsed_time_ms) {
+      result.completion_status = "incomplete_due_to_limits";
+      result.stop_reason = "max_elapsed_time_ms_reached";
+      break;
+    }
+    if (segment_index >= policy.max_continuations) {
+      result.completion_status = "incomplete_due_to_limits";
+      result.stop_reason = "max_continuations_reached";
+      break;
+    }
+
+    result.continuation_count = segment_index + 1;
+    current_payload = BuildContinuationPayload(
+        original_payload,
+        result.content,
+        policy,
+        summary.finish_reason != "length");
+  }
+
+  if (result.completion_status == "in_progress") {
+    result.completion_status = "failed";
+    result.stop_reason = "session_state_unresolved";
+  }
+  return result;
+}
+
+bool SendInteractionSseEvent(
+    int client_fd,
+    const std::string& event_name,
+    const json& payload) {
+  std::ostringstream frame;
+  frame << "event: " << event_name << "\n";
+  std::stringstream lines(payload.dump().append("\n"));
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    frame << "data: " << line << "\n";
+  }
+  frame << "\n";
+  return SendAll(client_fd, frame.str());
+}
+
+bool SendInteractionSseDone(int client_fd) {
+  return SendAll(client_fd, "data: [DONE]\n\n");
+}
+
 HttpResponse ProxyInteractionJson(
     const PlaneInteractionResolution& resolution,
     const std::string& method,
@@ -1310,7 +2040,16 @@ HttpResponse ProxyInteractionJson(
   }
   try {
     const std::string upstream_body =
-        method == "POST" ? BuildInteractionUpstreamBody(resolution, body, false) : body;
+        method == "POST"
+            ? BuildInteractionUpstreamBody(
+                  resolution,
+                  ParseInteractionPayload(body),
+                  false,
+                  ResolveInteractionCompletionPolicy(
+                      resolution.desired_state,
+                      ParseInteractionPayload(body))
+                      .policy)
+            : body;
     const HttpResponse upstream = SendControllerHttpRequest(
         *resolution.target,
         method,
@@ -2001,6 +2740,7 @@ json BuildBootstrapModelPayloadItem(
       {"source_url",
        bootstrap_model->source_url.has_value() ? json(*bootstrap_model->source_url)
                                                : json(nullptr)},
+      {"source_urls", bootstrap_model->source_urls},
       {"target_filename",
        bootstrap_model->target_filename.has_value()
            ? json(*bootstrap_model->target_filename)
@@ -3802,6 +4542,17 @@ void StreamPlaneInteractionSse(
   }
 
   PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, *plane_name);
+  if (!resolution.status_payload.value("interaction_enabled", false)) {
+    SendHttpResponse(
+        client_fd,
+        BuildPlaneInteractionError(
+            409,
+            resolution.status_payload,
+            "interaction is available only for plane_mode=llm"));
+    shutdown(client_fd, SHUT_RDWR);
+    close(client_fd);
+    return;
+  }
   if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
     SendHttpResponse(
         client_fd,
@@ -3814,108 +4565,436 @@ void StreamPlaneInteractionSse(
     return;
   }
 
-  const std::string body = BuildInteractionUpstreamBody(resolution, request.body, true);
+  const json original_payload = ParseInteractionPayload(request.body);
+  const InteractionCompletionPolicy policy =
+      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload).policy;
+  InteractionSessionResult session;
+  session.session_id = GenerateInteractionSessionId();
+  const auto session_started_at = std::chrono::steady_clock::now();
 
-  int upstream_fd = -1;
-  bool downstream_sse_started = false;
-  try {
-    upstream_fd = ConnectHttpTarget(*resolution.target);
-    std::ostringstream upstream_request;
-    upstream_request << "POST /v1/chat/completions HTTP/1.1\r\n";
-    upstream_request << "Host: " << resolution.target->host << ":" << resolution.target->port << "\r\n";
-    upstream_request << "Connection: close\r\n";
-    upstream_request << "Accept: text/event-stream\r\n";
-    upstream_request << "Content-Type: application/json\r\n";
-    upstream_request << "Content-Length: " << body.size() << "\r\n\r\n";
-    upstream_request << body;
-    if (!SendAll(upstream_fd, upstream_request.str())) {
-      throw std::runtime_error("failed to write upstream interaction request");
-    }
-
-    std::string response_text;
-    std::array<char, 8192> buffer{};
-    std::size_t header_end = std::string::npos;
-    while (header_end == std::string::npos) {
-      const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
-      if (read_count <= 0) {
-        break;
+  auto stream_single_segment =
+      [&](const json& payload, int segment_index) -> StreamedInteractionSegmentResult {
+    StreamedInteractionSegmentResult result;
+    result.summary.index = segment_index;
+    result.summary.continuation_index = segment_index;
+    int upstream_fd = -1;
+    const auto segment_started_at = std::chrono::steady_clock::now();
+    try {
+      upstream_fd = ConnectHttpTarget(*resolution.target);
+      const std::string body = BuildInteractionUpstreamBody(resolution, payload, true, policy);
+      std::ostringstream upstream_request;
+      upstream_request << "POST /v1/chat/completions HTTP/1.1\r\n";
+      upstream_request << "Host: " << resolution.target->host << ":" << resolution.target->port
+                       << "\r\n";
+      upstream_request << "Connection: close\r\n";
+      upstream_request << "Accept: text/event-stream\r\n";
+      upstream_request << "Content-Type: application/json\r\n";
+      upstream_request << "Content-Length: " << body.size() << "\r\n\r\n";
+      upstream_request << body;
+      if (!SendAll(upstream_fd, upstream_request.str())) {
+        throw std::runtime_error("failed to write upstream interaction request");
       }
-      response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
-      header_end = response_text.find("\r\n\r\n");
-    }
-    if (header_end == std::string::npos) {
-      throw std::runtime_error("upstream interaction response ended before headers");
-    }
 
-    const HttpResponse upstream = ParseHttpResponse(response_text);
-    if (upstream.status_code != 200 ||
-        upstream.content_type.find("text/event-stream") == std::string::npos) {
-      while (true) {
+      std::string response_text;
+      std::array<char, 8192> buffer{};
+      std::size_t header_end = std::string::npos;
+      while (header_end == std::string::npos) {
         const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
         if (read_count <= 0) {
           break;
         }
         response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+        header_end = response_text.find("\r\n\r\n");
       }
-      SendHttpResponse(client_fd, ParseHttpResponse(response_text));
+      if (header_end == std::string::npos) {
+        throw std::runtime_error("upstream interaction response ended before headers");
+      }
+
+      HttpResponse upstream = ParseHttpResponse(response_text);
+      if (upstream.status_code != 200 ||
+          upstream.content_type.find("text/event-stream") == std::string::npos) {
+        while (true) {
+          const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
+          if (read_count <= 0) {
+            break;
+          }
+          response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+        }
+        upstream = ParseHttpResponse(response_text);
+        throw std::runtime_error(
+            "upstream interaction request failed: " +
+            (upstream.body.empty() ? std::to_string(upstream.status_code) : upstream.body));
+      }
+
+      CompletionMarkerFilterState filter_state;
+      json complete_payload = json::object();
+      bool saw_complete = false;
+      std::string sse_buffer = upstream.body;
+      const auto handle_frame = [&](const InteractionSseFrame& frame) {
+        if (frame.data == "[DONE]") {
+          return false;
+        }
+        if (frame.event_name == "delta") {
+          if (frame.data.empty()) {
+            return true;
+          }
+          const json delta_payload = json::parse(frame.data);
+          const std::string filtered = ConsumeCompletionMarkerFilteredChunk(
+              filter_state,
+              delta_payload.value("delta", std::string{}),
+              policy.completion_marker,
+              false);
+          if (!filtered.empty()) {
+            result.cleaned_text += filtered;
+            if (!SendInteractionSseEvent(
+                    client_fd,
+                    "delta",
+                    json{
+                        {"session_id", session.session_id},
+                        {"segment_index", segment_index},
+                        {"continuation_index", segment_index},
+                        {"model", delta_payload.value("model", std::string{})},
+                        {"delta", filtered},
+                    })) {
+              throw std::runtime_error("failed to write downstream delta");
+            }
+          }
+          return true;
+        }
+        if (frame.event_name == "complete") {
+          complete_payload = json::parse(frame.data);
+          saw_complete = true;
+          return true;
+        }
+        if (frame.event_name == "error") {
+          const json error_payload = json::parse(frame.data);
+          throw std::runtime_error(
+              error_payload.value("message", std::string{"upstream stream error"}));
+        }
+        return true;
+      };
+
+      const auto drain_frames = [&](bool final_chunk) {
+        if (final_chunk && !sse_buffer.empty() &&
+            sse_buffer.find("\n\n") == std::string::npos) {
+          sse_buffer.append("\n\n");
+        }
+        InteractionSseFrame frame;
+        while (TryConsumeSseFrame(sse_buffer, &frame)) {
+          if (!handle_frame(frame)) {
+            break;
+          }
+        }
+      };
+
+      while (true) {
+        drain_frames(false);
+        if (saw_complete && sse_buffer.find("[DONE]") != std::string::npos) {
+          break;
+        }
+        const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
+        if (read_count <= 0) {
+          drain_frames(true);
+          break;
+        }
+        sse_buffer.append(buffer.data(), static_cast<std::size_t>(read_count));
+      }
+
+      const std::string final_filtered = ConsumeCompletionMarkerFilteredChunk(
+          filter_state,
+          std::string{},
+          policy.completion_marker,
+          true);
+      if (!final_filtered.empty()) {
+        result.cleaned_text += final_filtered;
+        if (!SendInteractionSseEvent(
+                client_fd,
+                "delta",
+                json{
+                    {"session_id", session.session_id},
+                    {"segment_index", segment_index},
+                    {"continuation_index", segment_index},
+                    {"delta", final_filtered},
+                })) {
+          throw std::runtime_error("failed to flush downstream delta");
+        }
+      }
+      if (!saw_complete) {
+        if (Trim(result.cleaned_text).empty()) {
+          const HttpResponse fallback = SendControllerHttpRequest(
+              *resolution.target,
+              "POST",
+              "/v1/chat/completions",
+              BuildInteractionUpstreamBody(resolution, payload, false, policy),
+              {{"Accept", "application/json"}});
+          if (fallback.status_code == 200 && !fallback.body.empty()) {
+            const json fallback_payload = json::parse(fallback.body);
+            bool marker_seen_in_fallback = false;
+            const std::string fallback_text = RemoveCompletionMarkers(
+                ExtractInteractionText(fallback_payload),
+                policy.completion_marker,
+                &marker_seen_in_fallback);
+            if (!fallback_text.empty()) {
+              result.cleaned_text += fallback_text;
+              if (!SendInteractionSseEvent(
+                      client_fd,
+                      "delta",
+                      json{
+                          {"session_id", session.session_id},
+                          {"segment_index", segment_index},
+                          {"continuation_index", segment_index},
+                          {"model", fallback_payload.value("model", std::string{})},
+                          {"delta", fallback_text},
+                      })) {
+                throw std::runtime_error("failed to write downstream fallback delta");
+              }
+            }
+            filter_state.marker_seen = filter_state.marker_seen || marker_seen_in_fallback;
+            complete_payload = fallback_payload;
+            saw_complete = true;
+          }
+        }
+        if (!saw_complete && !Trim(result.cleaned_text).empty()) {
+          complete_payload = json{
+              {"model", session.model},
+              {"finish_reason", "length"},
+              {"usage",
+               json{
+                   {"prompt_tokens", 0},
+                   {"completion_tokens", 0},
+                   {"total_tokens", 0},
+               }},
+          };
+          saw_complete = true;
+        }
+        if (!saw_complete) {
+          throw std::runtime_error("upstream interaction stream ended without completion event");
+        }
+      }
+
+      const auto segment_finished_at = std::chrono::steady_clock::now();
+      const json usage = complete_payload.value("usage", json::object());
+      result.summary.text = result.cleaned_text;
+      result.summary.finish_reason = complete_payload.value("finish_reason", std::string{"stop"});
+      result.summary.prompt_tokens = usage.value("prompt_tokens", 0);
+      result.summary.completion_tokens = usage.value("completion_tokens", 0);
+      result.summary.total_tokens = usage.value("total_tokens", 0);
+      result.summary.latency_ms = complete_payload.value(
+          "latency_ms",
+          static_cast<int>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  segment_finished_at - segment_started_at)
+                  .count()));
+      result.summary.marker_seen = filter_state.marker_seen;
+      if (session.model.empty()) {
+        session.model = complete_payload.value("model", std::string{});
+      }
       shutdown(upstream_fd, SHUT_RDWR);
       close(upstream_fd);
-      shutdown(client_fd, SHUT_RDWR);
-      close(client_fd);
-      return;
+      return result;
+    } catch (...) {
+      if (upstream_fd >= 0) {
+        shutdown(upstream_fd, SHUT_RDWR);
+        close(upstream_fd);
+      }
+      if (Trim(result.cleaned_text).empty()) {
+        try {
+          const HttpResponse fallback = SendControllerHttpRequest(
+              *resolution.target,
+              "POST",
+              "/v1/chat/completions",
+              BuildInteractionUpstreamBody(resolution, payload, false, policy),
+              {{"Accept", "application/json"}});
+          if (fallback.status_code == 200 && !fallback.body.empty()) {
+            const json fallback_payload = json::parse(fallback.body);
+            bool marker_seen_in_fallback = false;
+            const std::string fallback_text = RemoveCompletionMarkers(
+                ExtractInteractionText(fallback_payload),
+                policy.completion_marker,
+                &marker_seen_in_fallback);
+            if (!fallback_text.empty()) {
+              result.cleaned_text = fallback_text;
+              if (!SendInteractionSseEvent(
+                      client_fd,
+                      "delta",
+                      json{
+                          {"session_id", session.session_id},
+                          {"segment_index", segment_index},
+                          {"continuation_index", segment_index},
+                          {"model", fallback_payload.value("model", std::string{})},
+                          {"delta", fallback_text},
+                      })) {
+                throw std::runtime_error("failed to write downstream fallback delta");
+              }
+            }
+            const json usage = ExtractInteractionUsage(fallback_payload);
+            const auto segment_finished_at = std::chrono::steady_clock::now();
+            result.summary.text = result.cleaned_text;
+            result.summary.finish_reason = ExtractInteractionFinishReason(fallback_payload);
+            result.summary.prompt_tokens = usage.value("prompt_tokens", 0);
+            result.summary.completion_tokens = usage.value("completion_tokens", 0);
+            result.summary.total_tokens = usage.value("total_tokens", 0);
+            result.summary.latency_ms = static_cast<int>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    segment_finished_at - segment_started_at)
+                    .count());
+            result.summary.marker_seen = marker_seen_in_fallback;
+            if (session.model.empty()) {
+              session.model = fallback_payload.value("model", std::string{});
+            }
+            return result;
+          }
+        } catch (...) {
+        }
+      }
+      throw;
+    }
+  };
+
+  if (!SendSseHeaders(client_fd)) {
+    shutdown(client_fd, SHUT_RDWR);
+    close(client_fd);
+    return;
+  }
+
+  try {
+    json current_payload = original_payload;
+    for (int segment_index = 0;; ++segment_index) {
+      if (!SendInteractionSseEvent(
+              client_fd,
+              "segment_started",
+              json{
+                  {"session_id", session.session_id},
+                  {"segment_index", segment_index},
+                  {"continuation_index", segment_index},
+              })) {
+        throw std::runtime_error("failed to write segment_started");
+      }
+
+      const StreamedInteractionSegmentResult segment =
+          stream_single_segment(current_payload, segment_index);
+      session.content += segment.cleaned_text;
+      session.segments.push_back(segment.summary);
+      session.total_prompt_tokens += segment.summary.prompt_tokens;
+      session.total_completion_tokens += segment.summary.completion_tokens;
+      session.total_tokens += segment.summary.total_tokens;
+      session.total_latency_ms = static_cast<int>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - session_started_at)
+              .count());
+      session.final_finish_reason = segment.summary.finish_reason;
+      session.marker_seen = session.marker_seen || segment.summary.marker_seen;
+
+      if (!SendInteractionSseEvent(
+              client_fd,
+              "segment_complete",
+              json{
+                  {"session_id", session.session_id},
+                  {"segment_index", segment_index},
+                  {"continuation_index", segment_index},
+                  {"finish_reason", segment.summary.finish_reason},
+                  {"usage",
+                   json{
+                       {"prompt_tokens", segment.summary.prompt_tokens},
+                       {"completion_tokens", segment.summary.completion_tokens},
+                       {"total_tokens", segment.summary.total_tokens},
+                   }},
+                  {"latency_ms", segment.summary.latency_ms},
+                  {"marker_seen", segment.summary.marker_seen},
+              })) {
+        throw std::runtime_error("failed to write segment_complete");
+      }
+
+      if (session.marker_seen &&
+          SessionReachedTargetLength(policy, session.total_completion_tokens)) {
+        session.completion_status = "completed";
+        session.stop_reason = "semantic_completion_marker";
+        break;
+      }
+      if (CanCompleteOnNaturalStop(policy, segment.summary) &&
+          SessionReachedTargetLength(policy, session.total_completion_tokens)) {
+        session.completion_status = "completed";
+        session.stop_reason = "natural_stop";
+        break;
+      }
+      if (session.total_completion_tokens >= policy.max_total_completion_tokens) {
+        session.completion_status = "incomplete_due_to_limits";
+        session.stop_reason = "max_total_completion_tokens_reached";
+        break;
+      }
+      if (session.total_latency_ms >= policy.max_elapsed_time_ms) {
+        session.completion_status = "incomplete_due_to_limits";
+        session.stop_reason = "max_elapsed_time_ms_reached";
+        break;
+      }
+      if (segment_index >= policy.max_continuations) {
+        session.completion_status = "incomplete_due_to_limits";
+        session.stop_reason = "max_continuations_reached";
+        break;
+      }
+
+      session.continuation_count = segment_index + 1;
+      if (!SendInteractionSseEvent(
+              client_fd,
+              "continuation_started",
+              json{
+                  {"session_id", session.session_id},
+                  {"continuation_index", session.continuation_count},
+                  {"reason",
+                   segment.summary.finish_reason == "length"
+                       ? "segment_hit_token_limit"
+                       : "semantic_completion_not_confirmed"},
+              })) {
+        throw std::runtime_error("failed to write continuation_started");
+      }
+      current_payload = BuildContinuationPayload(
+          original_payload,
+          session.content,
+          policy,
+          segment.summary.finish_reason != "length");
     }
 
-    if (!SendSseHeaders(client_fd)) {
-      shutdown(upstream_fd, SHUT_RDWR);
-      close(upstream_fd);
-      shutdown(client_fd, SHUT_RDWR);
-      close(client_fd);
-      return;
+    if (session.completion_status == "in_progress") {
+      session.completion_status = "failed";
+      session.stop_reason = "session_state_unresolved";
     }
-    downstream_sse_started = true;
-    if (!upstream.body.empty() && !SendAll(client_fd, upstream.body)) {
-      shutdown(upstream_fd, SHUT_RDWR);
-      close(upstream_fd);
-      shutdown(client_fd, SHUT_RDWR);
-      close(client_fd);
-      return;
-    }
-    while (true) {
-      const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
-      if (read_count <= 0) {
-        break;
-      }
-      if (!SendAll(client_fd, std::string(buffer.data(), static_cast<std::size_t>(read_count)))) {
-        break;
-      }
-    }
-    shutdown(upstream_fd, SHUT_RDWR);
-    close(upstream_fd);
+
+    const json session_payload = BuildInteractionSessionPayload(session);
+    SendInteractionSseEvent(client_fd, "session_complete", session_payload);
+    SendInteractionSseEvent(
+        client_fd,
+        "complete",
+        json{
+            {"model", session.model},
+            {"finish_reason", session.completion_status == "completed" ? "stop" : "length"},
+            {"latency_ms", session.total_latency_ms},
+            {"usage", session_payload.at("usage")},
+            {"session", session_payload},
+            {"completion_status", session.completion_status},
+            {"stop_reason", session.stop_reason},
+            {"continuation_count", session.continuation_count},
+            {"segment_count", static_cast<int>(session.segments.size())},
+        });
+    SendInteractionSseDone(client_fd);
   } catch (const std::exception& error) {
-    if (upstream_fd >= 0) {
-      shutdown(upstream_fd, SHUT_RDWR);
-      close(upstream_fd);
-    }
-    if (downstream_sse_started) {
-      const json payload = {
-          {"message", error.what()},
-          {"plane_name", plane_name.value_or(std::string{})},
-      };
-      std::ostringstream frame;
-      frame << "event: error\n";
-      std::stringstream lines(payload.dump());
-      std::string line;
-      while (std::getline(lines, line)) {
-        frame << "data: " << line << "\n";
-      }
-      frame << "\n";
-      SendAll(client_fd, frame.str());
-      SendAll(client_fd, "data: [DONE]\n\n");
-    } else {
-      SendHttpResponse(
-          client_fd,
-          BuildPlaneInteractionError(502, resolution.status_payload, error.what()));
-    }
+    SendInteractionSseEvent(
+        client_fd,
+        "session_failed",
+        json{
+            {"session_id", session.session_id},
+            {"status", "failed"},
+            {"message", error.what()},
+            {"segment_count", static_cast<int>(session.segments.size())},
+            {"continuation_count", session.continuation_count},
+        });
+    SendInteractionSseEvent(
+        client_fd,
+        "error",
+        json{
+            {"message", error.what()},
+            {"plane_name", plane_name.value_or(std::string{})},
+        });
+    SendInteractionSseDone(client_fd);
   }
 
   shutdown(client_fd, SHUT_RDWR);
@@ -4727,15 +5806,24 @@ HttpResponse HandleControllerRequest(
       }
       const std::string plane_name = remainder.substr(0, interaction_chat_pos);
       try {
-        return ProxyInteractionJson(
-            ResolvePlaneInteraction(db_path, plane_name),
-            "POST",
-            "/v1/chat/completions",
-            request.body);
+        const PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
+        if (!resolution.status_payload.value("interaction_enabled", false)) {
+          return BuildPlaneInteractionError(
+              409,
+              resolution.status_payload,
+              "interaction is available only for plane_mode=llm");
+        }
+        if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
+          return BuildPlaneInteractionError(
+              409,
+              resolution.status_payload,
+              "plane interaction target is not ready");
+        }
+        return BuildInteractionSessionResponse(ExecuteInteractionSession(resolution, request.body));
       } catch (const std::exception& error) {
         return BuildJsonResponse(
-            404,
-            json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+            502,
+            json{{"status", "error"}, {"message", error.what()}, {"path", request.path}});
       }
     }
     const auto interaction_stream_pos = remainder.find("/interaction/chat/completions/stream");

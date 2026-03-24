@@ -454,6 +454,9 @@ std::string SerializeBootstrapModelSpec(
   if (bootstrap_model->source_url.has_value()) {
     value["source_url"] = *bootstrap_model->source_url;
   }
+  if (!bootstrap_model->source_urls.empty()) {
+    value["source_urls"] = bootstrap_model->source_urls;
+  }
   if (bootstrap_model->target_filename.has_value()) {
     value["target_filename"] = *bootstrap_model->target_filename;
   }
@@ -482,6 +485,9 @@ std::optional<BootstrapModelSpec> DeserializeBootstrapModelSpec(const std::strin
   if (value.contains("source_url") && !value.at("source_url").is_null()) {
     bootstrap_model.source_url = value.at("source_url").get<std::string>();
   }
+  if (value.contains("source_urls") && value.at("source_urls").is_array()) {
+    bootstrap_model.source_urls = value.at("source_urls").get<std::vector<std::string>>();
+  }
   if (value.contains("target_filename") && !value.at("target_filename").is_null()) {
     bootstrap_model.target_filename = value.at("target_filename").get<std::string>();
   }
@@ -509,6 +515,56 @@ std::optional<InteractionSettings> DeserializeInteractionSettings(const std::str
       value.value("supported_response_languages", std::vector<std::string>{});
   interaction.follow_user_language =
       value.value("follow_user_language", interaction.follow_user_language);
+  if (value.contains("completion_policy") && value.at("completion_policy").is_object()) {
+    InteractionSettings::CompletionPolicy completion_policy;
+    const auto& policy_value = value.at("completion_policy");
+    completion_policy.response_mode =
+        policy_value.value("response_mode", completion_policy.response_mode);
+    completion_policy.max_tokens =
+        policy_value.value("max_tokens", completion_policy.max_tokens);
+    if (policy_value.contains("target_completion_tokens") &&
+        !policy_value.at("target_completion_tokens").is_null()) {
+      completion_policy.target_completion_tokens =
+          policy_value.at("target_completion_tokens").get<int>();
+    }
+    completion_policy.max_continuations =
+        policy_value.value("max_continuations", completion_policy.max_continuations);
+    completion_policy.max_total_completion_tokens = policy_value.value(
+        "max_total_completion_tokens",
+        completion_policy.max_total_completion_tokens);
+    completion_policy.max_elapsed_time_ms =
+        policy_value.value("max_elapsed_time_ms", completion_policy.max_elapsed_time_ms);
+    if (policy_value.contains("semantic_goal") &&
+        !policy_value.at("semantic_goal").is_null()) {
+      completion_policy.semantic_goal = policy_value.at("semantic_goal").get<std::string>();
+    }
+    interaction.completion_policy = std::move(completion_policy);
+  }
+  if (value.contains("long_completion_policy") && value.at("long_completion_policy").is_object()) {
+    InteractionSettings::CompletionPolicy completion_policy;
+    const auto& policy_value = value.at("long_completion_policy");
+    completion_policy.response_mode =
+        policy_value.value("response_mode", completion_policy.response_mode);
+    completion_policy.max_tokens =
+        policy_value.value("max_tokens", completion_policy.max_tokens);
+    if (policy_value.contains("target_completion_tokens") &&
+        !policy_value.at("target_completion_tokens").is_null()) {
+      completion_policy.target_completion_tokens =
+          policy_value.at("target_completion_tokens").get<int>();
+    }
+    completion_policy.max_continuations =
+        policy_value.value("max_continuations", completion_policy.max_continuations);
+    completion_policy.max_total_completion_tokens = policy_value.value(
+        "max_total_completion_tokens",
+        completion_policy.max_total_completion_tokens);
+    completion_policy.max_elapsed_time_ms =
+        policy_value.value("max_elapsed_time_ms", completion_policy.max_elapsed_time_ms);
+    if (policy_value.contains("semantic_goal") &&
+        !policy_value.at("semantic_goal").is_null()) {
+      completion_policy.semantic_goal = policy_value.at("semantic_goal").get<std::string>();
+    }
+    interaction.long_completion_policy = std::move(completion_policy);
+  }
   return interaction;
 }
 

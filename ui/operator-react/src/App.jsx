@@ -477,6 +477,7 @@ function buildNewPlaneTemplate() {
       plane_shared_disk_name: "plane-new-plane-shared",
       control_root: "/comet/shared/control/new-plane",
       plane_mode: "compute",
+      placement_target: "local",
       bootstrap_model: {
         model_id: "model-id",
         served_model_name: "model-id",
@@ -491,9 +492,25 @@ function buildNewPlaneTemplate() {
         default_response_language: "ru",
         supported_response_languages: ["en", "de", "uk", "ru"],
         follow_user_language: true,
+        completion_policy: {
+          response_mode: "normal",
+          max_tokens: 512,
+          max_continuations: 0,
+          max_total_completion_tokens: 512,
+          max_elapsed_time_ms: 30000,
+        },
+        long_completion_policy: {
+          response_mode: "very_long",
+          max_tokens: 1024,
+          max_continuations: 6,
+          max_total_completion_tokens: 6144,
+          max_elapsed_time_ms: 120000,
+          semantic_goal:
+            "complete the requested artifact fully before emitting [[TASK_COMPLETE]]",
+        },
       },
       inference: {
-        primary_infer_node: "node-a",
+        primary_infer_node: "local-hostd",
         net_if: "eth0",
         models_root: "/comet/shared/models",
         gguf_cache_dir: "/comet/shared/models/gguf",
@@ -513,7 +530,7 @@ function buildNewPlaneTemplate() {
       runtime_gpu_nodes: [],
       nodes: [
         {
-          name: "node-a",
+          name: "local-hostd",
           platform: "linux",
           gpu_devices: ["0"],
           gpu_memory_mb: {
@@ -527,7 +544,7 @@ function buildNewPlaneTemplate() {
           kind: "plane-shared",
           plane_name: "new-plane",
           owner_name: "",
-          node_name: "node-a",
+          node_name: "local-hostd",
           host_path: "/comet/disks/new-plane/shared",
           container_path: "/comet/shared",
           size_gb: 40,
@@ -537,7 +554,7 @@ function buildNewPlaneTemplate() {
           kind: "infer-private",
           plane_name: "new-plane",
           owner_name: "infer-new-plane",
-          node_name: "node-a",
+          node_name: "local-hostd",
           host_path: "/comet/disks/new-plane/infer-private",
           container_path: "/comet/infer-private",
           size_gb: 20,
@@ -547,7 +564,7 @@ function buildNewPlaneTemplate() {
           kind: "worker-private",
           plane_name: "new-plane",
           owner_name: "worker-a",
-          node_name: "node-a",
+          node_name: "local-hostd",
           host_path: "/comet/disks/new-plane/worker-private",
           container_path: "/comet/worker-private",
           size_gb: 10,
@@ -558,7 +575,7 @@ function buildNewPlaneTemplate() {
           name: "infer-new-plane",
           role: "infer",
           plane_name: "new-plane",
-          node_name: "node-a",
+          node_name: "local-hostd",
           image: "comet/infer-runtime:dev",
           command: "",
           private_disk_name: "infer-new-plane-private",
@@ -579,7 +596,7 @@ function buildNewPlaneTemplate() {
           name: "worker-a",
           role: "worker",
           plane_name: "new-plane",
-          node_name: "node-a",
+          node_name: "local-hostd",
           image: "comet/worker-runtime:dev",
           command: "",
           private_disk_name: "worker-new-plane-private",
@@ -1239,6 +1256,7 @@ function App() {
         content: "",
         metrics: null,
         error: "",
+        session: null,
       },
     ]);
     setChatInput("");
@@ -1280,6 +1298,44 @@ function App() {
           return;
         }
         const payload = JSON.parse(data);
+        if (event === "segment_started") {
+          setChatMessages((current) =>
+            current.map((item) =>
+              item.id === assistantId
+                ? {
+                    ...item,
+                    session: {
+                      ...(item.session || {}),
+                      segmentCount: Math.max(
+                        item.session?.segmentCount || 0,
+                        (payload.segment_index ?? 0) + 1,
+                      ),
+                      status: "in_progress",
+                    },
+                  }
+                : item,
+            ),
+          );
+          return;
+        }
+        if (event === "continuation_started") {
+          setChatMessages((current) =>
+            current.map((item) =>
+              item.id === assistantId
+                ? {
+                    ...item,
+                    session: {
+                      ...(item.session || {}),
+                      continuationCount: payload.continuation_index ?? 0,
+                      status: "in_progress",
+                      stopReason: payload.reason || "",
+                    },
+                  }
+                : item,
+            ),
+          );
+          return;
+        }
         if (event === "delta") {
           setChatMessages((current) =>
             current.map((item) =>
@@ -1290,11 +1346,32 @@ function App() {
           );
           return;
         }
-        if (event === "complete") {
+        if (event === "segment_complete") {
+          setChatMessages((current) =>
+            current.map((item) =>
+              item.id === assistantId
+                ? {
+                    ...item,
+                    session: {
+                      ...(item.session || {}),
+                      lastSegmentFinishReason: payload.finish_reason || "",
+                      segmentCount: Math.max(
+                        item.session?.segmentCount || 0,
+                        (payload.segment_index ?? 0) + 1,
+                      ),
+                    },
+                  }
+                : item,
+            ),
+          );
+          return;
+        }
+        if (event === "session_complete" || event === "complete") {
+          const session = payload.session || payload;
           const latencyMs =
             payload.latency_ms ??
             Math.max(1, Math.round(performance.now() - startedAt));
-          const usage = payload.usage || {};
+          const usage = payload.usage || session.usage || {};
           const completionTokens = usage.completion_tokens ?? 0;
           const totalTokens = usage.total_tokens ?? 0;
           const tokensPerSecond =
@@ -1309,6 +1386,48 @@ function App() {
                       completionTokens,
                       totalTokens,
                       tokensPerSecond,
+                    },
+                    session: {
+                      ...(item.session || {}),
+                      status:
+                        payload.completion_status ||
+                        session.status ||
+                        "completed",
+                      stopReason:
+                        payload.stop_reason ||
+                        session.stop_reason ||
+                        "",
+                      continuationCount:
+                        payload.continuation_count ??
+                        session.continuation_count ??
+                        0,
+                      segmentCount:
+                        payload.segment_count ??
+                        session.segment_count ??
+                        item.session?.segmentCount ??
+                        1,
+                    },
+                  }
+                : item,
+            ),
+          );
+          return;
+        }
+        if (event === "session_failed") {
+          const message = payload.message || "Semantic completion session failed.";
+          setChatError(message);
+          setChatMessages((current) =>
+            current.map((item) =>
+              item.id === assistantId
+                ? {
+                    ...item,
+                    error: message,
+                    session: {
+                      ...(item.session || {}),
+                      status: payload.status || "failed",
+                      stopReason: payload.message || "",
+                      continuationCount: payload.continuation_count ?? 0,
+                      segmentCount: payload.segment_count ?? item.session?.segmentCount ?? 0,
                     },
                   }
                 : item,
@@ -2277,6 +2396,24 @@ function App() {
                             <p className="chat-message-text">{message.content || (message.role === "assistant" && chatBusy ? "Streaming..." : "")}</p>
                             {message.error ? (
                               <div className="chat-error-line">{message.error}</div>
+                            ) : null}
+                            {message.session ? (
+                              <div className="chat-metrics-line">
+                                session {message.session.status || "in_progress"}
+                                {message.session.segmentCount
+                                  ? ` / ${message.session.segmentCount} segment${
+                                      message.session.segmentCount === 1 ? "" : "s"
+                                    }`
+                                  : ""}
+                                {message.session.continuationCount
+                                  ? ` / ${message.session.continuationCount} continuation${
+                                      message.session.continuationCount === 1 ? "" : "s"
+                                    }`
+                                  : ""}
+                                {message.session.stopReason
+                                  ? ` / ${message.session.stopReason}`
+                                  : ""}
+                              </div>
                             ) : null}
                             {message.metrics ? (
                               <div className="chat-metrics-line">

@@ -1,14 +1,14 @@
 {
-  "plane_name": "qwen35-9b-min",
-  "plane_shared_disk_name": "plane-qwen35-9b-min-shared",
-  "control_root": "/comet/shared/control/qwen35-9b-min",
+  "plane_name": "qwen35-35b-a3b",
+  "plane_shared_disk_name": "plane-qwen35-35b-a3b-shared",
+  "control_root": "/comet/shared/control/qwen35-35b-a3b",
   "plane_mode": "llm",
   "placement_target": "local",
   "bootstrap_model": {
-    "model_id": "qwen3.5-9b-q4-k-m",
-    "served_model_name": "qwen3.5-9b",
-    "source_url": "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/Qwen_Qwen3.5-9B-Q4_K_M.gguf?download=true",
-    "target_filename": "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+    "model_id": "qwen3.5-35b-a3b-q4-k-m",
+    "served_model_name": "qwen3.5-35b-a3b",
+    "source_url": "https://huggingface.co/bartowski/Qwen_Qwen3.5-35B-A3B-GGUF/resolve/main/Qwen_Qwen3.5-35B-A3B-Q4_K_M.gguf?download=true",
+    "target_filename": "Qwen_Qwen3.5-35B-A3B-Q4_K_M.gguf"
   },
   "interaction": {
     "system_prompt": "You are Vesper QW35. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
@@ -52,11 +52,11 @@
   "gateway": {
     "listen_host": "0.0.0.0",
     "listen_port": 8080,
-    "server_name": "qwen35-9b-min.local"
+    "server_name": "qwen35-35b-a3b.local"
   },
   "runtime_gpu_nodes": [
     {
-      "name": "worker-qwen35-9b-min",
+      "name": "worker-qwen35-35b-a3b",
       "node_name": "local-hostd",
       "gpu_device": "0",
       "placement_mode": "manual",
@@ -64,7 +64,7 @@
       "gpu_fraction": 1.0,
       "priority": 100,
       "preemptible": false,
-      "memory_cap_mb": 10240,
+      "memory_cap_mb": 28672,
       "enabled": true
     }
   ],
@@ -76,70 +76,70 @@
         "0"
       ],
       "gpu_memory_mb": {
-        "0": 24576
+        "0": 32607
       }
     }
   ],
   "disks": [
     {
-      "name": "plane-qwen35-9b-min-shared",
+      "name": "plane-qwen35-35b-a3b-shared",
       "kind": "plane-shared",
-      "plane_name": "qwen35-9b-min",
-      "owner_name": "qwen35-9b-min",
+      "plane_name": "qwen35-35b-a3b",
+      "owner_name": "qwen35-35b-a3b",
       "node_name": "local-hostd",
-      "host_path": "/var/lib/comet/disks/planes/qwen35-9b-min/shared",
+      "host_path": "/var/lib/comet/disks/planes/qwen35-35b-a3b/shared",
       "container_path": "/comet/shared",
-      "size_gb": 20
+      "size_gb": 64
     },
     {
-      "name": "infer-qwen35-9b-min-private",
+      "name": "infer-qwen35-35b-a3b-private",
       "kind": "infer-private",
-      "plane_name": "qwen35-9b-min",
-      "owner_name": "infer-qwen35-9b-min",
+      "plane_name": "qwen35-35b-a3b",
+      "owner_name": "infer-qwen35-35b-a3b",
       "node_name": "local-hostd",
-      "host_path": "/var/lib/comet/disks/instances/infer-qwen35-9b-min/private",
+      "host_path": "/var/lib/comet/disks/instances/infer-qwen35-35b-a3b/private",
       "container_path": "/comet/private",
-      "size_gb": 8
+      "size_gb": 12
     },
     {
-      "name": "worker-qwen35-9b-min-private",
+      "name": "worker-qwen35-35b-a3b-private",
       "kind": "worker-private",
-      "plane_name": "qwen35-9b-min",
-      "owner_name": "worker-qwen35-9b-min",
+      "plane_name": "qwen35-35b-a3b",
+      "owner_name": "worker-qwen35-35b-a3b",
       "node_name": "local-hostd",
-      "host_path": "/var/lib/comet/disks/instances/worker-qwen35-9b-min/private",
+      "host_path": "/var/lib/comet/disks/instances/worker-qwen35-35b-a3b/private",
       "container_path": "/comet/private",
-      "size_gb": 8
+      "size_gb": 12
     }
   ],
   "instances": [
     {
-      "name": "infer-qwen35-9b-min",
+      "name": "infer-qwen35-35b-a3b",
       "role": "infer",
-      "plane_name": "qwen35-9b-min",
+      "plane_name": "qwen35-35b-a3b",
       "node_name": "local-hostd",
       "image": "comet/infer-runtime:dev",
       "command": "/runtime/infer/entrypoint.sh",
-      "private_disk_name": "infer-qwen35-9b-min-private",
-      "shared_disk_name": "plane-qwen35-9b-min-shared",
+      "private_disk_name": "infer-qwen35-35b-a3b-private",
+      "shared_disk_name": "plane-qwen35-35b-a3b-shared",
       "depends_on": [],
       "environment": {
-        "COMET_PLANE_NAME": "qwen35-9b-min",
-        "COMET_INSTANCE_NAME": "infer-qwen35-9b-min",
+        "COMET_PLANE_NAME": "qwen35-35b-a3b",
+        "COMET_INSTANCE_NAME": "infer-qwen35-35b-a3b",
         "COMET_INSTANCE_ROLE": "infer",
         "COMET_NODE_NAME": "local-hostd",
         "COMET_INFER_BOOT_MODE": "launch-runtime",
         "COMET_INFER_RUNTIME_BACKEND": "auto",
         "COMET_CONTROLLER_URL": "http://controller.internal:8080",
-        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-9b-min",
-        "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen35-9b-min/infer-runtime.json",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-35b-a3b",
+        "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen35-35b-a3b/infer-runtime.json",
         "COMET_INFERENCE_PORT": "8000",
         "COMET_GATEWAY_PORT": "8080",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
         "COMET_PRIVATE_DISK_PATH": "/comet/private"
       },
       "labels": {
-        "comet.plane": "qwen35-9b-min",
+        "comet.plane": "qwen35-35b-a3b",
         "comet.role": "infer",
         "comet.node": "local-hostd"
       },
@@ -148,34 +148,34 @@
       "gpu_fraction": 0.0,
       "priority": 100,
       "preemptible": false,
-      "private_disk_size_gb": 8
+      "private_disk_size_gb": 12
     },
     {
-      "name": "worker-qwen35-9b-min",
+      "name": "worker-qwen35-35b-a3b",
       "role": "worker",
-      "plane_name": "qwen35-9b-min",
+      "plane_name": "qwen35-35b-a3b",
       "node_name": "local-hostd",
       "image": "comet/worker-runtime:dev",
       "command": "/runtime/worker/entrypoint.sh",
-      "private_disk_name": "worker-qwen35-9b-min-private",
-      "shared_disk_name": "plane-qwen35-9b-min-shared",
+      "private_disk_name": "worker-qwen35-35b-a3b-private",
+      "shared_disk_name": "plane-qwen35-35b-a3b-shared",
       "depends_on": [
-        "infer-qwen35-9b-min"
+        "infer-qwen35-35b-a3b"
       ],
       "environment": {
-        "COMET_PLANE_NAME": "qwen35-9b-min",
-        "COMET_INSTANCE_NAME": "worker-qwen35-9b-min",
+        "COMET_PLANE_NAME": "qwen35-35b-a3b",
+        "COMET_INSTANCE_NAME": "worker-qwen35-35b-a3b",
         "COMET_INSTANCE_ROLE": "worker",
         "COMET_NODE_NAME": "local-hostd",
         "COMET_GPU_DEVICE": "0",
         "COMET_WORKER_BOOT_MODE": "llama-load",
-        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-9b-min",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-35b-a3b",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
         "COMET_PRIVATE_DISK_PATH": "/comet/private",
         "COMET_WORKER_RUNTIME_STATUS_PATH": "/comet/private/worker-runtime-status.json"
       },
       "labels": {
-        "comet.plane": "qwen35-9b-min",
+        "comet.plane": "qwen35-35b-a3b",
         "comet.role": "worker",
         "comet.node": "local-hostd",
         "comet.placement": "manual",
@@ -190,8 +190,8 @@
       "gpu_fraction": 1.0,
       "priority": 100,
       "preemptible": false,
-      "memory_cap_mb": 10240,
-      "private_disk_size_gb": 8
+      "memory_cap_mb": 28672,
+      "private_disk_size_gb": 12
     }
   ]
 }

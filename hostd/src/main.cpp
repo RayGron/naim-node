@@ -1272,31 +1272,83 @@ std::string SharedDiskHostPathForContainerPath(
   return (std::filesystem::path(shared_disk.host_path) / relative_path).string();
 }
 
-std::string BootstrapModelTargetPath(
+std::string FilenameFromUrl(const std::string& source_url) {
+  const auto query = source_url.find_first_of("?#");
+  const std::string without_query =
+      query == std::string::npos ? source_url : source_url.substr(0, query);
+  const std::string filename = std::filesystem::path(without_query).filename().string();
+  if (filename.empty()) {
+    throw std::runtime_error("failed to infer filename from bootstrap model URL: " + source_url);
+  }
+  return filename;
+}
+
+struct BootstrapModelArtifact {
+  std::optional<std::string> local_path;
+  std::optional<std::string> source_url;
+  std::string target_host_path;
+};
+
+std::vector<BootstrapModelArtifact> BuildBootstrapModelArtifacts(
     const comet::DesiredState& state,
     const std::string& node_name) {
   const auto& shared_disk = RequirePlaneSharedDiskForNode(state, node_name);
+  const std::filesystem::path target_root =
+      SharedDiskHostPathForContainerPath(
+          shared_disk,
+          state.inference.gguf_cache_dir,
+          "models/gguf");
+  std::vector<BootstrapModelArtifact> artifacts;
   std::string filename = "model.gguf";
-  if (state.bootstrap_model.has_value()) {
-    const auto& bootstrap_model = *state.bootstrap_model;
-    if (bootstrap_model.target_filename.has_value() && !bootstrap_model.target_filename->empty()) {
-      filename = *bootstrap_model.target_filename;
-    } else if (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) {
-      filename = std::filesystem::path(*bootstrap_model.local_path).filename().string();
-    } else if (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) {
-      filename = std::filesystem::path(*bootstrap_model.source_url).filename().string();
+  if (!state.bootstrap_model.has_value()) {
+    artifacts.push_back(BootstrapModelArtifact{
+        std::nullopt,
+        std::nullopt,
+        (target_root / filename).string(),
+    });
+    return artifacts;
+  }
+
+  const auto& bootstrap_model = *state.bootstrap_model;
+  if (!bootstrap_model.source_urls.empty()) {
+    artifacts.reserve(bootstrap_model.source_urls.size());
+    for (const auto& source_url : bootstrap_model.source_urls) {
+      artifacts.push_back(BootstrapModelArtifact{
+          std::nullopt,
+          source_url,
+          (target_root / FilenameFromUrl(source_url)).string(),
+      });
     }
+    return artifacts;
+  }
+
+  if (bootstrap_model.target_filename.has_value() && !bootstrap_model.target_filename->empty()) {
+    filename = *bootstrap_model.target_filename;
+  } else if (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) {
+    filename = std::filesystem::path(*bootstrap_model.local_path).filename().string();
+  } else if (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) {
+    filename = FilenameFromUrl(*bootstrap_model.source_url);
   }
   if (filename.empty()) {
     filename = "model.gguf";
   }
-  return (std::filesystem::path(
-              SharedDiskHostPathForContainerPath(
-                  shared_disk,
-                  state.inference.gguf_cache_dir,
-                  "models/gguf")) /
-          filename)
-      .string();
+  artifacts.push_back(BootstrapModelArtifact{
+      bootstrap_model.local_path,
+      bootstrap_model.source_url,
+      (target_root / filename).string(),
+  });
+  return artifacts;
+}
+
+std::string BootstrapModelTargetPath(
+    const comet::DesiredState& state,
+    const std::string& node_name) {
+  const auto artifacts = BuildBootstrapModelArtifacts(state, node_name);
+  if (artifacts.empty()) {
+    throw std::runtime_error(
+        "failed to resolve bootstrap model target path for plane '" + state.plane_name + "'");
+  }
+  return artifacts.front().target_host_path;
 }
 
 std::string ActiveModelPathForNode(
@@ -1391,7 +1443,11 @@ void CopyFileWithProgress(
     HostdBackend* backend,
     const std::optional<int>& assignment_id,
     const std::string& plane_name,
-    const std::string& node_name) {
+    const std::string& node_name,
+    std::size_t part_index = 0,
+    std::size_t part_count = 1,
+    std::uintmax_t aggregate_prefix = 0,
+    const std::optional<std::uintmax_t>& aggregate_total = std::nullopt) {
   const auto total_size = FileSizeIfExists(source_path);
   EnsureParentDirectory(target_path);
   const std::string temp_path = target_path + ".part";
@@ -1413,21 +1469,29 @@ void CopyFileWithProgress(
     }
     output.write(buffer.data(), count);
     copied += static_cast<std::uintmax_t>(count);
-    int percent = total_size.has_value() && *total_size > 0
-                      ? 20 + static_cast<int>((static_cast<double>(copied) / *total_size) * 40.0)
-                      : 40;
+    const std::uintmax_t overall_done = aggregate_prefix + copied;
+    int percent = 40;
+    if (aggregate_total.has_value() && *aggregate_total > 0) {
+      percent = 20 + static_cast<int>((static_cast<double>(overall_done) / *aggregate_total) * 40.0);
+    } else if (total_size.has_value() && *total_size > 0) {
+      percent = 20 + static_cast<int>((static_cast<double>(copied) / *total_size) * 40.0);
+    }
     PublishAssignmentProgress(
         backend,
         assignment_id,
         BuildAssignmentProgressPayload(
             "acquiring-model",
             "Acquiring model",
-            "Copying bootstrap model into the plane shared disk.",
+            part_count > 1
+                ? ("Copying bootstrap model part " + std::to_string(part_index + 1) + "/" +
+                   std::to_string(part_count) + " into the plane shared disk.")
+                : "Copying bootstrap model into the plane shared disk.",
             percent,
             plane_name,
             node_name,
-            copied,
-            total_size));
+            aggregate_total.has_value() ? std::optional<std::uintmax_t>(overall_done)
+                                        : std::optional<std::uintmax_t>(copied),
+            aggregate_total.has_value() ? aggregate_total : total_size));
   }
   output.close();
   if (!output.good()) {
@@ -1442,7 +1506,11 @@ void DownloadFileWithProgress(
     HostdBackend* backend,
     const std::optional<int>& assignment_id,
     const std::string& plane_name,
-    const std::string& node_name) {
+    const std::string& node_name,
+    std::size_t part_index = 0,
+    std::size_t part_count = 1,
+    std::uintmax_t aggregate_prefix = 0,
+    const std::optional<std::uintmax_t>& aggregate_total = std::nullopt) {
   EnsureParentDirectory(target_path);
   const std::string temp_path = target_path + ".part";
   std::filesystem::remove(temp_path);
@@ -1455,8 +1523,11 @@ void DownloadFileWithProgress(
       });
   while (future.wait_for(std::chrono::milliseconds(500)) != std::future_status::ready) {
     const auto bytes_done = FileSizeIfExists(temp_path).value_or(0);
+    const std::uintmax_t overall_done = aggregate_prefix + bytes_done;
     int percent = 40;
-    if (content_length.has_value() && *content_length > 0) {
+    if (aggregate_total.has_value() && *aggregate_total > 0) {
+      percent = 20 + static_cast<int>((static_cast<double>(overall_done) / *aggregate_total) * 40.0);
+    } else if (content_length.has_value() && *content_length > 0) {
       percent = 20 + static_cast<int>((static_cast<double>(bytes_done) / *content_length) * 40.0);
     }
     PublishAssignmentProgress(
@@ -1465,12 +1536,16 @@ void DownloadFileWithProgress(
         BuildAssignmentProgressPayload(
             "acquiring-model",
             "Acquiring model",
-            "Downloading bootstrap model into the plane shared disk.",
+            part_count > 1
+                ? ("Downloading bootstrap model part " + std::to_string(part_index + 1) + "/" +
+                   std::to_string(part_count) + " into the plane shared disk.")
+                : "Downloading bootstrap model into the plane shared disk.",
             percent,
             plane_name,
             node_name,
-            bytes_done,
-            content_length));
+            aggregate_total.has_value() ? std::optional<std::uintmax_t>(overall_done)
+                                        : std::optional<std::uintmax_t>(bytes_done),
+            aggregate_total.has_value() ? aggregate_total : content_length));
   }
   const int rc = future.get();
   if (rc != 0) {
@@ -1536,8 +1611,36 @@ void BootstrapPlaneModelIfNeeded(
 
   const auto& bootstrap_model = *state.bootstrap_model;
   const std::string target_path = BootstrapModelTargetPath(state, node_name);
-  bool already_present = std::filesystem::exists(target_path);
-  if (already_present && bootstrap_model.sha256.has_value()) {
+  const auto artifacts = BuildBootstrapModelArtifacts(state, node_name);
+  bool already_present = !artifacts.empty();
+  std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
+  for (const auto& artifact : artifacts) {
+    if (!std::filesystem::exists(artifact.target_host_path)) {
+      already_present = false;
+    }
+    std::optional<std::uintmax_t> expected_size;
+    if (artifact.local_path.has_value() && !artifact.local_path->empty()) {
+      expected_size = FileSizeIfExists(*artifact.local_path);
+      const auto target_size = FileSizeIfExists(artifact.target_host_path);
+      if (!expected_size.has_value() || !target_size.has_value() || *expected_size != *target_size) {
+        already_present = false;
+      }
+    } else if (artifact.source_url.has_value() && !artifact.source_url->empty()) {
+      expected_size = ProbeContentLength(*artifact.source_url);
+      const auto target_size = FileSizeIfExists(artifact.target_host_path);
+      if (!expected_size.has_value() || !target_size.has_value() || *expected_size != *target_size) {
+        already_present = false;
+      }
+    } else if (!std::filesystem::exists(artifact.target_host_path)) {
+      already_present = false;
+    }
+    if (!expected_size.has_value()) {
+      aggregate_total = std::nullopt;
+    } else if (aggregate_total.has_value()) {
+      *aggregate_total += *expected_size;
+    }
+  }
+  if (already_present && bootstrap_model.sha256.has_value() && artifacts.size() == 1) {
     PublishAssignmentProgress(
         backend,
         assignment_id,
@@ -1550,39 +1653,61 @@ void BootstrapPlaneModelIfNeeded(
             node_name));
     already_present = NormalizeLowercase(ComputeFileSha256Hex(target_path)) ==
                       NormalizeLowercase(*bootstrap_model.sha256);
-  } else if (already_present && bootstrap_model.local_path.has_value()) {
-    const auto source_size = FileSizeIfExists(*bootstrap_model.local_path);
-    const auto target_size = FileSizeIfExists(target_path);
-    already_present = source_size.has_value() && target_size.has_value() &&
-                      *source_size == *target_size;
-  } else if (already_present && bootstrap_model.source_url.has_value()) {
-    const auto remote_size = ProbeContentLength(*bootstrap_model.source_url);
-    const auto target_size = FileSizeIfExists(target_path);
-    already_present = remote_size.has_value() && target_size.has_value() &&
-                      *remote_size == *target_size;
+  } else if (bootstrap_model.sha256.has_value() && artifacts.size() > 1) {
+    throw std::runtime_error(
+        "bootstrap_model.sha256 is not supported with multipart bootstrap_model.source_urls");
   }
 
   if (!already_present) {
-    if (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) {
-      CopyFileWithProgress(
-          *bootstrap_model.local_path,
-          target_path,
-          backend,
-          assignment_id,
-          state.plane_name,
-          node_name);
-    } else if (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) {
-      DownloadFileWithProgress(
-          *bootstrap_model.source_url,
-          target_path,
-          backend,
-          assignment_id,
-          state.plane_name,
-          node_name);
+    std::uintmax_t aggregate_prefix = 0;
+    for (std::size_t index = 0; index < artifacts.size(); ++index) {
+      const auto& artifact = artifacts[index];
+      bool artifact_present = std::filesystem::exists(artifact.target_host_path);
+      std::optional<std::uintmax_t> artifact_size = FileSizeIfExists(artifact.target_host_path);
+      if (artifact.local_path.has_value() && !artifact.local_path->empty()) {
+        const auto source_size = FileSizeIfExists(*artifact.local_path);
+        artifact_present = artifact_present && source_size.has_value() && artifact_size.has_value() &&
+                           *source_size == *artifact_size;
+        if (!artifact_present) {
+          CopyFileWithProgress(
+              *artifact.local_path,
+              artifact.target_host_path,
+              backend,
+              assignment_id,
+              state.plane_name,
+              node_name,
+              index,
+              artifacts.size(),
+              aggregate_prefix,
+              aggregate_total);
+          artifact_size = FileSizeIfExists(artifact.target_host_path);
+        }
+      } else if (artifact.source_url.has_value() && !artifact.source_url->empty()) {
+        const auto remote_size = ProbeContentLength(*artifact.source_url);
+        artifact_present = artifact_present && remote_size.has_value() && artifact_size.has_value() &&
+                           *remote_size == *artifact_size;
+        if (!artifact_present) {
+          DownloadFileWithProgress(
+              *artifact.source_url,
+              artifact.target_host_path,
+              backend,
+              assignment_id,
+              state.plane_name,
+              node_name,
+              index,
+              artifacts.size(),
+              aggregate_prefix,
+              aggregate_total);
+          artifact_size = FileSizeIfExists(artifact.target_host_path);
+        }
+      }
+      if (artifact_size.has_value()) {
+        aggregate_prefix += *artifact_size;
+      }
     }
   }
 
-  if (bootstrap_model.sha256.has_value()) {
+  if (bootstrap_model.sha256.has_value() && artifacts.size() == 1) {
     PublishAssignmentProgress(
         backend,
         assignment_id,
@@ -1600,9 +1725,11 @@ void BootstrapPlaneModelIfNeeded(
     }
   }
 
-  if ((!bootstrap_model.local_path.has_value() || bootstrap_model.local_path->empty()) &&
-      (!bootstrap_model.source_url.has_value() || bootstrap_model.source_url->empty()) &&
-      !std::filesystem::exists(target_path)) {
+  const bool has_source =
+      (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) ||
+      (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) ||
+      !bootstrap_model.source_urls.empty();
+  if (!has_source && !std::filesystem::exists(target_path)) {
     RemoveFileIfExists(active_model_path);
     return;
   }

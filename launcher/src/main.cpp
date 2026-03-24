@@ -95,7 +95,7 @@ struct ControllerInstallOptions {
   bool with_hostd = false;
   bool with_web_ui = false;
   std::string compose_mode = "exec";
-  std::string node_name = "controller-local";
+  std::string node_name = "local-hostd";
 };
 
 struct HostdInstallOptions {
@@ -120,7 +120,7 @@ struct ControllerRunOptions {
   std::string controller_upstream;
   std::string compose_mode = "exec";
   std::string hostd_compose_mode = "exec";
-  std::string node_name = "controller-local";
+  std::string node_name = "local-hostd";
   fs::path runtime_root;
   fs::path state_root;
   int hostd_poll_interval_sec = 2;
@@ -334,11 +334,7 @@ GeneratedConfig LoadGeneratedConfig(const fs::path& path) {
 }
 
 std::string DefaultNodeName() {
-  char buffer[256]{};
-  if (gethostname(buffer, sizeof(buffer) - 1) == 0 && buffer[0] != '\0') {
-    return std::string(buffer);
-  }
-  return "node-local";
+  return "local-hostd";
 }
 
 std::string ReadTextFile(const fs::path& path) {
