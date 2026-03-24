@@ -5,10 +5,8 @@
   "plane_mode": "llm",
   "placement_target": "local",
   "bootstrap_model": {
-    "model_id": "qwen3.5-9b-q4-k-m",
-    "served_model_name": "qwen3.5-9b",
-    "source_url": "https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF/resolve/main/Qwen_Qwen3.5-9B-Q4_K_M.gguf?download=true",
-    "target_filename": "Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+    "model_id": "Qwen/Qwen3.5-9B",
+    "served_model_name": "qwen3.5-9b"
   },
   "interaction": {
     "system_prompt": "You are Vesper QW35. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
@@ -37,7 +35,7 @@
   },
   "inference": {
     "primary_infer_node": "local-hostd",
-    "runtime_engine": "llama.cpp",
+    "runtime_engine": "vllm",
     "net_if": "eth0",
     "models_root": "/comet/shared/models",
     "model_cache_dir": "/comet/shared/models/cache",
@@ -47,7 +45,7 @@
     "tensor_parallel_size": 1,
     "pipeline_parallel_size": 1,
     "max_num_seqs": 16,
-    "gpu_memory_utilization": 0.9,
+    "gpu_memory_utilization": 0.85,
     "enforce_eager": false,
     "gguf_cache_dir": "/comet/shared/models/gguf",
     "infer_log_dir": "/comet/shared/logs/infer",
@@ -66,7 +64,7 @@
       "node_name": "local-hostd",
       "gpu_device": "0",
       "gpu_fraction": 1.0,
-      "memory_cap_mb": 10240
+      "memory_cap_mb": 32768
     }
   ],
   "nodes": [
@@ -90,7 +88,7 @@
       "node_name": "local-hostd",
       "host_path": "/var/lib/comet/disks/planes/qwen35-9b-min/shared",
       "container_path": "/comet/shared",
-      "size_gb": 20
+      "size_gb": 40
     },
     {
       "name": "infer-qwen35-9b-min-private",
@@ -181,7 +179,7 @@
       },
       "gpu_device": "0",
       "gpu_fraction": 1.0,
-      "memory_cap_mb": 10240,
+      "memory_cap_mb": 32768,
       "private_disk_size_gb": 8
     }
   ]

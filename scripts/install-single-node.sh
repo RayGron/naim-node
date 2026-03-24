@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--with-vllm-worker] [--skip-prereqs] [--skip-image-build]
+  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--without-vllm-worker] [--skip-prereqs] [--skip-image-build]
 
 Builds comet-node on the current Linux host, installs controller+local-hostd as systemd services,
 and starts them.
@@ -18,7 +18,7 @@ build_type="Debug"
 listen_port="18080"
 node_name="local-hostd"
 with_web_ui="no"
-with_vllm_worker="no"
+with_vllm_worker="yes"
 skip_prereqs="no"
 skip_image_build="no"
 
@@ -40,8 +40,8 @@ while [[ $# -gt 0 ]]; do
       with_web_ui="yes"
       shift
       ;;
-    --with-vllm-worker)
-      with_vllm_worker="yes"
+    --without-vllm-worker)
+      with_vllm_worker="no"
       shift
       ;;
     --skip-prereqs)
