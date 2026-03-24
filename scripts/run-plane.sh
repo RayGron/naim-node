@@ -7,7 +7,7 @@ Usage:
   run-plane.sh [plane-name] [--controller-url <url>] [--artifacts-root <path>] [--wait-seconds <n>] [--cpu]
 
 Loads config/<plane-name>/desired-state.json into the local controller, starts the plane,
-and waits until interaction/status reports ready.
+and waits until interaction/status reports ready. The desired state is taken directly from the repo.
 EOF
 }
 
@@ -92,6 +92,18 @@ wait_for_http() {
   return 1
 }
 
+resolve_docker() {
+  if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+    echo "docker"
+    return 0
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker version >/dev/null 2>&1; then
+    echo "sudo -n docker"
+    return 0
+  fi
+  echo ""
+}
+
 download_to_cache_if_needed() {
   local source_url="$1"
   local target_path="$2"
@@ -139,6 +151,7 @@ force_cpu = sys.argv[5] == "yes"
 
 state = json.loads(desired_state_path.read_text())
 bootstrap = state.get("bootstrap_model") or {}
+runtime_engine = (state.get("inference") or {}).get("runtime_engine", "llama.cpp")
 
 def sanitize(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", value)
@@ -161,6 +174,13 @@ if single_source_url and not bootstrap.get("local_path"):
         model_dir_name = sanitize(bootstrap.get("model_id") or plane_name)
         bootstrap["local_path"] = str(model_cache_root / model_dir_name / filename)
 
+if runtime_engine == "vllm" and not bootstrap.get("local_path") and not single_source_url and not source_urls:
+    model_id = bootstrap.get("model_id") or plane_name
+    model_dir = model_cache_root / "vllm"
+    for part in model_id.split("/"):
+        model_dir /= sanitize(part)
+    bootstrap["local_path"] = str(model_dir)
+
 if force_cpu:
     state.setdefault("inference", {})["llama_gpu_layers"] = 0
 
@@ -177,24 +197,43 @@ bootstrap = state.get("bootstrap_model") or {}
 print(bootstrap.get("local_path", ""))
 print("yes" if bootstrap.get("source_urls") else "no")
 print(state.get("gateway", {}).get("listen_port", ""))
+print((state.get("inference") or {}).get("runtime_engine", "llama.cpp"))
+print(bootstrap.get("model_id", ""))
+print(bootstrap.get("source_url", ""))
 PY
 )"
 bootstrap_cached_path="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '1p')"
 bootstrap_is_multipart="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '2p')"
 gateway_port="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '3p')"
+runtime_engine="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '4p')"
+bootstrap_model_id="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '5p')"
+bootstrap_source_url="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '6p')"
 
 if [[ "${bootstrap_is_multipart}" != "yes" ]] && [[ -n "${bootstrap_cached_path}" ]]; then
-  source_url="$(
-    python3 - <<'PY' "${desired_state_path}"
-import json
-import sys
-state = json.load(open(sys.argv[1]))
-bootstrap = state.get("bootstrap_model") or {}
-print(bootstrap.get("source_url", ""))
-PY
-)"
-  if [[ -n "${source_url}" ]]; then
-    download_to_cache_if_needed "${source_url}" "${bootstrap_cached_path}"
+  if [[ "${runtime_engine}" == "vllm" ]] && [[ -z "${bootstrap_source_url}" ]]; then
+    docker_cmd="$(resolve_docker)"
+    if [[ -z "${docker_cmd}" ]]; then
+      echo "error: docker is required to prepare a vLLM model cache" >&2
+      exit 1
+    fi
+    if ! ${docker_cmd} image inspect comet/worker-vllm-runtime:dev >/dev/null 2>&1; then
+      echo "error: comet/worker-vllm-runtime:dev is missing. Run ./scripts/install-single-node.sh --with-vllm-worker first." >&2
+      exit 1
+    fi
+    if [[ -f "${bootstrap_cached_path}/config.json" ]]; then
+      echo "[run-plane] reusing cached vLLM model ${bootstrap_cached_path}"
+    else
+      echo "[run-plane] downloading Hugging Face model ${bootstrap_model_id} to shared cache ${bootstrap_cached_path}"
+      mkdir -p "$(dirname -- "${bootstrap_cached_path}")"
+      model_cache_mount="$(dirname -- "${model_cache_root}")"
+      model_cache_target="${bootstrap_cached_path}"
+      ${docker_cmd} run --rm \
+        -v "${model_cache_mount}:${model_cache_mount}" \
+        comet/worker-vllm-runtime:dev \
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${bootstrap_model_id}', local_dir='${model_cache_target}', local_dir_use_symlinks=False)"
+    fi
+  elif [[ -n "${bootstrap_source_url}" ]]; then
+    download_to_cache_if_needed "${bootstrap_source_url}" "${bootstrap_cached_path}"
   fi
 fi
 

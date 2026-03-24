@@ -1,0 +1,175 @@
+{
+  "plane_name": "qwen25-0.5b-vllm-smoke",
+  "plane_shared_disk_name": "plane-qwen25-0.5b-vllm-smoke-shared",
+  "control_root": "/comet/shared/control/qwen25-0.5b-vllm-smoke",
+  "plane_mode": "llm",
+  "placement_target": "local",
+  "bootstrap_model": {
+    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+    "served_model_name": "qwen2.5-0.5b-instruct"
+  },
+  "interaction": {
+    "system_prompt": "Reply concisely and directly.",
+    "default_response_language": "en",
+    "supported_response_languages": [
+      "en",
+      "de",
+      "uk",
+      "ru"
+    ],
+    "completion_policy": {
+      "response_mode": "normal",
+      "max_tokens": 256,
+      "max_continuations": 0,
+      "max_total_completion_tokens": 256,
+      "max_elapsed_time_ms": 30000
+    }
+  },
+  "inference": {
+    "primary_infer_node": "local-hostd",
+    "runtime_engine": "vllm",
+    "net_if": "eth0",
+    "models_root": "/comet/shared/models",
+    "model_cache_dir": "/comet/shared/models/cache",
+    "runtime_log_dir": "/comet/shared/logs/infer",
+    "api_port": 8000,
+    "max_model_len": 2048,
+    "tensor_parallel_size": 1,
+    "pipeline_parallel_size": 1,
+    "max_num_seqs": 8,
+    "gpu_memory_utilization": 0.2,
+    "enforce_eager": false,
+    "gguf_cache_dir": "/comet/shared/models/gguf",
+    "infer_log_dir": "/comet/shared/logs/infer",
+    "llama_port": 8000,
+    "llama_ctx_size": 2048,
+    "llama_threads": 4,
+    "llama_gpu_layers": 99
+  },
+  "gateway": {
+    "listen_port": 18087,
+    "server_name": "qwen25-0.5b-vllm-smoke.local"
+  },
+  "runtime_gpu_nodes": [
+    {
+      "name": "worker-qwen25-0.5b-vllm-smoke",
+      "node_name": "local-hostd",
+      "gpu_device": "0",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 16384
+    }
+  ],
+  "nodes": [
+    {
+      "name": "local-hostd",
+      "platform": "linux",
+      "gpu_devices": [
+        "0"
+      ],
+      "gpu_memory_mb": {
+        "0": 24576
+      }
+    }
+  ],
+  "disks": [
+    {
+      "name": "plane-qwen25-0.5b-vllm-smoke-shared",
+      "kind": "plane-shared",
+      "plane_name": "qwen25-0.5b-vllm-smoke",
+      "owner_name": "qwen25-0.5b-vllm-smoke",
+      "node_name": "local-hostd",
+      "host_path": "/var/lib/comet/disks/planes/qwen25-0.5b-vllm-smoke/shared",
+      "container_path": "/comet/shared",
+      "size_gb": 12
+    },
+    {
+      "name": "infer-qwen25-0.5b-vllm-smoke-private",
+      "kind": "infer-private",
+      "plane_name": "qwen25-0.5b-vllm-smoke",
+      "owner_name": "infer-qwen25-0.5b-vllm-smoke",
+      "node_name": "local-hostd",
+      "host_path": "/var/lib/comet/disks/instances/infer-qwen25-0.5b-vllm-smoke/private",
+      "container_path": "/comet/private",
+      "size_gb": 8
+    },
+    {
+      "name": "worker-qwen25-0.5b-vllm-smoke-private",
+      "kind": "worker-private",
+      "plane_name": "qwen25-0.5b-vllm-smoke",
+      "owner_name": "worker-qwen25-0.5b-vllm-smoke",
+      "node_name": "local-hostd",
+      "host_path": "/var/lib/comet/disks/instances/worker-qwen25-0.5b-vllm-smoke/private",
+      "container_path": "/comet/private",
+      "size_gb": 8
+    }
+  ],
+  "instances": [
+    {
+      "name": "infer-qwen25-0.5b-vllm-smoke",
+      "role": "infer",
+      "plane_name": "qwen25-0.5b-vllm-smoke",
+      "node_name": "local-hostd",
+      "image": "comet/infer-runtime:dev",
+      "command": "/runtime/infer/entrypoint.sh",
+      "private_disk_name": "infer-qwen25-0.5b-vllm-smoke-private",
+      "shared_disk_name": "plane-qwen25-0.5b-vllm-smoke-shared",
+      "environment": {
+        "COMET_PLANE_NAME": "qwen25-0.5b-vllm-smoke",
+        "COMET_INSTANCE_NAME": "infer-qwen25-0.5b-vllm-smoke",
+        "COMET_INSTANCE_ROLE": "infer",
+        "COMET_NODE_NAME": "local-hostd",
+        "COMET_INFER_BOOT_MODE": "launch-runtime",
+        "COMET_INFER_RUNTIME_BACKEND": "worker-vllm",
+        "COMET_CONTROLLER_URL": "http://controller.internal:8080",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen25-0.5b-vllm-smoke",
+        "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen25-0.5b-vllm-smoke/infer-runtime.json",
+        "COMET_INFERENCE_PORT": "8000",
+        "COMET_GATEWAY_PORT": "18087",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private"
+      },
+      "labels": {
+        "comet.plane": "qwen25-0.5b-vllm-smoke",
+        "comet.role": "infer",
+        "comet.node": "local-hostd"
+      },
+      "private_disk_size_gb": 8
+    },
+    {
+      "name": "worker-qwen25-0.5b-vllm-smoke",
+      "role": "worker",
+      "plane_name": "qwen25-0.5b-vllm-smoke",
+      "node_name": "local-hostd",
+      "image": "comet/worker-vllm-runtime:dev",
+      "command": "/runtime/worker/entrypoint.sh",
+      "private_disk_name": "worker-qwen25-0.5b-vllm-smoke-private",
+      "shared_disk_name": "plane-qwen25-0.5b-vllm-smoke-shared",
+      "environment": {
+        "COMET_PLANE_NAME": "qwen25-0.5b-vllm-smoke",
+        "COMET_INSTANCE_NAME": "worker-qwen25-0.5b-vllm-smoke",
+        "COMET_INSTANCE_ROLE": "worker",
+        "COMET_NODE_NAME": "local-hostd",
+        "COMET_GPU_DEVICE": "0",
+        "COMET_WORKER_BOOT_MODE": "vllm-openai",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen25-0.5b-vllm-smoke",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private",
+        "COMET_WORKER_RUNTIME_STATUS_PATH": "/comet/private/worker-runtime-status.json"
+      },
+      "labels": {
+        "comet.plane": "qwen25-0.5b-vllm-smoke",
+        "comet.role": "worker",
+        "comet.node": "local-hostd",
+        "comet.placement": "manual",
+        "comet.placement.mode": "manual",
+        "comet.placement.action": "manual",
+        "comet.requested.node": "local-hostd",
+        "comet.requested.gpu": "0"
+      },
+      "gpu_device": "0",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 16384,
+      "private_disk_size_gb": 8
+    }
+  ]
+}

@@ -1546,13 +1546,14 @@ std::vector<BootstrapModelArtifact> BuildBootstrapModelArtifacts(
     const comet::DesiredState& state,
     const std::string& node_name) {
   const auto& shared_disk = RequirePlaneSharedDiskForNode(state, node_name);
+  const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
   const std::filesystem::path target_root =
       SharedDiskHostPathForContainerPath(
           shared_disk,
-          state.inference.gguf_cache_dir,
-          "models/gguf");
+          use_vllm_runtime ? state.inference.model_cache_dir : state.inference.gguf_cache_dir,
+          use_vllm_runtime ? "models/cache" : "models/gguf");
   std::vector<BootstrapModelArtifact> artifacts;
-  std::string filename = "model.gguf";
+  std::string filename = use_vllm_runtime ? "model" : "model.gguf";
   if (!state.bootstrap_model.has_value()) {
     artifacts.push_back(BootstrapModelArtifact{
         std::nullopt,
@@ -1583,7 +1584,7 @@ std::vector<BootstrapModelArtifact> BuildBootstrapModelArtifacts(
     filename = FilenameFromUrl(*bootstrap_model.source_url);
   }
   if (filename.empty()) {
-    filename = "model.gguf";
+    filename = use_vllm_runtime ? "model" : "model.gguf";
   }
   artifacts.push_back(BootstrapModelArtifact{
       bootstrap_model.local_path,
@@ -1630,6 +1631,31 @@ std::string BootstrapRuntimeModelPath(
 
 std::optional<std::uintmax_t> FileSizeIfExists(const std::string& path) {
   std::error_code error;
+  if (!std::filesystem::exists(path, error) || error) {
+    return std::nullopt;
+  }
+  if (std::filesystem::is_directory(path, error)) {
+    if (error) {
+      return std::nullopt;
+    }
+    std::uintmax_t total = 0;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(path, error)) {
+      if (error) {
+        return std::nullopt;
+      }
+      if (!entry.is_regular_file(error)) {
+        if (error) {
+          return std::nullopt;
+        }
+        continue;
+      }
+      total += entry.file_size(error);
+      if (error) {
+        return std::nullopt;
+      }
+    }
+    return total;
+  }
   const auto size = std::filesystem::file_size(path, error);
   if (error) {
     return std::nullopt;
@@ -1705,6 +1731,81 @@ void CopyFileWithProgress(
     std::size_t part_count = 1,
     std::uintmax_t aggregate_prefix = 0,
     const std::optional<std::uintmax_t>& aggregate_total = std::nullopt) {
+  if (std::filesystem::is_directory(source_path)) {
+    const auto total_size = FileSizeIfExists(source_path);
+    const std::filesystem::path source_root(source_path);
+    const std::filesystem::path target_root(target_path);
+    const std::filesystem::path temp_root = target_root.string() + ".partdir";
+    std::filesystem::remove_all(temp_root);
+    std::filesystem::create_directories(temp_root);
+    std::uintmax_t copied = 0;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(source_root)) {
+      const auto relative = entry.path().lexically_relative(source_root);
+      const auto temp_target = temp_root / relative;
+      if (entry.is_directory()) {
+        std::filesystem::create_directories(temp_target);
+        continue;
+      }
+      if (!entry.is_regular_file()) {
+        continue;
+      }
+      EnsureParentDirectory(temp_target.string());
+      std::ifstream input(entry.path(), std::ios::binary);
+      if (!input.is_open()) {
+        throw std::runtime_error(
+            "failed to open bootstrap model source file: " + entry.path().string());
+      }
+      std::ofstream output(temp_target, std::ios::binary | std::ios::trunc);
+      if (!output.is_open()) {
+        throw std::runtime_error(
+            "failed to open bootstrap model target file: " + temp_target.string());
+      }
+      std::array<char, 1024 * 1024> buffer{};
+      while (input.good()) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto count = input.gcount();
+        if (count <= 0) {
+          break;
+        }
+        output.write(buffer.data(), count);
+        copied += static_cast<std::uintmax_t>(count);
+        const std::uintmax_t overall_done = aggregate_prefix + copied;
+        int percent = 40;
+        if (aggregate_total.has_value() && *aggregate_total > 0) {
+          percent =
+              20 + static_cast<int>((static_cast<double>(overall_done) / *aggregate_total) * 40.0);
+        } else if (total_size.has_value() && *total_size > 0) {
+          percent = 20 + static_cast<int>((static_cast<double>(copied) / *total_size) * 40.0);
+        }
+        PublishAssignmentProgress(
+            backend,
+            assignment_id,
+            BuildAssignmentProgressPayload(
+                "acquiring-model",
+                "Acquiring model",
+                part_count > 1
+                    ? ("Copying bootstrap model part " + std::to_string(part_index + 1) + "/" +
+                       std::to_string(part_count) + " into the plane shared disk.")
+                    : "Copying bootstrap model into the plane shared disk.",
+                percent,
+                plane_name,
+                node_name,
+                aggregate_total.has_value() ? std::optional<std::uintmax_t>(overall_done)
+                                            : std::optional<std::uintmax_t>(copied),
+                aggregate_total.has_value() ? aggregate_total : total_size));
+      }
+      output.close();
+      if (!output.good()) {
+        throw std::runtime_error(
+            "failed to write bootstrap model target file: " + temp_target.string());
+      }
+    }
+    std::filesystem::remove_all(target_root);
+    EnsureParentDirectory(target_root.string());
+    std::filesystem::rename(temp_root, target_root);
+    return;
+  }
+
   const auto total_size = FileSizeIfExists(source_path);
   EnsureParentDirectory(target_path);
   const std::string temp_path = target_path + ".part";
@@ -1898,6 +1999,10 @@ void BootstrapPlaneModelIfNeeded(
     }
   }
   if (already_present && bootstrap_model.sha256.has_value() && artifacts.size() == 1) {
+    if (std::filesystem::is_directory(target_path)) {
+      throw std::runtime_error(
+          "bootstrap_model.sha256 is not supported for directory-based bootstrap models");
+    }
     PublishAssignmentProgress(
         backend,
         assignment_id,
@@ -1965,6 +2070,10 @@ void BootstrapPlaneModelIfNeeded(
   }
 
   if (bootstrap_model.sha256.has_value() && artifacts.size() == 1) {
+    if (std::filesystem::is_directory(target_path)) {
+      throw std::runtime_error(
+          "bootstrap_model.sha256 is not supported for directory-based bootstrap models");
+    }
     PublishAssignmentProgress(
         backend,
         assignment_id,

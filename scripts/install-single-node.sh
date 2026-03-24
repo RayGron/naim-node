@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--skip-prereqs] [--skip-image-build]
+  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--with-vllm-worker] [--skip-prereqs] [--skip-image-build]
 
 Builds comet-node on the current Linux host, installs controller+local-hostd as systemd services,
 and starts them.
@@ -18,6 +18,7 @@ build_type="Debug"
 listen_port="18080"
 node_name="local-hostd"
 with_web_ui="no"
+with_vllm_worker="no"
 skip_prereqs="no"
 skip_image_build="no"
 
@@ -37,6 +38,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-web-ui)
       with_web_ui="yes"
+      shift
+      ;;
+    --with-vllm-worker)
+      with_vllm_worker="yes"
       shift
       ;;
     --skip-prereqs)
@@ -241,7 +246,11 @@ if [[ "${skip_image_build}" != "yes" ]]; then
   if [[ "${with_web_ui}" != "yes" ]]; then
     image_build_args+=(--skip-web-ui)
   fi
-  run_as_root env PATH="${PATH}" HOME="${HOME}" "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
+  image_build_env=(env PATH="${PATH}" HOME="${HOME}")
+  if [[ "${with_vllm_worker}" == "yes" ]]; then
+    image_build_env+=(COMET_BUILD_VLLM_WORKER=yes)
+  fi
+  run_as_root "${image_build_env[@]}" "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
 fi
 
 build_dir="$("${script_dir}/print-host-build-dir.sh")"

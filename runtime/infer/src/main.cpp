@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -69,10 +70,13 @@ struct RuntimeConfig {
   std::string control_root;
   std::string controller_url;
   std::string primary_infer_node;
+  std::string runtime_engine = "llama.cpp";
   std::string net_if;
   std::string models_root;
+  std::string model_cache_dir;
   std::string gguf_cache_dir;
   std::string infer_log_dir;
+  int api_port = 8000;
   int llama_port = 8000;
   int llama_ctx_size = 8192;
   int llama_threads = 8;
@@ -113,6 +117,11 @@ struct HttpRequest {
   std::string body;
 };
 
+struct UpstreamTarget {
+  std::string host;
+  int port = 80;
+};
+
 struct AssistantTextFilterState {
   std::string raw_text;
   std::string emitted_text;
@@ -120,6 +129,7 @@ struct AssistantTextFilterState {
 
 std::string Trim(const std::string& value);
 std::string JsonString(const json& object, const char* key);
+std::string Lowercase(std::string value);
 
 void SendResponse(int client_fd, const SimpleResponse& response);
 
@@ -170,6 +180,60 @@ json LoadJsonOrDefault(const fs::path& path, json fallback) {
     return fallback;
   }
   return LoadJsonFile(path);
+}
+
+UpstreamTarget ParseHttpUrl(const std::string& url) {
+  constexpr std::string_view kHttpPrefix = "http://";
+  if (url.rfind(std::string(kHttpPrefix), 0) != 0) {
+    Throw("unsupported url (expected http://): " + url);
+  }
+  std::string remainder = url.substr(kHttpPrefix.size());
+  const std::size_t slash = remainder.find('/');
+  const std::string authority =
+      slash == std::string::npos ? remainder : remainder.substr(0, slash);
+  const std::size_t colon = authority.rfind(':');
+  if (authority.empty()) {
+    Throw("http url is missing host: " + url);
+  }
+  UpstreamTarget target;
+  if (colon == std::string::npos) {
+    target.host = authority;
+    target.port = 80;
+  } else {
+    target.host = authority.substr(0, colon);
+    target.port = std::stoi(authority.substr(colon + 1));
+  }
+  return target;
+}
+
+int ConnectTcpHost(const std::string& host, int port) {
+  addrinfo hints{};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_protocol = IPPROTO_TCP;
+
+  addrinfo* results = nullptr;
+  const std::string service = std::to_string(port);
+  const int rc = getaddrinfo(host.c_str(), service.c_str(), &hints, &results);
+  if (rc != 0) {
+    return -1;
+  }
+
+  int fd = -1;
+  for (addrinfo* current = results; current != nullptr; current = current->ai_next) {
+    fd = socket(current->ai_family, current->ai_socktype, current->ai_protocol);
+    if (fd < 0) {
+      continue;
+    }
+    if (connect(fd, current->ai_addr, current->ai_addrlen) == 0) {
+      break;
+    }
+    close(fd);
+    fd = -1;
+  }
+
+  freeaddrinfo(results);
+  return fd;
 }
 
 bool ActiveModelLooksLikeQwen(const json& active_model) {
@@ -447,7 +511,7 @@ void PrintUsage() {
       << "  comet-inferctl doctor [--config <path>] [--checks <csv>]\n"
       << "  comet-inferctl bootstrap-dry-run [--config <path>] [--profile <name>] [--profiles <path>] [--apply]\n"
       << "  comet-inferctl launch-embedded-runtime [--config <path>]\n"
-      << "  comet-inferctl launch-runtime [--config <path>] [--backend <auto|embedded|llama>]\n"
+      << "  comet-inferctl launch-runtime [--config <path>] [--backend <auto|embedded|llama|worker-vllm>]\n"
       << "  comet-inferctl probe-url <url>\n";
 }
 
@@ -545,12 +609,17 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
   config.controller_url = Require<std::string>(control, "controller_url", "control");
   config.primary_infer_node =
       Require<std::string>(inference, "primary_infer_node", "inference");
+  config.runtime_engine =
+      inference.value("runtime_engine", config.runtime_engine);
   config.net_if = Require<std::string>(inference, "net_if", "inference");
   config.models_root =
       ExpandUserPath(Require<std::string>(inference, "models_root", "inference"));
+  config.model_cache_dir =
+      ExpandUserPath(inference.value("model_cache_dir", config.models_root));
   config.gguf_cache_dir =
       ExpandUserPath(Require<std::string>(inference, "gguf_cache_dir", "inference"));
   config.infer_log_dir = ExpandUserPath(Require<std::string>(inference, "infer_log_dir", "inference"));
+  config.api_port = inference.value("api_port", config.api_port);
   config.llama_port = Require<int>(inference, "llama_port", "inference");
   config.llama_ctx_size = inference.value("llama_ctx_size", config.llama_ctx_size);
   config.llama_threads = inference.value("llama_threads", config.llama_threads);
@@ -607,6 +676,7 @@ std::vector<fs::path> RuntimeDirs(const RuntimeConfig& config) {
   return {
       fs::path(config.control_root),
       fs::path(config.models_root),
+      fs::path(config.model_cache_dir),
       fs::path(config.gguf_cache_dir),
       fs::path(config.infer_log_dir),
   };
@@ -699,9 +769,9 @@ json BuildGatewayPayload(const RuntimeConfig& config) {
       {"listen_port", config.gateway_listen_port},
       {"server_name", config.gateway_server_name},
       {"proxy_health_url", "http://127.0.0.1:8001/health"},
-      {"upstream_health_url", "http://127.0.0.1:" + std::to_string(config.llama_port) + "/health"},
+      {"upstream_health_url", "http://127.0.0.1:" + std::to_string(config.api_port) + "/health"},
       {"upstream_models_url",
-       "http://127.0.0.1:" + std::to_string(config.llama_port) + "/v1/models"},
+       "http://127.0.0.1:" + std::to_string(config.api_port) + "/v1/models"},
       {"active_served_model_name", active_model.value("served_model_name", std::string{})},
       {"active_model_id", active_model.value("model_id", std::string{})},
   };
@@ -752,9 +822,9 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.gateway_listen =
       config.gateway_listen_host + ":" + std::to_string(config.gateway_listen_port);
   status.upstream_models_url =
-      "http://127.0.0.1:" + std::to_string(config.llama_port) + "/v1/models";
+      "http://127.0.0.1:" + std::to_string(config.api_port) + "/v1/models";
   status.inference_health_url =
-      "http://127.0.0.1:" + std::to_string(config.llama_port) + "/health";
+      "http://127.0.0.1:" + std::to_string(config.api_port) + "/health";
   status.gateway_health_url =
       "http://127.0.0.1:" + std::to_string(config.gateway_listen_port) + "/health";
   status.started_at = started_at;
@@ -1249,6 +1319,92 @@ bool SendAll(int fd, const std::string& payload) {
   return true;
 }
 
+std::string ForceConnectionClose(const std::string& request_text) {
+  const std::size_t headers_end = request_text.find("\r\n\r\n");
+  if (headers_end == std::string::npos) {
+    return request_text;
+  }
+  const std::string header_text = request_text.substr(0, headers_end);
+  const std::string body = request_text.substr(headers_end + 4);
+  std::stringstream stream(header_text);
+  std::string first_line;
+  std::getline(stream, first_line);
+  if (!first_line.empty() && first_line.back() == '\r') {
+    first_line.pop_back();
+  }
+
+  std::ostringstream out;
+  out << first_line << "\r\n";
+  bool wrote_connection_header = false;
+  std::string line;
+  while (std::getline(stream, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (line.empty()) {
+      continue;
+    }
+    const std::size_t colon = line.find(':');
+    if (colon == std::string::npos) {
+      out << line << "\r\n";
+      continue;
+    }
+    const std::string key = Lowercase(Trim(line.substr(0, colon)));
+    if (key == "connection") {
+      out << "Connection: close\r\n";
+      wrote_connection_header = true;
+      continue;
+    }
+    out << line << "\r\n";
+  }
+  if (!wrote_connection_header) {
+    out << "Connection: close\r\n";
+  }
+  out << "\r\n" << body;
+  return out.str();
+}
+
+bool ProxyHttpRequest(
+    int client_fd,
+    const std::string& request_data,
+    const UpstreamTarget& upstream) {
+  const int upstream_fd = ConnectTcpHost(upstream.host, upstream.port);
+  if (upstream_fd < 0) {
+    return false;
+  }
+
+  const std::string proxied_request = ForceConnectionClose(request_data);
+  if (!SendAll(upstream_fd, proxied_request)) {
+    shutdown(upstream_fd, SHUT_RDWR);
+    close(upstream_fd);
+    return false;
+  }
+
+  std::array<char, 8192> buffer{};
+  bool received_any_response = false;
+  while (true) {
+    const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
+    if (read_count < 0) {
+      shutdown(upstream_fd, SHUT_RDWR);
+      close(upstream_fd);
+      return false;
+    }
+    if (read_count == 0) {
+      break;
+    }
+    received_any_response = true;
+    if (!SendAll(client_fd, std::string(buffer.data(), static_cast<std::size_t>(read_count)))) {
+      shutdown(upstream_fd, SHUT_RDWR);
+      close(upstream_fd);
+      return false;
+    }
+  }
+
+  shutdown(upstream_fd, SHUT_RDWR);
+  close(upstream_fd);
+  return received_any_response;
+}
+
 bool SendSseHeaders(int client_fd) {
   std::ostringstream out;
   out << "HTTP/1.1 200 OK\r\n";
@@ -1542,12 +1698,14 @@ class LocalHttpServer {
       int port,
       std::string service_name,
       const RuntimeConfig& config,
-      LlamaLibraryEngine* engine)
+      LlamaLibraryEngine* engine,
+      std::optional<UpstreamTarget> upstream = std::nullopt)
       : host_(std::move(host)),
         port_(port),
         service_name_(std::move(service_name)),
         config_(config),
-        engine_(engine) {}
+        engine_(engine),
+        upstream_(std::move(upstream)) {}
 
   void Start() {
     listen_fd_ = CreateListenSocket(host_, port_);
@@ -1618,12 +1776,19 @@ class LocalHttpServer {
       }
     }
     if (!request_data.empty()) {
-      const HttpRequest request = ParseHttpRequest(request_data);
-      if (RequestWantsStream(request)) {
-        HandleStreamingChatRequest(client_fd, config_, request, engine_);
+      if (upstream_.has_value()) {
+        if (!ProxyHttpRequest(client_fd, request_data, *upstream_)) {
+          SendErrorResponse(client_fd, 503, "upstream runtime is unavailable");
+        }
       } else {
-        const SimpleResponse response = HandleLocalRequest(config_, request, service_name_, engine_);
-        SendResponse(client_fd, response);
+        const HttpRequest request = ParseHttpRequest(request_data);
+        if (RequestWantsStream(request)) {
+          HandleStreamingChatRequest(client_fd, config_, request, engine_);
+        } else {
+          const SimpleResponse response =
+              HandleLocalRequest(config_, request, service_name_, engine_);
+          SendResponse(client_fd, response);
+        }
       }
     }
     shutdown(client_fd, SHUT_RDWR);
@@ -1635,6 +1800,7 @@ class LocalHttpServer {
   std::string service_name_;
   RuntimeConfig config_;
   LlamaLibraryEngine* engine_ = nullptr;
+  std::optional<UpstreamTarget> upstream_;
   std::thread worker_;
   std::atomic<bool> running_{false};
   int listen_fd_ = -1;
@@ -1651,31 +1817,16 @@ bool ProbeUrl(const std::string& url) {
   }
   std::string remainder = url.substr(kHttpPrefix.size());
   const std::size_t slash = remainder.find('/');
-  const std::string authority = slash == std::string::npos ? remainder : remainder.substr(0, slash);
   const std::string path = slash == std::string::npos ? "/" : remainder.substr(slash);
-  const std::size_t colon = authority.find(':');
-  const std::string host = colon == std::string::npos ? authority : authority.substr(0, colon);
-  const int port = colon == std::string::npos ? 80 : std::stoi(authority.substr(colon + 1));
+  const UpstreamTarget target = ParseHttpUrl(url);
 
-  const int fd = socket(AF_INET, SOCK_STREAM, 0);
+  const int fd = ConnectTcpHost(target.host, target.port);
   if (fd < 0) {
     return false;
   }
 
-  sockaddr_in addr{};
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(static_cast<uint16_t>(port));
-  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
-    close(fd);
-    return false;
-  }
-  if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-    close(fd);
-    return false;
-  }
-
   const std::string request =
-      "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
+      "GET " + path + " HTTP/1.1\r\nHost: " + target.host + "\r\nConnection: close\r\n\r\n";
   if (send(fd, request.c_str(), request.size(), 0) < 0) {
     close(fd);
     return false;
@@ -1695,11 +1846,12 @@ void PrintConfigSummary(const RuntimeConfig& config) {
   std::cout << "plane_name=" << config.plane_name << "\n";
   std::cout << "control_root=" << config.control_root << "\n";
   std::cout << "controller_url=" << config.controller_url << "\n";
+  std::cout << "runtime_engine=" << config.runtime_engine << "\n";
   std::cout << "gpu_node_count=" << config.gpu_nodes.size() << "\n";
   std::cout << "enabled_gpu_node_count=" << EnabledGpuNodeCount(config) << "\n";
   std::cout << "primary_infer_node=" << config.primary_infer_node << "\n";
   std::cout << "models_root=" << config.models_root << "\n";
-  std::cout << "llama_port=" << config.llama_port << "\n";
+  std::cout << "api_port=" << config.api_port << "\n";
   std::cout << "gateway=" << config.gateway_listen_host << ":" << config.gateway_listen_port << "\n";
 }
 
@@ -2071,8 +2223,9 @@ void StopRuntime(const RuntimeConfig& config, bool apply, const std::string& bac
 
 void PrintLaunchPlan(const RuntimeConfig& config) {
   std::cout << "launch-plan:\n";
+  std::cout << "  runtime_engine=" << config.runtime_engine << "\n";
   std::cout << "  primary-infer=node:" << config.primary_infer_node
-            << " llama_port:" << config.llama_port
+            << " api_port:" << config.api_port
             << " ctx_size:" << config.llama_ctx_size
             << " threads:" << config.llama_threads
             << " gpu_layers:" << config.llama_gpu_layers
@@ -2093,9 +2246,15 @@ void PrintLaunchPlan(const RuntimeConfig& config) {
                 << " gpu:" << gpu_device << " fraction:" << gpu_fraction << "\n";
     }
   }
-  std::cout << "  llama.cpp=head:" << config.primary_infer_node << " port:" << config.llama_port
-            << " gguf_cache_dir:" << config.gguf_cache_dir << " log_dir:" << config.infer_log_dir
-            << "\n";
+  if (config.runtime_engine == "vllm") {
+    std::cout << "  vllm=head:" << config.primary_infer_node << " port:" << config.api_port
+              << " model_cache_dir:" << config.model_cache_dir
+              << " log_dir:" << config.infer_log_dir << "\n";
+  } else {
+    std::cout << "  llama.cpp=head:" << config.primary_infer_node << " port:" << config.llama_port
+              << " gguf_cache_dir:" << config.gguf_cache_dir
+              << " log_dir:" << config.infer_log_dir << "\n";
+  }
   std::cout << "  gateway=listen:" << config.gateway_listen_host << ":" << config.gateway_listen_port
             << " server_name:" << config.gateway_server_name << "\n";
 }
@@ -2176,18 +2335,27 @@ class LocalRuntime {
       const RuntimeConfig& config,
       std::string backend,
       std::string started_at,
-      std::unique_ptr<LlamaLibraryEngine> engine)
+      std::unique_ptr<LlamaLibraryEngine> engine,
+      std::optional<UpstreamTarget> upstream = std::nullopt)
       : config_(config),
         backend_(std::move(backend)),
         started_at_(std::move(started_at)),
         engine_(std::move(engine)),
-        inference_server_("0.0.0.0", config.llama_port, "comet-llama-local", config, engine_.get()),
+        upstream_(std::move(upstream)),
+        inference_server_(
+            "0.0.0.0",
+            config.api_port,
+            "comet-inference-local",
+            config,
+            engine_.get(),
+            upstream_),
         gateway_server_(
             config.gateway_listen_host,
             config.gateway_listen_port,
             "comet-gateway-local",
             config,
-            engine_.get()) {}
+            engine_.get(),
+            upstream_) {}
 
   int Run() {
     std::signal(SIGINT, SignalHandler);
@@ -2213,6 +2381,7 @@ class LocalRuntime {
   std::string backend_;
   std::string started_at_;
   std::unique_ptr<LlamaLibraryEngine> engine_;
+  std::optional<UpstreamTarget> upstream_;
   LocalHttpServer inference_server_;
   LocalHttpServer gateway_server_;
 };
@@ -2237,6 +2406,20 @@ int LaunchLlamaRuntime(const RuntimeConfig& config) {
   return runtime.Run();
 }
 
+int LaunchWorkerVllmRuntime(const RuntimeConfig& config) {
+  const char* upstream_url = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
+  if (upstream_url == nullptr || std::strlen(upstream_url) == 0) {
+    Throw("worker-vllm backend requires COMET_INFER_VLLM_UPSTREAM_URL");
+  }
+  LocalRuntime runtime(
+      config,
+      "worker-vllm",
+      UtcNowIso(),
+      nullptr,
+      ParseHttpUrl(upstream_url));
+  return runtime.Run();
+}
+
 int LaunchRuntime(const RuntimeConfig& config, const std::string& requested_backend) {
   if (requested_backend == "embedded") {
     return LaunchEmbeddedRuntime(config, "embedded");
@@ -2244,8 +2427,14 @@ int LaunchRuntime(const RuntimeConfig& config, const std::string& requested_back
   if (requested_backend == "llama") {
     return LaunchLlamaRuntime(config);
   }
+  if (requested_backend == "worker-vllm" || requested_backend == "vllm") {
+    return LaunchWorkerVllmRuntime(config);
+  }
   if (requested_backend != "auto") {
     Throw("unsupported backend: " + requested_backend);
+  }
+  if (config.runtime_engine == "vllm") {
+    return LaunchWorkerVllmRuntime(config);
   }
   const json active_model = LoadActiveModel(config);
   if (active_model.empty()) {
