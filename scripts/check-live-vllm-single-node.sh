@@ -150,7 +150,9 @@ print(control_root.rstrip("/") + "/worker-upstream.json")
 PY
 )"
 "${docker_cmd[@]}" exec "${infer_container}" test -f "${worker_upstream_path}"
-"${docker_cmd[@]}" exec "${infer_container}" python3 - <<'PY' "${worker_upstream_path}"
+worker_upstream_json="${tmp_dir}/worker-upstream.json"
+"${docker_cmd[@]}" exec "${infer_container}" cat "${worker_upstream_path}" >"${worker_upstream_json}"
+python3 - <<'PY' "${worker_upstream_json}"
 import json
 import pathlib
 import sys
