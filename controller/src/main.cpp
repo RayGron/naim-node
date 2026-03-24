@@ -2110,10 +2110,18 @@ json BuildContinuationPayload(
       messages.push_back(message);
     }
   }
+  const std::string recent_assistant_context =
+      accumulated_text.empty() ? std::string{} : Utf8SafeSuffix(accumulated_text, 4096);
   const std::string trailing_excerpt =
       accumulated_text.empty() ? std::string{} : Utf8SafeSuffix(accumulated_text, 256);
   const int remaining_completion_tokens =
       std::max(0, policy.max_total_completion_tokens - total_completion_tokens);
+  if (!recent_assistant_context.empty()) {
+    messages.push_back(json{
+        {"role", "assistant"},
+        {"content", recent_assistant_context},
+    });
+  }
   messages.push_back(json{
       {"role", "user"},
       {"content",
