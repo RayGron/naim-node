@@ -19,7 +19,6 @@
       "uk",
       "ru"
     ],
-    "follow_user_language": true,
     "completion_policy": {
       "response_mode": "normal",
       "max_tokens": 512,
@@ -45,13 +44,10 @@
     "llama_port": 8000,
     "llama_ctx_size": 4096,
     "llama_threads": 4,
-    "llama_gpu_layers": 99,
-    "inference_healthcheck_retries": 300,
-    "inference_healthcheck_interval_sec": 5
+    "llama_gpu_layers": 99
   },
   "gateway": {
-    "listen_host": "0.0.0.0",
-    "listen_port": 8080,
+    "listen_port": 18083,
     "server_name": "qwen35-27b.local"
   },
   "runtime_gpu_nodes": [
@@ -59,13 +55,8 @@
       "name": "worker-qwen35-27b",
       "node_name": "local-hostd",
       "gpu_device": "0",
-      "placement_mode": "manual",
-      "share_mode": "exclusive",
       "gpu_fraction": 1.0,
-      "priority": 100,
-      "preemptible": false,
-      "memory_cap_mb": 28672,
-      "enabled": true
+      "memory_cap_mb": 28672
     }
   ],
   "nodes": [
@@ -122,7 +113,6 @@
       "command": "/runtime/infer/entrypoint.sh",
       "private_disk_name": "infer-qwen35-27b-private",
       "shared_disk_name": "plane-qwen35-27b-shared",
-      "depends_on": [],
       "environment": {
         "COMET_PLANE_NAME": "qwen35-27b",
         "COMET_INSTANCE_NAME": "infer-qwen35-27b",
@@ -134,7 +124,7 @@
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-27b",
         "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen35-27b/infer-runtime.json",
         "COMET_INFERENCE_PORT": "8000",
-        "COMET_GATEWAY_PORT": "8080",
+        "COMET_GATEWAY_PORT": "18083",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
         "COMET_PRIVATE_DISK_PATH": "/comet/private"
       },
@@ -143,11 +133,6 @@
         "comet.role": "infer",
         "comet.node": "local-hostd"
       },
-      "placement_mode": "manual",
-      "share_mode": "exclusive",
-      "gpu_fraction": 0.0,
-      "priority": 100,
-      "preemptible": false,
       "private_disk_size_gb": 12
     },
     {
@@ -185,11 +170,7 @@
         "comet.requested.gpu": "0"
       },
       "gpu_device": "0",
-      "placement_mode": "manual",
-      "share_mode": "exclusive",
       "gpu_fraction": 1.0,
-      "priority": 100,
-      "preemptible": false,
       "memory_cap_mb": 28672,
       "private_disk_size_gb": 12
     }
