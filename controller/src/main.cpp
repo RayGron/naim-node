@@ -1491,8 +1491,24 @@ bool TryConsumeSseFrame(std::string& buffer, InteractionSseFrame* frame) {
     if (!line.empty() && line.back() == '\r') {
       line.pop_back();
     }
+    const std::string trimmed_line = Trim(line);
     if (line.empty() || line[0] == ':') {
       continue;
+    }
+    if (!trimmed_line.empty()) {
+      const std::size_t extensions = trimmed_line.find(';');
+      const std::string chunk_size_candidate =
+          Trim(trimmed_line.substr(0, extensions == std::string::npos ? trimmed_line.size()
+                                                                      : extensions));
+      const bool looks_like_chunk_size =
+          !chunk_size_candidate.empty() &&
+          std::all_of(
+              chunk_size_candidate.begin(),
+              chunk_size_candidate.end(),
+              [](unsigned char ch) { return std::isxdigit(ch) != 0; });
+      if (looks_like_chunk_size) {
+        continue;
+      }
     }
     if (line.rfind("event:", 0) == 0) {
       frame->event_name = Trim(line.substr(6));
@@ -4883,7 +4899,66 @@ void StreamPlaneInteractionSse(
       }
       const auto handle_frame = [&](const InteractionSseFrame& frame) {
         if (frame.data == "[DONE]") {
+          if (!saw_complete) {
+            complete_payload = json{
+                {"model", session.model},
+                {"finish_reason", "stop"},
+                {"usage",
+                 json{
+                     {"prompt_tokens", 0},
+                     {"completion_tokens", 0},
+                     {"total_tokens", 0},
+                 }},
+            };
+            saw_complete = true;
+          }
           return false;
+        }
+        if (frame.event_name == "message") {
+          if (frame.data.empty()) {
+            return true;
+          }
+          const json chunk_payload = json::parse(frame.data);
+          if (session.model.empty()) {
+            session.model = chunk_payload.value("model", std::string{});
+          }
+          if (chunk_payload.contains("choices") && chunk_payload.at("choices").is_array() &&
+              !chunk_payload.at("choices").empty()) {
+            const json& choice = chunk_payload.at("choices").at(0);
+            std::string delta_text;
+            if (choice.contains("delta") && choice.at("delta").is_object()) {
+              delta_text = choice.at("delta").value("content", std::string{});
+            }
+            const std::string filtered = ConsumeCompletionMarkerFilteredChunk(
+                filter_state,
+                delta_text,
+                policy.completion_marker,
+                false);
+            if (!filtered.empty()) {
+              result.cleaned_text += filtered;
+              if (!SendInteractionSseEvent(
+                      client_fd,
+                      "delta",
+                      json{
+                          {"session_id", session.session_id},
+                          {"segment_index", segment_index},
+                          {"continuation_index", segment_index},
+                          {"model", chunk_payload.value("model", std::string{})},
+                          {"delta", filtered},
+                      })) {
+                throw std::runtime_error("failed to write downstream delta");
+              }
+            }
+            if (choice.contains("finish_reason") && !choice.at("finish_reason").is_null()) {
+              complete_payload = json{
+                  {"model", chunk_payload.value("model", std::string{})},
+                  {"finish_reason", choice.value("finish_reason", std::string{"stop"})},
+                  {"usage", ExtractInteractionUsage(chunk_payload)},
+              };
+              saw_complete = true;
+            }
+          }
+          return true;
         }
         if (frame.event_name == "delta") {
           if (frame.data.empty()) {
