@@ -130,7 +130,11 @@ echo "[install-single-node] building host binaries (${build_type})"
 
 if [[ "${skip_image_build}" != "yes" ]]; then
   echo "[install-single-node] building runtime images"
-  run_as_root env PATH="${PATH}" HOME="${HOME}" "${script_dir}/build-runtime-images.sh"
+  image_build_args=()
+  if [[ "${with_web_ui}" != "yes" ]]; then
+    image_build_args+=(--skip-web-ui)
+  fi
+  run_as_root env PATH="${PATH}" HOME="${HOME}" "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
 fi
 
 build_dir="$("${script_dir}/print-host-build-dir.sh")"

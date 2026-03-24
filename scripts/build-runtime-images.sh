@@ -4,6 +4,12 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
+skip_web_ui="no"
+if [[ "${1:-}" == "--skip-web-ui" ]]; then
+  skip_web_ui="yes"
+  shift
+fi
+
 resolve_docker() {
   if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
     echo "docker"
@@ -45,14 +51,18 @@ echo "building ${worker_tag}"
   -t "${worker_tag}" \
   "${repo_root}"
 
-echo "building ${web_ui_tag}"
-"${docker_cmd}" build \
-  -f "${repo_root}/runtime/web-ui/Dockerfile" \
-  -t "${web_ui_tag}" \
-  "${repo_root}"
+if [[ "${skip_web_ui}" != "yes" ]]; then
+  echo "building ${web_ui_tag}"
+  "${docker_cmd}" build \
+    -f "${repo_root}/runtime/web-ui/Dockerfile" \
+    -t "${web_ui_tag}" \
+    "${repo_root}"
+fi
 
 echo "runtime images ready"
 echo "  base=${base_tag}"
 echo "  infer=${infer_tag}"
 echo "  worker=${worker_tag}"
-echo "  web_ui=${web_ui_tag}"
+if [[ "${skip_web_ui}" != "yes" ]]; then
+  echo "  web_ui=${web_ui_tag}"
+fi
