@@ -4,7 +4,24 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
-plane_name="${1:-qwen35-9b-min}"
+plane_name="qwen35-9b-min"
+recreate_plane="${COMET_RECREATE_PLANE:-no}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --recreate)
+      recreate_plane="yes"
+      shift
+      ;;
+    --*)
+      echo "error: unknown argument: $1" >&2
+      exit 1
+      ;;
+    *)
+      plane_name="$1"
+      shift
+      ;;
+  esac
+done
 controller_url="${COMET_CONTROLLER_URL:-http://127.0.0.1:18080}"
 web_ui_url="${COMET_WEB_UI_URL:-http://127.0.0.1:18081}"
 
@@ -52,6 +69,10 @@ worker_container=""
 worker_stopped_for_validation="no"
 
 echo "[check-live-vllm] ensuring plane ${plane_name} is running"
+if [[ "${recreate_plane}" == "yes" ]]; then
+  echo "[check-live-vllm] recreating plane ${plane_name}"
+  curl -fsS -X DELETE "${controller_url}/api/v1/planes/${plane_name}" >/dev/null || true
+fi
 "${repo_root}/scripts/run-plane.sh" "${plane_name}" >/dev/null
 infer_container="$(resolve_container_name "infer-${plane_name}")"
 worker_container="$(resolve_container_name "worker-${plane_name}")"
