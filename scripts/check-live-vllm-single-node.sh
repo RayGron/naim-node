@@ -8,10 +8,19 @@ plane_name="${1:-qwen35-9b-min}"
 controller_url="${COMET_CONTROLLER_URL:-http://127.0.0.1:18080}"
 web_ui_url="${COMET_WEB_UI_URL:-http://127.0.0.1:18081}"
 
+docker_cmd=(docker)
+if ! docker info >/dev/null 2>&1; then
+  docker_cmd=(sudo -n docker)
+fi
+if ! "${docker_cmd[@]}" info >/dev/null 2>&1; then
+  echo "error: docker is not available for live validation" >&2
+  exit 1
+fi
+
 tmp_dir="$(mktemp -d)"
 cleanup() {
   if [[ "${worker_stopped_for_validation:-no}" == "yes" ]]; then
-    docker start "${worker_container}" >/dev/null 2>&1 || true
+    "${docker_cmd[@]}" start "${worker_container}" >/dev/null 2>&1 || true
   fi
   rm -rf "${tmp_dir}"
 }
@@ -62,8 +71,8 @@ print("models=" + ",".join(item.get("id", "") for item in models))
 PY
 
 echo "[check-live-vllm] checking worker upstream contract"
-docker inspect "${infer_container}" >/dev/null
-if docker inspect "${infer_container}" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^COMET_INFER_VLLM_UPSTREAM_URL='; then
+"${docker_cmd[@]}" inspect "${infer_container}" >/dev/null
+if "${docker_cmd[@]}" inspect "${infer_container}" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^COMET_INFER_VLLM_UPSTREAM_URL='; then
   echo "error: infer container still has COMET_INFER_VLLM_UPSTREAM_URL pinned" >&2
   exit 1
 fi
@@ -79,8 +88,8 @@ assert control_root, payload
 print(control_root.rstrip("/") + "/worker-upstream.json")
 PY
 )"
-docker exec "${infer_container}" test -f "${worker_upstream_path}"
-docker exec "${infer_container}" python3 - <<'PY' "${worker_upstream_path}"
+"${docker_cmd[@]}" exec "${infer_container}" test -f "${worker_upstream_path}"
+"${docker_cmd[@]}" exec "${infer_container}" python3 - <<'PY' "${worker_upstream_path}"
 import json
 import pathlib
 import sys
@@ -156,7 +165,7 @@ print("stream=PONG")
 PY
 
 echo "[check-live-vllm] checking missing-worker failure handling"
-docker stop "${worker_container}" >/dev/null
+"${docker_cmd[@]}" stop "${worker_container}" >/dev/null
 worker_stopped_for_validation="yes"
 deadline=$((SECONDS + 60))
 status_payload=""
@@ -202,7 +211,7 @@ assert code >= 500, (code, body)
 assert "unavailable" in body.lower() or "failed" in body.lower(), body
 print(f"missing_worker_chat=http_{code}")
 PY
-docker start "${worker_container}" >/dev/null
+"${docker_cmd[@]}" start "${worker_container}" >/dev/null
 worker_stopped_for_validation="no"
 deadline=$((SECONDS + 120))
 status_payload=""
