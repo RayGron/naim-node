@@ -90,6 +90,33 @@ run_as_invoking_user() {
   "$@"
 }
 
+wait_for_http() {
+  local url="$1"
+  local attempts="${2:-30}"
+  for _ in $(seq 1 "${attempts}"); do
+    if curl -fsS "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+stop_existing_comet_processes() {
+  echo "[install-single-node] stopping existing comet services and stray processes"
+  run_as_root systemctl stop comet-node-controller.service comet-node-hostd.service >/dev/null 2>&1 || true
+
+  local patterns=(
+    "/comet-node run controller"
+    "/comet-controller serve"
+    "/comet-node run hostd"
+  )
+  local pattern
+  for pattern in "${patterns[@]}"; do
+    run_as_root pkill -f "${pattern}" >/dev/null 2>&1 || true
+  done
+}
+
 install_prereqs_if_needed() {
   if [[ "${skip_prereqs}" == "yes" ]]; then
     return
@@ -159,6 +186,8 @@ if [[ ! -x "${launcher_binary}" ]]; then
   exit 1
 fi
 
+stop_existing_comet_processes
+
 install_args=(
   install
   controller
@@ -176,6 +205,10 @@ run_as_root "${launcher_binary}" "${install_args[@]}"
 echo "[install-single-node] verifying services"
 run_as_root systemctl is-active --quiet comet-node-controller.service
 run_as_root systemctl is-active --quiet comet-node-hostd.service
+if ! wait_for_http "http://127.0.0.1:${listen_port}/health" 30; then
+  echo "error: controller health endpoint did not become ready on port ${listen_port}" >&2
+  exit 1
+fi
 
 echo "installed=ok"
 echo "controller_api_url=http://127.0.0.1:${listen_port}"
