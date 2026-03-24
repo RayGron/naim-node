@@ -916,6 +916,7 @@ kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
 http_server_pid=""
 "${build_dir}/comet-controller" render-infer-runtime --db "${db_path}" | grep -F '"gpu_nodes"' >/dev/null
+"${build_dir}/comet-controller" render-infer-runtime --db "${db_path}" | grep -F '"serving_workers"' >/dev/null
 "${build_dir}/comet-controller" render-compose --db "${db_path}" --node node-a >/dev/null
 test -f "${artifacts_root}/alpha/node-a/docker-compose.yml"
 test -f "${artifacts_root}/alpha/infer-runtime.json"
@@ -925,7 +926,7 @@ test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/http_probe.py
 test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/runtime_supervisor.py
 test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/runtime_launcher.py
 /mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh bootstrap-runtime --config "${artifacts_root}/alpha/infer-runtime.json" --profile generic | grep -F "runtime_mode=llama-library" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh plan-launch --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "primary-infer-local-worker=node:node-a worker:worker-a" >/dev/null
+/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh plan-launch --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "serving-worker=node:node-a worker:worker-a gpu:0 fraction:1 colocated_with_primary_infer:yes" >/dev/null
 mkdir -p "${infer_model_root}"
 perl -MJSON::PP -e '
   use strict;

@@ -66,6 +66,56 @@ json BuildGpuNodesJson(const DesiredState& state) {
   return gpu_nodes;
 }
 
+json BuildServingWorkersJson(const DesiredState& state) {
+  json serving_workers = json::array();
+  if (!state.runtime_gpu_nodes.empty()) {
+    for (const auto& gpu_node : state.runtime_gpu_nodes) {
+      json worker_json = {
+          {"name", gpu_node.name},
+          {"node_name", gpu_node.node_name},
+          {"gpu_device", gpu_node.gpu_device},
+          {"placement_mode", ToString(gpu_node.placement_mode)},
+          {"share_mode", ToString(gpu_node.share_mode)},
+          {"gpu_fraction", gpu_node.gpu_fraction},
+          {"priority", gpu_node.priority},
+          {"preemptible", gpu_node.preemptible},
+          {"enabled", gpu_node.enabled},
+      };
+      if (gpu_node.memory_cap_mb.has_value()) {
+        worker_json["memory_cap_mb"] = *gpu_node.memory_cap_mb;
+      }
+      worker_json["colocated_with_primary_infer"] =
+          gpu_node.node_name == state.inference.primary_infer_node;
+      serving_workers.push_back(std::move(worker_json));
+    }
+    return serving_workers;
+  }
+
+  for (const auto& instance : state.instances) {
+    if (instance.role != InstanceRole::Worker) {
+      continue;
+    }
+    json worker_json = {
+        {"name", instance.name},
+        {"node_name", instance.node_name},
+        {"gpu_device", instance.gpu_device.value_or("")},
+        {"placement_mode", ToString(instance.placement_mode)},
+        {"share_mode", ToString(instance.share_mode)},
+        {"gpu_fraction", instance.gpu_fraction},
+        {"priority", instance.priority},
+        {"preemptible", instance.preemptible},
+        {"enabled", true},
+        {"colocated_with_primary_infer",
+         instance.node_name == state.inference.primary_infer_node},
+    };
+    if (instance.memory_cap_mb.has_value()) {
+      worker_json["memory_cap_mb"] = *instance.memory_cap_mb;
+    }
+    serving_workers.push_back(std::move(worker_json));
+  }
+  return serving_workers;
+}
+
 }  // namespace
 
 std::string RenderInferRuntimeConfigJson(const DesiredState& state) {
@@ -86,6 +136,7 @@ std::string RenderInferRuntimeConfigJson(const DesiredState& state) {
                                   : infer.environment.at("COMET_CONTROLLER_URL")},
        }},
       {"gpu_nodes", BuildGpuNodesJson(state)},
+      {"serving_workers", BuildServingWorkersJson(state)},
       {"inference",
        {
            {"primary_infer_node", state.inference.primary_infer_node},

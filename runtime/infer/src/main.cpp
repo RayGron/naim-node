@@ -85,6 +85,7 @@ struct RuntimeConfig {
   int gateway_listen_port = 80;
   std::string gateway_server_name;
   json gpu_nodes = json::array();
+  json serving_workers = json::array();
 };
 
 struct RuntimeProfile {
@@ -656,6 +657,7 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
   config.gateway_listen_port = Require<int>(gateway, "listen_port", "gateway");
   config.gateway_server_name = Require<std::string>(gateway, "server_name", "gateway");
   config.gpu_nodes = Require<json>(root, "gpu_nodes", "root");
+  config.serving_workers = root.value("serving_workers", config.gpu_nodes);
   return config;
 }
 
@@ -2281,21 +2283,20 @@ void PrintLaunchPlan(const RuntimeConfig& config) {
             << " threads:" << config.llama_threads
             << " gpu_layers:" << config.llama_gpu_layers
             << " net_if:" << config.net_if << "\n";
-  for (const auto& gpu_node : config.gpu_nodes) {
-    if (!gpu_node.value("enabled", true)) {
+  for (const auto& serving_worker : config.serving_workers) {
+    if (!serving_worker.value("enabled", true)) {
       continue;
     }
-    const std::string node_name = gpu_node.value("node_name", std::string{});
-    const std::string name = gpu_node.value("name", std::string{});
-    const std::string gpu_device = gpu_node.value("gpu_device", std::string{});
-    const double gpu_fraction = gpu_node.value("gpu_fraction", 0.0);
-    if (node_name == config.primary_infer_node) {
-      std::cout << "  primary-infer-local-worker=node:" << node_name << " worker:" << name
-                << " gpu:" << gpu_device << " fraction:" << gpu_fraction << "\n";
-    } else {
-      std::cout << "  inference-worker=node:" << node_name << " worker:" << name
-                << " gpu:" << gpu_device << " fraction:" << gpu_fraction << "\n";
-    }
+    const std::string node_name = serving_worker.value("node_name", std::string{});
+    const std::string name = serving_worker.value("name", std::string{});
+    const std::string gpu_device = serving_worker.value("gpu_device", std::string{});
+    const double gpu_fraction = serving_worker.value("gpu_fraction", 0.0);
+    const bool colocated_with_primary_infer =
+        serving_worker.value("colocated_with_primary_infer", node_name == config.primary_infer_node);
+    std::cout << "  serving-worker=node:" << node_name << " worker:" << name
+              << " gpu:" << gpu_device << " fraction:" << gpu_fraction
+              << " colocated_with_primary_infer:"
+              << (colocated_with_primary_infer ? "yes" : "no") << "\n";
   }
   if (config.runtime_engine == "vllm") {
     std::cout << "  vllm=head:" << config.primary_infer_node << " port:" << config.api_port
@@ -2322,24 +2323,36 @@ int RunDoctor(const RuntimeConfig& config, const std::string& checks) {
   }
   if (selected.count("topology") > 0) {
     std::cout << "[doctor topology]\n";
-    const int enabled = EnabledGpuNodeCount(config);
-    std::cout << "  enabled gpu nodes: " << (enabled > 0 ? "OK" : "FAIL") << " (" << enabled << ")\n";
-    if (enabled == 0) {
-      rc = 1;
-    }
-    bool primary_present = false;
-    for (const auto& gpu_node : config.gpu_nodes) {
-      if (gpu_node.value("enabled", true) &&
-          gpu_node.value("node_name", std::string{}) == config.primary_infer_node) {
-        primary_present = true;
-        break;
+    int enabled_serving_workers = 0;
+    int colocated_serving_workers = 0;
+    for (const auto& serving_worker : config.serving_workers) {
+      if (!serving_worker.value("enabled", true)) {
+        continue;
+      }
+      ++enabled_serving_workers;
+      const std::string node_name = serving_worker.value("node_name", std::string{});
+      const bool colocated_with_primary_infer =
+          serving_worker.value("colocated_with_primary_infer", node_name == config.primary_infer_node);
+      if (colocated_with_primary_infer) {
+        ++colocated_serving_workers;
       }
     }
-    std::cout << "  primary infer node: " << (primary_present ? "OK" : "FAIL")
-              << " (" << config.primary_infer_node << ")\n";
-    if (!primary_present) {
+    std::cout << "  enabled serving workers: "
+              << (enabled_serving_workers > 0 ? "OK" : "FAIL")
+              << " (" << enabled_serving_workers << ")\n";
+    if (enabled_serving_workers == 0) {
       rc = 1;
     }
+    const bool primary_configured = !config.primary_infer_node.empty();
+    std::cout << "  primary infer node configured: "
+              << (primary_configured ? "OK" : "FAIL")
+              << " (" << config.primary_infer_node << ")\n";
+    if (!primary_configured) {
+      rc = 1;
+    }
+    std::cout << "  colocated serving workers: "
+              << (colocated_serving_workers > 0 ? "INFO" : "INFO")
+              << " (" << colocated_serving_workers << ")\n";
   }
   if (selected.count("filesystem") > 0) {
     std::cout << "[doctor filesystem]\n";
