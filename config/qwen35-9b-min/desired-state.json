@@ -64,7 +64,7 @@
       "node_name": "local-hostd",
       "gpu_device": "0",
       "gpu_fraction": 1.0,
-      "memory_cap_mb": 32768
+      "memory_cap_mb": 24576
     }
   ],
   "nodes": [
@@ -179,7 +179,7 @@
       },
       "gpu_device": "0",
       "gpu_fraction": 1.0,
-      "memory_cap_mb": 32768,
+      "memory_cap_mb": 24576,
       "private_disk_size_gb": 8
     }
   ]
