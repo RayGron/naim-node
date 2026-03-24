@@ -3,6 +3,7 @@
 #include "comet/state_json.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -184,7 +185,30 @@ struct AutoPlacementDecision {
   int score = 0;
   bool idle_target = false;
   bool upgrade_to_exclusive = false;
+  double allocated_fraction = 0.0;
+  int allocated_memory_mb = 0;
+  int node_order = 0;
+  int gpu_order = 0;
 };
+
+std::string EffectiveWorkerSelectionPolicy(const DesiredState& state) {
+  if (!state.worker_group.worker_selection_policy.empty()) {
+    return state.worker_group.worker_selection_policy;
+  }
+  if (!state.inference.worker_selection_policy.empty()) {
+    return state.inference.worker_selection_policy;
+  }
+  return "prefer-free-then-share";
+}
+
+int AutoPlacementPolicyRank(
+    const std::string& policy,
+    const AutoPlacementDecision& candidate) {
+  if (policy == "prefer-free-then-share") {
+    return candidate.idle_target ? 0 : 1;
+  }
+  return candidate.idle_target ? 0 : 1;
+}
 
 constexpr int kMovableRelocationThreshold = 10;
 
@@ -220,7 +244,7 @@ std::optional<AutoPlacementDecision> SelectAutoPlacement(
     const std::vector<NodeInventory>& nodes,
     const std::map<std::pair<std::string, std::string>, PlacementUsage>& placement_usage,
     const InstanceSpec& worker,
-    const InferenceRuntimeSettings& inference,
+    const DesiredState& state,
     const std::optional<std::string>& requested_node_name,
     const std::optional<std::string>& requested_gpu_device,
     bool strict_node_constraint,
@@ -233,8 +257,10 @@ std::optional<AutoPlacementDecision> SelectAutoPlacement(
       worker.placement_mode == PlacementMode::Movable ? std::nullopt : requested_node_name;
   const std::optional<std::string> scoring_preferred_gpu_device =
       worker.placement_mode == PlacementMode::Movable ? std::nullopt : requested_gpu_device;
+  const std::string selection_policy = EffectiveWorkerSelectionPolicy(state);
 
-  for (const auto& node : nodes) {
+  for (std::size_t node_index = 0; node_index < nodes.size(); ++node_index) {
+    const auto& node = nodes[node_index];
     if (!NodeSupportsInstanceRole(node, worker.role)) {
       continue;
     }
@@ -242,7 +268,8 @@ std::optional<AutoPlacementDecision> SelectAutoPlacement(
       continue;
     }
 
-    for (const auto& gpu_device : node.gpu_devices) {
+    for (std::size_t gpu_index = 0; gpu_index < node.gpu_devices.size(); ++gpu_index) {
+      const auto& gpu_device = node.gpu_devices[gpu_index];
       if (strict_gpu_constraint && requested_gpu_device.has_value() &&
           gpu_device != *requested_gpu_device) {
         continue;
@@ -269,24 +296,43 @@ std::optional<AutoPlacementDecision> SelectAutoPlacement(
               node,
               gpu_device,
               usage,
-              inference,
+              state.inference,
               scoring_preferred_node_name,
               scoring_preferred_gpu_device);
       candidate.idle_target = usage.allocated_fraction <= 1e-9;
       candidate.upgrade_to_exclusive =
           candidate.idle_target &&
           (worker.share_mode != GpuShareMode::Exclusive || worker.gpu_fraction < 1.0 - 1e-9);
+      candidate.allocated_fraction = usage.allocated_fraction;
+      candidate.allocated_memory_mb = usage.allocated_memory_mb;
+      candidate.node_order = static_cast<int>(node_index);
+      candidate.gpu_order = static_cast<int>(gpu_index);
 
       if (has_current_target && node.name == *requested_node_name &&
           gpu_device == *requested_gpu_device) {
         current_target = candidate;
       }
 
-      if (!best.has_value() || candidate.score > best->score ||
-          (candidate.score == best->score &&
-           (candidate.node_name < best->node_name ||
-            (candidate.node_name == best->node_name &&
-             candidate.gpu_device < best->gpu_device)))) {
+      if (!best.has_value()) {
+        best = candidate;
+        continue;
+      }
+
+      const int candidate_rank = AutoPlacementPolicyRank(selection_policy, candidate);
+      const int best_rank = AutoPlacementPolicyRank(selection_policy, *best);
+      if (candidate_rank < best_rank ||
+          (candidate_rank == best_rank &&
+           (candidate.allocated_fraction < best->allocated_fraction - 1e-9 ||
+            (std::abs(candidate.allocated_fraction - best->allocated_fraction) <= 1e-9 &&
+             (candidate.score > best->score ||
+              (candidate.score == best->score &&
+               (candidate.node_order < best->node_order ||
+                (candidate.node_order == best->node_order &&
+                 (candidate.gpu_order < best->gpu_order ||
+                  (candidate.gpu_order == best->gpu_order &&
+                   (candidate.node_name < best->node_name ||
+                    (candidate.node_name == best->node_name &&
+                     candidate.gpu_device < best->gpu_device)))))))))))) {
         best = candidate;
       }
     }
@@ -849,7 +895,7 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
           state.nodes,
           placement_usage,
           worker,
-          state.inference,
+          state,
           requested_node_name,
           requested_gpu_device,
           strict_node_constraint,

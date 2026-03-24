@@ -15,6 +15,20 @@ namespace {
 
 constexpr double kFractionEpsilon = 1e-9;
 
+bool NodeSupportsWorkerExecutionMode(const NodeInventory& node) {
+  return node.execution_mode != HostExecutionMode::InferOnly;
+}
+
+std::string EffectiveWorkerSelectionPolicy(const DesiredState& state) {
+  if (!state.worker_group.worker_selection_policy.empty()) {
+    return state.worker_group.worker_selection_policy;
+  }
+  if (!state.inference.worker_selection_policy.empty()) {
+    return state.inference.worker_selection_policy;
+  }
+  return "prefer-free-then-share";
+}
+
 std::string JoinStrings(const std::vector<std::string>& values, const std::string& delimiter) {
   std::ostringstream out;
   for (std::size_t index = 0; index < values.size(); ++index) {
@@ -115,6 +129,25 @@ int ScorePlacementCandidate(
   score += static_cast<int>(capacity.free_fraction * 10.0);
   score -= capacity.worker_count * 10;
   return score;
+}
+
+int PlacementCandidatePolicyRank(
+    const std::string& policy,
+    const PlacementCandidate& candidate) {
+  if (policy == "prefer-free-then-share") {
+    if (candidate.idle && !candidate.preemption_required) {
+      return 0;
+    }
+    if (!candidate.idle && !candidate.preemption_required &&
+        (candidate.fits_exclusive_fraction || candidate.fits_current_fraction)) {
+      return 1;
+    }
+    if (candidate.preemption_required) {
+      return 2;
+    }
+    return 3;
+  }
+  return candidate.preemption_required ? 1 : 0;
 }
 
 std::string PlacementAction(
@@ -292,6 +325,12 @@ SchedulingPolicyReport EvaluateSchedulingPolicy(const DesiredState& state) {
     }
 
     const auto& node = node_it->second;
+    if (!NodeSupportsWorkerExecutionMode(node)) {
+      report.errors.push_back(
+          "worker '" + instance.name + "' targets node '" + instance.node_name +
+          "' which is not worker-capable");
+      continue;
+    }
     const auto gpu_it = std::find(
         node.gpu_devices.begin(), node.gpu_devices.end(), *instance.gpu_device);
     if (gpu_it == node.gpu_devices.end()) {
@@ -467,6 +506,9 @@ SchedulingPolicyReport EvaluateSchedulingPolicy(const DesiredState& state) {
   bool has_soft_share_groups = false;
   std::vector<std::string> idle_gpus;
   for (const auto& node : state.nodes) {
+    if (!NodeSupportsWorkerExecutionMode(node)) {
+      continue;
+    }
     for (const auto& gpu_device : node.gpu_devices) {
       GpuCapacitySummary summary;
       summary.node_name = node.name;
@@ -630,6 +672,7 @@ SchedulingPolicyReport EvaluateSchedulingPolicy(const DesiredState& state) {
     recommendation.current_fraction = worker.gpu_fraction;
     recommendation.current_memory_cap_mb = worker.memory_cap_mb;
 
+    const std::string selection_policy = EffectiveWorkerSelectionPolicy(state);
     for (const auto& capacity : report.capacities) {
       if (capacity.node_name == worker.node_name &&
           capacity.gpu_device == worker.gpu_device) {
@@ -704,7 +747,12 @@ SchedulingPolicyReport EvaluateSchedulingPolicy(const DesiredState& state) {
     std::sort(
         recommendation.candidates.begin(),
         recommendation.candidates.end(),
-        [](const PlacementCandidate& left, const PlacementCandidate& right) {
+        [&](const PlacementCandidate& left, const PlacementCandidate& right) {
+          const int left_rank = PlacementCandidatePolicyRank(selection_policy, left);
+          const int right_rank = PlacementCandidatePolicyRank(selection_policy, right);
+          if (left_rank != right_rank) {
+            return left_rank < right_rank;
+          }
           if (left.score != right.score) {
             return left.score > right.score;
           }
