@@ -38,13 +38,7 @@
     "pipeline_parallel_size": 1,
     "max_num_seqs": 8,
     "gpu_memory_utilization": 0.2,
-    "enforce_eager": false,
-    "gguf_cache_dir": "/comet/shared/models/gguf",
-    "infer_log_dir": "/comet/shared/logs/infer",
-    "llama_port": 18088,
-    "llama_ctx_size": 2048,
-    "llama_threads": 4,
-    "llama_gpu_layers": 99
+    "enforce_eager": false
   },
   "gateway": {
     "listen_port": 18087,

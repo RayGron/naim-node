@@ -46,13 +46,7 @@
     "pipeline_parallel_size": 1,
     "max_num_seqs": 16,
     "gpu_memory_utilization": 0.85,
-    "enforce_eager": false,
-    "gguf_cache_dir": "/comet/shared/models/gguf",
-    "infer_log_dir": "/comet/shared/logs/infer",
-    "llama_port": 8000,
-    "llama_ctx_size": 4096,
-    "llama_threads": 4,
-    "llama_gpu_layers": 99
+    "enforce_eager": false
   },
   "gateway": {
     "listen_port": 18082,
@@ -127,7 +121,7 @@
         "COMET_INSTANCE_ROLE": "infer",
         "COMET_NODE_NAME": "local-hostd",
         "COMET_INFER_BOOT_MODE": "launch-runtime",
-        "COMET_INFER_RUNTIME_BACKEND": "auto",
+        "COMET_INFER_RUNTIME_BACKEND": "worker-vllm",
         "COMET_CONTROLLER_URL": "http://controller.internal:8080",
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-9b-min",
         "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen35-9b-min/infer-runtime.json",
@@ -148,20 +142,17 @@
       "role": "worker",
       "plane_name": "qwen35-9b-min",
       "node_name": "local-hostd",
-      "image": "comet/worker-runtime:dev",
+      "image": "comet/worker-vllm-runtime:dev",
       "command": "/runtime/worker/entrypoint.sh",
       "private_disk_name": "worker-qwen35-9b-min-private",
       "shared_disk_name": "plane-qwen35-9b-min-shared",
-      "depends_on": [
-        "infer-qwen35-9b-min"
-      ],
       "environment": {
         "COMET_PLANE_NAME": "qwen35-9b-min",
         "COMET_INSTANCE_NAME": "worker-qwen35-9b-min",
         "COMET_INSTANCE_ROLE": "worker",
         "COMET_NODE_NAME": "local-hostd",
         "COMET_GPU_DEVICE": "0",
-        "COMET_WORKER_BOOT_MODE": "llama-load",
+        "COMET_WORKER_BOOT_MODE": "vllm-openai",
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-9b-min",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
         "COMET_PRIVATE_DISK_PATH": "/comet/private",
