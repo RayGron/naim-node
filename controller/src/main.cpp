@@ -925,6 +925,73 @@ HttpResponse ParseHttpResponse(const std::string& response_text) {
   return response;
 }
 
+std::optional<std::string> FindHttpHeaderValue(
+    const std::string& header_text,
+    const std::string& header_name) {
+  const std::size_t line_end = header_text.find("\r\n");
+  std::size_t offset = line_end == std::string::npos ? header_text.size() : line_end + 2;
+  while (offset < header_text.size()) {
+    const std::size_t next = header_text.find("\r\n", offset);
+    const std::string line = header_text.substr(
+        offset,
+        next == std::string::npos ? std::string::npos : next - offset);
+    const std::size_t colon = line.find(':');
+    if (colon != std::string::npos) {
+      const std::string key = Lowercase(Trim(line.substr(0, colon)));
+      if (key == Lowercase(header_name)) {
+        return Trim(line.substr(colon + 1));
+      }
+    }
+    if (next == std::string::npos) {
+      break;
+    }
+    offset = next + 2;
+  }
+  return std::nullopt;
+}
+
+bool DecodeAvailableChunkedHttpBody(
+    std::string& encoded,
+    std::string* decoded,
+    bool* stream_finished) {
+  bool progressed = false;
+  while (true) {
+    const std::size_t line_end = encoded.find("\r\n");
+    if (line_end == std::string::npos) {
+      return progressed;
+    }
+    std::string chunk_size_text = encoded.substr(0, line_end);
+    const std::size_t extensions = chunk_size_text.find(';');
+    if (extensions != std::string::npos) {
+      chunk_size_text = chunk_size_text.substr(0, extensions);
+    }
+    chunk_size_text = Trim(chunk_size_text);
+    std::size_t chunk_size = 0;
+    try {
+      chunk_size = static_cast<std::size_t>(std::stoull(chunk_size_text, nullptr, 16));
+    } catch (const std::exception&) {
+      throw std::runtime_error("invalid HTTP chunk size '" + chunk_size_text + "'");
+    }
+
+    const std::size_t chunk_data_begin = line_end + 2;
+    if (chunk_size == 0) {
+      if (encoded.size() < chunk_data_begin + 2) {
+        return progressed;
+      }
+      encoded.erase(0, chunk_data_begin + 2);
+      *stream_finished = true;
+      return true;
+    }
+
+    if (encoded.size() < chunk_data_begin + chunk_size + 2) {
+      return progressed;
+    }
+    decoded->append(encoded, chunk_data_begin, chunk_size);
+    encoded.erase(0, chunk_data_begin + chunk_size + 2);
+    progressed = true;
+  }
+}
+
 HttpResponse SendControllerHttpRequest(
     const ControllerEndpointTarget& target,
     const std::string& method,
@@ -4781,7 +4848,12 @@ void StreamPlaneInteractionSse(
         throw std::runtime_error("upstream interaction response ended before headers");
       }
 
+      const std::string header_text = response_text.substr(0, header_end);
       HttpResponse upstream = ParseHttpResponse(response_text);
+      const bool chunked_transfer =
+          FindHttpHeaderValue(header_text, "transfer-encoding").has_value() &&
+          Lowercase(*FindHttpHeaderValue(header_text, "transfer-encoding")).find("chunked") !=
+              std::string::npos;
       if (upstream.status_code != 200 ||
           upstream.content_type.find("text/event-stream") == std::string::npos) {
         while (true) {
@@ -4800,7 +4872,15 @@ void StreamPlaneInteractionSse(
       CompletionMarkerFilterState filter_state;
       json complete_payload = json::object();
       bool saw_complete = false;
-      std::string sse_buffer = upstream.body;
+      bool upstream_stream_finished = false;
+      std::string transport_buffer = upstream.body;
+      std::string sse_buffer;
+      if (chunked_transfer) {
+        DecodeAvailableChunkedHttpBody(
+            transport_buffer, &sse_buffer, &upstream_stream_finished);
+      } else {
+        sse_buffer = std::move(transport_buffer);
+      }
       const auto handle_frame = [&](const InteractionSseFrame& frame) {
         if (frame.data == "[DONE]") {
           return false;
@@ -4846,6 +4926,10 @@ void StreamPlaneInteractionSse(
       };
 
       const auto drain_frames = [&](bool final_chunk) {
+        if (chunked_transfer) {
+          DecodeAvailableChunkedHttpBody(
+              transport_buffer, &sse_buffer, &upstream_stream_finished);
+        }
         if (final_chunk && !sse_buffer.empty() &&
             sse_buffer.find("\n\n") == std::string::npos) {
           sse_buffer.append("\n\n");
@@ -4863,12 +4947,20 @@ void StreamPlaneInteractionSse(
         if (saw_complete && sse_buffer.find("[DONE]") != std::string::npos) {
           break;
         }
+        if (chunked_transfer && upstream_stream_finished) {
+          drain_frames(true);
+          break;
+        }
         const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
         if (read_count <= 0) {
           drain_frames(true);
           break;
         }
-        sse_buffer.append(buffer.data(), static_cast<std::size_t>(read_count));
+        if (chunked_transfer) {
+          transport_buffer.append(buffer.data(), static_cast<std::size_t>(read_count));
+        } else {
+          sse_buffer.append(buffer.data(), static_cast<std::size_t>(read_count));
+        }
       }
 
       const std::string final_filtered = ConsumeCompletionMarkerFilteredChunk(
