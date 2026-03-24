@@ -2121,27 +2121,47 @@ bool HostCanManageRealDisks() {
   return geteuid() == 0;
 }
 
+std::string NormalizeLoopImagePath(const std::string& image_path) {
+  std::error_code error;
+  const auto normalized = std::filesystem::weakly_canonical(image_path, error);
+  if (!error) {
+    return normalized.string();
+  }
+  return std::filesystem::path(image_path).lexically_normal().string();
+}
+
 std::optional<std::string> DetectExistingLoopDevice(const std::string& image_path) {
-  const std::string output =
-      RunCommandCapture("/usr/sbin/losetup -j " + ShellQuote(image_path) + " 2>/dev/null || true");
-  const std::string trimmed = Trim(output);
-  if (trimmed.empty()) {
-    return std::nullopt;
+  const std::array<std::string, 2> candidates = {
+      image_path,
+      NormalizeLoopImagePath(image_path),
+  };
+  for (const auto& candidate : candidates) {
+    if (candidate.empty()) {
+      continue;
+    }
+    const std::string output =
+        RunCommandCapture("/usr/sbin/losetup -j " + ShellQuote(candidate) + " 2>/dev/null || true");
+    const std::string trimmed = Trim(output);
+    if (trimmed.empty()) {
+      continue;
+    }
+    const auto colon = trimmed.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    return trimmed.substr(0, colon);
   }
-  const auto colon = trimmed.find(':');
-  if (colon == std::string::npos) {
-    return std::nullopt;
-  }
-  return trimmed.substr(0, colon);
+  return std::nullopt;
 }
 
 std::string RequireLoopDeviceForImage(const std::string& image_path) {
   if (const auto existing = DetectExistingLoopDevice(image_path); existing.has_value()) {
     return *existing;
   }
+  const std::string attach_path = NormalizeLoopImagePath(image_path);
   const std::string output =
       RunCommandCapture(
-          "/usr/sbin/losetup --find --show " + ShellQuote(image_path) + " 2>/dev/null");
+          "/usr/sbin/losetup --find --show " + ShellQuote(attach_path) + " 2>/dev/null");
   const std::string loop_device = Trim(output);
   if (loop_device.empty()) {
     throw std::runtime_error("failed to attach loop device for image '" + image_path + "'");
