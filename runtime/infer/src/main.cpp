@@ -760,6 +760,26 @@ bool CommandExists(const std::string& command) {
   return false;
 }
 
+std::string RuntimeUpstreamBaseUrl(const RuntimeConfig& config) {
+  const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
+  if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
+    return worker_vllm_upstream;
+  }
+  return "http://127.0.0.1:" + std::to_string(config.api_port);
+}
+
+std::string RuntimeUpstreamHealthUrl(const RuntimeConfig& config) {
+  return RuntimeUpstreamBaseUrl(config) + "/health";
+}
+
+std::string RuntimeUpstreamModelsUrl(const RuntimeConfig& config) {
+  return RuntimeUpstreamBaseUrl(config) + "/v1/models";
+}
+
+std::string RuntimeGatewayHealthUrl(const RuntimeConfig& config) {
+  return "http://127.0.0.1:" + std::to_string(config.gateway_listen_port) + "/health";
+}
+
 json BuildGatewayPayload(const RuntimeConfig& config) {
   const json active_model = LoadActiveModel(config);
   return json{
@@ -769,9 +789,8 @@ json BuildGatewayPayload(const RuntimeConfig& config) {
       {"listen_port", config.gateway_listen_port},
       {"server_name", config.gateway_server_name},
       {"proxy_health_url", "http://127.0.0.1:8001/health"},
-      {"upstream_health_url", "http://127.0.0.1:" + std::to_string(config.api_port) + "/health"},
-      {"upstream_models_url",
-       "http://127.0.0.1:" + std::to_string(config.api_port) + "/v1/models"},
+      {"upstream_health_url", RuntimeUpstreamHealthUrl(config)},
+      {"upstream_models_url", RuntimeUpstreamModelsUrl(config)},
       {"active_served_model_name", active_model.value("served_model_name", std::string{})},
       {"active_model_id", active_model.value("model_id", std::string{})},
   };
@@ -821,12 +840,9 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.model_path = status.cached_local_model_path;
   status.gateway_listen =
       config.gateway_listen_host + ":" + std::to_string(config.gateway_listen_port);
-  status.upstream_models_url =
-      "http://127.0.0.1:" + std::to_string(config.api_port) + "/v1/models";
-  status.inference_health_url =
-      "http://127.0.0.1:" + std::to_string(config.api_port) + "/health";
-  status.gateway_health_url =
-      "http://127.0.0.1:" + std::to_string(config.gateway_listen_port) + "/health";
+  status.upstream_models_url = RuntimeUpstreamModelsUrl(config);
+  status.inference_health_url = RuntimeUpstreamHealthUrl(config);
+  status.gateway_health_url = RuntimeGatewayHealthUrl(config);
   status.started_at = started_at;
   status.last_activity_at = started_at;
   status.ready = inference_ready && gateway_ready;
@@ -2361,22 +2377,46 @@ class LocalRuntime {
     std::signal(SIGINT, SignalHandler);
     std::signal(SIGTERM, SignalHandler);
     TouchReadyFile();
-    WriteRuntimeStatus(config_, backend_, "starting", false, false, static_cast<int>(getpid()), started_at_);
+    WriteCurrentRuntimeStatus("starting");
     inference_server_.Start();
     gateway_server_.Start();
-    WriteRuntimeStatus(config_, backend_, "running", true, true, static_cast<int>(getpid()), started_at_);
+    WriteCurrentRuntimeStatus("running");
     while (!g_stop_requested.load()) {
       std::this_thread::sleep_for(std::chrono::seconds(2));
-      WriteRuntimeStatus(config_, backend_, "running", true, true, static_cast<int>(getpid()), started_at_);
+      WriteCurrentRuntimeStatus("running");
     }
-    WriteRuntimeStatus(config_, backend_, "stopping", false, false, static_cast<int>(getpid()), started_at_);
+    WriteCurrentRuntimeStatus("stopping");
     gateway_server_.Stop();
     inference_server_.Stop();
-    WriteRuntimeStatus(config_, backend_, "stopped", false, false, static_cast<int>(getpid()), started_at_);
+    WriteCurrentRuntimeStatus("stopped");
     return 0;
   }
 
  private:
+  bool InferenceReady() const {
+    if (upstream_.has_value()) {
+      return ProbeUrl(RuntimeUpstreamHealthUrl(config_));
+    }
+    return ProbeUrl("http://127.0.0.1:" + std::to_string(config_.api_port) + "/health");
+  }
+
+  bool GatewayReady() const {
+    return ProbeUrl(RuntimeGatewayHealthUrl(config_));
+  }
+
+  void WriteCurrentRuntimeStatus(const std::string& phase) const {
+    const bool inference_ready = phase == "running" && InferenceReady();
+    const bool gateway_ready = phase == "running" && GatewayReady();
+    WriteRuntimeStatus(
+        config_,
+        backend_,
+        phase,
+        inference_ready,
+        gateway_ready,
+        static_cast<int>(getpid()),
+        started_at_);
+  }
+
   RuntimeConfig config_;
   std::string backend_;
   std::string started_at_;
