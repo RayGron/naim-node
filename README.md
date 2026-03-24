@@ -655,6 +655,8 @@ Then:
 
 - the install command builds binaries and runtime images, installs `controller + local hostd`
   as system services, and starts them
+- on GPU hosts, the install command also installs a CUDA toolkit automatically when `nvidia-smi`
+  is present but `nvcc` is not yet available
 - the run command loads `config/<plane>/desired-state.json` from the repository, starts the
   plane, and waits until `interaction/status` becomes ready
 - `config/comet-node-config.json` is the machine-level storage config for managed disks and

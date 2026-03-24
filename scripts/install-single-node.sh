@@ -148,6 +148,52 @@ install_prereqs_if_needed() {
   run_as_root apt-get install -y "${docker_packages[@]}" || run_as_root apt-get install -y docker.io || true
 }
 
+apt_package_has_candidate() {
+  local package_name="$1"
+  local policy_output
+  policy_output="$(apt-cache policy "${package_name}" 2>/dev/null || true)"
+  [[ -n "${policy_output}" ]] && ! grep -Fq 'Candidate: (none)' <<<"${policy_output}"
+}
+
+install_cuda_toolkit_if_needed() {
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    return
+  fi
+  if command -v nvcc >/dev/null 2>&1; then
+    return
+  fi
+  if [[ "${skip_prereqs}" == "yes" ]]; then
+    echo "[install-single-node] skipping CUDA toolkit install because --skip-prereqs was requested"
+    return
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "[install-single-node] skipping CUDA toolkit install: apt-get not found"
+    return
+  fi
+
+  local package_name=""
+  local candidates=(
+    cuda-toolkit-13-1
+    cuda-toolkit-13-0
+    nvidia-cuda-toolkit
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if apt_package_has_candidate "${candidate}"; then
+      package_name="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${package_name}" ]]; then
+    echo "[install-single-node] CUDA toolkit package was not found in apt sources"
+    return
+  fi
+
+  echo "[install-single-node] installing CUDA toolkit package ${package_name}"
+  run_as_root apt-get install -y "${package_name}"
+}
+
 config_summary="$(
   python3 - <<'PY' "${repo_root}/config/comet-node-config.json"
 import json
@@ -165,6 +211,7 @@ storage_root="$(printf '%s\n' "${config_summary}" | sed -n '1p')"
 model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
 install_prereqs_if_needed
+install_cuda_toolkit_if_needed
 
 echo "[install-single-node] building host binaries (${build_type})"
 run_as_invoking_user "${script_dir}/build-host.sh" "${build_type}"
