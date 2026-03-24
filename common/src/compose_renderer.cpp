@@ -83,6 +83,13 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
       }
     }
 
+    if (!service.extra_hosts.empty()) {
+      out << "    extra_hosts:\n";
+      for (const auto& extra_host : service.extra_hosts) {
+        out << "      - \"" << extra_host << "\"\n";
+      }
+    }
+
     if (!service.volumes.empty()) {
       out << "    volumes:\n";
       for (const auto& volume : service.volumes) {

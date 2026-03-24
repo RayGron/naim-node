@@ -1831,6 +1831,10 @@ PlaneInteractionResolution ResolvePlaneInteraction(
       std::max(0, desired_state->worker_group.expected_workers);
   const int ready_worker_members =
       resolution.runtime_status.has_value() ? resolution.runtime_status->registry_entries : 0;
+  const bool worker_group_degraded =
+      expected_worker_members > 0 &&
+      ready_worker_members > 0 &&
+      ready_worker_members < expected_worker_members;
   const auto local_runtime_blocker =
       DescribeUnsupportedControllerLocalRuntime(*desired_state, primary_node);
   const bool runtime_ready =
@@ -1884,6 +1888,7 @@ PlaneInteractionResolution ResolvePlaneInteraction(
            : json(desired_state->worker_group.group_id)},
       {"worker_group_expected", expected_worker_members},
       {"worker_group_ready", ready_worker_members},
+      {"degraded", worker_group_degraded},
       {"active_model_id",
        resolution.runtime_status.has_value() &&
                !resolution.runtime_status->active_model_id.empty()

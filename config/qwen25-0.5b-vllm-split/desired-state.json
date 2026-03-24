@@ -1,0 +1,302 @@
+{
+  "plane_name": "qwen25-0.5b-vllm-split",
+  "plane_shared_disk_name": "plane-qwen25-0.5b-vllm-split-shared",
+  "control_root": "/comet/shared/control/qwen25-0.5b-vllm-split",
+  "plane_mode": "llm",
+  "placement_target": "split-host",
+  "bootstrap_model": {
+    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+    "served_model_name": "qwen2.5-0.5b-instruct"
+  },
+  "interaction": {
+    "system_prompt": "Reply concisely and directly.",
+    "default_response_language": "en",
+    "supported_response_languages": [
+      "en",
+      "de",
+      "uk",
+      "ru"
+    ],
+    "completion_policy": {
+      "response_mode": "normal",
+      "max_tokens": 256,
+      "max_continuations": 0,
+      "max_total_completion_tokens": 256,
+      "max_elapsed_time_ms": 30000
+    }
+  },
+  "inference": {
+    "primary_infer_node": "infer-hostd",
+    "runtime_engine": "vllm",
+    "worker_group_id": "qwen25-0.5b-vllm-split-workers",
+    "distributed_backend": "vllm",
+    "worker_selection_policy": "prefer-free-then-share",
+    "net_if": "eth0",
+    "models_root": "/comet/shared/models",
+    "model_cache_dir": "/comet/shared/models/cache",
+    "runtime_log_dir": "/comet/shared/logs/infer",
+    "api_port": 18090,
+    "max_model_len": 2048,
+    "tensor_parallel_size": 1,
+    "pipeline_parallel_size": 1,
+    "max_num_seqs": 8,
+    "gpu_memory_utilization": 0.2,
+    "enforce_eager": false,
+    "rendezvous_port": 29510
+  },
+  "worker_group": {
+    "group_id": "qwen25-0.5b-vllm-split-workers",
+    "infer_instance_name": "infer-qwen25-0.5b-vllm-split",
+    "distributed_backend": "vllm",
+    "rendezvous_host": "infer-qwen25-0.5b-vllm-split",
+    "rendezvous_port": 29510,
+    "expected_workers": 2,
+    "worker_selection_policy": "prefer-free-then-share",
+    "members": [
+      {
+        "name": "worker-qwen25-0.5b-vllm-split-a",
+        "node_name": "worker-hostd-a",
+        "gpu_device": "0",
+        "rank": 0,
+        "gpu_fraction": 1.0,
+        "share_mode": "exclusive",
+        "priority": 100,
+        "preemptible": false,
+        "memory_cap_mb": 8192,
+        "enabled": true,
+        "leader": true
+      },
+      {
+        "name": "worker-qwen25-0.5b-vllm-split-b",
+        "node_name": "worker-hostd-b",
+        "gpu_device": "1",
+        "rank": 1,
+        "gpu_fraction": 1.0,
+        "share_mode": "exclusive",
+        "priority": 100,
+        "preemptible": false,
+        "memory_cap_mb": 8192,
+        "enabled": true,
+        "leader": false
+      }
+    ]
+  },
+  "gateway": {
+    "listen_port": 18089,
+    "server_name": "qwen25-0.5b-vllm-split.local"
+  },
+  "runtime_gpu_nodes": [
+    {
+      "name": "worker-qwen25-0.5b-vllm-split-a",
+      "node_name": "worker-hostd-a",
+      "gpu_device": "0",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 8192
+    },
+    {
+      "name": "worker-qwen25-0.5b-vllm-split-b",
+      "node_name": "worker-hostd-b",
+      "gpu_device": "1",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 8192
+    }
+  ],
+  "nodes": [
+    {
+      "name": "infer-hostd",
+      "platform": "linux",
+      "execution_mode": "infer-only",
+      "gpu_devices": [],
+      "gpu_memory_mb": {}
+    },
+    {
+      "name": "worker-hostd-a",
+      "platform": "linux",
+      "execution_mode": "worker-only",
+      "gpu_devices": [
+        "0"
+      ],
+      "gpu_memory_mb": {
+        "0": 24576
+      }
+    },
+    {
+      "name": "worker-hostd-b",
+      "platform": "linux",
+      "execution_mode": "worker-only",
+      "gpu_devices": [
+        "1"
+      ],
+      "gpu_memory_mb": {
+        "1": 24576
+      }
+    }
+  ],
+  "disks": [
+    {
+      "name": "plane-qwen25-0.5b-vllm-split-shared",
+      "kind": "plane-shared",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "owner_name": "qwen25-0.5b-vllm-split",
+      "node_name": "infer-hostd",
+      "host_path": "/var/lib/comet/disks/planes/qwen25-0.5b-vllm-split/shared",
+      "container_path": "/comet/shared",
+      "size_gb": 12
+    },
+    {
+      "name": "plane-qwen25-0.5b-vllm-split-shared",
+      "kind": "plane-shared",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "owner_name": "qwen25-0.5b-vllm-split",
+      "node_name": "worker-hostd-a",
+      "host_path": "/var/lib/comet/disks/planes/qwen25-0.5b-vllm-split/shared",
+      "container_path": "/comet/shared",
+      "size_gb": 12
+    },
+    {
+      "name": "plane-qwen25-0.5b-vllm-split-shared",
+      "kind": "plane-shared",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "owner_name": "qwen25-0.5b-vllm-split",
+      "node_name": "worker-hostd-b",
+      "host_path": "/var/lib/comet/disks/planes/qwen25-0.5b-vllm-split/shared",
+      "container_path": "/comet/shared",
+      "size_gb": 12
+    },
+    {
+      "name": "infer-qwen25-0.5b-vllm-split-private",
+      "kind": "infer-private",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "owner_name": "infer-qwen25-0.5b-vllm-split",
+      "node_name": "infer-hostd",
+      "host_path": "/var/lib/comet/disks/instances/infer-qwen25-0.5b-vllm-split/private",
+      "container_path": "/comet/private",
+      "size_gb": 8
+    },
+    {
+      "name": "worker-qwen25-0.5b-vllm-split-a-private",
+      "kind": "worker-private",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "owner_name": "worker-qwen25-0.5b-vllm-split-a",
+      "node_name": "worker-hostd-a",
+      "host_path": "/var/lib/comet/disks/instances/worker-qwen25-0.5b-vllm-split-a/private",
+      "container_path": "/comet/private",
+      "size_gb": 8
+    },
+    {
+      "name": "worker-qwen25-0.5b-vllm-split-b-private",
+      "kind": "worker-private",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "owner_name": "worker-qwen25-0.5b-vllm-split-b",
+      "node_name": "worker-hostd-b",
+      "host_path": "/var/lib/comet/disks/instances/worker-qwen25-0.5b-vllm-split-b/private",
+      "container_path": "/comet/private",
+      "size_gb": 8
+    }
+  ],
+  "instances": [
+    {
+      "name": "infer-qwen25-0.5b-vllm-split",
+      "role": "infer",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "node_name": "infer-hostd",
+      "image": "comet/infer-runtime:dev",
+      "command": "/runtime/infer/entrypoint.sh",
+      "private_disk_name": "infer-qwen25-0.5b-vllm-split-private",
+      "shared_disk_name": "plane-qwen25-0.5b-vllm-split-shared",
+      "environment": {
+        "COMET_PLANE_NAME": "qwen25-0.5b-vllm-split",
+        "COMET_INSTANCE_NAME": "infer-qwen25-0.5b-vllm-split",
+        "COMET_INSTANCE_ROLE": "infer",
+        "COMET_NODE_NAME": "infer-hostd",
+        "COMET_INFER_BOOT_MODE": "launch-runtime",
+        "COMET_INFER_RUNTIME_BACKEND": "worker-vllm",
+        "COMET_CONTROLLER_URL": "http://controller.internal:8080",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen25-0.5b-vllm-split",
+        "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen25-0.5b-vllm-split/infer-runtime.json",
+        "COMET_INFERENCE_PORT": "18090",
+        "COMET_GATEWAY_PORT": "18089",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private"
+      },
+      "labels": {
+        "comet.plane": "qwen25-0.5b-vllm-split",
+        "comet.role": "infer",
+        "comet.node": "infer-hostd"
+      },
+      "private_disk_size_gb": 8
+    },
+    {
+      "name": "worker-qwen25-0.5b-vllm-split-a",
+      "role": "worker",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "node_name": "worker-hostd-a",
+      "image": "comet/worker-vllm-runtime:dev",
+      "command": "/runtime/worker/entrypoint.sh",
+      "private_disk_name": "worker-qwen25-0.5b-vllm-split-a-private",
+      "shared_disk_name": "plane-qwen25-0.5b-vllm-split-shared",
+      "environment": {
+        "COMET_PLANE_NAME": "qwen25-0.5b-vllm-split",
+        "COMET_INSTANCE_NAME": "worker-qwen25-0.5b-vllm-split-a",
+        "COMET_INSTANCE_ROLE": "worker",
+        "COMET_NODE_NAME": "worker-hostd-a",
+        "COMET_GPU_DEVICE": "0",
+        "COMET_WORKER_BOOT_MODE": "vllm-openai",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen25-0.5b-vllm-split",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private",
+        "COMET_WORKER_RUNTIME_STATUS_PATH": "/comet/private/worker-runtime-status.json"
+      },
+      "labels": {
+        "comet.plane": "qwen25-0.5b-vllm-split",
+        "comet.role": "worker",
+        "comet.node": "worker-hostd-a",
+        "comet.placement": "manual",
+        "comet.placement.mode": "manual",
+        "comet.placement.action": "manual",
+        "comet.requested.node": "worker-hostd-a",
+        "comet.requested.gpu": "0"
+      },
+      "gpu_device": "0",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 8192,
+      "private_disk_size_gb": 8
+    },
+    {
+      "name": "worker-qwen25-0.5b-vllm-split-b",
+      "role": "worker",
+      "plane_name": "qwen25-0.5b-vllm-split",
+      "node_name": "worker-hostd-b",
+      "image": "comet/worker-vllm-runtime:dev",
+      "command": "/runtime/worker/entrypoint.sh",
+      "private_disk_name": "worker-qwen25-0.5b-vllm-split-b-private",
+      "shared_disk_name": "plane-qwen25-0.5b-vllm-split-shared",
+      "environment": {
+        "COMET_PLANE_NAME": "qwen25-0.5b-vllm-split",
+        "COMET_INSTANCE_NAME": "worker-qwen25-0.5b-vllm-split-b",
+        "COMET_INSTANCE_ROLE": "worker",
+        "COMET_NODE_NAME": "worker-hostd-b",
+        "COMET_GPU_DEVICE": "1",
+        "COMET_WORKER_BOOT_MODE": "vllm-openai",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/qwen25-0.5b-vllm-split",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private",
+        "COMET_WORKER_RUNTIME_STATUS_PATH": "/comet/private/worker-runtime-status.json"
+      },
+      "labels": {
+        "comet.plane": "qwen25-0.5b-vllm-split",
+        "comet.role": "worker",
+        "comet.node": "worker-hostd-b",
+        "comet.placement": "manual",
+        "comet.placement.mode": "manual",
+        "comet.placement.action": "manual",
+        "comet.requested.node": "worker-hostd-b",
+        "comet.requested.gpu": "1"
+      },
+      "gpu_device": "1",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 8192,
+      "private_disk_size_gb": 8
+    }
+  ]
+}
