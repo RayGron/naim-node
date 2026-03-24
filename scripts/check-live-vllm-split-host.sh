@@ -146,9 +146,9 @@ start_hostd_loop "worker-hostd-a" "worker-only"
 start_hostd_loop "worker-hostd-b" "worker-only"
 
 echo "[check-live-vllm-split] verifying registered hosts"
-"${controller_bin}" show-hostd-hosts --db "${controller_db}" --node infer-hostd | grep -F '"execution_mode": "infer-only"' >/dev/null
-"${controller_bin}" show-hostd-hosts --db "${controller_db}" --node worker-hostd-a | grep -F '"execution_mode": "worker-only"' >/dev/null
-"${controller_bin}" show-hostd-hosts --db "${controller_db}" --node worker-hostd-b | grep -F '"execution_mode": "worker-only"' >/dev/null
+${sudo_prefix} "${controller_bin}" show-hostd-hosts --db "${controller_db}" --node infer-hostd | grep -F '"execution_mode": "infer-only"' >/dev/null
+${sudo_prefix} "${controller_bin}" show-hostd-hosts --db "${controller_db}" --node worker-hostd-a | grep -F '"execution_mode": "worker-only"' >/dev/null
+${sudo_prefix} "${controller_bin}" show-hostd-hosts --db "${controller_db}" --node worker-hostd-b | grep -F '"execution_mode": "worker-only"' >/dev/null
 echo "registered_hosts=ok"
 
 echo "[check-live-vllm-split] ensuring plane ${plane_name} is running"
