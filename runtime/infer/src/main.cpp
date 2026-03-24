@@ -71,6 +71,7 @@ struct RuntimeConfig {
   std::string controller_url;
   std::string primary_infer_node;
   std::string runtime_engine = "llama.cpp";
+  json worker_group = json::object();
   std::string net_if;
   std::string models_root;
   std::string model_cache_dir;
@@ -104,6 +105,7 @@ struct ControlPaths {
   fs::path gateway_plan_path;
   fs::path runtime_status_path;
   fs::path worker_upstream_path;
+  fs::path worker_group_dir;
 };
 
 struct SimpleResponse {
@@ -130,6 +132,7 @@ struct AssistantTextFilterState {
 };
 
 json LoadWorkerUpstreamContract(const RuntimeConfig& config);
+json LoadWorkerGroupStatus(const RuntimeConfig& config);
 std::string Trim(const std::string& value);
 std::string JsonString(const json& object, const char* key);
 std::string Lowercase(std::string value);
@@ -213,6 +216,29 @@ std::optional<std::string> ResolveRuntimeUpstreamBaseUrl(const RuntimeConfig& co
   const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
   if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
     return std::string(worker_vllm_upstream);
+  }
+  const json worker_group = LoadWorkerGroupStatus(config);
+  if (worker_group.is_object()) {
+    const auto members = worker_group.value("members", json::array());
+    std::optional<json> leader_member;
+    for (const auto& member : members) {
+      if (!member.is_object() || !member.value("ready", false)) {
+        continue;
+      }
+      if (member.value("leader", false)) {
+        leader_member = member;
+        break;
+      }
+      if (!leader_member.has_value()) {
+        leader_member = member;
+      }
+    }
+    if (leader_member.has_value()) {
+      const std::string advertised = JsonString(*leader_member, "base_url");
+      if (!advertised.empty()) {
+        return advertised;
+      }
+    }
   }
   const json worker_upstream = LoadWorkerUpstreamContract(config);
   if (worker_upstream.is_object()) {
@@ -640,6 +666,7 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
       Require<std::string>(inference, "primary_infer_node", "inference");
   config.runtime_engine =
       inference.value("runtime_engine", config.runtime_engine);
+  config.worker_group = root.value("worker_group", json::object());
   config.net_if = Require<std::string>(inference, "net_if", "inference");
   config.models_root =
       ExpandUserPath(Require<std::string>(inference, "models_root", "inference"));
@@ -700,11 +727,53 @@ ControlPaths BuildControlPaths(const RuntimeConfig& config) {
       root / "gateway-plan.json",
       root / "runtime-status.json",
       root / "worker-upstream.json",
+      root / "worker-group",
   };
 }
 
 json LoadWorkerUpstreamContract(const RuntimeConfig& config) {
   return LoadJsonOrDefault(BuildControlPaths(config).worker_upstream_path, json::object());
+}
+
+json LoadWorkerGroupStatus(const RuntimeConfig& config) {
+  const ControlPaths paths = BuildControlPaths(config);
+  json result = {
+      {"group_id", config.worker_group.value("group_id", std::string{})},
+      {"expected_workers", config.worker_group.value("expected_workers", 0)},
+      {"members", json::array()},
+  };
+  if (!fs::exists(paths.worker_group_dir) || !fs::is_directory(paths.worker_group_dir)) {
+    return result;
+  }
+  std::set<std::string> configured_members;
+  for (const auto& member : config.worker_group.value("members", json::array())) {
+    if (member.is_object()) {
+      const std::string member_name = member.value("name", std::string{});
+      if (!member_name.empty()) {
+        configured_members.insert(member_name);
+      }
+    }
+  }
+  std::vector<fs::path> files;
+  for (const auto& entry : fs::directory_iterator(paths.worker_group_dir)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".json") {
+      files.push_back(entry.path());
+    }
+  }
+  std::sort(files.begin(), files.end());
+  for (const auto& path : files) {
+    const json member = LoadJsonOrDefault(path, json::object());
+    if (!member.is_object()) {
+      continue;
+    }
+    const std::string member_name = member.value("instance_name", std::string{});
+    if (!configured_members.empty() && !member_name.empty() &&
+        configured_members.count(member_name) == 0) {
+      continue;
+    }
+    result["members"].push_back(member);
+  }
+  return result;
 }
 
 std::vector<fs::path> RuntimeDirs(const RuntimeConfig& config) {
@@ -836,6 +905,14 @@ comet::RuntimeStatus BuildRuntimeStatus(
   const json registry = LoadRegistry(config);
   const json active_model = LoadActiveModel(config);
   const json gateway_plan = LoadGatewayPlan(config);
+  const json worker_group = LoadWorkerGroupStatus(config);
+  const auto worker_members = worker_group.value("members", json::array());
+  int ready_worker_members = 0;
+  for (const auto& member : worker_members) {
+    if (member.is_object() && member.value("ready", false)) {
+      ++ready_worker_members;
+    }
+  }
   comet::RuntimeStatus status;
   status.plane_name = config.plane_name;
   status.control_root = config.control_root;
@@ -853,7 +930,9 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.runtime_backend = backend;
   status.runtime_phase = phase;
   status.enabled_gpu_nodes = EnabledGpuNodeCount(config);
-  status.registry_entries = static_cast<int>(registry.value("entries", json::array()).size());
+  status.registry_entries = ready_worker_members > 0
+                                ? ready_worker_members
+                                : static_cast<int>(registry.value("entries", json::array()).size());
   status.supervisor_pid = supervisor_pid;
   status.runtime_pid = supervisor_pid;
   status.engine_pid = supervisor_pid;
@@ -2276,6 +2355,7 @@ void StopRuntime(const RuntimeConfig& config, bool apply, const std::string& bac
 
 void PrintLaunchPlan(const RuntimeConfig& config) {
   std::cout << "launch-plan:\n";
+  const json worker_group = config.worker_group;
   std::cout << "  runtime_engine=" << config.runtime_engine << "\n";
   std::cout << "  primary-infer=node:" << config.primary_infer_node
             << " api_port:" << config.api_port
@@ -2297,6 +2377,12 @@ void PrintLaunchPlan(const RuntimeConfig& config) {
               << " gpu:" << gpu_device << " fraction:" << gpu_fraction
               << " colocated_with_primary_infer:"
               << (colocated_with_primary_infer ? "yes" : "no") << "\n";
+  }
+  if (worker_group.is_object()) {
+    std::cout << "  worker-group=id:" << worker_group.value("group_id", std::string{})
+              << " backend:" << worker_group.value("distributed_backend", std::string{"vllm"})
+              << " expected_workers:" << worker_group.value("expected_workers", 0)
+              << " rendezvous_port:" << worker_group.value("rendezvous_port", 29500) << "\n";
   }
   if (config.runtime_engine == "vllm") {
     std::cout << "  vllm=head:" << config.primary_infer_node << " port:" << config.api_port
@@ -2323,6 +2409,17 @@ int RunDoctor(const RuntimeConfig& config, const std::string& checks) {
   }
   if (selected.count("topology") > 0) {
     std::cout << "[doctor topology]\n";
+    const json observed_worker_group = LoadWorkerGroupStatus(config);
+    const int expected_workers =
+        config.worker_group.value(
+            "expected_workers",
+            static_cast<int>(config.worker_group.value("members", json::array()).size()));
+    int ready_worker_members = 0;
+    for (const auto& member : observed_worker_group.value("members", json::array())) {
+      if (member.is_object() && member.value("ready", false)) {
+        ++ready_worker_members;
+      }
+    }
     int enabled_serving_workers = 0;
     int colocated_serving_workers = 0;
     for (const auto& serving_worker : config.serving_workers) {
@@ -2348,6 +2445,12 @@ int RunDoctor(const RuntimeConfig& config, const std::string& checks) {
               << (primary_configured ? "OK" : "FAIL")
               << " (" << config.primary_infer_node << ")\n";
     if (!primary_configured) {
+      rc = 1;
+    }
+    std::cout << "  worker group bootstrap: "
+              << (ready_worker_members >= std::max(1, expected_workers) ? "OK" : "FAIL")
+              << " (" << ready_worker_members << "/" << expected_workers << " ready)\n";
+    if (ready_worker_members < std::max(1, expected_workers)) {
       rc = 1;
     }
     std::cout << "  colocated serving workers: "
@@ -2445,7 +2548,31 @@ class LocalRuntime {
   }
 
  private:
+  bool WorkerGroupReady() const {
+    if (config_.runtime_engine != "vllm") {
+      return true;
+    }
+    const json worker_group = LoadWorkerGroupStatus(config_);
+    const int expected_workers =
+        config_.worker_group.value(
+            "expected_workers",
+            static_cast<int>(config_.worker_group.value("members", json::array()).size()));
+    if (expected_workers <= 0) {
+      return true;
+    }
+    int ready_worker_members = 0;
+    for (const auto& member : worker_group.value("members", json::array())) {
+      if (member.is_object() && member.value("ready", false)) {
+        ++ready_worker_members;
+      }
+    }
+    return ready_worker_members >= expected_workers;
+  }
+
   bool InferenceReady() const {
+    if (!WorkerGroupReady()) {
+      return false;
+    }
     if (dynamic_upstream_ || upstream_.has_value()) {
       const std::string health_url = RuntimeUpstreamHealthUrl(config_);
       return !health_url.empty() && ProbeUrl(health_url);

@@ -1827,6 +1827,10 @@ PlaneInteractionResolution ResolvePlaneInteraction(
   const bool running_plane =
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
   const bool observation_ready = observation_matches_plane;
+  const int expected_worker_members =
+      std::max(0, desired_state->worker_group.expected_workers);
+  const int ready_worker_members =
+      resolution.runtime_status.has_value() ? resolution.runtime_status->registry_entries : 0;
   const auto local_runtime_blocker =
       DescribeUnsupportedControllerLocalRuntime(*desired_state, primary_node);
   const bool runtime_ready =
@@ -1850,10 +1854,15 @@ PlaneInteractionResolution ResolvePlaneInteraction(
     reason = "runtime_status_missing";
   } else if (!resolution.runtime_status->active_model_ready) {
     reason = "active_model_missing";
+  } else if (expected_worker_members > 0 &&
+             ready_worker_members < expected_worker_members) {
+    reason = "worker_group_partial";
   } else if (!resolution.runtime_status->gateway_ready) {
     reason = "gateway_not_ready";
   } else if (!resolution.runtime_status->inference_ready) {
-    reason = "inference_not_ready";
+    reason = desired_state->inference.runtime_engine == "vllm"
+                 ? "distributed_bootstrap_pending"
+                 : "inference_not_ready";
   } else if (!resolution.target.has_value()) {
     reason = "gateway_target_missing";
   }
@@ -1869,6 +1878,12 @@ PlaneInteractionResolution ResolvePlaneInteraction(
        resolution.plane_record.has_value() ? json(resolution.plane_record->state) : json(nullptr)},
       {"primary_infer_node",
        primary_node.empty() ? json(nullptr) : json(primary_node)},
+      {"worker_group_id",
+       desired_state->worker_group.group_id.empty()
+           ? json(nullptr)
+           : json(desired_state->worker_group.group_id)},
+      {"worker_group_expected", expected_worker_members},
+      {"worker_group_ready", ready_worker_members},
       {"active_model_id",
        resolution.runtime_status.has_value() &&
                !resolution.runtime_status->active_model_id.empty()
@@ -3150,6 +3165,7 @@ json BuildRegisteredHostsPayload(
         {"node_name", host.node_name},
         {"advertised_address", host.advertised_address.empty() ? json(nullptr) : json(host.advertised_address)},
         {"transport_mode", host.transport_mode},
+        {"execution_mode", host.execution_mode.empty() ? json("mixed") : json(host.execution_mode)},
         {"registration_state", host.registration_state},
         {"session_state", host.session_state},
         {"controller_public_key_fingerprint",
@@ -3175,6 +3191,53 @@ json BuildRegisteredHostsPayload(
       {"node_name", view.node_name.has_value() ? json(*view.node_name) : json(nullptr)},
       {"items", items},
   };
+}
+
+void ApplyRegisteredHostExecutionModes(
+    comet::ControllerStore& store,
+    comet::DesiredState* desired_state) {
+  if (desired_state == nullptr) {
+    return;
+  }
+  for (auto& node : desired_state->nodes) {
+    if (const auto host = store.LoadRegisteredHost(node.name); host.has_value() &&
+        !host->execution_mode.empty()) {
+      node.execution_mode = comet::ParseHostExecutionMode(host->execution_mode);
+    }
+  }
+}
+
+bool NodeAllowsInstanceRole(
+    comet::HostExecutionMode execution_mode,
+    comet::InstanceRole role) {
+  switch (execution_mode) {
+    case comet::HostExecutionMode::InferOnly:
+      return role == comet::InstanceRole::Infer;
+    case comet::HostExecutionMode::WorkerOnly:
+      return role == comet::InstanceRole::Worker;
+    case comet::HostExecutionMode::Mixed:
+      return true;
+  }
+  return true;
+}
+
+void ValidateDesiredStateExecutionModes(const comet::DesiredState& desired_state) {
+  std::map<std::string, comet::HostExecutionMode> node_modes;
+  for (const auto& node : desired_state.nodes) {
+    node_modes[node.name] = node.execution_mode;
+  }
+  for (const auto& instance : desired_state.instances) {
+    const auto node_it = node_modes.find(instance.node_name);
+    if (node_it == node_modes.end()) {
+      continue;
+    }
+    if (!NodeAllowsInstanceRole(node_it->second, instance.role)) {
+      throw std::invalid_argument(
+          "instance '" + instance.name + "' role '" + comet::ToString(instance.role) +
+          "' is not allowed on node '" + instance.node_name + "' execution_mode='" +
+          comet::ToString(node_it->second) + "'");
+    }
+  }
 }
 
 json BuildHostObservationsPayload(
@@ -4115,32 +4178,35 @@ int ApplyDesiredState(
   ValidateDesiredStateForControllerAdmission(desired_state);
   comet::ControllerStore store(db_path);
   store.Initialize();
-  const auto current_state = store.LoadDesiredState(desired_state.plane_name);
-  comet::RequireSchedulingPolicy(desired_state);
+  comet::DesiredState effective_desired_state = desired_state;
+  ApplyRegisteredHostExecutionModes(store, &effective_desired_state);
+  ValidateDesiredStateExecutionModes(effective_desired_state);
+  const auto current_state = store.LoadDesiredState(effective_desired_state.plane_name);
+  comet::RequireSchedulingPolicy(effective_desired_state);
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto observations = store.LoadHostObservations();
   const int desired_generation =
-      store.LoadDesiredGeneration(desired_state.plane_name).value_or(0) + 1;
+      store.LoadDesiredGeneration(effective_desired_state.plane_name).value_or(0) + 1;
   const comet::ReconcilePlan plan =
-      comet::BuildReconcilePlan(current_state, desired_state);
+      comet::BuildReconcilePlan(current_state, effective_desired_state);
   const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(desired_state);
+      comet::EvaluateSchedulingPolicy(effective_desired_state);
   const auto host_plans =
-      comet::BuildNodeExecutionPlans(current_state, desired_state, artifacts_root);
+      comet::BuildNodeExecutionPlans(current_state, effective_desired_state, artifacts_root);
 
   std::cout << "apply-plan:\n";
   std::cout << comet::RenderReconcilePlan(plan);
   std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
-  PrintSchedulerDecisionSummary(desired_state);
+  PrintSchedulerDecisionSummary(effective_desired_state);
   PrintRolloutGateSummary(scheduling_report);
   std::cout << comet::RenderNodeExecutionPlans(host_plans);
 
-  MaterializeComposeArtifacts(desired_state, host_plans);
-  MaterializeInferRuntimeArtifact(desired_state, artifacts_root);
-  store.ReplaceDesiredState(desired_state, desired_generation, 0);
-  store.UpdatePlaneArtifactsRoot(desired_state.plane_name, artifacts_root);
-  store.ClearSchedulerPlaneRuntime(desired_state.plane_name);
-  store.ReplaceRolloutActions(desired_state.plane_name, desired_generation, {});
+  MaterializeComposeArtifacts(effective_desired_state, host_plans);
+  MaterializeInferRuntimeArtifact(effective_desired_state, artifacts_root);
+  store.ReplaceDesiredState(effective_desired_state, desired_generation, 0);
+  store.UpdatePlaneArtifactsRoot(effective_desired_state.plane_name, artifacts_root);
+  store.ClearSchedulerPlaneRuntime(effective_desired_state.plane_name);
+  store.ReplaceRolloutActions(effective_desired_state.plane_name, desired_generation, {});
 
   const bool existed = current_state.has_value();
   AppendControllerEvent(
@@ -4155,16 +4221,16 @@ int ApplyDesiredState(
           {"desired_generation", desired_generation},
           {"applied_generation",
            current_state.has_value()
-               ? json(store.LoadPlane(desired_state.plane_name)->applied_generation)
+               ? json(store.LoadPlane(effective_desired_state.plane_name)->applied_generation)
                : json(0)},
-          {"worker_count", desired_state.instances.size()},
-          {"disk_count", desired_state.disks.size()},
+          {"worker_count", effective_desired_state.instances.size()},
+          {"disk_count", effective_desired_state.disks.size()},
       },
-      desired_state.plane_name);
-  std::cout << (existed ? "staged update for" : "created") << " plane '" << desired_state.plane_name
+      effective_desired_state.plane_name);
+  std::cout << (existed ? "staged update for" : "created") << " plane '" << effective_desired_state.plane_name
             << "' in: " << db_path << "\n";
   std::cout << "desired generation: " << desired_generation << "\n";
-  const auto plane = store.LoadPlane(desired_state.plane_name);
+  const auto plane = store.LoadPlane(effective_desired_state.plane_name);
   if (plane.has_value()) {
     std::cout << "applied generation: " << plane->applied_generation << "\n";
     std::cout << "plane state: " << plane->state << "\n";
@@ -5452,6 +5518,10 @@ HttpResponse HandleControllerRequest(
           "controller_public_key_fingerprint",
           host.controller_public_key_fingerprint);
       host.transport_mode = body.value("transport_mode", host.transport_mode.empty() ? "out" : host.transport_mode);
+      host.execution_mode = body.value(
+          "execution_mode",
+          host.execution_mode.empty() ? std::string("mixed") : host.execution_mode);
+      comet::ParseHostExecutionMode(host.execution_mode);
       host.registration_state = body.value(
           "registration_state",
           host.registration_state.empty() ? "registered" : host.registration_state);
@@ -5468,7 +5538,7 @@ HttpResponse HandleControllerRequest(
           "host-registry",
           "registered",
           "registered host node",
-          json{{"transport_mode", host.transport_mode}},
+          json{{"transport_mode", host.transport_mode}, {"execution_mode", host.execution_mode}},
           "",
           node_name);
       return BuildJsonResponse(
@@ -12685,14 +12755,16 @@ int StartPlane(const std::string& db_path, const std::string& plane_name) {
   comet::ControllerStore store(db_path);
   store.Initialize();
   const auto plane = store.LoadPlane(plane_name);
-  const auto desired_state = store.LoadDesiredState(plane_name);
+  auto desired_state = store.LoadDesiredState(plane_name);
   if (!plane.has_value()) {
     throw std::runtime_error("plane '" + plane_name + "' not found");
   }
   if (!desired_state.has_value()) {
     throw std::runtime_error("desired state for plane '" + plane_name + "' not found");
   }
+  ApplyRegisteredHostExecutionModes(store, &*desired_state);
   ValidateDesiredStateForControllerAdmission(*desired_state);
+  ValidateDesiredStateExecutionModes(*desired_state);
   if (plane->state == "running") {
     std::cout << "plane already running: " << plane_name << "\n";
     return 0;

@@ -27,6 +27,19 @@ const DiskSpec& FindDiskByName(
   return *it;
 }
 
+const WorkerGroupMemberSpec* FindWorkerGroupMember(
+    const DesiredState& state,
+    const std::string& instance_name) {
+  const auto it = std::find_if(
+      state.worker_group.members.begin(),
+      state.worker_group.members.end(),
+      [&](const WorkerGroupMemberSpec& member) { return member.name == instance_name; });
+  if (it == state.worker_group.members.end()) {
+    return nullptr;
+  }
+  return &*it;
+}
+
 ComposeService BuildComposeService(
     const InstanceSpec& instance,
     const std::vector<DiskSpec>& disks,
@@ -57,7 +70,21 @@ ComposeService BuildComposeService(
   if (use_vllm) {
     if (instance.role == InstanceRole::Infer) {
       service.environment["COMET_INFER_RUNTIME_BACKEND"] = "worker-vllm";
+      service.environment["COMET_WORKER_GROUP_ID"] = state.worker_group.group_id;
+      service.environment["COMET_WORKER_GROUP_EXPECTED_SIZE"] =
+          std::to_string(std::max(0, state.worker_group.expected_workers));
+      service.environment["COMET_DISTRIBUTED_BACKEND"] =
+          state.worker_group.distributed_backend;
+      service.environment["COMET_WORKER_SELECTION_POLICY"] =
+          state.worker_group.worker_selection_policy;
+      service.environment["COMET_RENDEZVOUS_HOST"] =
+          state.worker_group.rendezvous_host.empty()
+              ? state.worker_group.infer_instance_name
+              : state.worker_group.rendezvous_host;
+      service.environment["COMET_RENDEZVOUS_PORT"] =
+          std::to_string(state.worker_group.rendezvous_port);
     } else if (instance.role == InstanceRole::Worker) {
+      const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
       service.environment["COMET_WORKER_BOOT_MODE"] = "vllm-openai";
       service.environment["COMET_VLLM_PORT"] = std::to_string(state.inference.api_port);
       service.environment["COMET_VLLM_TENSOR_PARALLEL_SIZE"] =
@@ -73,6 +100,25 @@ ComposeService BuildComposeService(
       service.environment["COMET_VLLM_ENFORCE_EAGER"] =
           state.inference.enforce_eager ? "1" : "0";
       service.environment["COMET_VLLM_DOWNLOAD_DIR"] = state.inference.model_cache_dir;
+      service.environment["COMET_WORKER_GROUP_ID"] = state.worker_group.group_id;
+      service.environment["COMET_WORKER_GROUP_WORLD_SIZE"] =
+          std::to_string(std::max(0, state.worker_group.expected_workers));
+      service.environment["COMET_DISTRIBUTED_BACKEND"] =
+          state.worker_group.distributed_backend;
+      service.environment["COMET_WORKER_SELECTION_POLICY"] =
+          state.worker_group.worker_selection_policy;
+      service.environment["COMET_RENDEZVOUS_HOST"] =
+          state.worker_group.rendezvous_host.empty()
+              ? state.worker_group.infer_instance_name
+              : state.worker_group.rendezvous_host;
+      service.environment["COMET_RENDEZVOUS_PORT"] =
+          std::to_string(state.worker_group.rendezvous_port);
+      if (worker_group_member != nullptr) {
+        service.environment["COMET_WORKER_GROUP_RANK"] =
+            std::to_string(worker_group_member->rank);
+        service.environment["COMET_WORKER_GROUP_LEADER"] =
+            worker_group_member->leader ? "1" : "0";
+      }
       if (state.bootstrap_model.has_value() &&
           state.bootstrap_model->served_model_name.has_value() &&
           !state.bootstrap_model->served_model_name->empty()) {
@@ -262,6 +308,31 @@ PlaneMode ParsePlaneMode(const std::string& value) {
     return PlaneMode::Llm;
   }
   throw std::runtime_error("unknown plane mode '" + value + "'");
+}
+
+std::string ToString(HostExecutionMode mode) {
+  switch (mode) {
+    case HostExecutionMode::InferOnly:
+      return "infer-only";
+    case HostExecutionMode::WorkerOnly:
+      return "worker-only";
+    case HostExecutionMode::Mixed:
+      return "mixed";
+  }
+  return "mixed";
+}
+
+HostExecutionMode ParseHostExecutionMode(const std::string& value) {
+  if (value == "infer-only") {
+    return HostExecutionMode::InferOnly;
+  }
+  if (value == "worker-only") {
+    return HostExecutionMode::WorkerOnly;
+  }
+  if (value == "mixed" || value.empty()) {
+    return HostExecutionMode::Mixed;
+  }
+  throw std::runtime_error("unknown host execution mode '" + value + "'");
 }
 
 }  // namespace comet

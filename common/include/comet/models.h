@@ -35,6 +35,12 @@ enum class PlaneMode {
   Llm,
 };
 
+enum class HostExecutionMode {
+  InferOnly,
+  WorkerOnly,
+  Mixed,
+};
+
 struct DiskSpec {
   std::string name;
   DiskKind kind;
@@ -71,6 +77,7 @@ struct InstanceSpec {
 struct NodeInventory {
   std::string name;
   std::string platform;
+  HostExecutionMode execution_mode = HostExecutionMode::Mixed;
   std::vector<std::string> gpu_devices;
   std::map<std::string, int> gpu_memory_mb;
 };
@@ -91,6 +98,9 @@ struct RuntimeGpuNode {
 struct InferenceRuntimeSettings {
   std::string primary_infer_node;
   std::string runtime_engine = "llama.cpp";
+  std::string worker_group_id;
+  std::string distributed_backend = "vllm";
+  std::string worker_selection_policy = "prefer-free-then-share";
   std::string net_if = "eth0";
   std::string models_root = "/comet/shared/models";
   std::string model_cache_dir = "/comet/shared/models/cache";
@@ -110,6 +120,32 @@ struct InferenceRuntimeSettings {
   int llama_gpu_layers = 99;
   int inference_healthcheck_retries = 300;
   int inference_healthcheck_interval_sec = 5;
+  int rendezvous_port = 29500;
+};
+
+struct WorkerGroupMemberSpec {
+  std::string name;
+  std::string node_name;
+  std::string gpu_device;
+  int rank = 0;
+  double gpu_fraction = 0.0;
+  GpuShareMode share_mode = GpuShareMode::Exclusive;
+  int priority = 100;
+  bool preemptible = false;
+  std::optional<int> memory_cap_mb;
+  bool enabled = true;
+  bool leader = false;
+};
+
+struct WorkerGroupSpec {
+  std::string group_id;
+  std::string infer_instance_name;
+  std::string distributed_backend = "vllm";
+  std::string rendezvous_host;
+  int rendezvous_port = 29500;
+  int expected_workers = 0;
+  std::string worker_selection_policy = "prefer-free-then-share";
+  std::vector<WorkerGroupMemberSpec> members;
 };
 
 struct GatewaySettings {
@@ -156,6 +192,7 @@ struct DesiredState {
   std::optional<BootstrapModelSpec> bootstrap_model;
   std::optional<InteractionSettings> interaction;
   InferenceRuntimeSettings inference;
+  WorkerGroupSpec worker_group;
   GatewaySettings gateway;
   std::vector<RuntimeGpuNode> runtime_gpu_nodes;
   std::vector<NodeInventory> nodes;
@@ -204,5 +241,7 @@ std::string ToString(PlacementMode mode);
 PlacementMode ParsePlacementMode(const std::string& value);
 std::string ToString(PlaneMode mode);
 PlaneMode ParsePlaneMode(const std::string& value);
+std::string ToString(HostExecutionMode mode);
+HostExecutionMode ParseHostExecutionMode(const std::string& value);
 
 }  // namespace comet

@@ -161,6 +161,18 @@ void ValidateGpuExists(
   }
 }
 
+bool NodeSupportsInstanceRole(const NodeInventory& node, InstanceRole role) {
+  switch (node.execution_mode) {
+    case HostExecutionMode::InferOnly:
+      return role == InstanceRole::Infer;
+    case HostExecutionMode::WorkerOnly:
+      return role == InstanceRole::Worker;
+    case HostExecutionMode::Mixed:
+      return true;
+  }
+  return true;
+}
+
 struct PlacementUsage {
   double allocated_fraction = 0.0;
   int allocated_memory_mb = 0;
@@ -223,6 +235,9 @@ std::optional<AutoPlacementDecision> SelectAutoPlacement(
       worker.placement_mode == PlacementMode::Movable ? std::nullopt : requested_gpu_device;
 
   for (const auto& node : nodes) {
+    if (!NodeSupportsInstanceRole(node, worker.role)) {
+      continue;
+    }
     if (strict_node_constraint && requested_node_name.has_value() && node.name != *requested_node_name) {
       continue;
     }
@@ -305,10 +320,21 @@ std::vector<NodeInventory> ParseNodes(const json& plane_json) {
   std::set<std::string> node_names;
 
   if (!plane_json.contains("nodes")) {
-    nodes = {
-        NodeInventory{"local-hostd", "linux", {"0", "1"}, {{"0", 24576}, {"1", 24576}}},
-        NodeInventory{"node-b", "linux", {"0"}, {{"0", 24576}}},
-    };
+    NodeInventory local_hostd;
+    local_hostd.name = "local-hostd";
+    local_hostd.platform = "linux";
+    local_hostd.execution_mode = HostExecutionMode::Mixed;
+    local_hostd.gpu_devices = {"0", "1"};
+    local_hostd.gpu_memory_mb = {{"0", 24576}, {"1", 24576}};
+    nodes.push_back(std::move(local_hostd));
+
+    NodeInventory node_b;
+    node_b.name = "node-b";
+    node_b.platform = "linux";
+    node_b.execution_mode = HostExecutionMode::Mixed;
+    node_b.gpu_devices = {"0"};
+    node_b.gpu_memory_mb = {{"0", 24576}};
+    nodes.push_back(std::move(node_b));
     return nodes;
   }
 
@@ -320,6 +346,8 @@ std::vector<NodeInventory> ParseNodes(const json& plane_json) {
     NodeInventory node;
     node.name = RequiredString(node_json, "name", "plane node");
     node.platform = OptionalString(node_json, "platform", "linux");
+    node.execution_mode =
+        ParseHostExecutionMode(OptionalString(node_json, "execution_mode", "mixed"));
     if (!node_names.insert(node.name).second) {
       throw std::runtime_error("plane.json contains duplicate node '" + node.name + "'");
     }
@@ -669,9 +697,20 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   }
 
   const std::string infer_name = RequiredString(infer_json, "name", "infer.json");
+  std::string default_infer_node_name = state.nodes.front().name;
+  for (const auto& node : state.nodes) {
+    if (NodeSupportsInstanceRole(node, InstanceRole::Infer)) {
+      default_infer_node_name = node.name;
+      break;
+    }
+  }
   const std::string infer_node_name =
-      OptionalString(infer_json, "node", state.nodes.front().name);
+      OptionalString(infer_json, "node", default_infer_node_name);
   ValidateNodeExists(nodes_by_name, infer_node_name, "infer.json");
+  if (!NodeSupportsInstanceRole(nodes_by_name.at(infer_node_name), InstanceRole::Infer)) {
+    throw std::runtime_error(
+        "infer.json targets node '" + infer_node_name + "' which is not infer-capable");
+  }
   if (state.inference.primary_infer_node.empty()) {
     state.inference.primary_infer_node = infer_node_name;
   }
@@ -785,11 +824,21 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       worker.node_name = *requested_node_name;
       ValidateNodeExists(nodes_by_name, worker.node_name, worker_file.string());
       const NodeInventory& node = nodes_by_name.at(worker.node_name);
+      if (!NodeSupportsInstanceRole(node, InstanceRole::Worker)) {
+        throw std::runtime_error(
+            worker_file.string() + " targets node '" + worker.node_name +
+            "' which is not worker-capable");
+      }
       ValidateGpuExists(node, worker.gpu_device, worker_file.string());
     } else if (worker.placement_mode == PlacementMode::Movable && node_explicit && gpu_explicit) {
       worker.node_name = *requested_node_name;
       ValidateNodeExists(nodes_by_name, worker.node_name, worker_file.string());
       const NodeInventory& node = nodes_by_name.at(worker.node_name);
+      if (!NodeSupportsInstanceRole(node, InstanceRole::Worker)) {
+        throw std::runtime_error(
+            worker_file.string() + " targets node '" + worker.node_name +
+            "' which is not worker-capable");
+      }
       ValidateGpuExists(node, worker.gpu_device, worker_file.string());
       placement_origin = "requested";
       placement_action = "requested";
@@ -885,6 +934,34 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
             true,
         });
     ReservePlacement(&placement_usage, worker);
+  }
+
+  state.worker_group.group_id = state.inference.worker_group_id.empty()
+                                    ? state.plane_name + "-workers"
+                                    : state.inference.worker_group_id;
+  state.worker_group.infer_instance_name = infer.name;
+  state.worker_group.distributed_backend = state.inference.distributed_backend;
+  state.worker_group.rendezvous_host = infer.name;
+  state.worker_group.rendezvous_port = state.inference.rendezvous_port;
+  state.worker_group.worker_selection_policy = state.inference.worker_selection_policy;
+  state.worker_group.expected_workers = 0;
+  for (const auto& worker : state.instances) {
+    if (worker.role != InstanceRole::Worker) {
+      continue;
+    }
+    WorkerGroupMemberSpec member;
+    member.name = worker.name;
+    member.node_name = worker.node_name;
+    member.gpu_device = worker.gpu_device.value_or("");
+    member.rank = state.worker_group.expected_workers++;
+    member.gpu_fraction = worker.gpu_fraction;
+    member.share_mode = worker.share_mode;
+    member.priority = worker.priority;
+    member.preemptible = worker.preemptible;
+    member.memory_cap_mb = worker.memory_cap_mb;
+    member.enabled = true;
+    member.leader = member.rank == 0;
+    state.worker_group.members.push_back(std::move(member));
   }
 
   ApplyMovableSchedulerDecisions(&state);

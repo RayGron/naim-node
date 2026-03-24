@@ -28,6 +28,9 @@
   "inference": {
     "primary_infer_node": "local-hostd",
     "runtime_engine": "vllm",
+    "worker_group_id": "qwen25-0.5b-vllm-smoke-workers",
+    "distributed_backend": "vllm",
+    "worker_selection_policy": "prefer-free-then-share",
     "net_if": "eth0",
     "models_root": "/comet/shared/models",
     "model_cache_dir": "/comet/shared/models/cache",
@@ -38,7 +41,32 @@
     "pipeline_parallel_size": 1,
     "max_num_seqs": 8,
     "gpu_memory_utilization": 0.2,
-    "enforce_eager": false
+    "enforce_eager": false,
+    "rendezvous_port": 29500
+  },
+  "worker_group": {
+    "group_id": "qwen25-0.5b-vllm-smoke-workers",
+    "infer_instance_name": "infer-qwen25-0.5b-vllm-smoke",
+    "distributed_backend": "vllm",
+    "rendezvous_host": "infer-qwen25-0.5b-vllm-smoke",
+    "rendezvous_port": 29500,
+    "expected_workers": 1,
+    "worker_selection_policy": "prefer-free-then-share",
+    "members": [
+      {
+        "name": "worker-qwen25-0.5b-vllm-smoke",
+        "node_name": "local-hostd",
+        "gpu_device": "0",
+        "rank": 0,
+        "gpu_fraction": 1.0,
+        "share_mode": "exclusive",
+        "priority": 100,
+        "preemptible": false,
+        "memory_cap_mb": 16384,
+        "enabled": true,
+        "leader": true
+      }
+    ]
   },
   "gateway": {
     "listen_port": 18087,
@@ -57,6 +85,7 @@
     {
       "name": "local-hostd",
       "platform": "linux",
+      "execution_mode": "mixed",
       "gpu_devices": [
         "0"
       ],

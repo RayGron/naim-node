@@ -57,6 +57,14 @@ def worker_upstream_path(control_root: str) -> Path:
     return Path(control_root) / "worker-upstream.json"
 
 
+def worker_group_dir(control_root: str) -> Path:
+    return Path(control_root) / "worker-group"
+
+
+def worker_group_member_path(control_root: str, instance_name: str) -> Path:
+    return worker_group_dir(control_root) / f"{instance_name}.json"
+
+
 def status_path(private_disk_path: str) -> Path:
     return Path(
         env(
@@ -216,6 +224,46 @@ def build_worker_upstream_contract(
     }
 
 
+def build_worker_group_member_contract(
+    *,
+    control_root: str,
+    ready: bool,
+    phase: str,
+    node_name: str,
+    instance_name: str,
+    active_model_id: str,
+    served_model_name: str,
+    port: int,
+    last_activity_at: str,
+) -> dict:
+    return {
+        "plane_name": env("COMET_PLANE_NAME"),
+        "control_root": control_root,
+        "group_id": env("COMET_WORKER_GROUP_ID", "default-worker-group"),
+        "distributed_backend": env("COMET_DISTRIBUTED_BACKEND", "vllm"),
+        "worker_selection_policy": env(
+            "COMET_WORKER_SELECTION_POLICY", "prefer-free-then-share"
+        ),
+        "node_name": node_name,
+        "instance_name": instance_name,
+        "runtime_backend": "vllm-worker",
+        "rank": env_int("COMET_WORKER_GROUP_RANK", 0),
+        "world_size": env_int("COMET_WORKER_GROUP_WORLD_SIZE", 1),
+        "leader": env_bool("COMET_WORKER_GROUP_LEADER", False),
+        "gpu_device": env("COMET_GPU_DEVICE", env("COMET_WORKER_GPU_DEVICE")),
+        "ready": ready,
+        "phase": phase,
+        "active_model_id": active_model_id,
+        "served_model_name": served_model_name,
+        "port": port,
+        "base_url": resolve_advertised_base_url(port),
+        "health_url": f"{resolve_advertised_base_url(port)}/health",
+        "models_url": f"{resolve_advertised_base_url(port)}/v1/models",
+        "rendezvous_port": env_int("COMET_RENDEZVOUS_PORT", 29500),
+        "last_activity_at": last_activity_at,
+    }
+
+
 def probe(url: str) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=2) as response:
@@ -282,6 +330,7 @@ def main() -> int:
     started_at = utc_now_iso()
     status_file = status_path(private_disk_path)
     upstream_file = worker_upstream_path(control_root)
+    worker_group_member_file = worker_group_member_path(control_root, instance_name)
     health_url = f"http://127.0.0.1:{port}/health"
     child_env = os.environ.copy()
     instance_name = env("COMET_INSTANCE_NAME", "worker")
@@ -317,8 +366,8 @@ def main() -> int:
         ),
     )
     write_json(
-        upstream_file,
-        build_worker_upstream_contract(
+        worker_group_member_file,
+        build_worker_group_member_contract(
             control_root=control_root,
             ready=False,
             phase="starting",
@@ -330,6 +379,21 @@ def main() -> int:
             last_activity_at="",
         ),
     )
+    if env_bool("COMET_WORKER_GROUP_LEADER", False):
+        write_json(
+            upstream_file,
+            build_worker_upstream_contract(
+                control_root=control_root,
+                ready=False,
+                phase="starting",
+                node_name=node_name,
+                instance_name=instance_name,
+                active_model_id=active_model_id,
+                served_model_name=served_model_name,
+                port=port,
+                last_activity_at="",
+            ),
+        )
 
     while child.poll() is None and not STOP_REQUESTED:
         healthy = probe(health_url)
@@ -350,8 +414,8 @@ def main() -> int:
             ),
         )
         write_json(
-            upstream_file,
-            build_worker_upstream_contract(
+            worker_group_member_file,
+            build_worker_group_member_contract(
                 control_root=control_root,
                 ready=healthy,
                 phase="running" if healthy else "starting",
@@ -363,6 +427,21 @@ def main() -> int:
                 last_activity_at=now,
             ),
         )
+        if env_bool("COMET_WORKER_GROUP_LEADER", False):
+            write_json(
+                upstream_file,
+                build_worker_upstream_contract(
+                    control_root=control_root,
+                    ready=healthy,
+                    phase="running" if healthy else "starting",
+                    node_name=node_name,
+                    instance_name=instance_name,
+                    active_model_id=active_model_id,
+                    served_model_name=served_model_name,
+                    port=port,
+                    last_activity_at=now,
+                ),
+            )
         time.sleep(2)
 
     if STOP_REQUESTED and child.poll() is None:
@@ -389,8 +468,8 @@ def main() -> int:
         ),
     )
     write_json(
-        upstream_file,
-        build_worker_upstream_contract(
+        worker_group_member_file,
+        build_worker_group_member_contract(
             control_root=control_root,
             ready=False,
             phase="stopped" if child.returncode == 0 else "failed",
@@ -402,6 +481,21 @@ def main() -> int:
             last_activity_at=utc_now_iso(),
         ),
     )
+    if env_bool("COMET_WORKER_GROUP_LEADER", False):
+        write_json(
+            upstream_file,
+            build_worker_upstream_contract(
+                control_root=control_root,
+                ready=False,
+                phase="stopped" if child.returncode == 0 else "failed",
+                node_name=node_name,
+                instance_name=instance_name,
+                active_model_id=active_model_id,
+                served_model_name=served_model_name,
+                port=port,
+                last_activity_at=utc_now_iso(),
+            ),
+        )
     return 0 if child.returncode is None else child.returncode
 
 

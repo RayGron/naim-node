@@ -116,6 +116,38 @@ json BuildServingWorkersJson(const DesiredState& state) {
   return serving_workers;
 }
 
+json BuildWorkerGroupJson(const DesiredState& state) {
+  json members = json::array();
+  for (const auto& member : state.worker_group.members) {
+    json item = {
+        {"name", member.name},
+        {"node_name", member.node_name},
+        {"gpu_device", member.gpu_device},
+        {"rank", member.rank},
+        {"gpu_fraction", member.gpu_fraction},
+        {"share_mode", ToString(member.share_mode)},
+        {"priority", member.priority},
+        {"preemptible", member.preemptible},
+        {"enabled", member.enabled},
+        {"leader", member.leader},
+    };
+    if (member.memory_cap_mb.has_value()) {
+      item["memory_cap_mb"] = *member.memory_cap_mb;
+    }
+    members.push_back(std::move(item));
+  }
+  return {
+      {"group_id", state.worker_group.group_id},
+      {"infer_instance_name", state.worker_group.infer_instance_name},
+      {"distributed_backend", state.worker_group.distributed_backend},
+      {"rendezvous_host", state.worker_group.rendezvous_host},
+      {"rendezvous_port", state.worker_group.rendezvous_port},
+      {"expected_workers", state.worker_group.expected_workers},
+      {"worker_selection_policy", state.worker_group.worker_selection_policy},
+      {"members", std::move(members)},
+  };
+}
+
 }  // namespace
 
 std::string RenderInferRuntimeConfigJson(const DesiredState& state) {
@@ -141,6 +173,9 @@ std::string RenderInferRuntimeConfigJson(const DesiredState& state) {
        {
            {"primary_infer_node", state.inference.primary_infer_node},
            {"runtime_engine", state.inference.runtime_engine},
+           {"worker_group_id", state.inference.worker_group_id},
+           {"distributed_backend", state.inference.distributed_backend},
+           {"worker_selection_policy", state.inference.worker_selection_policy},
            {"net_if", state.inference.net_if},
            {"models_root", state.inference.models_root},
            {"model_cache_dir", state.inference.model_cache_dir},
@@ -161,7 +196,9 @@ std::string RenderInferRuntimeConfigJson(const DesiredState& state) {
            {"inference_healthcheck_retries", state.inference.inference_healthcheck_retries},
            {"inference_healthcheck_interval_sec",
             state.inference.inference_healthcheck_interval_sec},
+           {"rendezvous_port", state.inference.rendezvous_port},
        }},
+      {"worker_group", BuildWorkerGroupJson(state)},
       {"gateway",
        {
            {"listen_host", state.gateway.listen_host},

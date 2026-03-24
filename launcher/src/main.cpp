@@ -106,6 +106,7 @@ struct HostdInstallOptions {
   std::string controller_fingerprint;
   std::string node_name;
   std::string transport_mode = "out";
+  std::string execution_mode = "mixed";
   std::string listen_address;
   std::string compose_mode = "exec";
 };
@@ -154,6 +155,7 @@ struct GeneratedHostdConfig {
   std::optional<std::string> node_name;
   std::optional<std::string> controller_url;
   std::optional<std::string> transport_mode;
+  std::optional<std::string> execution_mode;
   std::optional<std::string> listen_address;
   std::optional<fs::path> runtime_root;
   std::optional<fs::path> state_root;
@@ -314,6 +316,8 @@ GeneratedConfig LoadGeneratedConfig(const fs::path& path) {
         config.hostd.controller_url = UnquoteTomlValue(raw_value);
       } else if (key == "transport_mode") {
         config.hostd.transport_mode = UnquoteTomlValue(raw_value);
+      } else if (key == "execution_mode") {
+        config.hostd.execution_mode = UnquoteTomlValue(raw_value);
       } else if (key == "listen_address") {
         config.hostd.listen_address = UnquoteTomlValue(raw_value);
       } else if (key == "runtime_root") {
@@ -556,6 +560,7 @@ std::string RenderConfigToml(
     out << "node_name = \"" << hostd->node_name << "\"\n";
     out << "controller_url = \"" << hostd->controller_url << "\"\n";
     out << "transport_mode = \"" << hostd->transport_mode << "\"\n";
+    out << "execution_mode = \"" << hostd->execution_mode << "\"\n";
     out << "listen_address = \"" << hostd->listen_address << "\"\n";
     out << "runtime_root = \"" << (hostd->layout.state_root / "runtime").string() << "\"\n";
     out << "state_root = \"" << (hostd->layout.state_root / "hostd-state").string() << "\"\n";
@@ -872,6 +877,7 @@ int RunControllerSupervisor(
     host.advertised_address = local_controller_url;
     host.public_key_base64 = Trim(ReadTextFile(options.state_root.parent_path() / "keys" / "hostd.pub.b64"));
     host.transport_mode = "out";
+    host.execution_mode = "mixed";
     host.registration_state = "registered";
     host.session_state = "disconnected";
     host.status_message = "auto-registered local hostd by comet-node run controller";
@@ -980,6 +986,7 @@ void InstallController(const fs::path& self_path, const std::vector<std::string>
         controller_fingerprint,
         options.node_name,
         "out",
+        "mixed",
         "",
         options.compose_mode,
       };
@@ -994,6 +1001,7 @@ void InstallController(const fs::path& self_path, const std::vector<std::string>
       host.public_key_base64 = Trim(ReadTextFile(hostd_public_key));
       host.controller_public_key_fingerprint = controller_fingerprint;
       host.transport_mode = "out";
+      host.execution_mode = "mixed";
       host.registration_state = "registered";
       host.session_state = "disconnected";
       host.status_message = "prepared by comet-node install controller";
@@ -1055,6 +1063,8 @@ void InstallHostd(const fs::path& self_path, const std::vector<std::string>& arg
   options.controller_fingerprint = FindFlagValue(args, "--controller-fingerprint").value_or("");
   options.node_name = FindFlagValue(args, "--node").value_or(DefaultNodeName());
   options.transport_mode = FindFlagValue(args, "--transport").value_or(options.transport_mode);
+  options.execution_mode =
+      FindFlagValue(args, "--execution-mode").value_or(options.execution_mode);
   options.listen_address = FindFlagValue(args, "--listen").value_or("");
   options.compose_mode = FindFlagValue(args, "--compose-mode").value_or(options.compose_mode);
   const bool skip_systemctl = HasFlag(args, "--skip-systemctl");
@@ -1201,6 +1211,7 @@ void ConnectHostd(const std::vector<std::string>& args) {
   record.controller_public_key_fingerprint =
       FindFlagValue(args, "--controller-fingerprint").value_or("");
   record.transport_mode = FindFlagValue(args, "--transport").value_or("out");
+  record.execution_mode = FindFlagValue(args, "--execution-mode").value_or("mixed");
   record.registration_state = "registered";
   record.session_state = "disconnected";
   record.capabilities_json = "{}";

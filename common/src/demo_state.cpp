@@ -121,10 +121,21 @@ DesiredState BuildDemoState() {
   state.gateway.listen_port = 8080;
   state.gateway.server_name = "alpha.local";
 
-  state.nodes = {
-      NodeInventory{"node-a", "linux", {"0", "1"}, {{"0", 24576}, {"1", 24576}}},
-      NodeInventory{"node-b", "linux", {"0"}, {{"0", 24576}}},
-  };
+  NodeInventory node_a;
+  node_a.name = "node-a";
+  node_a.platform = "linux";
+  node_a.execution_mode = HostExecutionMode::Mixed;
+  node_a.gpu_devices = {"0", "1"};
+  node_a.gpu_memory_mb = {{"0", 24576}, {"1", 24576}};
+  state.nodes.push_back(std::move(node_a));
+
+  NodeInventory node_b;
+  node_b.name = "node-b";
+  node_b.platform = "linux";
+  node_b.execution_mode = HostExecutionMode::Mixed;
+  node_b.gpu_devices = {"0"};
+  node_b.gpu_memory_mb = {{"0", 24576}};
+  state.nodes.push_back(std::move(node_b));
 
   state.disks = {
       MakeDisk(

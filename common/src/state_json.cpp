@@ -18,6 +18,15 @@ void NormalizeInferenceSettings(InferenceRuntimeSettings* settings) {
   if (settings == nullptr) {
     return;
   }
+  if (settings->worker_group_id.empty()) {
+    settings->worker_group_id = "default-worker-group";
+  }
+  if (settings->distributed_backend.empty()) {
+    settings->distributed_backend = "vllm";
+  }
+  if (settings->worker_selection_policy.empty()) {
+    settings->worker_selection_policy = "prefer-free-then-share";
+  }
   if (settings->model_cache_dir.empty()) {
     settings->model_cache_dir = settings->gguf_cache_dir;
   }
@@ -71,9 +80,46 @@ json ToJson(const NodeInventory& node) {
   return json{
       {"name", node.name},
       {"platform", node.platform},
+      {"execution_mode", ToString(node.execution_mode)},
       {"gpu_devices", node.gpu_devices},
       {"gpu_memory_mb", node.gpu_memory_mb},
   };
+}
+
+json ToJson(const WorkerGroupMemberSpec& member) {
+  json result = {
+      {"name", member.name},
+      {"node_name", member.node_name},
+      {"gpu_device", member.gpu_device},
+      {"rank", member.rank},
+      {"gpu_fraction", member.gpu_fraction},
+      {"share_mode", ToString(member.share_mode)},
+      {"priority", member.priority},
+      {"preemptible", member.preemptible},
+      {"enabled", member.enabled},
+      {"leader", member.leader},
+  };
+  if (member.memory_cap_mb.has_value()) {
+    result["memory_cap_mb"] = *member.memory_cap_mb;
+  }
+  return result;
+}
+
+json ToJson(const WorkerGroupSpec& group) {
+  json result = {
+      {"group_id", group.group_id},
+      {"infer_instance_name", group.infer_instance_name},
+      {"distributed_backend", group.distributed_backend},
+      {"rendezvous_host", group.rendezvous_host},
+      {"rendezvous_port", group.rendezvous_port},
+      {"expected_workers", group.expected_workers},
+      {"worker_selection_policy", group.worker_selection_policy},
+      {"members", json::array()},
+  };
+  for (const auto& member : group.members) {
+    result["members"].push_back(ToJson(member));
+  }
+  return result;
 }
 
 json ToJson(const RuntimeGpuNode& gpu_node) {
@@ -214,9 +260,48 @@ NodeInventory NodeInventoryFromJson(const json& value) {
   NodeInventory node;
   node.name = value.at("name").get<std::string>();
   node.platform = value.at("platform").get<std::string>();
+  node.execution_mode =
+      ParseHostExecutionMode(value.value("execution_mode", std::string("mixed")));
   node.gpu_devices = value.value("gpu_devices", std::vector<std::string>{});
   node.gpu_memory_mb = value.value("gpu_memory_mb", std::map<std::string, int>{});
   return node;
+}
+
+WorkerGroupMemberSpec WorkerGroupMemberSpecFromJson(const json& value) {
+  WorkerGroupMemberSpec member;
+  member.name = value.at("name").get<std::string>();
+  member.node_name = value.at("node_name").get<std::string>();
+  member.gpu_device = value.value("gpu_device", std::string{});
+  member.rank = value.value("rank", 0);
+  member.gpu_fraction = value.value("gpu_fraction", 0.0);
+  member.share_mode =
+      ParseGpuShareMode(value.value("share_mode", std::string("exclusive")));
+  member.priority = value.value("priority", 100);
+  member.preemptible = value.value("preemptible", false);
+  member.enabled = value.value("enabled", true);
+  member.leader = value.value("leader", false);
+  if (value.contains("memory_cap_mb") && !value.at("memory_cap_mb").is_null()) {
+    member.memory_cap_mb = value.at("memory_cap_mb").get<int>();
+  }
+  return member;
+}
+
+WorkerGroupSpec WorkerGroupSpecFromJson(const json& value) {
+  WorkerGroupSpec group;
+  group.group_id = value.value("group_id", std::string{});
+  group.infer_instance_name = value.value("infer_instance_name", std::string{});
+  group.distributed_backend = value.value("distributed_backend", std::string("vllm"));
+  group.rendezvous_host = value.value("rendezvous_host", std::string{});
+  group.rendezvous_port = value.value("rendezvous_port", 29500);
+  group.expected_workers = value.value("expected_workers", 0);
+  group.worker_selection_policy =
+      value.value("worker_selection_policy", std::string("prefer-free-then-share"));
+  for (const auto& member : value.value("members", json::array())) {
+    if (member.is_object()) {
+      group.members.push_back(WorkerGroupMemberSpecFromJson(member));
+    }
+  }
+  return group;
 }
 
 RuntimeGpuNode RuntimeGpuNodeFromJson(const json& value) {
@@ -400,6 +485,9 @@ json DesiredStateToJson(const DesiredState& state) {
        {
            {"primary_infer_node", state.inference.primary_infer_node},
            {"runtime_engine", state.inference.runtime_engine},
+           {"worker_group_id", state.inference.worker_group_id},
+           {"distributed_backend", state.inference.distributed_backend},
+           {"worker_selection_policy", state.inference.worker_selection_policy},
            {"net_if", state.inference.net_if},
            {"models_root", state.inference.models_root},
            {"model_cache_dir", state.inference.model_cache_dir},
@@ -420,7 +508,9 @@ json DesiredStateToJson(const DesiredState& state) {
            {"inference_healthcheck_retries", state.inference.inference_healthcheck_retries},
            {"inference_healthcheck_interval_sec",
             state.inference.inference_healthcheck_interval_sec},
+           {"rendezvous_port", state.inference.rendezvous_port},
        }},
+      {"worker_group", ToJson(state.worker_group)},
       {"gateway",
        {
            {"listen_host", state.gateway.listen_host},
@@ -481,6 +571,12 @@ DesiredState DesiredStateFromJson(const json& value) {
         inference.value("primary_infer_node", state.inference.primary_infer_node);
     state.inference.runtime_engine =
         inference.value("runtime_engine", state.inference.runtime_engine);
+    state.inference.worker_group_id =
+        inference.value("worker_group_id", state.inference.worker_group_id);
+    state.inference.distributed_backend =
+        inference.value("distributed_backend", state.inference.distributed_backend);
+    state.inference.worker_selection_policy =
+        inference.value("worker_selection_policy", state.inference.worker_selection_policy);
     state.inference.net_if = inference.value("net_if", state.inference.net_if);
     state.inference.models_root =
         inference.value("models_root", state.inference.models_root);
@@ -534,8 +630,28 @@ DesiredState DesiredStateFromJson(const json& value) {
     state.inference.inference_healthcheck_interval_sec = inference.value(
         "inference_healthcheck_interval_sec",
         state.inference.inference_healthcheck_interval_sec);
+    state.inference.rendezvous_port =
+        inference.value("rendezvous_port", state.inference.rendezvous_port);
   }
   NormalizeInferenceSettings(&state.inference);
+  if (value.contains("worker_group") && value.at("worker_group").is_object()) {
+    state.worker_group = WorkerGroupSpecFromJson(value.at("worker_group"));
+  }
+  if (state.worker_group.group_id.empty()) {
+    state.worker_group.group_id = state.inference.worker_group_id;
+  }
+  if (state.worker_group.group_id.empty()) {
+    state.worker_group.group_id = state.plane_name + "-workers";
+  }
+  if (state.worker_group.distributed_backend.empty()) {
+    state.worker_group.distributed_backend = state.inference.distributed_backend;
+  }
+  if (state.worker_group.worker_selection_policy.empty()) {
+    state.worker_group.worker_selection_policy = state.inference.worker_selection_policy;
+  }
+  if (state.worker_group.rendezvous_port <= 0) {
+    state.worker_group.rendezvous_port = state.inference.rendezvous_port;
+  }
 
   if (value.contains("gateway") && value.at("gateway").is_object()) {
     const auto& gateway = value.at("gateway");
@@ -560,6 +676,62 @@ DesiredState DesiredStateFromJson(const json& value) {
     state.instances.push_back(InstanceSpecFromJson(instance));
   }
 
+  if (state.worker_group.members.empty()) {
+    if (!state.runtime_gpu_nodes.empty()) {
+      int next_rank = 0;
+      for (const auto& gpu_node : state.runtime_gpu_nodes) {
+        WorkerGroupMemberSpec member;
+        member.name = gpu_node.name;
+        member.node_name = gpu_node.node_name;
+        member.gpu_device = gpu_node.gpu_device;
+        member.rank = next_rank++;
+        member.gpu_fraction = gpu_node.gpu_fraction;
+        member.share_mode = gpu_node.share_mode;
+        member.priority = gpu_node.priority;
+        member.preemptible = gpu_node.preemptible;
+        member.memory_cap_mb = gpu_node.memory_cap_mb;
+        member.enabled = gpu_node.enabled;
+        member.leader = member.rank == 0;
+        state.worker_group.members.push_back(std::move(member));
+      }
+    } else {
+      int next_rank = 0;
+      for (const auto& instance : state.instances) {
+        if (instance.role != InstanceRole::Worker) {
+          continue;
+        }
+        WorkerGroupMemberSpec member;
+        member.name = instance.name;
+        member.node_name = instance.node_name;
+        member.gpu_device = instance.gpu_device.value_or("");
+        member.rank = next_rank++;
+        member.gpu_fraction = instance.gpu_fraction;
+        member.share_mode = instance.share_mode;
+        member.priority = instance.priority;
+        member.preemptible = instance.preemptible;
+        member.memory_cap_mb = instance.memory_cap_mb;
+        member.enabled = true;
+        member.leader = member.rank == 0;
+        state.worker_group.members.push_back(std::move(member));
+      }
+    }
+  }
+  if (state.worker_group.expected_workers <= 0) {
+    state.worker_group.expected_workers =
+        static_cast<int>(state.worker_group.members.size());
+  }
+  if (state.worker_group.infer_instance_name.empty()) {
+    for (const auto& instance : state.instances) {
+      if (instance.role == InstanceRole::Infer) {
+        state.worker_group.infer_instance_name = instance.name;
+        break;
+      }
+    }
+  }
+  if (state.worker_group.rendezvous_host.empty()) {
+    state.worker_group.rendezvous_host = state.worker_group.infer_instance_name;
+  }
+
   return state;
 }
 
@@ -577,6 +749,7 @@ DesiredState SliceDesiredStateForNode(
   result.bootstrap_model = state.bootstrap_model;
   result.interaction = state.interaction;
   result.inference = state.inference;
+  result.worker_group = state.worker_group;
   result.gateway = state.gateway;
   result.runtime_gpu_nodes = state.runtime_gpu_nodes;
 
@@ -612,6 +785,11 @@ DesiredState ResolvePlacementTargetAliases(DesiredState state) {
   std::set<std::string> referenced_nodes;
   if (!state.inference.primary_infer_node.empty()) {
     referenced_nodes.insert(state.inference.primary_infer_node);
+  }
+  for (const auto& member : state.worker_group.members) {
+    if (!member.node_name.empty()) {
+      referenced_nodes.insert(member.node_name);
+    }
   }
   for (const auto& node : state.nodes) {
     if (!node.name.empty()) {
@@ -652,6 +830,9 @@ DesiredState ResolvePlacementTargetAliases(DesiredState state) {
   }
   for (auto& gpu_node : state.runtime_gpu_nodes) {
     gpu_node.node_name = resolved_target;
+  }
+  for (auto& member : state.worker_group.members) {
+    member.node_name = resolved_target;
   }
   return state;
 }

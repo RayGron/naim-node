@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS planes (
 CREATE TABLE IF NOT EXISTS nodes (
     name TEXT PRIMARY KEY,
     platform TEXT NOT NULL,
+    execution_mode TEXT NOT NULL DEFAULT 'mixed',
     state TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS registered_hosts (
     public_key_base64 TEXT NOT NULL DEFAULT '',
     controller_public_key_fingerprint TEXT NOT NULL DEFAULT '',
     transport_mode TEXT NOT NULL DEFAULT 'out',
+    execution_mode TEXT NOT NULL DEFAULT 'mixed',
     registration_state TEXT NOT NULL DEFAULT 'registered',
     session_state TEXT NOT NULL DEFAULT 'disconnected',
     session_token TEXT NOT NULL DEFAULT '',
@@ -424,6 +426,9 @@ std::string SerializeInferenceSettings(const InferenceRuntimeSettings& settings)
   return json{
       {"primary_infer_node", settings.primary_infer_node},
       {"runtime_engine", settings.runtime_engine},
+      {"worker_group_id", settings.worker_group_id},
+      {"distributed_backend", settings.distributed_backend},
+      {"worker_selection_policy", settings.worker_selection_policy},
       {"net_if", settings.net_if},
       {"models_root", settings.models_root},
       {"model_cache_dir", settings.model_cache_dir},
@@ -443,6 +448,7 @@ std::string SerializeInferenceSettings(const InferenceRuntimeSettings& settings)
       {"llama_gpu_layers", settings.llama_gpu_layers},
       {"inference_healthcheck_retries", settings.inference_healthcheck_retries},
       {"inference_healthcheck_interval_sec", settings.inference_healthcheck_interval_sec},
+      {"rendezvous_port", settings.rendezvous_port},
   }
       .dump();
 }
@@ -588,6 +594,11 @@ InferenceRuntimeSettings DeserializeInferenceSettings(const std::string& json_te
   settings.primary_infer_node =
       value.value("primary_infer_node", settings.primary_infer_node);
   settings.runtime_engine = value.value("runtime_engine", settings.runtime_engine);
+  settings.worker_group_id = value.value("worker_group_id", settings.worker_group_id);
+  settings.distributed_backend =
+      value.value("distributed_backend", settings.distributed_backend);
+  settings.worker_selection_policy =
+      value.value("worker_selection_policy", settings.worker_selection_policy);
   settings.net_if = value.value("net_if", settings.net_if);
   settings.models_root = value.value("models_root", settings.models_root);
   settings.model_cache_dir = value.value("model_cache_dir", settings.model_cache_dir);
@@ -616,6 +627,7 @@ InferenceRuntimeSettings DeserializeInferenceSettings(const std::string& json_te
       "inference_healthcheck_retries", settings.inference_healthcheck_retries);
   settings.inference_healthcheck_interval_sec = value.value(
       "inference_healthcheck_interval_sec", settings.inference_healthcheck_interval_sec);
+  settings.rendezvous_port = value.value("rendezvous_port", settings.rendezvous_port);
   if (settings.model_cache_dir.empty()) {
     settings.model_cache_dir = settings.gguf_cache_dir;
   }
@@ -1088,6 +1100,11 @@ void ControllerStore::Initialize() {
   }
   EnsureColumn(
       db,
+      "nodes",
+      "execution_mode",
+      "execution_mode TEXT NOT NULL DEFAULT 'mixed'");
+  EnsureColumn(
+      db,
       "scheduler_worker_runtime",
       "last_scheduler_phase",
       "last_scheduler_phase TEXT NOT NULL DEFAULT ''");
@@ -1121,6 +1138,11 @@ void ControllerStore::Initialize() {
       "registered_hosts",
       "transport_mode",
       "transport_mode TEXT NOT NULL DEFAULT 'out'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "execution_mode",
+      "execution_mode TEXT NOT NULL DEFAULT 'mixed'");
   EnsureColumn(
       db,
       "registered_hosts",
@@ -1253,12 +1275,14 @@ void ControllerStore::ReplaceDesiredState(
     for (const auto& node : state.nodes) {
       Statement node_statement(
           db,
-          "INSERT INTO nodes(name, platform, state) VALUES(?1, ?2, 'ready') "
+          "INSERT INTO nodes(name, platform, execution_mode, state) VALUES(?1, ?2, ?3, 'ready') "
           "ON CONFLICT(name) DO UPDATE SET "
           "platform = excluded.platform, "
+          "execution_mode = excluded.execution_mode, "
           "state = excluded.state;");
       node_statement.BindText(1, node.name);
       node_statement.BindText(2, node.platform);
+      node_statement.BindText(3, ToString(node.execution_mode));
       node_statement.StepDone();
 
       Statement membership_statement(
@@ -1470,7 +1494,7 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState(const std::string&
   {
     std::map<std::string, std::size_t> node_indexes;
     if (!plane_node_names.empty()) {
-      std::string node_sql = "SELECT name, platform FROM nodes WHERE name IN (";
+      std::string node_sql = "SELECT name, platform, execution_mode FROM nodes WHERE name IN (";
       for (std::size_t index = 0; index < plane_node_names.size(); ++index) {
         if (index > 0) {
           node_sql += ", ";
@@ -1487,6 +1511,8 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState(const std::string&
         NodeInventory node;
         node.name = ToColumnText(node_statement.raw(), 0);
         node.platform = ToColumnText(node_statement.raw(), 1);
+        node.execution_mode =
+            ParseHostExecutionMode(ToColumnText(node_statement.raw(), 2));
         node_indexes[node.name] = state.nodes.size();
         state.nodes.push_back(std::move(node));
       }
@@ -1744,6 +1770,7 @@ void ControllerStore::UpsertRegisteredHost(const RegisteredHostRecord& host) {
       " public_key_base64,"
       " controller_public_key_fingerprint,"
       " transport_mode,"
+      " execution_mode,"
       " registration_state,"
       " session_state,"
       " session_token,"
@@ -1756,13 +1783,14 @@ void ControllerStore::UpsertRegisteredHost(const RegisteredHostRecord& host) {
       " last_heartbeat_at,"
       " updated_at"
       ") VALUES ("
-      " ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, CURRENT_TIMESTAMP"
+      " ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, CURRENT_TIMESTAMP"
       ")"
       " ON CONFLICT(node_name) DO UPDATE SET"
       " advertised_address = excluded.advertised_address,"
       " public_key_base64 = excluded.public_key_base64,"
       " controller_public_key_fingerprint = excluded.controller_public_key_fingerprint,"
       " transport_mode = excluded.transport_mode,"
+      " execution_mode = excluded.execution_mode,"
       " registration_state = excluded.registration_state,"
       " session_state = excluded.session_state,"
       " session_token = excluded.session_token,"
@@ -1779,16 +1807,17 @@ void ControllerStore::UpsertRegisteredHost(const RegisteredHostRecord& host) {
   statement.BindText(3, host.public_key_base64);
   statement.BindText(4, host.controller_public_key_fingerprint);
   statement.BindText(5, host.transport_mode);
-  statement.BindText(6, host.registration_state);
-  statement.BindText(7, host.session_state);
-  statement.BindText(8, host.session_token);
-  statement.BindText(9, host.session_expires_at);
-  statement.BindInt(10, static_cast<int>(host.session_host_sequence));
-  statement.BindInt(11, static_cast<int>(host.session_controller_sequence));
-  statement.BindText(12, host.capabilities_json);
-  statement.BindText(13, host.status_message);
-  statement.BindText(14, host.last_session_at);
-  statement.BindText(15, host.last_heartbeat_at);
+  statement.BindText(6, host.execution_mode);
+  statement.BindText(7, host.registration_state);
+  statement.BindText(8, host.session_state);
+  statement.BindText(9, host.session_token);
+  statement.BindText(10, host.session_expires_at);
+  statement.BindInt(11, static_cast<int>(host.session_host_sequence));
+  statement.BindInt(12, static_cast<int>(host.session_controller_sequence));
+  statement.BindText(13, host.capabilities_json);
+  statement.BindText(14, host.status_message);
+  statement.BindText(15, host.last_session_at);
+  statement.BindText(16, host.last_heartbeat_at);
   statement.StepDone();
 }
 
@@ -1802,6 +1831,7 @@ std::optional<RegisteredHostRecord> ControllerStore::LoadRegisteredHost(
       " public_key_base64,"
       " controller_public_key_fingerprint,"
       " transport_mode,"
+      " execution_mode,"
       " registration_state,"
       " session_state,"
       " session_token,"
@@ -1830,14 +1860,15 @@ std::optional<RegisteredHostRecord> ControllerStore::LoadRegisteredHost(
       ToColumnText(statement.raw(), 6),
       ToColumnText(statement.raw(), 7),
       ToColumnText(statement.raw(), 8),
-      sqlite3_column_int64(statement.raw(), 9),
+      ToColumnText(statement.raw(), 9),
       sqlite3_column_int64(statement.raw(), 10),
-      ToColumnText(statement.raw(), 11),
+      sqlite3_column_int64(statement.raw(), 11),
       ToColumnText(statement.raw(), 12),
       ToColumnText(statement.raw(), 13),
       ToColumnText(statement.raw(), 14),
       ToColumnText(statement.raw(), 15),
       ToColumnText(statement.raw(), 16),
+      ToColumnText(statement.raw(), 17),
   };
 }
 
@@ -1850,6 +1881,7 @@ std::vector<RegisteredHostRecord> ControllerStore::LoadRegisteredHosts(
       " public_key_base64,"
       " controller_public_key_fingerprint,"
       " transport_mode,"
+      " execution_mode,"
       " registration_state,"
       " session_state,"
       " session_token,"
@@ -1884,14 +1916,15 @@ std::vector<RegisteredHostRecord> ControllerStore::LoadRegisteredHosts(
         ToColumnText(statement.raw(), 6),
         ToColumnText(statement.raw(), 7),
         ToColumnText(statement.raw(), 8),
-        sqlite3_column_int64(statement.raw(), 9),
+        ToColumnText(statement.raw(), 9),
         sqlite3_column_int64(statement.raw(), 10),
-        ToColumnText(statement.raw(), 11),
+        sqlite3_column_int64(statement.raw(), 11),
         ToColumnText(statement.raw(), 12),
         ToColumnText(statement.raw(), 13),
         ToColumnText(statement.raw(), 14),
         ToColumnText(statement.raw(), 15),
         ToColumnText(statement.raw(), 16),
+        ToColumnText(statement.raw(), 17),
     });
   }
   return hosts;

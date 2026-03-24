@@ -179,6 +179,7 @@ struct RegisteredHostRecord {
   std::string public_key_base64;
   std::string controller_public_key_fingerprint;
   std::string transport_mode;
+  std::string execution_mode = "mixed";
   std::string registration_state;
   std::string session_state;
   std::string session_token;
