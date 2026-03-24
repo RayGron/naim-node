@@ -4889,6 +4889,8 @@ void StreamPlaneInteractionSse(
       json complete_payload = json::object();
       bool saw_complete = false;
       bool upstream_stream_finished = false;
+      std::string openai_stream_raw_text;
+      std::string openai_stream_emitted_text;
       std::string transport_buffer = upstream.body;
       std::string sse_buffer;
       if (chunked_transfer) {
@@ -4897,8 +4899,58 @@ void StreamPlaneInteractionSse(
       } else {
         sse_buffer = std::move(transport_buffer);
       }
+      const auto emit_openai_stream_progress =
+          [&](const std::string& model_name, bool final_flush) {
+            std::string visible_text;
+            const std::size_t think_close = openai_stream_raw_text.rfind("</think>");
+            if (think_close != std::string::npos) {
+              visible_text = openai_stream_raw_text.substr(think_close + std::string("</think>").size());
+            } else {
+              const std::string trimmed = Trim(openai_stream_raw_text);
+              if (!final_flush &&
+                  (openai_stream_raw_text.find("<think>") != std::string::npos ||
+                   StartsWithReasoningPreamble(trimmed))) {
+                return;
+              }
+              visible_text = openai_stream_raw_text;
+            }
+            bool marker_seen = false;
+            visible_text = RemoveCompletionMarkers(
+                visible_text, policy.completion_marker, &marker_seen);
+            filter_state.marker_seen = filter_state.marker_seen || marker_seen;
+            visible_text = SanitizeInteractionText(visible_text);
+            if (visible_text.empty()) {
+              return;
+            }
+            if (visible_text.size() < openai_stream_emitted_text.size() ||
+                visible_text.compare(0, openai_stream_emitted_text.size(), openai_stream_emitted_text) !=
+                    0) {
+              if (!final_flush || !openai_stream_emitted_text.empty()) {
+                return;
+              }
+            }
+            const std::string delta = visible_text.substr(openai_stream_emitted_text.size());
+            if (delta.empty()) {
+              return;
+            }
+            openai_stream_emitted_text = visible_text;
+            result.cleaned_text += delta;
+            if (!SendInteractionSseEvent(
+                    client_fd,
+                    "delta",
+                    json{
+                        {"session_id", session.session_id},
+                        {"segment_index", segment_index},
+                        {"continuation_index", segment_index},
+                        {"model", model_name},
+                        {"delta", delta},
+                    })) {
+              throw std::runtime_error("failed to write downstream delta");
+            }
+          };
       const auto handle_frame = [&](const InteractionSseFrame& frame) {
         if (frame.data == "[DONE]") {
+          emit_openai_stream_progress(session.model, true);
           if (!saw_complete) {
             complete_payload = json{
                 {"model", session.model},
@@ -4929,27 +4981,10 @@ void StreamPlaneInteractionSse(
             if (choice.contains("delta") && choice.at("delta").is_object()) {
               delta_text = choice.at("delta").value("content", std::string{});
             }
-            const std::string filtered = ConsumeCompletionMarkerFilteredChunk(
-                filter_state,
-                delta_text,
-                policy.completion_marker,
-                false);
-            if (!filtered.empty()) {
-              result.cleaned_text += filtered;
-              if (!SendInteractionSseEvent(
-                      client_fd,
-                      "delta",
-                      json{
-                          {"session_id", session.session_id},
-                          {"segment_index", segment_index},
-                          {"continuation_index", segment_index},
-                          {"model", chunk_payload.value("model", std::string{})},
-                          {"delta", filtered},
-                      })) {
-                throw std::runtime_error("failed to write downstream delta");
-              }
-            }
+            openai_stream_raw_text += delta_text;
+            emit_openai_stream_progress(chunk_payload.value("model", std::string{}), false);
             if (choice.contains("finish_reason") && !choice.at("finish_reason").is_null()) {
+              emit_openai_stream_progress(chunk_payload.value("model", std::string{}), true);
               complete_payload = json{
                   {"model", chunk_payload.value("model", std::string{})},
                   {"finish_reason", choice.value("finish_reason", std::string{"stop"})},
