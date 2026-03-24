@@ -184,6 +184,10 @@ std::vector<comet::HostObservation> FilterHostObservationsForPlane(
     const std::vector<comet::HostObservation>& observations,
     const std::string& plane_name);
 
+bool ObservationMatchesPlane(
+    const comet::HostObservation& observation,
+    const std::string& plane_name);
+
 std::map<std::string, comet::HostAssignment> BuildLatestPlaneAssignmentsByNode(
     const std::vector<comet::HostAssignment>& assignments);
 
@@ -1692,10 +1696,13 @@ PlaneInteractionResolution ResolvePlaneInteraction(
   resolution.desired_state = *desired_state;
   resolution.plane_record = store.LoadPlane(plane_name);
   const std::string primary_node = desired_state->inference.primary_infer_node;
+  bool observation_matches_plane = false;
   if (!primary_node.empty()) {
     resolution.observation = store.LoadHostObservation(primary_node);
-    if (resolution.observation.has_value() &&
-        resolution.observation->plane_name == plane_name &&
+    observation_matches_plane =
+        resolution.observation.has_value() &&
+        ObservationMatchesPlane(*resolution.observation, plane_name);
+    if (observation_matches_plane &&
         !resolution.observation->runtime_status_json.empty()) {
       resolution.runtime_status =
           comet::DeserializeRuntimeStatusJson(resolution.observation->runtime_status_json);
@@ -1708,8 +1715,7 @@ PlaneInteractionResolution ResolvePlaneInteraction(
   const bool llm_plane = desired_state->plane_mode == comet::PlaneMode::Llm;
   const bool running_plane =
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
-  const bool observation_ready =
-      resolution.observation.has_value() && resolution.observation->plane_name == plane_name;
+  const bool observation_ready = observation_matches_plane;
   const auto local_runtime_blocker =
       DescribeUnsupportedControllerLocalRuntime(*desired_state, primary_node);
   const bool runtime_ready =
