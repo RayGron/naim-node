@@ -27,6 +27,17 @@ if [[ ! -f "${vcpkg_root}/scripts/buildsystems/vcpkg.cmake" ]]; then
   exit 1
 fi
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if ! command -v pkg-config >/dev/null 2>&1 && ! command -v pkgconf >/dev/null 2>&1; then
+    echo "error: pkg-config is required for macOS dependency builds; install it with 'brew install pkg-config'" >&2
+    exit 1
+  fi
+  if ! command -v autoconf >/dev/null 2>&1; then
+    echo "error: autoconf is required for macOS dependency builds; install it with 'brew install autoconf automake libtool'" >&2
+    exit 1
+  fi
+fi
+
 hash_cmd=()
 if command -v sha256sum >/dev/null 2>&1; then
   hash_cmd=(sha256sum)

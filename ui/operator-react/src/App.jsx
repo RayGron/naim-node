@@ -317,14 +317,21 @@ function bootstrapModelTargetPath(desiredState) {
 
 function interactionReasonMessage(status) {
   const reason = status?.reason || "";
+  const failureDetail = status?.failure_detail || "";
   if (reason === "plane_mode_compute") {
     return "Interaction is disabled for compute planes.";
   }
   if (reason === "plane_not_running") {
     return "Start the plane to enable chat interaction.";
   }
+  if (reason === "unsupported_local_runtime") {
+    return failureDetail || "This plane cannot be materialized on the local host.";
+  }
   if (reason === "no_observation") {
     return "Waiting for a fresh infer-node observation.";
+  }
+  if (reason === "runtime_start_failed") {
+    return failureDetail || "Runtime startup failed on the infer node.";
   }
   if (reason === "runtime_status_missing") {
     return "Runtime status is not available yet.";

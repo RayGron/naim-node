@@ -2,8 +2,8 @@
   "name": "comet-node",
   "version-string": "0.1.0",
   "dependencies": [
+    "libsodium",
     "nlohmann-json",
-    "openssl",
     "sqlite3"
   ]
 }

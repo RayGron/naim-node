@@ -104,12 +104,21 @@ External C/C++ dependencies are managed through `vcpkg` in manifest mode.
 
 Current manifest dependencies:
 
-- `llama-cpp`
 - `sqlite3`
 - `nlohmann-json`
+- `libsodium`
+
+The project pulls `llama.cpp` through CMake `FetchContent` using the pinned revision in
+`CMakeLists.txt`.
 
 The host configure script searches for `vcpkg`, installs the manifest dependencies for the
 current platform triplet, and only then runs CMake configure.
+
+On macOS, install the build prerequisites first:
+
+```bash
+brew install pkg-config autoconf automake libtool libomp
+```
 
 ## Build
 
@@ -126,6 +135,8 @@ Host builds are grouped by platform and architecture:
 - Linux x64: `build/linux/x64`
 - Linux arm64: `build/linux/arm64`
 - Windows x64: `build/windows/x64`
+- Windows arm64: `build/windows/arm64`
+- macOS x64: `build/macos/x64`
 - macOS arm64: `build/macos/arm64`
 
 The executables and static libraries are emitted directly into that folder.
@@ -149,12 +160,19 @@ The repository ships VS Code build tasks similar to the `maglev` workflow:
 - `Comet Windows x64: Build Release`
 - `Comet Windows arm64: Build Debug`
 - `Comet Windows arm64: Build Release`
+- `Comet macOS x64: Build Debug`
+- `Comet macOS x64: Build Release`
+- `Comet macOS arm64: Build Debug`
+- `Comet macOS arm64: Build Release`
 - `Comet Linux x64: Package Release`
 - `Comet Linux arm64: Package Release`
 - `Comet Windows x64: Package Release`
 - `Comet Windows arm64: Package Release`
+- `Comet macOS x64: Package Release`
+- `Comet macOS arm64: Package Release`
 - `Comet: Package Release`
 - `Comet: Check`
+- `Comet macOS: Check`
 
 Controller-side storage inspection now has two layers:
 
@@ -648,7 +666,7 @@ Primary remote hostd flow:
 ./build/linux/x64/comet-node run controller
 
 ./build/linux/x64/comet-node install hostd --controller http://controller:18080 --node gpu-b --skip-systemctl
-./build/linux/x64/comet-node connect-hostd --db /var/lib/comet-node/controller.sqlite --node gpu-b --public-key /var/lib/comet-node/keys/hostd.pub.pem
+./build/linux/x64/comet-node connect-hostd --db /var/lib/comet-node/controller.sqlite --node gpu-b --public-key /var/lib/comet-node/keys/hostd.pub.b64
 ./build/linux/x64/comet-node run hostd
 ```
 
@@ -676,6 +694,14 @@ It validates the primary user flow:
 - see local `hostd` materialize state after plane apply
 
 `--skip-image-build` is valid when `comet/web-ui:dev` is already present locally. The harness
+is wrapped by a macOS-only entrypoint as well:
+
+```bash
+./scripts/check-macos.sh --skip-image-build
+```
+
+It builds the host debug target, verifies the launcher install flow with
+`service verify --skip-systemctl`, and then runs the live Phase L validation.
 uses `--hostd-compose-mode skip`, so it validates first-use onboarding and local state
 materialization without requiring infer/worker runtime images.
 
@@ -693,7 +719,7 @@ Registry inspection and control:
 ```bash
 ./build/linux/x64/comet-controller show-hostd-hosts --db var/controller.sqlite
 ./build/linux/x64/comet-controller revoke-hostd --db var/controller.sqlite --node gpu-b
-./build/linux/x64/comet-controller rotate-hostd-key --db var/controller.sqlite --node gpu-b --public-key /path/to/new-hostd.pub.pem
+./build/linux/x64/comet-controller rotate-hostd-key --db var/controller.sqlite --node gpu-b --public-key /path/to/new-hostd.pub.b64
 ```
 
 The browser-facing runtime architecture is now:

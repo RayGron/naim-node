@@ -32,7 +32,7 @@
 #include <algorithm>
 
 #include <nlohmann/json.hpp>
-#include <openssl/sha.h>
+#include <sodium.h>
 
 #include "comet/compose_renderer.h"
 #include "comet/crypto_utils.h"
@@ -1026,6 +1026,89 @@ std::string NormalizeLowercase(std::string value) {
   return value;
 }
 
+std::string CurrentHostPlatform() {
+#if defined(_WIN32)
+  return "windows";
+#elif defined(__APPLE__)
+  return "macos";
+#elif defined(__linux__)
+  return "linux";
+#else
+  return "unknown";
+#endif
+}
+
+const comet::NodeInventory* FindNodeInventory(
+    const comet::DesiredState& desired_node_state,
+    const std::string& node_name) {
+  for (const auto& node : desired_node_state.nodes) {
+    if (node.name == node_name) {
+      return &node;
+    }
+  }
+  return nullptr;
+}
+
+bool NodeUsesGpuRuntime(
+    const comet::DesiredState& desired_node_state,
+    const std::string& node_name) {
+  for (const auto& runtime_gpu_node : desired_node_state.runtime_gpu_nodes) {
+    if (runtime_gpu_node.enabled && runtime_gpu_node.node_name == node_name) {
+      return true;
+    }
+  }
+  for (const auto& instance : desired_node_state.instances) {
+    if (instance.node_name == node_name && instance.gpu_device.has_value() &&
+        !instance.gpu_device->empty()) {
+      return true;
+    }
+  }
+  if (const auto* node = FindNodeInventory(desired_node_state, node_name);
+      node != nullptr && !node->gpu_devices.empty()) {
+    return true;
+  }
+  return false;
+}
+
+bool NodeUsesManagedRuntimeServices(
+    const comet::DesiredState& desired_node_state,
+    const std::string& node_name) {
+  for (const auto& instance : desired_node_state.instances) {
+    if (instance.node_name == node_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void ValidateDesiredNodeStateForCurrentHost(
+    const comet::DesiredState& desired_node_state,
+    ComposeMode compose_mode) {
+  if (compose_mode != ComposeMode::Exec) {
+    return;
+  }
+
+  if (desired_node_state.nodes.empty()) {
+    throw std::runtime_error("desired node state is empty");
+  }
+  const std::string node_name = desired_node_state.nodes.front().name;
+  const std::string host_platform = CurrentHostPlatform();
+  if (const auto* node = FindNodeInventory(desired_node_state, node_name);
+      node != nullptr && !node->platform.empty() && node->platform != host_platform) {
+    throw std::runtime_error(
+        "node '" + node_name + "' targets platform '" + node->platform +
+        "', but hostd is running on '" + host_platform + "'");
+  }
+
+  if (host_platform == "macos" &&
+      NodeUsesManagedRuntimeServices(desired_node_state, node_name) &&
+      NodeUsesGpuRuntime(desired_node_state, node_name)) {
+    throw std::runtime_error(
+        "node '" + node_name +
+        "' requests Linux/NVIDIA GPU runtime, but hostd compose exec is unsupported on macOS");
+  }
+}
+
 std::optional<std::filesystem::path> FindRepoRootFromPath(std::filesystem::path current) {
   while (!current.empty()) {
     if (std::filesystem::exists(current / "scripts" / "build-runtime-images.sh") &&
@@ -1385,22 +1468,26 @@ std::optional<std::uintmax_t> FileSizeIfExists(const std::string& path) {
 }
 
 std::string ComputeFileSha256Hex(const std::string& path) {
+  comet::InitializeCrypto();
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     throw std::runtime_error("failed to open file for sha256: " + path);
   }
-  SHA256_CTX context;
-  SHA256_Init(&context);
+  crypto_hash_sha256_state context;
+  crypto_hash_sha256_init(&context);
   std::array<char, 1024 * 1024> buffer{};
   while (input.good()) {
     input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
     const auto count = input.gcount();
     if (count > 0) {
-      SHA256_Update(&context, buffer.data(), static_cast<std::size_t>(count));
+      crypto_hash_sha256_update(
+          &context,
+          reinterpret_cast<const unsigned char*>(buffer.data()),
+          static_cast<unsigned long long>(count));
     }
   }
-  unsigned char digest[SHA256_DIGEST_LENGTH];
-  SHA256_Final(digest, &context);
+  std::array<unsigned char, crypto_hash_sha256_BYTES> digest{};
+  crypto_hash_sha256_final(&context, digest.data());
   std::ostringstream out;
   out << std::hex << std::setfill('0');
   for (unsigned char byte : digest) {
@@ -4277,6 +4364,8 @@ void ApplyDesiredNodeState(
   }
   std::cout << "compose_mode="
             << (compose_mode == ComposeMode::Exec ? "exec" : "skip") << "\n";
+
+  ValidateDesiredNodeStateForCurrentHost(desired_node_state, compose_mode);
 
   if (execution_plan.operations.empty()) {
     std::cout << "no local changes for node=" << node_name << "\n";

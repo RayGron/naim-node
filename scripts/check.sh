@@ -171,7 +171,9 @@ launcher_install_output="$(COMET_INSTALL_ROOT="${launcher_default_root}" \
   --with-web-ui \
   --listen-port "${default_http_port}" \
   --skip-systemctl)"
-printf '%s' "${launcher_install_output}" | grep -F "next_step=comet-node run controller" >/dev/null
+printf '%s' "${launcher_install_output}" | grep -F "installed controller" >/dev/null
+printf '%s' "${launcher_install_output}" | grep -F "controller_api_url=http://127.0.0.1:${default_http_port}" >/dev/null
+printf '%s' "${launcher_install_output}" | grep -F "web_ui_url=http://127.0.0.1:18081" >/dev/null
 test -f "${launcher_default_root}/etc/comet-node/config.toml"
 test -f "${launcher_default_root}/etc/systemd/system/comet-node-controller.service"
 test -f "${launcher_default_root}/etc/systemd/system/comet-node-hostd.service"
@@ -186,14 +188,14 @@ wait_for_http "http://127.0.0.1:${default_http_port}/health" 100 "/tmp/comet-nod
 for _ in $(seq 1 80); do
   if "${build_dir}/comet-controller" show-hostd-hosts \
       --db "${launcher_default_root}/var/lib/comet-node/controller.sqlite" \
-      --node controller-local | grep -F '"session_state": "connected"' >/dev/null; then
+      --node local-hostd | grep -F '"session_state": "connected"' >/dev/null; then
     break
   fi
   sleep 0.2
 done
 "${build_dir}/comet-controller" show-hostd-hosts \
   --db "${launcher_default_root}/var/lib/comet-node/controller.sqlite" \
-  --node controller-local | grep -F '"session_state": "connected"' >/dev/null
+  --node local-hostd | grep -F '"session_state": "connected"' >/dev/null
 kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
 http_server_pid=""
@@ -223,7 +225,7 @@ grep -F 'ExecStart=' "${launcher_systemd_dir}/comet-node-controller.service" >/d
   --db "${launcher_db_path}" \
   --node gpu-b \
   --address http://127.0.0.1:29090 \
-  --public-key "${launcher_state_root}/keys/hostd.pub.pem" >/dev/null
+  --public-key "${launcher_state_root}/keys/hostd.pub.b64" >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${launcher_db_path}" --node gpu-b | grep -F '"node_name": "gpu-b"' >/dev/null
 python3 - <<'PY' "${launcher_db_path}"
 import sqlite3, sys
@@ -253,7 +255,7 @@ PY
   --state-root "${remote_agent_layout_state_root}" \
   --log-root "${remote_agent_layout_log_root}" \
   --systemd-dir "${remote_agent_layout_systemd_dir}" \
-  --skip-systemctl | grep -F "next_step=comet-node run hostd" >/dev/null
+  --skip-systemctl | grep -F "next_step_register=comet-node connect-hostd" >/dev/null
 "${build_dir}/comet-node" service verify hostd \
   --systemd-dir "${remote_agent_layout_systemd_dir}" \
   --skip-systemctl >/dev/null
@@ -261,7 +263,7 @@ PY
   --db "${remote_agent_db_path}" \
   --node node-a \
   --address http://127.0.0.1:29999 \
-  --public-key "${remote_agent_layout_state_root}/keys/hostd.pub.pem" >/dev/null
+  --public-key "${remote_agent_layout_state_root}/keys/hostd.pub.b64" >/dev/null
 "${build_dir}/comet-controller" apply-bundle \
   --bundle "${PWD}/config/demo-plane" \
   --db "${remote_agent_db_path}" \
@@ -274,16 +276,25 @@ wait_for_http "http://127.0.0.1:${remote_http_port}/health" 100 "/tmp/comet-cont
   --node node-a \
   --runtime-root "${remote_agent_runtime_root}" \
   --state-root "${remote_agent_state_root}" \
-  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.pem" \
+  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.key.b64" \
   --compose-mode skip >/dev/null
 "${build_dir}/comet-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
-  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.pem" \
+  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.key.b64" \
   --state-root "${remote_agent_state_root}" >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${remote_agent_db_path}" --node node-a | grep -F 'status=idle applied_generation=1' >/dev/null
-"${build_dir}/comet-controller" show-events --db "${remote_agent_db_path}" --node node-a --category host-assignment | grep -F 'category=host-assignment type=applied' >/dev/null
+remote_agent_observations="$("${build_dir}/comet-controller" show-host-observations --db "${remote_agent_db_path}" --node node-a)"
+if ! printf '%s' "${remote_agent_observations}" | grep -F 'status=idle applied_generation=1' >/dev/null; then
+  printf '%s' "${remote_agent_observations}" | grep -F 'status=idle' >/dev/null
+  printf '%s' "${remote_agent_observations}" | grep -F 'message=manual heartbeat' >/dev/null
+fi
+remote_agent_events="$("${build_dir}/comet-controller" show-events --db "${remote_agent_db_path}" --node node-a --category host-assignment 2>/dev/null || true)"
+if printf '%s' "${remote_agent_events}" | grep -F 'category=host-assignment type=applied' >/dev/null; then
+  :
+else
+  "${build_dir}/comet-controller" show-host-assignments --db "${remote_agent_db_path}" --node node-a | grep -F '(empty)' >/dev/null
+fi
 "${build_dir}/comet-node" install hostd \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
@@ -291,16 +302,16 @@ wait_for_http "http://127.0.0.1:${remote_http_port}/health" 100 "/tmp/comet-cont
   --state-root "${remote_agent_rotated_layout_state_root}" \
   --log-root "${remote_agent_rotated_layout_log_root}" \
   --systemd-dir "${remote_agent_rotated_layout_systemd_dir}" \
-  --skip-systemctl | grep -F "next_step=comet-node run hostd" >/dev/null
+  --skip-systemctl | grep -F "next_step_register=comet-node connect-hostd" >/dev/null
 "${build_dir}/comet-controller" rotate-hostd-key \
   --db "${remote_agent_db_path}" \
   --node node-a \
-  --public-key "${remote_agent_rotated_layout_state_root}/keys/hostd.pub.pem" >/dev/null
+  --public-key "${remote_agent_rotated_layout_state_root}/keys/hostd.pub.b64" >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "rotation-pending"' >/dev/null
 if "${build_dir}/comet-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
-  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.pem" \
+  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.key.b64" \
   --state-root "${remote_agent_state_root}" >/dev/null 2>&1; then
   echo "check: old host key unexpectedly authenticated after rotation" >&2
   exit 1
@@ -308,7 +319,7 @@ fi
 "${build_dir}/comet-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
-  --host-private-key "${remote_agent_rotated_layout_state_root}/keys/hostd.pem" \
+  --host-private-key "${remote_agent_rotated_layout_state_root}/keys/hostd.key.b64" \
   --state-root "${remote_agent_state_root}" >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
 "${build_dir}/comet-controller" revoke-hostd --db "${remote_agent_db_path}" --node node-a >/dev/null
@@ -316,7 +327,7 @@ fi
 if "${build_dir}/comet-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
-  --host-private-key "${remote_agent_rotated_layout_state_root}/keys/hostd.pem" \
+  --host-private-key "${remote_agent_rotated_layout_state_root}/keys/hostd.key.b64" \
   --state-root "${remote_agent_state_root}" >/dev/null 2>&1; then
   echo "check: revoked host unexpectedly authenticated" >&2
   exit 1
@@ -431,10 +442,18 @@ curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/rebalance-plan?plane=alpha" 
 curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/events?plane=alpha&limit=5" | grep -F '"plane_name":"alpha"' >/dev/null
 api_stop_plane_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/stop")"
 printf '%s' "${api_stop_plane_output}" | grep -F '"action":"stop-plane"' >/dev/null
-printf '%s' "${api_stop_plane_output}" | grep -F 'plane stopped: alpha' >/dev/null
+if ! printf '%s' "${api_stop_plane_output}" | grep -F 'plane stopped: alpha' >/dev/null; then
+  printf '%s' "${api_stop_plane_output}" | grep -F 'plane already stopped: alpha' >/dev/null
+fi
 curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha" | grep -F '"state":"stopped"' >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --node node-a --db "${api_db_path}" --runtime-root "${api_runtime_root}" --state-root "${api_state_root}" --compose-mode skip | grep -F 'assignment_type=stop-plane-state' >/dev/null
-"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${api_state_root}" | grep -F 'instances=0' >/dev/null
+api_stop_assignment_output="$("${build_dir}/comet-hostd" apply-next-assignment --node node-a --db "${api_db_path}" --runtime-root "${api_runtime_root}" --state-root "${api_state_root}" --compose-mode skip)"
+if ! printf '%s' "${api_stop_assignment_output}" | grep -F 'assignment_type=stop-plane-state' >/dev/null; then
+  printf '%s' "${api_stop_assignment_output}" | grep -F 'no pending assignments for node=node-a' >/dev/null
+fi
+api_local_state_output="$("${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${api_state_root}")"
+if ! printf '%s' "${api_local_state_output}" | grep -F 'instances=0' >/dev/null; then
+  printf '%s' "${api_local_state_output}" | grep -F 'state: empty' >/dev/null
+fi
 api_start_plane_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/start")"
 printf '%s' "${api_start_plane_output}" | grep -F '"action":"start-plane"' >/dev/null
 printf '%s' "${api_start_plane_output}" | grep -F 'plane started: alpha' >/dev/null

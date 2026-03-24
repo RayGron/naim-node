@@ -122,6 +122,66 @@
       }
     },
     {
+      "label": "Comet macOS x64: Build Debug",
+      "type": "shell",
+      "command": "./scripts/build-target.sh",
+      "args": [
+        "macos",
+        "x64",
+        "Debug"
+      ],
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Comet macOS x64: Build Release",
+      "type": "shell",
+      "command": "./scripts/build-target.sh",
+      "args": [
+        "macos",
+        "x64",
+        "Release"
+      ],
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Comet macOS arm64: Build Debug",
+      "type": "shell",
+      "command": "./scripts/build-target.sh",
+      "args": [
+        "macos",
+        "arm64",
+        "Debug"
+      ],
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Comet macOS arm64: Build Release",
+      "type": "shell",
+      "command": "./scripts/build-target.sh",
+      "args": [
+        "macos",
+        "arm64",
+        "Release"
+      ],
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
       "label": "Comet Linux x64: Package Release",
       "type": "shell",
       "command": "./scripts/package-target.sh",
@@ -178,6 +238,34 @@
       }
     },
     {
+      "label": "Comet macOS x64: Package Release",
+      "type": "shell",
+      "command": "./scripts/package-target.sh",
+      "args": [
+        "macos",
+        "x64"
+      ],
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Comet macOS arm64: Package Release",
+      "type": "shell",
+      "command": "./scripts/package-target.sh",
+      "args": [
+        "macos",
+        "arm64"
+      ],
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
       "label": "Comet: Package Release",
       "type": "shell",
       "command": "./scripts/package-host-release.sh",
@@ -191,6 +279,16 @@
       "label": "Comet: Check",
       "type": "shell",
       "command": "./scripts/check.sh",
+      "group": "test",
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Comet macOS: Check",
+      "type": "shell",
+      "command": "./scripts/check-macos.sh",
       "group": "test",
       "problemMatcher": "$gcc",
       "options": {

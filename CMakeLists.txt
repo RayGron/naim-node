@@ -4,6 +4,9 @@ option(COMET_SKIP_VCPKG_TOOLCHAIN "Skip automatic vcpkg toolchain detection" OFF
 
 if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
   list(PREPEND CMAKE_PREFIX_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+  if(NOT DEFINED _VCPKG_INSTALLED_DIR)
+    set(_VCPKG_INSTALLED_DIR "${VCPKG_INSTALLED_DIR}")
+  endif()
 endif()
 
 if(NOT DEFINED CMAKE_DISABLE_FIND_PACKAGE_ICU)
@@ -109,7 +112,7 @@ endif()
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(OpenSSL REQUIRED)
+find_package(unofficial-sodium CONFIG REQUIRED)
 
 add_library(
   comet-common
@@ -132,7 +135,7 @@ target_link_libraries(
   comet-common
   PUBLIC
     nlohmann_json::nlohmann_json
-    OpenSSL::Crypto
+    unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3
 )
 target_compile_options(comet-common PRIVATE -Wall -Wextra -Wpedantic)

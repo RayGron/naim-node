@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 CREATE TABLE IF NOT EXISTS registered_hosts (
     node_name TEXT PRIMARY KEY,
     advertised_address TEXT NOT NULL DEFAULT '',
-    public_key_pem TEXT NOT NULL DEFAULT '',
+    public_key_base64 TEXT NOT NULL DEFAULT '',
     controller_public_key_fingerprint TEXT NOT NULL DEFAULT '',
     transport_mode TEXT NOT NULL DEFAULT 'out',
     registration_state TEXT NOT NULL DEFAULT 'registered',
@@ -1058,8 +1058,8 @@ void ControllerStore::Initialize() {
   EnsureColumn(
       db,
       "registered_hosts",
-      "public_key_pem",
-      "public_key_pem TEXT NOT NULL DEFAULT ''");
+      "public_key_base64",
+      "public_key_base64 TEXT NOT NULL DEFAULT ''");
   EnsureColumn(
       db,
       "registered_hosts",
@@ -1690,7 +1690,7 @@ void ControllerStore::UpsertRegisteredHost(const RegisteredHostRecord& host) {
       "INSERT INTO registered_hosts("
       " node_name,"
       " advertised_address,"
-      " public_key_pem,"
+      " public_key_base64,"
       " controller_public_key_fingerprint,"
       " transport_mode,"
       " registration_state,"
@@ -1709,7 +1709,7 @@ void ControllerStore::UpsertRegisteredHost(const RegisteredHostRecord& host) {
       ")"
       " ON CONFLICT(node_name) DO UPDATE SET"
       " advertised_address = excluded.advertised_address,"
-      " public_key_pem = excluded.public_key_pem,"
+      " public_key_base64 = excluded.public_key_base64,"
       " controller_public_key_fingerprint = excluded.controller_public_key_fingerprint,"
       " transport_mode = excluded.transport_mode,"
       " registration_state = excluded.registration_state,"
@@ -1725,7 +1725,7 @@ void ControllerStore::UpsertRegisteredHost(const RegisteredHostRecord& host) {
       " updated_at = CURRENT_TIMESTAMP;");
   statement.BindText(1, host.node_name);
   statement.BindText(2, host.advertised_address);
-  statement.BindText(3, host.public_key_pem);
+  statement.BindText(3, host.public_key_base64);
   statement.BindText(4, host.controller_public_key_fingerprint);
   statement.BindText(5, host.transport_mode);
   statement.BindText(6, host.registration_state);
@@ -1748,7 +1748,7 @@ std::optional<RegisteredHostRecord> ControllerStore::LoadRegisteredHost(
       db,
       "SELECT node_name,"
       " advertised_address,"
-      " public_key_pem,"
+      " public_key_base64,"
       " controller_public_key_fingerprint,"
       " transport_mode,"
       " registration_state,"
@@ -1796,7 +1796,7 @@ std::vector<RegisteredHostRecord> ControllerStore::LoadRegisteredHosts(
   std::string sql =
       "SELECT node_name,"
       " advertised_address,"
-      " public_key_pem,"
+      " public_key_base64,"
       " controller_public_key_fingerprint,"
       " transport_mode,"
       " registration_state,"

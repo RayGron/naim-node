@@ -107,7 +107,7 @@ PY
   --db "${remote_db_path}" \
   --node node-a \
   --address "http://127.0.0.1:29999" \
-  --public-key "${remote_layout_state_root}/keys/hostd.pub.pem" >/dev/null
+  --public-key "${remote_layout_state_root}/keys/hostd.pub.b64" >/dev/null
 "${build_dir}/comet-controller" apply-bundle \
   --bundle "${PWD}/config/demo-plane" \
   --db "${remote_db_path}" \
@@ -123,13 +123,13 @@ wait_for_http "http://127.0.0.1:${remote_http_port}/health"
   --node node-a \
   --runtime-root "${remote_runtime_root}" \
   --state-root "${remote_state_root}" \
-  --host-private-key "${remote_layout_state_root}/keys/hostd.pem" \
+  --host-private-key "${remote_layout_state_root}/keys/hostd.key.b64" \
   --compose-mode skip >/dev/null
 "${build_dir}/comet-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --state-root "${remote_state_root}" \
-  --host-private-key "${remote_layout_state_root}/keys/hostd.pem" >/dev/null
+  --host-private-key "${remote_layout_state_root}/keys/hostd.key.b64" >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
 "${build_dir}/comet-controller" show-host-observations --db "${remote_db_path}" --node node-a | grep -F 'status=idle applied_generation=1' >/dev/null
 curl -fsS "http://127.0.0.1:${remote_http_port}/api/v1/hostd/hosts?node=node-a" | grep -F '"session_state":"connected"' >/dev/null
@@ -144,13 +144,13 @@ curl -fsS "http://127.0.0.1:${remote_http_port}/api/v1/hostd/hosts?node=node-a" 
 "${build_dir}/comet-controller" rotate-hostd-key \
   --db "${remote_db_path}" \
   --node node-a \
-  --public-key "${remote_rotated_layout_state_root}/keys/hostd.pub.pem" >/dev/null
+  --public-key "${remote_rotated_layout_state_root}/keys/hostd.pub.b64" >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "rotation-pending"' >/dev/null
 if "${build_dir}/comet-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --state-root "${remote_state_root}" \
-  --host-private-key "${remote_layout_state_root}/keys/hostd.pem" >/dev/null 2>&1; then
+  --host-private-key "${remote_layout_state_root}/keys/hostd.key.b64" >/dev/null 2>&1; then
   echo "phase-k-live: old host key unexpectedly authenticated after rotation" >&2
   exit 1
 fi
@@ -158,7 +158,7 @@ fi
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --state-root "${remote_state_root}" \
-  --host-private-key "${remote_rotated_layout_state_root}/keys/hostd.pem" >/dev/null
+  --host-private-key "${remote_rotated_layout_state_root}/keys/hostd.key.b64" >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
 "${build_dir}/comet-controller" revoke-hostd --db "${remote_db_path}" --node node-a >/dev/null
 "${build_dir}/comet-controller" show-hostd-hosts --db "${remote_db_path}" --node node-a | grep -F '"registration_state": "revoked"' >/dev/null
@@ -166,7 +166,7 @@ if "${build_dir}/comet-hostd" report-observed-state \
   --controller "http://127.0.0.1:${remote_http_port}" \
   --node node-a \
   --state-root "${remote_state_root}" \
-  --host-private-key "${remote_rotated_layout_state_root}/keys/hostd.pem" >/dev/null 2>&1; then
+  --host-private-key "${remote_rotated_layout_state_root}/keys/hostd.key.b64" >/dev/null 2>&1; then
   echo "phase-k-live: revoked host unexpectedly authenticated" >&2
   exit 1
 fi

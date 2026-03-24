@@ -299,7 +299,7 @@ void PrintUsage() {
       << "  comet-controller delete-plane --plane <plane-name> [--db <path>]\n"
       << "  comet-controller show-hostd-hosts [--db <path>] [--node <node-name>]\n"
       << "  comet-controller revoke-hostd --node <node-name> [--db <path>] [--message <text>]\n"
-      << "  comet-controller rotate-hostd-key --node <node-name> --public-key <pem-or-file> [--db <path>] [--message <text>]\n"
+      << "  comet-controller rotate-hostd-key --node <node-name> --public-key <base64-or-file> [--db <path>] [--message <text>]\n"
       << "  comet-controller ensure-web-ui [--db <path>] [--web-ui-root <path>] [--listen-port <port>] [--controller-upstream <url>] [--compose-mode skip|exec]\n"
       << "  comet-controller show-web-ui-status [--db <path>] [--web-ui-root <path>]\n"
       << "  comet-controller stop-web-ui [--db <path>] [--web-ui-root <path>] [--compose-mode skip|exec]\n"
@@ -534,7 +534,7 @@ std::string ReadTextFile(const std::filesystem::path& path) {
   return buffer.str();
 }
 
-std::string ReadPublicKeyArgument(const std::string& value) {
+std::string ReadPublicKeyBase64Argument(const std::string& value) {
   const std::filesystem::path candidate(value);
   if (std::filesystem::exists(candidate)) {
     return Trim(ReadTextFile(candidate));
@@ -1602,6 +1602,82 @@ std::optional<ControllerEndpointTarget> ParseInteractionTarget(
   return ParseControllerEndpointTarget(host + ":" + std::to_string(port));
 }
 
+std::string CurrentControllerPlatform() {
+#if defined(_WIN32)
+  return "windows";
+#elif defined(__APPLE__)
+  return "macos";
+#elif defined(__linux__)
+  return "linux";
+#else
+  return "unknown";
+#endif
+}
+
+const comet::NodeInventory* FindPlaneNodeInventory(
+    const comet::DesiredState& desired_state,
+    const std::string& node_name) {
+  for (const auto& node : desired_state.nodes) {
+    if (node.name == node_name) {
+      return &node;
+    }
+  }
+  return nullptr;
+}
+
+bool PlaneNodeUsesGpuRuntime(
+    const comet::DesiredState& desired_state,
+    const std::string& node_name) {
+  for (const auto& runtime_gpu_node : desired_state.runtime_gpu_nodes) {
+    if (runtime_gpu_node.enabled && runtime_gpu_node.node_name == node_name) {
+      return true;
+    }
+  }
+  for (const auto& instance : desired_state.instances) {
+    if (instance.node_name == node_name && instance.gpu_device.has_value() &&
+        !instance.gpu_device->empty()) {
+      return true;
+    }
+  }
+  if (const auto* node = FindPlaneNodeInventory(desired_state, node_name);
+      node != nullptr && !node->gpu_devices.empty()) {
+    return true;
+  }
+  return false;
+}
+
+std::optional<std::string> DescribeUnsupportedControllerLocalRuntime(
+    const comet::DesiredState& desired_state,
+    const std::string& node_name) {
+  if (node_name != "local-hostd" && node_name != "controller-local") {
+    return std::nullopt;
+  }
+
+  const std::string controller_platform = CurrentControllerPlatform();
+  if (const auto* node = FindPlaneNodeInventory(desired_state, node_name);
+      node != nullptr && !node->platform.empty() && node->platform != controller_platform) {
+    return "Local host '" + node_name + "' is running on '" + controller_platform +
+           "', but the plane targets platform '" + node->platform + "'";
+  }
+
+  if (controller_platform == "macos" && PlaneNodeUsesGpuRuntime(desired_state, node_name)) {
+    return "Local host '" + node_name +
+           "' is running on macOS, but this plane requires Linux/NVIDIA GPU runtime";
+  }
+
+  return std::nullopt;
+}
+
+void ValidateDesiredStateForControllerAdmission(const comet::DesiredState& desired_state) {
+  for (const auto& node : desired_state.nodes) {
+    if (const auto detail =
+            DescribeUnsupportedControllerLocalRuntime(desired_state, node.name);
+        detail.has_value()) {
+      throw std::invalid_argument(*detail);
+    }
+  }
+}
+
 PlaneInteractionResolution ResolvePlaneInteraction(
     const std::string& db_path,
     const std::string& plane_name) {
@@ -1634,6 +1710,8 @@ PlaneInteractionResolution ResolvePlaneInteraction(
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
   const bool observation_ready =
       resolution.observation.has_value() && resolution.observation->plane_name == plane_name;
+  const auto local_runtime_blocker =
+      DescribeUnsupportedControllerLocalRuntime(*desired_state, primary_node);
   const bool runtime_ready =
       resolution.runtime_status.has_value() &&
       resolution.runtime_status->active_model_ready &&
@@ -1645,8 +1723,12 @@ PlaneInteractionResolution ResolvePlaneInteraction(
     reason = "plane_mode_compute";
   } else if (!running_plane) {
     reason = "plane_not_running";
+  } else if (local_runtime_blocker.has_value()) {
+    reason = "unsupported_local_runtime";
   } else if (!observation_ready) {
     reason = "no_observation";
+  } else if (resolution.observation->status == comet::HostObservationStatus::Failed) {
+    reason = "runtime_start_failed";
   } else if (!resolution.runtime_status.has_value()) {
     reason = "runtime_status_missing";
   } else if (!resolution.runtime_status->active_model_ready) {
@@ -1766,6 +1848,13 @@ PlaneInteractionResolution ResolvePlaneInteraction(
        resolution.runtime_status.has_value()
            ? json::parse(comet::SerializeRuntimeStatusJson(*resolution.runtime_status))
            : json(nullptr)},
+      {"failure_detail",
+       reason == "unsupported_local_runtime"
+           ? json(*local_runtime_blocker)
+           : (reason == "runtime_start_failed" && resolution.observation.has_value() &&
+                      !resolution.observation->status_message.empty()
+                  ? json(resolution.observation->status_message)
+                  : json(nullptr))},
   };
   return resolution;
 }
@@ -2864,9 +2953,9 @@ json BuildRegisteredHostsPayload(
              ? json(nullptr)
              : json(host.controller_public_key_fingerprint)},
         {"host_public_key_fingerprint",
-         host.public_key_pem.empty()
+         host.public_key_base64.empty()
              ? json(nullptr)
-             : json(comet::ComputeKeyFingerprintHex(host.public_key_pem))},
+             : json(comet::ComputeKeyFingerprintHex(host.public_key_base64))},
         {"status_message", host.status_message.empty() ? json(nullptr) : json(host.status_message)},
         {"last_session_at", host.last_session_at.empty() ? json(nullptr) : json(host.last_session_at)},
         {"session_expires_at",
@@ -3454,7 +3543,7 @@ int RevokeHostd(
 int RotateHostdKey(
     const std::string& db_path,
     const std::string& node_name,
-    const std::string& public_key_pem,
+    const std::string& public_key_base64,
     const std::optional<std::string>& status_message);
 
 struct ControllerActionResult {
@@ -3819,6 +3908,7 @@ int ApplyDesiredState(
     const comet::DesiredState& desired_state,
     const std::string& artifacts_root,
     const std::string& source_label) {
+  ValidateDesiredStateForControllerAdmission(desired_state);
   comet::ControllerStore store(db_path);
   store.Initialize();
   const auto current_state = store.LoadDesiredState(desired_state.plane_name);
@@ -4014,11 +4104,11 @@ ControllerActionResult ExecuteRevokeHostdAction(
 ControllerActionResult ExecuteRotateHostdKeyAction(
     const std::string& db_path,
     const std::string& node_name,
-    const std::string& public_key_pem,
+    const std::string& public_key_base64,
     const std::optional<std::string>& status_message) {
   return RunControllerActionResult(
       "rotate-hostd-key",
-      [&]() { return RotateHostdKey(db_path, node_name, public_key_pem, status_message); });
+      [&]() { return RotateHostdKey(db_path, node_name, public_key_base64, status_message); });
 }
 
 int ExecuteRemoteControllerCommand(
@@ -4122,7 +4212,7 @@ int ExecuteRemoteControllerCommand(
             "POST",
             "/api/v1/hostd/hosts/" + UrlEncode(*node_name) + "/rotate-key",
             json{
-                {"public_key_pem", ReadPublicKeyArgument(*public_key)},
+                {"public_key_base64", ReadPublicKeyBase64Argument(*public_key)},
                 {"message", message.value_or("")},
             }));
   }
@@ -5033,7 +5123,7 @@ HttpResponse HandleControllerRequest(
       }
       host.node_name = node_name;
       host.advertised_address = body.value("advertised_address", host.advertised_address);
-      host.public_key_pem = body.value("public_key_pem", host.public_key_pem);
+      host.public_key_base64 = body.value("public_key_base64", host.public_key_base64);
       host.controller_public_key_fingerprint = body.value(
           "controller_public_key_fingerprint",
           host.controller_public_key_fingerprint);
@@ -5122,11 +5212,11 @@ HttpResponse HandleControllerRequest(
       const std::string node_name = remainder.substr(0, rotate_pos);
       try {
         const json body = ParseJsonRequestBody(request);
-        const std::string public_key_pem = body.value("public_key_pem", std::string{});
-        if (public_key_pem.empty()) {
+        const std::string public_key_base64 = body.value("public_key_base64", std::string{});
+        if (public_key_base64.empty()) {
           return BuildJsonResponse(
               400,
-              json{{"status", "bad_request"}, {"message", "missing required field 'public_key_pem'"}}); 
+              json{{"status", "bad_request"}, {"message", "missing required field 'public_key_base64'"}}); 
         }
         const std::optional<std::string> message =
             body.contains("message") && body["message"].is_string()
@@ -5135,7 +5225,7 @@ HttpResponse HandleControllerRequest(
         return BuildJsonResponse(
             200,
             BuildControllerActionPayload(
-                ExecuteRotateHostdKeyAction(db_path, node_name, public_key_pem, message)));
+                ExecuteRotateHostdKeyAction(db_path, node_name, public_key_base64, message)));
       } catch (const std::exception& error) {
         return BuildJsonResponse(
             500,
@@ -5172,14 +5262,14 @@ HttpResponse HandleControllerRequest(
             400,
             json{{"status", "bad_request"}, {"message", "missing required session handshake fields"}});
       }
-      if (current->public_key_pem.empty()) {
+      if (current->public_key_base64.empty()) {
         return BuildJsonResponse(
             403,
             json{{"status", "forbidden"}, {"message", "registered host is missing public key"}});
       }
       const std::string signed_message =
           "hostd-session-open\n" + node_name + "\n" + timestamp + "\n" + nonce;
-      if (!comet::VerifyDetachedBase64(signed_message, signature, current->public_key_pem)) {
+      if (!comet::VerifyDetachedBase64(signed_message, signature, current->public_key_base64)) {
         return BuildJsonResponse(
             403,
             json{{"status", "forbidden"}, {"message", "invalid host session signature"}});
@@ -5751,6 +5841,10 @@ HttpResponse HandleControllerRequest(
                     artifacts_root,
                     std::nullopt,
                     "api")));
+      } catch (const std::invalid_argument& error) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
       } catch (const std::exception& error) {
         return BuildJsonResponse(
             500,
@@ -5844,6 +5938,10 @@ HttpResponse HandleControllerRequest(
             200,
             BuildControllerActionPayload(
                 ExecuteStartPlaneAction(db_path, plane_name)));
+      } catch (const std::invalid_argument& error) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
       } catch (const std::exception& error) {
         return BuildJsonResponse(
             500,
@@ -5905,6 +6003,10 @@ HttpResponse HandleControllerRequest(
                     artifacts_root,
                     remainder,
                     "api")));
+      } catch (const std::invalid_argument& error) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}});
       } catch (const std::exception& error) {
         return BuildJsonResponse(
             500,
@@ -12264,6 +12366,7 @@ int StartPlane(const std::string& db_path, const std::string& plane_name) {
   if (!desired_state.has_value()) {
     throw std::runtime_error("desired state for plane '" + plane_name + "' not found");
   }
+  ValidateDesiredStateForControllerAdmission(*desired_state);
   if (plane->state == "running") {
     std::cout << "plane already running: " << plane_name << "\n";
     return 0;
@@ -12504,7 +12607,7 @@ int RevokeHostd(
 int RotateHostdKey(
     const std::string& db_path,
     const std::string& node_name,
-    const std::string& public_key_pem,
+    const std::string& public_key_base64,
     const std::optional<std::string>& status_message) {
   comet::ControllerStore store(db_path);
   store.Initialize();
@@ -12513,8 +12616,8 @@ int RotateHostdKey(
     throw std::runtime_error("registered host '" + node_name + "' not found");
   }
   const std::string previous_fingerprint =
-      host->public_key_pem.empty() ? std::string{} : comet::ComputeKeyFingerprintHex(host->public_key_pem);
-  host->public_key_pem = Trim(public_key_pem);
+      host->public_key_base64.empty() ? std::string{} : comet::ComputeKeyFingerprintHex(host->public_key_base64);
+  host->public_key_base64 = Trim(public_key_base64);
   host->registration_state = "registered";
   host->session_state = "rotation-pending";
   host->session_token.clear();
@@ -12531,12 +12634,12 @@ int RotateHostdKey(
       json{
           {"previous_fingerprint",
            previous_fingerprint.empty() ? json(nullptr) : json(previous_fingerprint)},
-          {"next_fingerprint", comet::ComputeKeyFingerprintHex(host->public_key_pem)},
+          {"next_fingerprint", comet::ComputeKeyFingerprintHex(host->public_key_base64)},
       },
       "",
       node_name);
   std::cout << "host key rotated: " << node_name
-            << " fingerprint=" << comet::ComputeKeyFingerprintHex(host->public_key_pem) << "\n";
+            << " fingerprint=" << comet::ComputeKeyFingerprintHex(host->public_key_base64) << "\n";
   return 0;
 }
 
@@ -12821,7 +12924,7 @@ int main(int argc, char** argv) {
           ExecuteRotateHostdKeyAction(
               db_path,
               *node_name,
-              ReadPublicKeyArgument(*public_key),
+              ReadPublicKeyBase64Argument(*public_key),
               ParseMessageArg(argc, argv)));
     }
 

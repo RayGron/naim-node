@@ -505,10 +505,10 @@ std::string ComputePublicKeyFingerprint(const fs::path& public_key_path) {
   return comet::ComputeKeyFingerprintHex(Trim(ReadTextFile(public_key_path)));
 }
 
-std::string ReadPublicKeyArgument(const std::string& value) {
+std::string ReadPublicKeyBase64Argument(const std::string& value) {
   const fs::path candidate(value);
   if (fs::exists(candidate)) {
-    return ReadTextFile(candidate);
+    return Trim(ReadTextFile(candidate));
   }
   return value;
 }
@@ -695,7 +695,7 @@ void PrintUsage() {
       << "    comet-node run controller\n"
       << "  quick start (remote hostd):\n"
       << "    comet-node install hostd --controller http://controller:18080\n"
-      << "    comet-node connect-hostd --db /var/lib/comet-node/controller.sqlite --node <node> --public-key /var/lib/comet-node/keys/hostd.pub.pem\n"
+      << "    comet-node connect-hostd --db /var/lib/comet-node/controller.sqlite --node <node> --public-key /var/lib/comet-node/keys/hostd.pub.b64\n"
       << "    comet-node run hostd\n"
       << "  comet-node version\n"
       << "  comet-node doctor [controller|hostd]\n"
@@ -704,7 +704,7 @@ void PrintUsage() {
       << "  comet-node install controller [--with-hostd] [--with-web-ui] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
       << "  comet-node install hostd [--node <name>] [--controller <url>] [--controller-fingerprint <sha256>] [--transport out|in|hybrid] [--listen <addr>] [--config <path>] [--state-root <path>] [--log-root <path>] [--systemd-dir <path>] [--skip-systemctl]\n"
       << "  comet-node service status|start|stop|restart|uninstall|verify <controller|hostd|controller-hostd> [--systemd-dir <path>] [--skip-systemctl]\n"
-      << "  comet-node connect-hostd --db <path> --node <name> --public-key <pem-or-file> [--address <hostd-url>] [--transport out|in|hybrid] [--controller-fingerprint <sha256>]\n";
+      << "  comet-node connect-hostd --db <path> --node <name> --public-key <base64-or-file> [--address <hostd-url>] [--transport out|in|hybrid] [--controller-fingerprint <sha256>]\n";
 }
 
 int RunHostdLoop(const fs::path& hostd_binary, const HostdRunOptions& options) {
@@ -800,9 +800,9 @@ void PrepareControllerRuntime(const ControllerRunOptions& options) {
   }
 
   const fs::path keys_root = options.state_root.parent_path() / "keys";
-  EnsureKeypair(keys_root / "controller.pem", keys_root / "controller.pub.pem");
+  EnsureKeypair(keys_root / "controller.key.b64", keys_root / "controller.pub.b64");
   if (options.with_hostd) {
-    EnsureKeypair(keys_root / "hostd.pem", keys_root / "hostd.pub.pem");
+    EnsureKeypair(keys_root / "hostd.key.b64", keys_root / "hostd.pub.b64");
   }
 
   comet::ControllerStore store(options.db_path.string());
@@ -820,7 +820,7 @@ int RunControllerSupervisor(
       options.controller_upstream.empty()
           ? DefaultWebUiControllerUpstream(options.listen_port)
           : options.controller_upstream;
-  const fs::path controller_public_key_path = options.state_root.parent_path() / "keys" / "controller.pub.pem";
+  const fs::path controller_public_key_path = options.state_root.parent_path() / "keys" / "controller.pub.b64";
   const std::string controller_fingerprint =
       fs::exists(controller_public_key_path)
           ? ComputePublicKeyFingerprint(controller_public_key_path)
@@ -869,7 +869,7 @@ int RunControllerSupervisor(
     }
     host.node_name = options.node_name;
     host.advertised_address = local_controller_url;
-    host.public_key_pem = Trim(ReadTextFile(options.state_root.parent_path() / "keys" / "hostd.pub.pem"));
+    host.public_key_base64 = Trim(ReadTextFile(options.state_root.parent_path() / "keys" / "hostd.pub.b64"));
     host.transport_mode = "out";
     host.registration_state = "registered";
     host.session_state = "disconnected";
@@ -890,7 +890,7 @@ int RunControllerSupervisor(
       "--state-root",
       options.state_root.string(),
       "--host-private-key",
-      (options.state_root.parent_path() / "keys" / "hostd.pem").string(),
+      (options.state_root.parent_path() / "keys" / "hostd.key.b64").string(),
       "--compose-mode",
       options.hostd_compose_mode,
       "--poll-interval-sec",
@@ -958,10 +958,10 @@ void InstallController(const fs::path& self_path, const std::vector<std::string>
   const bool skip_systemctl = HasFlag(args, "--skip-systemctl");
 
   const fs::path keys_root = options.layout.state_root / "keys";
-  const fs::path controller_private_key = keys_root / "controller.pem";
-  const fs::path controller_public_key = keys_root / "controller.pub.pem";
-  const fs::path hostd_private_key = keys_root / "hostd.pem";
-  const fs::path hostd_public_key = keys_root / "hostd.pub.pem";
+  const fs::path controller_private_key = keys_root / "controller.key.b64";
+  const fs::path controller_public_key = keys_root / "controller.pub.b64";
+  const fs::path hostd_private_key = keys_root / "hostd.key.b64";
+  const fs::path hostd_public_key = keys_root / "hostd.pub.b64";
   fs::create_directories(options.layout.state_root);
   fs::create_directories(options.layout.log_root);
   fs::create_directories(options.layout.systemd_dir);
@@ -990,7 +990,7 @@ void InstallController(const fs::path& self_path, const std::vector<std::string>
       comet::RegisteredHostRecord host;
       host.node_name = options.node_name;
       host.advertised_address = "http://127.0.0.1:" + std::to_string(options.listen_port);
-      host.public_key_pem = Trim(ReadTextFile(hostd_public_key));
+      host.public_key_base64 = Trim(ReadTextFile(hostd_public_key));
       host.controller_public_key_fingerprint = controller_fingerprint;
       host.transport_mode = "out";
       host.registration_state = "registered";
@@ -1058,10 +1058,10 @@ void InstallHostd(const fs::path& self_path, const std::vector<std::string>& arg
   options.compose_mode = FindFlagValue(args, "--compose-mode").value_or(options.compose_mode);
   const bool skip_systemctl = HasFlag(args, "--skip-systemctl");
   const fs::path keys_root = options.layout.state_root / "keys";
-  const fs::path controller_private_key = keys_root / "controller.pem";
-  const fs::path controller_public_key = keys_root / "controller.pub.pem";
-  const fs::path hostd_private_key = keys_root / "hostd.pem";
-  const fs::path hostd_public_key = keys_root / "hostd.pub.pem";
+  const fs::path controller_private_key = keys_root / "controller.key.b64";
+  const fs::path controller_public_key = keys_root / "controller.pub.b64";
+  const fs::path hostd_private_key = keys_root / "hostd.key.b64";
+  const fs::path hostd_public_key = keys_root / "hostd.pub.b64";
   fs::create_directories(options.layout.state_root);
   fs::create_directories(options.layout.log_root);
   fs::create_directories(options.layout.systemd_dir);
@@ -1091,7 +1091,7 @@ void InstallHostd(const fs::path& self_path, const std::vector<std::string>& arg
     std::cout << "controller_url=" << options.controller_url << "\n";
     std::cout << "next_step_register=comet-node connect-hostd --db <controller-db> --node "
               << options.node_name
-              << " --public-key " << (options.layout.state_root / "keys/hostd.pub.pem").string()
+              << " --public-key " << (options.layout.state_root / "keys/hostd.pub.b64").string()
               << "\n";
   }
   std::cout << "next_step="
@@ -1104,17 +1104,22 @@ void ServiceCommand(const std::string& action, const std::string& role, const st
   const bool skip_systemctl = HasFlag(args, "--skip-systemctl");
   const std::vector<std::string> units = ParseRoleTargets(role);
   const auto verify_units = [&]() {
+    for (const std::string& unit : units) {
+      const fs::path unit_path = layout.systemd_dir / unit;
+      if (!fs::exists(unit_path)) {
+        throw std::runtime_error("missing unit file '" + unit_path.string() + "'");
+      }
+    }
+    if (skip_systemctl && !CommandExists("systemd-analyze")) {
+      return;
+    }
     if (!CommandExists("systemd-analyze")) {
       throw std::runtime_error("systemd-analyze is required for service verify");
     }
     std::ostringstream command;
     command << "systemd-analyze verify";
     for (const std::string& unit : units) {
-      const fs::path unit_path = layout.systemd_dir / unit;
-      if (!fs::exists(unit_path)) {
-        throw std::runtime_error("missing unit file '" + unit_path.string() + "'");
-      }
-      command << " " << ShellEscape(unit_path.string());
+      command << " " << ShellEscape((layout.systemd_dir / unit).string());
     }
     if (RunShellCommand(command.str()) != 0) {
       throw std::runtime_error("systemd-analyze verify failed");
@@ -1191,7 +1196,7 @@ void ConnectHostd(const std::vector<std::string>& args) {
   comet::RegisteredHostRecord record;
   record.node_name = *node_name;
   record.advertised_address = FindFlagValue(args, "--address").value_or("");
-  record.public_key_pem = ReadPublicKeyArgument(*public_key);
+  record.public_key_base64 = ReadPublicKeyBase64Argument(*public_key);
   record.controller_public_key_fingerprint =
       FindFlagValue(args, "--controller-fingerprint").value_or("");
   record.transport_mode = FindFlagValue(args, "--transport").value_or("out");

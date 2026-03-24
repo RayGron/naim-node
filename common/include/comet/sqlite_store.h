@@ -175,7 +175,7 @@ struct PlaneRecord {
 struct RegisteredHostRecord {
   std::string node_name;
   std::string advertised_address;
-  std::string public_key_pem;
+  std::string public_key_base64;
   std::string controller_public_key_fingerprint;
   std::string transport_mode;
   std::string registration_state;

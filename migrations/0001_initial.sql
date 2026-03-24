@@ -30,7 +30,7 @@ CREATE TABLE nodes (
 CREATE TABLE registered_hosts (
     node_name TEXT PRIMARY KEY,
     advertised_address TEXT NOT NULL DEFAULT '',
-    public_key_pem TEXT NOT NULL DEFAULT '',
+    public_key_base64 TEXT NOT NULL DEFAULT '',
     controller_public_key_fingerprint TEXT NOT NULL DEFAULT '',
     transport_mode TEXT NOT NULL DEFAULT 'out',
     registration_state TEXT NOT NULL DEFAULT 'registered',

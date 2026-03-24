@@ -13,6 +13,9 @@ target_arch="${2}"
 build_type="${3:-Debug}"
 cuda_root=""
 cuda_nvcc=""
+openmp_root=""
+openmp_include_dir=""
+openmp_library=""
 
 case "${build_type}" in
   Debug|Release|RelWithDebInfo|MinSizeRel)
@@ -66,12 +69,58 @@ detect_cuda_root() {
   return 1
 }
 
+detect_macos_openmp() {
+  local candidate=""
+  local root_candidates=()
+
+  if [[ "${target_os}" != "macos" ]]; then
+    return 1
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    candidate="$(brew --prefix libomp 2>/dev/null || true)"
+    if [[ -n "${candidate}" ]]; then
+      root_candidates+=("${candidate}")
+    fi
+  fi
+
+  root_candidates+=(
+    "/opt/homebrew/opt/libomp"
+    "/usr/local/opt/libomp"
+  )
+
+  for candidate in "${root_candidates[@]}"; do
+    if [[ -f "${candidate}/include/omp.h" ]]; then
+      if [[ -f "${candidate}/lib/libomp.dylib" ]]; then
+        openmp_root="${candidate}"
+        openmp_include_dir="${candidate}/include"
+        openmp_library="${candidate}/lib/libomp.dylib"
+        return 0
+      fi
+      if [[ -f "${candidate}/lib/libomp.a" ]]; then
+        openmp_root="${candidate}"
+        openmp_include_dir="${candidate}/include"
+        openmp_library="${candidate}/lib/libomp.a"
+        return 0
+      fi
+    fi
+  done
+
+  return 1
+}
+
 if detect_cuda_root; then
   export CUDA_TOOLKIT_ROOT_DIR="${cuda_root}"
   export CUDA_HOME="${cuda_root}"
   export CUDA_PATH="${cuda_root}"
   export CUDA_BIN_PATH="${cuda_root}/bin"
   export CUDACXX="${cuda_nvcc}"
+fi
+
+if detect_macos_openmp; then
+  :
+elif [[ "${target_os}" == "macos" ]]; then
+  echo "[cmake] OpenMP runtime was not found for macOS; building without OpenMP (install with 'brew install libomp' to enable it)" >&2
 fi
 
 build_dir="$("${script_dir}/print-build-dir.sh" "${target_os}" "${target_arch}")"
@@ -119,6 +168,29 @@ if [[ -f "${cache_path}" ]]; then
       needs_clean_reconfigure=1
     fi
   fi
+  if [[ -n "${openmp_root}" ]]; then
+    if ! grep -Fq "OpenMP_ROOT:UNINITIALIZED=${openmp_root}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_ROOT:PATH=${openmp_root}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_ROOT:STRING=${openmp_root}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
+    if ! grep -Fq "OpenMP_C_INCLUDE_DIR:PATH=${openmp_include_dir}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_C_INCLUDE_DIR:STRING=${openmp_include_dir}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_C_INCLUDE_DIR:UNINITIALIZED=${openmp_include_dir}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
+    if ! grep -Fq "OpenMP_CXX_INCLUDE_DIR:PATH=${openmp_include_dir}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_CXX_INCLUDE_DIR:STRING=${openmp_include_dir}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_CXX_INCLUDE_DIR:UNINITIALIZED=${openmp_include_dir}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
+    if ! grep -Fq "OpenMP_libomp_LIBRARY:FILEPATH=${openmp_library}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_libomp_LIBRARY:PATH=${openmp_library}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_libomp_LIBRARY:STRING=${openmp_library}" "${cache_path}" \
+      && ! grep -Fq "OpenMP_libomp_LIBRARY:UNINITIALIZED=${openmp_library}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
+  fi
   if ! grep -Fq "CMAKE_GENERATOR:INTERNAL=Ninja" "${cache_path}"; then
     needs_clean_reconfigure=1
   fi
@@ -152,6 +224,14 @@ if [[ -n "${cuda_root}" ]]; then
 fi
 if [[ -n "${cuda_nvcc}" ]]; then
   cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
+fi
+if [[ -n "${openmp_root}" ]]; then
+  cmake_args+=(
+    "-DOpenMP_ROOT=${openmp_root}"
+    "-DOpenMP_C_INCLUDE_DIR=${openmp_include_dir}"
+    "-DOpenMP_CXX_INCLUDE_DIR=${openmp_include_dir}"
+    "-DOpenMP_libomp_LIBRARY=${openmp_library}"
+  )
 fi
 
 cmake "${cmake_args[@]}"

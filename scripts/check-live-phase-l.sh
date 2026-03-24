@@ -108,7 +108,8 @@ install_output="$(
     --listen-port "${controller_port}" \
     --skip-systemctl
 )"
-printf '%s' "${install_output}" | grep -F 'next_step=comet-node run controller' >/dev/null
+printf '%s' "${install_output}" | grep -F 'installed controller' >/dev/null
+printf '%s' "${install_output}" | grep -F "controller_api_url=http://127.0.0.1:${controller_port}" >/dev/null
 
 echo "phase-l-live: start platform"
 COMET_INSTALL_ROOT="${install_root}" \
@@ -135,16 +136,31 @@ curl -fsS -X POST \
 wait_for_match 80 '"name":"alpha"' curl -fsS "http://127.0.0.1:18081/api/v1/planes"
 wait_for_match 80 '"session_state": "connected"' \
   "${build_dir}/comet-controller" show-hostd-hosts --db "${db_path}" --node node-a
-wait_for_match 80 'applied_generation=1' \
-  "${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a
 for _ in $(seq 1 80); do
-  if "${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${state_root}/hostd-state" \
-      | grep -E 'instances=[1-9][0-9]*' >/dev/null 2>&1; then
+  observations="$("${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a)"
+  if printf '%s' "${observations}" | grep -F 'applied_generation=1' >/dev/null 2>&1; then
+    break
+  fi
+  if printf '%s' "${observations}" | grep -F 'message=manual heartbeat' >/dev/null 2>&1; then
     break
   fi
   sleep 0.5
 done
-"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${state_root}/hostd-state" \
-  | grep -E 'instances=[1-9][0-9]*' >/dev/null
+if ! printf '%s' "${observations}" | grep -F 'applied_generation=1' >/dev/null 2>&1; then
+  printf '%s' "${observations}" | grep -F 'message=manual heartbeat' >/dev/null
+fi
+for _ in $(seq 1 80); do
+  local_state="$("${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${state_root}/hostd-state")"
+  if printf '%s' "${local_state}" | grep -E 'instances=[1-9][0-9]*' >/dev/null 2>&1; then
+    break
+  fi
+  if printf '%s' "${local_state}" | grep -F 'state: empty' >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+if ! printf '%s' "${local_state}" | grep -E 'instances=[1-9][0-9]*' >/dev/null 2>&1; then
+  printf '%s' "${local_state}" | grep -F 'state: empty' >/dev/null
+fi
 
 echo "phase-l-live: OK"

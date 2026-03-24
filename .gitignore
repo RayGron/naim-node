@@ -3,3 +3,4 @@ dist/
 var/
 vcpkg_installed/
 .tools/
+.DS_Store
