@@ -76,6 +76,20 @@ run_as_root() {
   sudo "$@"
 }
 
+run_as_invoking_user() {
+  if [[ "$(id -u)" == "0" ]] && [[ -n "${SUDO_USER:-}" ]] && [[ "${SUDO_USER}" != "root" ]]; then
+    local user_home
+    user_home="$(getent passwd "${SUDO_USER}" | cut -d: -f6)"
+    sudo -u "${SUDO_USER}" env \
+      PATH="${PATH}" \
+      HOME="${user_home}" \
+      VCPKG_ROOT="${VCPKG_ROOT:-}" \
+      "$@"
+    return
+  fi
+  "$@"
+}
+
 install_prereqs_if_needed() {
   if [[ "${skip_prereqs}" == "yes" ]]; then
     return
@@ -98,13 +112,13 @@ install_prereqs_if_needed() {
   )
   local docker_packages=(
     docker.io
-    docker-compose-v2
+    docker-compose-plugin
   )
 
   echo "[install-single-node] installing apt prerequisites"
   run_as_root apt-get update
   run_as_root apt-get install -y "${packages[@]}"
-  run_as_root apt-get install -y "${docker_packages[@]}" || true
+  run_as_root apt-get install -y "${docker_packages[@]}" || run_as_root apt-get install -y docker.io || true
 }
 
 config_summary="$(
@@ -126,7 +140,7 @@ model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 install_prereqs_if_needed
 
 echo "[install-single-node] building host binaries (${build_type})"
-"${script_dir}/build-host.sh" "${build_type}"
+run_as_invoking_user "${script_dir}/build-host.sh" "${build_type}"
 
 if [[ "${skip_image_build}" != "yes" ]]; then
   echo "[install-single-node] building runtime images"

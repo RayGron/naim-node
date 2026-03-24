@@ -647,7 +647,7 @@ The current [ui/operator/index.html](/mnt/e/dev/Repos/comet-node/ui/operator/ind
 Primary user flow:
 
 ```bash
-sudo ./scripts/install-single-node.sh
+./scripts/install-single-node.sh
 ./scripts/run-plane.sh qwen35-9b-min
 ```
 
