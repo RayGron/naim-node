@@ -102,6 +102,7 @@ struct ControlPaths {
   fs::path active_model_path;
   fs::path gateway_plan_path;
   fs::path runtime_status_path;
+  fs::path worker_upstream_path;
 };
 
 struct SimpleResponse {
@@ -669,7 +670,12 @@ ControlPaths BuildControlPaths(const RuntimeConfig& config) {
       root / "active-model.json",
       root / "gateway-plan.json",
       root / "runtime-status.json",
+      root / "worker-upstream.json",
   };
+}
+
+json LoadWorkerUpstreamContract(const RuntimeConfig& config) {
+  return LoadJsonOrDefault(BuildControlPaths(config).worker_upstream_path, json::object());
 }
 
 std::vector<fs::path> RuntimeDirs(const RuntimeConfig& config) {
@@ -764,6 +770,13 @@ std::string RuntimeUpstreamBaseUrl(const RuntimeConfig& config) {
   const char* worker_vllm_upstream = std::getenv("COMET_INFER_VLLM_UPSTREAM_URL");
   if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
     return worker_vllm_upstream;
+  }
+  const json worker_upstream = LoadWorkerUpstreamContract(config);
+  if (worker_upstream.is_object()) {
+    const std::string advertised = JsonString(worker_upstream, "base_url");
+    if (!advertised.empty()) {
+      return advertised;
+    }
   }
   return "http://127.0.0.1:" + std::to_string(config.api_port);
 }

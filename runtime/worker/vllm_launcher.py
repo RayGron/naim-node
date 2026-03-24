@@ -53,6 +53,10 @@ def active_model_path(control_root: str) -> Path:
     return Path(control_root) / "active-model.json"
 
 
+def worker_upstream_path(control_root: str) -> Path:
+    return Path(control_root) / "worker-upstream.json"
+
+
 def status_path(private_disk_path: str) -> Path:
     return Path(
         env(
@@ -124,6 +128,14 @@ def resolve_active_model_id(active_model: dict, served_model_name: str) -> str:
     )
 
 
+def resolve_advertised_base_url(port: int) -> str:
+    explicit = env("COMET_WORKER_ADVERTISED_BASE_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    instance_name = env("COMET_INSTANCE_NAME", "worker")
+    return f"http://{instance_name}:{port}"
+
+
 def build_status(
     *,
     phase: str,
@@ -170,6 +182,37 @@ def build_status(
         "inference_ready": ready,
         "gateway_ready": False,
         "launch_ready": ready,
+    }
+
+
+def build_worker_upstream_contract(
+    *,
+    control_root: str,
+    ready: bool,
+    phase: str,
+    node_name: str,
+    instance_name: str,
+    active_model_id: str,
+    served_model_name: str,
+    port: int,
+    last_activity_at: str,
+) -> dict:
+    base_url = resolve_advertised_base_url(port)
+    return {
+        "plane_name": env("COMET_PLANE_NAME"),
+        "control_root": control_root,
+        "node_name": node_name,
+        "instance_name": instance_name,
+        "runtime_backend": "vllm-worker",
+        "ready": ready,
+        "phase": phase,
+        "active_model_id": active_model_id,
+        "served_model_name": served_model_name,
+        "port": port,
+        "base_url": base_url,
+        "health_url": f"{base_url}/health",
+        "models_url": f"{base_url}/v1/models",
+        "last_activity_at": last_activity_at,
     }
 
 
@@ -238,8 +281,11 @@ def main() -> int:
     active_model_id = resolve_active_model_id(active_model, served_model_name)
     started_at = utc_now_iso()
     status_file = status_path(private_disk_path)
+    upstream_file = worker_upstream_path(control_root)
     health_url = f"http://127.0.0.1:{port}/health"
     child_env = os.environ.copy()
+    instance_name = env("COMET_INSTANCE_NAME", "worker")
+    node_name = env("COMET_NODE_NAME")
 
     gpu_device = env("COMET_GPU_DEVICE", env("COMET_WORKER_GPU_DEVICE"))
     if gpu_device:
@@ -270,6 +316,20 @@ def main() -> int:
             runtime_pid=child.pid,
         ),
     )
+    write_json(
+        upstream_file,
+        build_worker_upstream_contract(
+            control_root=control_root,
+            ready=False,
+            phase="starting",
+            node_name=node_name,
+            instance_name=instance_name,
+            active_model_id=active_model_id,
+            served_model_name=served_model_name,
+            port=port,
+            last_activity_at="",
+        ),
+    )
 
     while child.poll() is None and not STOP_REQUESTED:
         healthy = probe(health_url)
@@ -287,6 +347,20 @@ def main() -> int:
                 served_model_name=served_model_name,
                 port=port,
                 runtime_pid=child.pid,
+            ),
+        )
+        write_json(
+            upstream_file,
+            build_worker_upstream_contract(
+                control_root=control_root,
+                ready=healthy,
+                phase="running" if healthy else "starting",
+                node_name=node_name,
+                instance_name=instance_name,
+                active_model_id=active_model_id,
+                served_model_name=served_model_name,
+                port=port,
+                last_activity_at=now,
             ),
         )
         time.sleep(2)
@@ -312,6 +386,20 @@ def main() -> int:
             served_model_name=served_model_name,
             port=port,
             runtime_pid=child.pid,
+        ),
+    )
+    write_json(
+        upstream_file,
+        build_worker_upstream_contract(
+            control_root=control_root,
+            ready=False,
+            phase="stopped" if child.returncode == 0 else "failed",
+            node_name=node_name,
+            instance_name=instance_name,
+            active_model_id=active_model_id,
+            served_model_name=served_model_name,
+            port=port,
+            last_activity_at=utc_now_iso(),
         ),
     )
     return 0 if child.returncode is None else child.returncode
