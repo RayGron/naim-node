@@ -108,7 +108,7 @@ resolve_container_name() {
 register_host() {
   local node_name="$1"
   local execution_mode="$2"
-  "${launcher_bin}" connect-hostd \
+  ${sudo_prefix} "${launcher_bin}" connect-hostd \
     --db "${controller_db}" \
     --node "${node_name}" \
     --public-key /var/lib/comet-node/keys/hostd.pub.b64 \
