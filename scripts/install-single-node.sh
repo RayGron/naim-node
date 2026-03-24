@@ -156,11 +156,28 @@ apt_package_has_candidate() {
   [[ -n "${policy_output}" ]] && ! grep -Fq 'Candidate: (none)' <<<"${policy_output}"
 }
 
+have_nvcc() {
+  if command -v nvcc >/dev/null 2>&1; then
+    return 0
+  fi
+  local candidate=""
+  for candidate in \
+    /usr/local/cuda/bin/nvcc \
+    /usr/local/cuda-13.1/bin/nvcc \
+    /usr/local/cuda-13.0/bin/nvcc \
+    /usr/lib/nvidia-cuda-toolkit/bin/nvcc; do
+    if [[ -x "${candidate}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 install_cuda_toolkit_if_needed() {
   if ! command -v nvidia-smi >/dev/null 2>&1; then
     return
   fi
-  if command -v nvcc >/dev/null 2>&1; then
+  if have_nvcc; then
     return
   fi
   if [[ "${skip_prereqs}" == "yes" ]]; then
