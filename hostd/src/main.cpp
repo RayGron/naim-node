@@ -406,6 +406,10 @@ bool IsUnderRoot(
   const auto path_text = normalized_path.generic_string();
   const auto root_text = normalized_root.generic_string();
 
+  if (root_text == "/") {
+    return !path_text.empty() && path_text.front() == '/';
+  }
+
   return path_text == root_text ||
          (path_text.size() > root_text.size() &&
           path_text.compare(0, root_text.size(), root_text) == 0 &&
