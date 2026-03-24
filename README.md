@@ -647,15 +647,24 @@ The current [ui/operator/index.html](/mnt/e/dev/Repos/comet-node/ui/operator/ind
 Primary user flow:
 
 ```bash
-./build/linux/x64/comet-node install controller --with-web-ui --with-hostd --skip-systemctl
-./build/linux/x64/comet-node run controller
+sudo ./scripts/install-single-node.sh
+./scripts/run-plane.sh qwen35-9b-min
 ```
 
 Then:
 
-- open `http://localhost:18081`
-- load the first plane from the Web UI
-- controller and local `hostd` materialize infer and worker runtime automatically
+- the install command builds binaries and runtime images, installs `controller + local hostd`
+  as system services, and starts them
+- the run command loads `config/<plane>/desired-state.json` from the repository, starts the
+  plane, and waits until `interaction/status` becomes ready
+- `config/comet-node-config.json` is the machine-level storage config for managed disks and
+  heavy cached model files
+
+For CPU-only validation on a host where the worker runtime should not offload layers to GPU yet:
+
+```bash
+./scripts/run-plane.sh qwen35-9b-min --cpu
+```
 
 For single-node local demo work, install the local host with a node name that matches the bundle, for example `--node node-a`.
 

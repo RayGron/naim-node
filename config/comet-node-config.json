@@ -1,5 +1,6 @@
 {
   "paths": {
-    "storage_root": "/mnt/shared-storage/comet"
+    "storage_root": "/mnt/shared-storage/comet",
+    "model_cache_root": "/mnt/shared-storage/models"
   }
 }
