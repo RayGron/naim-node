@@ -122,6 +122,34 @@ stop_existing_comet_processes() {
   done
 }
 
+prepare_runtime_storage_root() {
+  local runtime_link="/var/lib/comet-node/runtime"
+  local runtime_target="${storage_root%/}/runtime"
+
+  echo "[install-single-node] preparing runtime storage at ${runtime_target}"
+  run_as_root mkdir -p "/var/lib/comet-node"
+  run_as_root mkdir -p "${storage_root}"
+  run_as_root mkdir -p "${runtime_target}"
+
+  if [[ -L "${runtime_link}" ]]; then
+    local current_target=""
+    current_target="$(run_as_root readlink "${runtime_link}")"
+    if [[ "${current_target}" == "${runtime_target}" ]]; then
+      return
+    fi
+    run_as_root rm -f "${runtime_link}"
+  elif [[ -d "${runtime_link}" ]]; then
+    if run_as_root find "${runtime_link}" -mindepth 1 -print -quit | grep -q .; then
+      run_as_root cp -a "${runtime_link}/." "${runtime_target}/"
+    fi
+    run_as_root rm -rf "${runtime_link}"
+  elif [[ -e "${runtime_link}" ]]; then
+    run_as_root rm -f "${runtime_link}"
+  fi
+
+  run_as_root ln -s "${runtime_target}" "${runtime_link}"
+}
+
 install_prereqs_if_needed() {
   if [[ "${skip_prereqs}" == "yes" ]]; then
     return
@@ -262,6 +290,7 @@ if [[ ! -x "${launcher_binary}" ]]; then
 fi
 
 stop_existing_comet_processes
+prepare_runtime_storage_root
 
 install_args=(
   install
