@@ -313,7 +313,7 @@ echo "[check-live-vllm-split] ensuring plane ${plane_name} is running"
 delete_competing_planes
 curl -sS -X DELETE "${controller_url}/api/v1/planes/${plane_name}" >/dev/null || true
 wait_for_plane_absent "${plane_name}"
-"${repo_root}/scripts/run-plane.sh" "${plane_name}" >/dev/null
+"${repo_root}/scripts/run-plane.sh" "${plane_name}" --no-wait >/dev/null
 
 status_payload="$(
   wait_for_json_field \

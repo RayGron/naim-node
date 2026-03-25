@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  run-plane.sh [plane-name] [--controller-url <url>] [--artifacts-root <path>] [--wait-seconds <n>] [--cpu]
+  run-plane.sh [plane-name] [--controller-url <url>] [--artifacts-root <path>] [--wait-seconds <n>] [--cpu] [--no-wait]
 
 Loads config/<plane-name>/desired-state.json into the local controller, starts the plane,
 and waits until interaction/status reports ready. The desired state is taken directly from the repo.
@@ -19,6 +19,7 @@ controller_url="http://127.0.0.1:18080"
 artifacts_root="/var/lib/comet-node/artifacts"
 wait_seconds="900"
 force_cpu="no"
+wait_for_ready="yes"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,6 +37,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cpu)
       force_cpu="yes"
+      shift
+      ;;
+    --no-wait)
+      wait_for_ready="no"
       shift
       ;;
     -h|--help)
@@ -296,6 +301,21 @@ echo "[run-plane] starting ${plane_name}"
 curl -fsS \
   -X POST \
   "${controller_url}/api/v1/planes/${plane_name}/start" >/dev/null
+
+if [[ "${wait_for_ready}" != "yes" ]]; then
+  echo "plane=${plane_name}"
+  echo "started=yes"
+  echo "controller_url=${controller_url}"
+  if [[ -n "${gateway_port}" ]]; then
+    echo "gateway_url=http://127.0.0.1:${gateway_port}"
+  fi
+  echo "storage_root=${storage_root}"
+  echo "model_cache_root=${model_cache_root}"
+  if [[ "${force_cpu}" == "yes" ]]; then
+    echo "runtime_mode=cpu"
+  fi
+  exit 0
+fi
 
 echo "[run-plane] waiting for ${plane_name} readiness"
 deadline=$((SECONDS + wait_seconds))
