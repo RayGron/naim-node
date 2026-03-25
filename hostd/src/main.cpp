@@ -2330,6 +2330,7 @@ comet::DiskRuntimeState EnsureRealDiskMount(
   runtime_state.image_path = ManagedDiskImagePath(disk, storage_root, runtime_root);
   runtime_state.mount_point = disk.host_path;
 
+  const bool image_preexisting = std::filesystem::exists(runtime_state.image_path);
   CreateSparseImageFile(runtime_state.image_path, disk.size_gb);
   runtime_state.runtime_state = "image-created";
 
@@ -2338,6 +2339,16 @@ comet::DiskRuntimeState EnsureRealDiskMount(
   runtime_state.runtime_state = "attached";
 
   runtime_state.filesystem_type = DetectFilesystemTypeForDevice(runtime_state.loop_device);
+  if (runtime_state.filesystem_type.empty() && image_preexisting &&
+      disk.kind == comet::DiskKind::PlaneShared) {
+    for (int attempt = 0; attempt < 15; ++attempt) {
+      std::this_thread::sleep_for(std::chrono::seconds(2));
+      runtime_state.filesystem_type = DetectFilesystemTypeForDevice(runtime_state.loop_device);
+      if (!runtime_state.filesystem_type.empty()) {
+        break;
+      }
+    }
+  }
   if (runtime_state.filesystem_type.empty()) {
     if (!RunCommandOk(
             "/usr/sbin/mkfs.ext4 -F " + ShellQuote(runtime_state.loop_device) +
