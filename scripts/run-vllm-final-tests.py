@@ -355,12 +355,30 @@ class Campaign:
             time.sleep(2)
         raise RuntimeError(f"plane {plane_name} did not become ready: {last_payload}")
 
+    def interaction_request_raw(self, method: str, url: str, payload=None, timeout=600, max_attempts=4):
+        last_error = None
+        for attempt in range(max_attempts):
+            try:
+                return self.request_raw(method, url, payload=payload, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                if exc.code not in {502, 503, 504} or attempt + 1 == max_attempts:
+                    raise
+                last_error = exc
+            except urllib.error.URLError as exc:
+                if attempt + 1 == max_attempts:
+                    raise
+                last_error = exc
+            time.sleep(2 + attempt)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"interaction request failed without a response: {url}")
+
     def chat_completion(self, plane_name: str, payload: dict, timeout=1800):
         url = urllib.parse.urljoin(
             self.controller_url, f"/api/v1/planes/{plane_name}/interaction/chat/completions"
         )
         started = time.time()
-        body, status, _ = self.request_raw("POST", url, payload=payload, timeout=timeout)
+        body, status, _ = self.interaction_request_raw("POST", url, payload=payload, timeout=timeout)
         elapsed_ms = (time.time() - started) * 1000
         parsed = json.loads(body)
         return parsed, elapsed_ms, status
@@ -380,34 +398,54 @@ class Campaign:
         first_delta = None
         deltas = []
         complete_payload = None
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        last_error = None
+        for attempt in range(4):
             event_name = None
             data_lines = []
-            while True:
-                raw_line = response.readline()
-                if not raw_line:
-                    break
-                line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
-                if line.startswith("event: "):
-                    event_name = line[len("event: ") :]
-                elif line.startswith("data: "):
-                    data_lines.append(line[len("data: ") :])
-                elif line == "":
-                    if event_name and data_lines:
-                        data_blob = "\n".join(data_lines)
-                        if event_name == "delta":
-                            payload_json = json.loads(data_blob)
-                            delta = payload_json.get("delta", "")
-                            if delta and first_delta is None:
-                                first_delta = (time.time() - start) * 1000
-                            deltas.append(delta)
-                        elif event_name == "complete" and data_blob != "[DONE]":
-                            try:
-                                complete_payload = json.loads(data_blob)
-                            except json.JSONDecodeError:
-                                complete_payload = {"raw": data_blob}
-                    event_name = None
-                    data_lines = []
+            deltas = []
+            complete_payload = None
+            first_delta = None
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    while True:
+                        raw_line = response.readline()
+                        if not raw_line:
+                            break
+                        line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                        if line.startswith("event: "):
+                            event_name = line[len("event: ") :]
+                        elif line.startswith("data: "):
+                            data_lines.append(line[len("data: ") :])
+                        elif line == "":
+                            if event_name and data_lines:
+                                data_blob = "\n".join(data_lines)
+                                if event_name == "delta":
+                                    payload_json = json.loads(data_blob)
+                                    delta = payload_json.get("delta", "")
+                                    if delta and first_delta is None:
+                                        first_delta = (time.time() - start) * 1000
+                                    deltas.append(delta)
+                                elif event_name == "complete" and data_blob != "[DONE]":
+                                    try:
+                                        complete_payload = json.loads(data_blob)
+                                    except json.JSONDecodeError:
+                                        complete_payload = {"raw": data_blob}
+                            event_name = None
+                            data_lines = []
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code not in {502, 503, 504} or attempt == 3:
+                    raise
+                last_error = exc
+                time.sleep(2 + attempt)
+            except urllib.error.URLError as exc:
+                if attempt == 3:
+                    raise
+                last_error = exc
+                time.sleep(2 + attempt)
+        else:
+            if last_error is not None:
+                raise last_error
         total_ms = (time.time() - start) * 1000
         return {
             "ttft_ms": first_delta,
