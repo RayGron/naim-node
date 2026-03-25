@@ -338,8 +338,10 @@ member_a = json.loads(pathlib.Path(sys.argv[1]).read_text())
 member_b = json.loads(pathlib.Path(sys.argv[2]).read_text())
 assert member_a["rank"] == 0 and member_a["leader"] is True, member_a
 assert member_b["rank"] == 1 and member_b["leader"] is False, member_b
-assert member_a["base_url"].startswith("http://host.docker.internal:"), member_a
-assert member_b["base_url"].startswith("http://host.docker.internal:"), member_b
+assert member_a["base_url"] == "http://worker-qwen25-0.5b-vllm-split-a:18090", member_a
+assert member_b["base_url"] == "", member_b
+assert member_a["leader_api_base_url"] == "http://worker-qwen25-0.5b-vllm-split-a:18090", member_a
+assert member_b["leader_api_base_url"] == "http://worker-qwen25-0.5b-vllm-split-a:18090", member_b
 print("worker_group_contract=ok")
 PY
 
