@@ -4160,6 +4160,9 @@ void ApplyNodePlan(
         const auto runtime_state =
             backend == nullptr ? std::nullopt
                                : backend->LoadDiskRuntimeState(disk_name, disk_node_name);
+        const bool delegated_shared_remove =
+            disk_name == desired_node_state.plane_shared_disk_name &&
+            disk_node_name != desired_node_state.inference.primary_infer_node;
         bool removed = false;
         const bool mounted_now = IsPathMounted(operation.details);
         if (HostCanManageRealDisks() &&
@@ -4185,11 +4188,16 @@ void ApplyNodePlan(
           if (effective_state.node_name.empty()) {
             effective_state.node_name = disk_node_name;
           }
-          RemoveRealDiskMount(effective_state, runtime_root);
           removed = true;
+          if (!delegated_shared_remove) {
+            RemoveRealDiskMount(effective_state, runtime_root);
+          }
           auto removed_state = effective_state;
           removed_state.runtime_state = "removed";
-          removed_state.status_message = "managed disk detached and removed by hostd";
+          removed_state.status_message =
+              delegated_shared_remove
+                  ? "plane-shared disk removal delegated to primary infer node"
+                  : "managed disk detached and removed by hostd";
           removed_state.loop_device.clear();
           removed_state.mount_point = operation.details;
           if (runtime_root.has_value()) {
