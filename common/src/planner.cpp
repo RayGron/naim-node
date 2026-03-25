@@ -199,6 +199,8 @@ ComposeService BuildComposeService(
           worker_group_leader
               ? "http://host.docker.internal:" + std::to_string(published_host_port)
               : "";
+      service.environment["VLLM_HOST_IP"] = "host.docker.internal";
+      service.environment["VLLM_PORT"] = std::to_string(published_rendezvous_host_port);
       service.environment["COMET_VLLM_DISTRIBUTED_RUNTIME"] =
           distributed_runtime ? "1" : "0";
       service.environment["COMET_VLLM_DISTRIBUTED_EXECUTOR_BACKEND"] = "mp";
@@ -231,7 +233,7 @@ ComposeService BuildComposeService(
         service.published_ports.push_back(
             PublishedPort{"0.0.0.0", published_host_port, state.inference.api_port});
       }
-      if (worker_group_leader && distributed_runtime) {
+      if (distributed_runtime) {
         service.published_ports.push_back(PublishedPort{
             "0.0.0.0",
             published_rendezvous_host_port,
