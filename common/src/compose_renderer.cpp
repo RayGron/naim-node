@@ -96,6 +96,10 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
       out << "    runtime: nvidia\n";
     }
 
+    if (service.shm_size.has_value() && !service.shm_size->empty()) {
+      out << "    shm_size: " << *service.shm_size << "\n";
+    }
+
     if (!service.volumes.empty()) {
       out << "    volumes:\n";
       for (const auto& volume : service.volumes) {

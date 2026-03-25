@@ -207,6 +207,9 @@ ComposeService BuildComposeService(
         service.published_ports.push_back(
             PublishedPort{"0.0.0.0", published_host_port, state.inference.api_port});
       }
+      if (distributed_runtime) {
+        service.shm_size = "1gb";
+      }
     }
   }
   service.labels = instance.labels;
