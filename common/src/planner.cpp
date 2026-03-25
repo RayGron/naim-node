@@ -14,6 +14,8 @@ bool UsesVllmRuntime(const DesiredState& state) {
 
 constexpr int kWorkerPublishedPortBase = 20000;
 constexpr int kWorkerPublishedPortSpan = 20000;
+constexpr int kWorkerInternalPortBase = 30000;
+constexpr int kWorkerInternalPortSpan = 10000;
 
 uint32_t StableWorkerPortHash(const std::string& value) {
   uint32_t hash = 2166136261u;
@@ -30,6 +32,15 @@ int WorkerPublishedHostPort(
   const uint32_t offset =
       StableWorkerPortHash(state.plane_name + ":" + instance.name) % kWorkerPublishedPortSpan;
   return kWorkerPublishedPortBase + static_cast<int>(offset);
+}
+
+int WorkerInternalRuntimePort(
+    const DesiredState& state,
+    const InstanceSpec& instance) {
+  const uint32_t offset = StableWorkerPortHash(
+                              state.plane_name + ":" + instance.name + ":internal") %
+      kWorkerInternalPortSpan;
+  return kWorkerInternalPortBase + static_cast<int>(offset);
 }
 
 const DiskSpec& FindDiskByName(
@@ -122,6 +133,7 @@ ComposeService BuildComposeService(
       const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
       const auto* leader_worker_group_member = FindLeaderWorkerGroupMember(state);
       const int published_host_port = WorkerPublishedHostPort(state, instance);
+      const int internal_runtime_port = WorkerInternalRuntimePort(state, instance);
       const bool worker_group_leader =
           worker_group_member != nullptr && worker_group_member->leader;
       const bool distributed_runtime =
@@ -159,8 +171,7 @@ ComposeService BuildComposeService(
               ? "http://" + instance.name + ":" + std::to_string(state.inference.api_port)
               : "";
       service.environment["VLLM_HOST_IP"] = instance.name;
-      service.environment["VLLM_PORT"] =
-          std::to_string(state.worker_group.rendezvous_port);
+      service.environment["VLLM_PORT"] = std::to_string(internal_runtime_port);
       service.environment["COMET_VLLM_DISTRIBUTED_RUNTIME"] =
           distributed_runtime ? "1" : "0";
       service.environment["COMET_VLLM_DISTRIBUTED_EXECUTOR_BACKEND"] = "mp";
