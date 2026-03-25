@@ -2,6 +2,7 @@
 import argparse
 import base64
 import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -67,9 +68,23 @@ class Campaign:
         self.planes_to_cleanup = []
         self.docker_cmd = self.resolve_docker()
         self.sudo_prefix = self.resolve_sudo_prefix()
+        self.lock_handle = None
+        self.acquire_lock()
         self.controller_fingerprint = hashlib.sha256(
             base64.b64decode(self.controller_public_key_path.read_text().strip())
         ).hexdigest()
+
+    def acquire_lock(self):
+        lock_path = pathlib.Path(os.environ.get("COMET_VLLM_FINAL_TEST_LOCK", "/tmp/comet-vllm-final-tests.lock"))
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("w")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(f"another vLLM final test campaign is already running: {lock_path}") from exc
+        handle.write(f"{os.getpid()}\n")
+        handle.flush()
+        self.lock_handle = handle
 
     def resolve_docker(self):
         for candidate in (["docker"], ["sudo", "-n", "docker"]):
@@ -93,6 +108,14 @@ class Campaign:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             body = response.read().decode("utf-8")
             return json.loads(body) if body else {}
+
+    def controller_snapshot(self):
+        return {
+            "planes": self.request_json("GET", "/api/v1/planes", timeout=30),
+            "host_assignments": self.request_json("GET", "/api/v1/host-assignments", timeout=30),
+            "host_observations": self.request_json("GET", "/api/v1/host-observations", timeout=30),
+            "host_health": self.request_json("GET", "/api/v1/host-health", timeout=30),
+        }
 
     def request_raw(self, method: str, url: str, payload=None, timeout=600):
         data = None
@@ -234,6 +257,60 @@ class Campaign:
             )
         except Exception:
             pass
+
+    def active_assignments_for_planes(self, plane_names):
+        plane_names = set(plane_names)
+        payload = self.request_json("GET", "/api/v1/host-assignments", timeout=30)
+        assignments = payload.get("assignments", [])
+        active_statuses = {"pending", "claimed", "applying", "running", "queued"}
+        return [
+            item
+            for item in assignments
+            if item.get("plane_name") in plane_names and item.get("status") in active_statuses
+        ]
+
+    def wait_assignments_clear(self, plane_names, timeout=3600, node_names=None):
+        plane_names = [item for item in plane_names if item]
+        if not plane_names:
+            return
+        deadline = time.time() + timeout
+        last_active = []
+        while time.time() < deadline:
+            if node_names:
+                self.pump_nodes(node_names)
+            last_active = self.active_assignments_for_planes(plane_names)
+            if not last_active:
+                return
+            time.sleep(2)
+        raise RuntimeError(f"assignments did not clear for planes {plane_names}: {last_active}")
+
+    def capture_failure_artifacts(self, test_id: str, plane_names=None):
+        plane_names = plane_names or []
+        target = self.report_root / "artifacts" / test_id / f"failure-{time.strftime('%H%M%S')}"
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            (target / "controller-snapshot.json").write_text(json.dumps(self.controller_snapshot(), indent=2) + "\n")
+        except Exception as exc:
+            (target / "controller-snapshot.error.txt").write_text(str(exc) + "\n")
+        for plane_name in plane_names:
+            if not plane_name:
+                continue
+            try:
+                status = self.request_json("GET", f"/api/v1/planes/{plane_name}/interaction/status", timeout=30)
+                (target / f"{plane_name}-interaction-status.json").write_text(json.dumps(status, indent=2) + "\n")
+            except Exception as exc:
+                (target / f"{plane_name}-interaction-status.error.txt").write_text(str(exc) + "\n")
+        command_specs = {
+            "docker-ps.txt": [*self.docker_cmd, "ps", "-a", "--format", "table {{.Names}}\t{{.Status}}\t{{.Image}}"],
+            "nvidia-smi.txt": [*(self.sudo_prefix or []), "nvidia-smi"],
+            "controller-journal.txt": [*(self.sudo_prefix or []), "journalctl", "-u", "comet-node-controller.service", "-n", "400", "--no-pager"],
+            "hostd-journal.txt": [*(self.sudo_prefix or []), "journalctl", "-u", "comet-node-hostd.service", "-n", "400", "--no-pager"],
+            "processes.txt": [*(self.sudo_prefix or []), "ps", "-eo", "pid=,etimes=,args="],
+        }
+        for filename, args in command_specs.items():
+            result = run_cmd(args, check=False)
+            content = result.stdout if result.returncode == 0 else (result.stdout + "\n" + result.stderr)
+            (target / filename).write_text(content)
 
     def wait_plane_absent(self, plane_name: str, timeout=600):
         deadline = time.time() + timeout
@@ -922,7 +999,7 @@ class Campaign:
             time.sleep(2)
         raise RuntimeError("GPU workloads are still running after cleanup")
 
-    def delete_other_planes(self, keep=None):
+    def delete_other_planes(self, keep=None, node_names=None):
         keep = set(keep or [])
         payload = self.request_json("GET", "/api/v1/planes", timeout=30)
         for item in payload.get("items", []):
@@ -931,6 +1008,7 @@ class Campaign:
                 self.delete_plane(name)
                 try:
                     self.wait_plane_absent(name, timeout=900)
+                    self.wait_assignments_clear([name], timeout=900, node_names=node_names)
                 except Exception:
                     pass
 
@@ -1068,6 +1146,7 @@ class Campaign:
             payload["status"] = "failed"
             payload["finished_at"] = now_iso()
             payload["issues"].append(str(exc))
+            self.capture_failure_artifacts(test_id, [state.get("plane_name")])
         self.save_report(test_id, payload)
         self.summary.append({"id": test_id, "title": payload["title"], "status": payload["status"], "issues": payload["issues"]})
 
@@ -1084,7 +1163,7 @@ class Campaign:
         plane_a = "qwen35-35b-a3b-a"
         plane_b = "qwen35-35b-a3b-b"
         try:
-            self.delete_other_planes()
+            self.delete_other_planes(node_names=["local-hostd"])
             self.wait_gpu_idle()
             base_state = self.load_state("config/qwen35-35b-a3b/desired-state.json")
             state_a = self.make_single_worker_plane(base_state, plane_a, "0", 18110, 18111, 29531)
@@ -1202,6 +1281,7 @@ class Campaign:
             payload["status"] = "failed"
             payload["finished_at"] = now_iso()
             payload["issues"].append(str(exc))
+            self.capture_failure_artifacts(test_id, [plane_a, plane_b])
         self.save_report(test_id, payload)
         self.summary.append({"id": test_id, "title": payload["title"], "status": payload["status"], "issues": payload["issues"]})
 
@@ -1217,7 +1297,7 @@ class Campaign:
         }
         plane_name = "qwen35-122b-a10b-split"
         try:
-            self.delete_other_planes()
+            self.delete_other_planes(node_names=["infer-hostd", "worker-hostd-a", "worker-hostd-b"])
             self.wait_gpu_idle()
             self.setup_split_hostds()
             base_state = self.load_state("config/qwen35-122b-a10b/desired-state.json")
@@ -1293,6 +1373,7 @@ class Campaign:
             payload["status"] = "failed"
             payload["finished_at"] = now_iso()
             payload["issues"].append(str(exc))
+            self.capture_failure_artifacts(test_id, [plane_name])
         self.save_report(test_id, payload)
         self.summary.append({"id": test_id, "title": payload["title"], "status": payload["status"], "issues": payload["issues"]})
 
@@ -1309,7 +1390,7 @@ class Campaign:
         plane_a = "qwen35-35b-a3b-split-a"
         plane_b = "qwen35-35b-a3b-split-b"
         try:
-            self.delete_other_planes()
+            self.delete_other_planes(node_names=["infer-hostd", "worker-hostd-a", "worker-hostd-b"])
             self.wait_gpu_idle()
             self.setup_split_hostds()
             base_state = self.load_state("config/qwen35-35b-a3b/desired-state.json")
@@ -1420,6 +1501,7 @@ class Campaign:
             payload["status"] = "failed"
             payload["finished_at"] = now_iso()
             payload["issues"].append(str(exc))
+            self.capture_failure_artifacts(test_id, [plane_a, plane_b])
         self.save_report(test_id, payload)
         self.summary.append({"id": test_id, "title": payload["title"], "status": payload["status"], "issues": payload["issues"]})
 
@@ -1447,6 +1529,13 @@ class Campaign:
             for plane in reversed(self.planes_to_cleanup):
                 self.delete_plane(plane)
             self.cleanup_split_hostds()
+        if self.lock_handle is not None:
+            try:
+                fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            self.lock_handle.close()
+            self.lock_handle = None
 
 
 def main():
