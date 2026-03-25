@@ -132,7 +132,18 @@ class Campaign:
             raise RuntimeError(f"plane {state.get('plane_name')} is missing bootstrap_model.model_id")
         local_path = pathlib.Path(bootstrap.get("local_path") or self.model_local_path(model_id))
         state.setdefault("bootstrap_model", {})["local_path"] = str(local_path)
-        if (local_path / "config.json").exists():
+        config_path = local_path / "config.json"
+        try:
+            if config_path.exists():
+                return
+        except PermissionError:
+            if local_path.exists():
+                return
+            raise
+        try:
+            if local_path.exists() and local_path.is_dir():
+                return
+        except PermissionError:
             return
         local_path.parent.mkdir(parents=True, exist_ok=True)
         mount_root = self.model_cache_root.parent
