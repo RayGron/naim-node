@@ -165,6 +165,36 @@ start_hostd_loop() {
   printf '%s\n' "${pid}" >"${hostd_pid_dir}/${node_name}.pid"
 }
 
+delete_competing_planes() {
+  local plane_json
+  plane_json="$(curl -fsS "${controller_url}/api/v1/planes")"
+  python3 - <<'PY' "${plane_json}" "${plane_name}" >"${tmp_dir}/competing-planes.txt"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+target_plane = sys.argv[2]
+for item in payload.get("items", []):
+    name = item.get("name")
+    if name and name != target_plane:
+        print(name)
+PY
+  while IFS= read -r other_plane; do
+    [[ -n "${other_plane}" ]] || continue
+    curl -sS -X DELETE "${controller_url}/api/v1/planes/${other_plane}" >/dev/null || true
+  done <"${tmp_dir}/competing-planes.txt"
+
+  for _ in $(seq 1 120); do
+    if ! ${sudo_prefix} nvidia-smi --query-compute-apps=process_name --format=csv,noheader 2>/dev/null \
+      | grep -F 'VLLM::EngineCore' >/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "error: competing GPU workloads are still running after plane cleanup" >&2
+  exit 1
+}
+
 echo "[check-live-vllm-split] registering host roles"
 start_hostd_loop "infer-hostd" "infer-only"
 start_hostd_loop "worker-hostd-a" "worker-only"
@@ -177,6 +207,7 @@ ${sudo_prefix} "${controller_bin}" show-hostd-hosts --db "${controller_db}" --no
 echo "registered_hosts=ok"
 
 echo "[check-live-vllm-split] ensuring plane ${plane_name} is running"
+delete_competing_planes
 curl -sS -X DELETE "${controller_url}/api/v1/planes/${plane_name}" >/dev/null || true
 "${repo_root}/scripts/run-plane.sh" "${plane_name}" >/dev/null
 

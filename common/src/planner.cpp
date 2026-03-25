@@ -172,8 +172,15 @@ ComposeService BuildComposeService(
   }
   if (service.gpu_device.has_value()) {
     service.use_nvidia_runtime = true;
-    service.environment["NVIDIA_VISIBLE_DEVICES"] = *service.gpu_device;
     service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
+    if (use_vllm && instance.role == InstanceRole::Worker) {
+      // Docker device filtering already scopes the container to the selected GPU.
+      // Inside the container, vLLM should address that device as local ordinal 0.
+      service.environment["NVIDIA_VISIBLE_DEVICES"] = "all";
+      service.environment["CUDA_VISIBLE_DEVICES"] = "0";
+    } else {
+      service.environment["NVIDIA_VISIBLE_DEVICES"] = *service.gpu_device;
+    }
     service.security_opts.push_back("apparmor=unconfined");
   } else if (use_vllm && instance.role == InstanceRole::Infer) {
     // vLLM-backed infer still links against CUDA-enabled binaries, so expose driver

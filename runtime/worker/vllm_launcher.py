@@ -338,8 +338,10 @@ def main() -> int:
 
     gpu_device = env("COMET_GPU_DEVICE", env("COMET_WORKER_GPU_DEVICE"))
     if gpu_device:
-        child_env.setdefault("CUDA_VISIBLE_DEVICES", gpu_device)
-        child_env.setdefault("NVIDIA_VISIBLE_DEVICES", gpu_device)
+        # Docker already filters the container down to the selected physical GPU.
+        # Inside the container that GPU must be addressed as local ordinal 0.
+        child_env["CUDA_VISIBLE_DEVICES"] = env("COMET_LOCAL_GPU_ORDINAL", "0")
+        child_env["NVIDIA_VISIBLE_DEVICES"] = "all"
 
     command = build_command(model_ref, served_model_name, port)
     print(
