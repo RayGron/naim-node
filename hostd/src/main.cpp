@@ -4662,11 +4662,15 @@ void RemoveRealDiskMount(
     if (loop_device.has_value() && !loop_device->empty()) {
       if (!RunCommandOk(
               "/usr/sbin/losetup -d " + ShellQuote(*loop_device) + " >/dev/null 2>&1")) {
+        const bool loop_device_missing = !std::filesystem::exists(*loop_device);
         const auto still_attached =
             runtime_state.image_path.empty()
                 ? std::nullopt
                 : DetectExistingLoopDevice(runtime_state.image_path);
-        if (IsSharedManagedDiskImagePath(runtime_state.image_path) &&
+        if (loop_device_missing || !still_attached.has_value()) {
+          loop_device.reset();
+        } else if (
+            IsSharedManagedDiskImagePath(runtime_state.image_path) &&
             still_attached.has_value() &&
             (!runtime_state.mount_point.empty() && !IsPathMounted(runtime_state.mount_point))) {
           shared_image_removal_deferred = true;
