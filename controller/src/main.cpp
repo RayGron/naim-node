@@ -1648,13 +1648,35 @@ std::string BuildInteractionUpstreamBody(
     }
     combined_system_instruction += part;
   }
+
+  for (const auto& message : payload.at("messages")) {
+    if (!message.is_object() || message.value("role", std::string{}) != "system") {
+      continue;
+    }
+    std::string system_content;
+    if (message.contains("content")) {
+      if (message.at("content").is_string()) {
+        system_content = message.at("content").get<std::string>();
+      } else {
+        system_content = message.at("content").dump();
+      }
+    }
+    if (system_content.empty()) {
+      continue;
+    }
+    if (!combined_system_instruction.empty()) {
+      combined_system_instruction += "\n\n";
+    }
+    combined_system_instruction += system_content;
+  }
+
   if (!combined_system_instruction.empty()) {
-    merged_messages.push_back(json{
-        {"role", "system"},
-        {"content", combined_system_instruction},
-    });
+    merged_messages.push_back(json{{"role", "system"}, {"content", combined_system_instruction}});
   }
   for (const auto& message : payload.at("messages")) {
+    if (message.is_object() && message.value("role", std::string{}) == "system") {
+      continue;
+    }
     merged_messages.push_back(message);
   }
   payload["messages"] = merged_messages;
