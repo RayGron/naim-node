@@ -1678,6 +1678,13 @@ bool LooksLikeRecognizedModelDirectory(const std::string& path) {
          std::filesystem::exists(root / "params.json", error);
 }
 
+std::string SharedModelBootstrapOwnerNode(const comet::DesiredState& state) {
+  if (!state.inference.primary_infer_node.empty()) {
+    return state.inference.primary_infer_node;
+  }
+  return RequireSingleNodeName(state);
+}
+
 std::string ComputeFileSha256Hex(const std::string& path) {
   comet::InitializeCrypto();
   std::ifstream input(path, std::ios::binary);
@@ -1985,6 +1992,37 @@ void BootstrapPlaneModelIfNeeded(
   const auto& bootstrap_model = *state.bootstrap_model;
   const std::string target_path = BootstrapModelTargetPath(state, node_name);
   const auto artifacts = BuildBootstrapModelArtifacts(state, node_name);
+  const std::string bootstrap_owner_node = SharedModelBootstrapOwnerNode(state);
+  const bool shared_bootstrap_owned_elsewhere =
+      bootstrap_owner_node != node_name &&
+      std::any_of(
+          artifacts.begin(),
+          artifacts.end(),
+          [](const BootstrapModelArtifact& artifact) {
+            return artifact.local_path.has_value() && !artifact.local_path->empty();
+          });
+  if (shared_bootstrap_owned_elsewhere) {
+    for (int attempt = 0; attempt < 300; ++attempt) {
+      if (LooksLikeRecognizedModelDirectory(target_path) || std::filesystem::exists(target_path)) {
+        WriteBootstrapActiveModel(state, node_name, target_path);
+        return;
+      }
+      PublishAssignmentProgress(
+          backend,
+          assignment_id,
+          BuildAssignmentProgressPayload(
+              "waiting-for-model",
+              "Waiting for shared model",
+              "Waiting for " + bootstrap_owner_node +
+                  " to finish copying the shared model into the plane disk.",
+              18,
+              state.plane_name,
+              node_name));
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    throw std::runtime_error(
+        "timed out waiting for shared model bootstrap on node '" + bootstrap_owner_node + "'");
+  }
   bool already_present = !artifacts.empty();
   std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
   for (const auto& artifact : artifacts) {
