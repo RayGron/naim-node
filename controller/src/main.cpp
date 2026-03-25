@@ -2007,6 +2007,12 @@ PlaneInteractionResolution ResolvePlaneInteraction(
   if (resolution.runtime_status.has_value()) {
     resolution.runtime_status->registry_entries =
         std::max(resolution.runtime_status->registry_entries, ready_worker_members);
+    resolution.runtime_status->launch_ready =
+        resolution.runtime_status->active_model_ready &&
+        resolution.runtime_status->inference_ready &&
+        resolution.runtime_status->gateway_ready &&
+        ready_worker_members >= expected_worker_members;
+    resolution.runtime_status->ready = resolution.runtime_status->launch_ready;
   }
   const bool worker_group_degraded =
       expected_worker_members > 0 &&
