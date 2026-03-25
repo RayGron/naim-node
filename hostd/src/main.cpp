@@ -2909,6 +2909,38 @@ class HttpHostdBackend final : public HostdBackend {
   }
 
  private:
+  static bool IsRecoverableSessionErrorMessage(const std::string& message) {
+    return message.find("invalid or missing host session") != std::string::npos ||
+           message.find("stale or replayed host session request") != std::string::npos;
+  }
+
+  void ResetSessionState() {
+    session_token_.clear();
+    session_node_name_.clear();
+    host_sequence_ = 0;
+    controller_sequence_ = 0;
+  }
+
+  template <typename Fn>
+  json RetryOnRecoverableSessionError(
+      const std::string& message_type,
+      const char* recovery_status_message,
+      Fn&& fn) {
+    try {
+      return fn();
+    } catch (const std::exception& error) {
+      if (session_node_name_.empty() ||
+          message_type == "session/heartbeat" ||
+          !IsRecoverableSessionErrorMessage(error.what())) {
+        throw;
+      }
+      const std::string node_name = session_node_name_;
+      ResetSessionState();
+      EnsureSession(node_name, recovery_status_message);
+      return fn();
+    }
+  }
+
   static constexpr std::uint64_t SessionRekeyMessageLimit() {
     return 64;
   }
@@ -2931,53 +2963,55 @@ class HttpHostdBackend final : public HostdBackend {
       const std::string& path,
       const json& payload,
       const std::string& message_type) {
-    if (session_token_.empty()) {
-      throw std::runtime_error("missing host session token");
-    }
-    host_sequence_ += 1;
-    const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
-        payload.dump(),
-        session_token_,
-        BuildRequestAad(message_type, host_sequence_));
-    const json response = SendControllerJsonRequest(
-        target_,
-        "POST",
-        path,
-        json{
-            {"encrypted", true},
-            {"sequence_number", host_sequence_},
-            {"nonce", envelope.nonce_base64},
-            {"ciphertext", envelope.ciphertext_base64},
-        },
-        SessionHeaders());
-    if (!response.value("encrypted", false)) {
-      return response;
-    }
-    const std::uint64_t controller_sequence =
-        response.value("sequence_number", static_cast<std::uint64_t>(0));
-    if (controller_sequence <= controller_sequence_) {
-      throw std::runtime_error("stale or replayed controller session response");
-    }
-    const comet::EncryptedEnvelope response_envelope{
-        response.value("nonce", std::string{}),
-        response.value("ciphertext", std::string{}),
-    };
-    const std::string decrypted = comet::DecryptEnvelopeBase64(
-        response_envelope,
-        session_token_,
-        BuildResponseAad(message_type, controller_sequence));
-    controller_sequence_ = controller_sequence;
-    return decrypted.empty() ? json::object() : json::parse(decrypted);
+    return RetryOnRecoverableSessionError(
+        message_type,
+        "recovering host session",
+        [&]() {
+          if (session_token_.empty()) {
+            throw std::runtime_error("missing host session token");
+          }
+          host_sequence_ += 1;
+          const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
+              payload.dump(),
+              session_token_,
+              BuildRequestAad(message_type, host_sequence_));
+          const json response = SendControllerJsonRequest(
+              target_,
+              "POST",
+              path,
+              json{
+                  {"encrypted", true},
+                  {"sequence_number", host_sequence_},
+                  {"nonce", envelope.nonce_base64},
+                  {"ciphertext", envelope.ciphertext_base64},
+              },
+              SessionHeaders());
+          if (!response.value("encrypted", false)) {
+            return response;
+          }
+          const std::uint64_t controller_sequence =
+              response.value("sequence_number", static_cast<std::uint64_t>(0));
+          if (controller_sequence <= controller_sequence_) {
+            throw std::runtime_error("stale or replayed controller session response");
+          }
+          const comet::EncryptedEnvelope response_envelope{
+              response.value("nonce", std::string{}),
+              response.value("ciphertext", std::string{}),
+          };
+          const std::string decrypted = comet::DecryptEnvelopeBase64(
+              response_envelope,
+              session_token_,
+              BuildResponseAad(message_type, controller_sequence));
+          controller_sequence_ = controller_sequence;
+          return decrypted.empty() ? json::object() : json::parse(decrypted);
+        });
   }
 
   void EnsureSession(const std::string& node_name, const std::string& status_message) {
     if (!session_token_.empty() &&
         (host_sequence_ >= SessionRekeyMessageLimit() ||
          controller_sequence_ >= SessionRekeyMessageLimit())) {
-      session_token_.clear();
-      session_node_name_.clear();
-      host_sequence_ = 0;
-      controller_sequence_ = 0;
+      ResetSessionState();
     }
     if (!session_token_.empty() && session_node_name_ == node_name) {
       try {
@@ -2990,10 +3024,7 @@ class HttpHostdBackend final : public HostdBackend {
             "session/heartbeat");
         return;
       } catch (const std::exception&) {
-        session_token_.clear();
-        session_node_name_.clear();
-        host_sequence_ = 0;
-        controller_sequence_ = 0;
+        ResetSessionState();
       }
     }
     const std::string nonce = comet::RandomTokenBase64(24);

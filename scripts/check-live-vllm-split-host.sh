@@ -65,6 +65,10 @@ mkdir -p "${hostd_pid_dir}"
 cleanup() {
   set +e
   curl -sS -X DELETE "${controller_url}/api/v1/planes/${plane_name}" >/dev/null 2>&1 || true
+  local node_name
+  for node_name in infer-hostd worker-hostd-a worker-hostd-b; do
+    ${sudo_prefix} pkill -f "comet-node run hostd --foreground --skip-systemctl --node ${node_name} " >/dev/null 2>&1 || true
+  done
   local pid_file
   for pid_file in "${hostd_pid_dir}"/*.pid; do
     [[ -f "${pid_file}" ]] || continue
@@ -76,6 +80,19 @@ cleanup() {
   rm -rf "${tmp_dir}"
 }
 trap cleanup EXIT
+
+stop_existing_hostd_loop() {
+  local node_name="$1"
+  ${sudo_prefix} pkill -f "comet-node run hostd --foreground --skip-systemctl --node ${node_name} " >/dev/null 2>&1 || true
+  for _ in $(seq 1 30); do
+    if ! ${sudo_prefix} pgrep -f "comet-node run hostd --foreground --skip-systemctl --node ${node_name} " >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "error: stale hostd loop for ${node_name} is still running" >&2
+  exit 1
+}
 
 wait_for_json_field() {
   local url="$1"
@@ -143,6 +160,7 @@ start_hostd_loop() {
   local execution_mode="$2"
   local state_root="/var/lib/comet-node/${node_name}-state"
   local log_path="/var/log/${node_name}.log"
+  stop_existing_hostd_loop "${node_name}"
   register_host "${node_name}" "${execution_mode}"
   ${sudo_prefix} mkdir -p "${state_root}"
   local pid
