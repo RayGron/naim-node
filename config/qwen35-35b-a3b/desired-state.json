@@ -6,6 +6,7 @@
   "placement_target": "local",
   "bootstrap_model": {
     "model_id": "Qwen/Qwen3.5-35B-A3B",
+    "local_path": "/mnt/shared-storage/models/vllm/Qwen/Qwen3.5-35B-A3B",
     "served_model_name": "qwen3.5-35b-a3b"
   },
   "interaction": {
