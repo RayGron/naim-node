@@ -221,6 +221,7 @@ def build_worker_upstream_contract(
         "health_url": f"{base_url}/health",
         "models_url": f"{base_url}/v1/models",
         "last_activity_at": last_activity_at,
+        "distributed_runtime": env_bool("COMET_VLLM_DISTRIBUTED_RUNTIME", False),
     }
 
 
@@ -256,9 +257,24 @@ def build_worker_group_member_contract(
         "active_model_id": active_model_id,
         "served_model_name": served_model_name,
         "port": port,
-        "base_url": resolve_advertised_base_url(port),
-        "health_url": f"{resolve_advertised_base_url(port)}/health",
-        "models_url": f"{resolve_advertised_base_url(port)}/v1/models",
+        "headless": env_bool("COMET_VLLM_HEADLESS", False),
+        "distributed_runtime": env_bool("COMET_VLLM_DISTRIBUTED_RUNTIME", False),
+        "base_url": resolve_advertised_base_url(port)
+        if not env_bool("COMET_VLLM_HEADLESS", False)
+        else "",
+        "health_url": (
+            f"{resolve_advertised_base_url(port)}/health"
+            if not env_bool("COMET_VLLM_HEADLESS", False)
+            else ""
+        ),
+        "models_url": (
+            f"{resolve_advertised_base_url(port)}/v1/models"
+            if not env_bool("COMET_VLLM_HEADLESS", False)
+            else ""
+        ),
+        "leader_api_base_url": env("COMET_WORKER_LEADER_API_BASE_URL"),
+        "master_addr": env("COMET_VLLM_DISTRIBUTED_MASTER_ADDR"),
+        "master_port": env_int("COMET_VLLM_DISTRIBUTED_MASTER_PORT", env_int("COMET_RENDEZVOUS_PORT", 29500)),
         "rendezvous_port": env_int("COMET_RENDEZVOUS_PORT", 29500),
         "last_activity_at": last_activity_at,
     }
@@ -275,15 +291,13 @@ def probe(url: str) -> bool:
 def build_command(model_ref: str, served_model_name: str, port: int) -> list[str]:
     tokenizer_ref = env("COMET_VLLM_TOKENIZER", model_ref)
     command = [
-        sys.executable,
-        "-m",
-        "vllm.entrypoints.openai.api_server",
+        "vllm",
+        "serve",
+        model_ref,
         "--host",
         "0.0.0.0",
         "--port",
         str(port),
-        "--model",
-        model_ref,
         "--tokenizer",
         tokenizer_ref,
         "--served-model-name",
@@ -299,6 +313,24 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
         "--gpu-memory-utilization",
         str(env_float("COMET_VLLM_GPU_MEMORY_UTILIZATION", 0.9)),
     ]
+    distributed_runtime = env_bool("COMET_VLLM_DISTRIBUTED_RUNTIME", False)
+    if distributed_runtime:
+        command.extend(
+            [
+                "--distributed-executor-backend",
+                env("COMET_VLLM_DISTRIBUTED_EXECUTOR_BACKEND", "mp"),
+                "--nnodes",
+                str(env_int("COMET_VLLM_DISTRIBUTED_NNODES", 1)),
+                "--node-rank",
+                str(env_int("COMET_VLLM_DISTRIBUTED_NODE_RANK", 0)),
+                "--master-addr",
+                env("COMET_VLLM_DISTRIBUTED_MASTER_ADDR", "host.docker.internal"),
+                "--master-port",
+                str(env_int("COMET_VLLM_DISTRIBUTED_MASTER_PORT", env_int("COMET_RENDEZVOUS_PORT", 29500))),
+            ]
+        )
+        if env_bool("COMET_VLLM_HEADLESS", False):
+            command.append("--headless")
     download_dir = env("COMET_VLLM_DOWNLOAD_DIR")
     if download_dir:
         command.extend(["--download-dir", download_dir])
@@ -307,6 +339,12 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
     if env_bool("COMET_VLLM_TRUST_REMOTE_CODE", False):
         command.append("--trust-remote-code")
     return command
+
+
+def member_ready(*, leader_health: bool, child_alive: bool) -> bool:
+    if env_bool("COMET_VLLM_HEADLESS", False):
+        return child_alive and leader_health
+    return leader_health
 
 
 def signal_handler(_signum, _frame) -> None:
@@ -335,6 +373,9 @@ def main() -> int:
     upstream_file = worker_upstream_path(control_root)
     worker_group_member_file = worker_group_member_path(control_root, instance_name)
     health_url = f"http://127.0.0.1:{port}/health"
+    leader_health_url = env("COMET_WORKER_LEADER_API_BASE_URL", "").rstrip("/")
+    if leader_health_url:
+        leader_health_url = f"{leader_health_url}/health"
     child_env = os.environ.copy()
     instance_name = env("COMET_INSTANCE_NAME", "worker")
     node_name = env("COMET_NODE_NAME")
@@ -402,13 +443,17 @@ def main() -> int:
 
     while child.poll() is None and not STOP_REQUESTED:
         healthy = probe(health_url)
+        leader_healthy = healthy
+        if env_bool("COMET_VLLM_HEADLESS", False) and leader_health_url:
+            leader_healthy = probe(leader_health_url)
+        ready = member_ready(leader_health=leader_healthy, child_alive=child.poll() is None)
         now = utc_now_iso()
-        set_ready(healthy)
+        set_ready(ready)
         write_json(
             status_file,
             build_status(
-                phase="running" if healthy else "starting",
-                ready=healthy,
+                phase="running" if ready else "starting",
+                ready=ready,
                 started_at=started_at,
                 last_activity_at=now,
                 active_model_id=active_model_id,
@@ -422,8 +467,8 @@ def main() -> int:
             worker_group_member_file,
             build_worker_group_member_contract(
                 control_root=control_root,
-                ready=healthy,
-                phase="running" if healthy else "starting",
+                ready=ready,
+                phase="running" if ready else "starting",
                 node_name=node_name,
                 instance_name=instance_name,
                 active_model_id=active_model_id,
@@ -437,8 +482,8 @@ def main() -> int:
                 upstream_file,
                 build_worker_upstream_contract(
                     control_root=control_root,
-                    ready=healthy,
-                    phase="running" if healthy else "starting",
+                    ready=ready,
+                    phase="running" if ready else "starting",
                     node_name=node_name,
                     instance_name=instance_name,
                     active_model_id=active_model_id,

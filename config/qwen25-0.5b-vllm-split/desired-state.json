@@ -37,7 +37,7 @@
     "api_port": 18090,
     "max_model_len": 2048,
     "tensor_parallel_size": 1,
-    "pipeline_parallel_size": 1,
+    "pipeline_parallel_size": 2,
     "max_num_seqs": 8,
     "gpu_memory_utilization": 0.2,
     "enforce_eager": false,
