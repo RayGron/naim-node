@@ -43,21 +43,21 @@
     "models_root": "/comet/shared/models",
     "model_cache_dir": "/comet/shared/models/cache",
     "runtime_log_dir": "/comet/shared/logs/infer",
-    "api_port": 8000,
+    "api_port": 18092,
     "max_model_len": 4096,
     "tensor_parallel_size": 1,
     "pipeline_parallel_size": 1,
     "max_num_seqs": 16,
     "gpu_memory_utilization": 0.85,
     "enforce_eager": false,
-    "rendezvous_port": 29500
+    "rendezvous_port": 29502
   },
   "worker_group": {
     "group_id": "qwen35-9b-min-workers",
     "infer_instance_name": "infer-qwen35-9b-min",
     "distributed_backend": "vllm",
     "rendezvous_host": "infer-qwen35-9b-min",
-    "rendezvous_port": 29500,
+    "rendezvous_port": 29502,
     "expected_workers": 1,
     "worker_selection_policy": "prefer-free-then-share",
     "members": [
@@ -154,7 +154,7 @@
         "COMET_CONTROLLER_URL": "http://controller.internal:8080",
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen35-9b-min",
         "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/qwen35-9b-min/infer-runtime.json",
-        "COMET_INFERENCE_PORT": "8000",
+        "COMET_INFERENCE_PORT": "18092",
         "COMET_GATEWAY_PORT": "18082",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
         "COMET_PRIVATE_DISK_PATH": "/comet/private"
