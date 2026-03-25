@@ -12,6 +12,18 @@ bool UsesVllmRuntime(const DesiredState& state) {
   return state.inference.runtime_engine == "vllm";
 }
 
+std::optional<ComposeVolume> BuildDirectModelCacheVolume(const DesiredState& state) {
+  if (!UsesVllmRuntime(state) || !state.bootstrap_model.has_value() ||
+      !state.bootstrap_model->local_path.has_value()) {
+    return std::nullopt;
+  }
+  const std::string& local_path = *state.bootstrap_model->local_path;
+  if (local_path.empty() || local_path.front() != '/') {
+    return std::nullopt;
+  }
+  return ComposeVolume{local_path, local_path, true};
+}
+
 constexpr int kWorkerPublishedPortBase = 20000;
 constexpr int kWorkerPublishedPortSpan = 20000;
 constexpr int kWorkerInternalPortBase = 30000;
@@ -268,6 +280,9 @@ ComposeService BuildComposeService(
       ComposeVolume{shared_disk.host_path, shared_disk.container_path, false});
   service.volumes.push_back(
       ComposeVolume{private_disk.host_path, private_disk.container_path, false});
+  if (const auto direct_model_cache = BuildDirectModelCacheVolume(state); direct_model_cache.has_value()) {
+    service.volumes.push_back(*direct_model_cache);
+  }
 
   return service;
 }

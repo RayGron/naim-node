@@ -1701,6 +1701,17 @@ bool LooksLikeRecognizedModelDirectory(const std::string& path) {
          std::filesystem::exists(root / "params.json", error);
 }
 
+bool LooksLikeReadySharedModelDirectory(const std::string& path) {
+  if (!LooksLikeRecognizedModelDirectory(path)) {
+    return false;
+  }
+  std::error_code error;
+  return std::filesystem::exists(
+             std::filesystem::path(path) / ".comet-model-ready",
+             error) &&
+         !error;
+}
+
 std::string SharedModelBootstrapOwnerNode(const comet::DesiredState& state) {
   if (!state.inference.primary_infer_node.empty()) {
     return state.inference.primary_infer_node;
@@ -1960,19 +1971,25 @@ void DownloadFileWithProgress(
 void WriteBootstrapActiveModel(
     const comet::DesiredState& state,
     const std::string& node_name,
-    const std::string& target_host_path) {
+    const std::string& target_host_path,
+    const std::optional<std::string>& runtime_model_path_override = std::nullopt) {
   const auto& bootstrap_model = *state.bootstrap_model;
-  const std::string runtime_model_path = BootstrapRuntimeModelPath(state, target_host_path);
+  const std::string runtime_model_path =
+      runtime_model_path_override.has_value()
+          ? *runtime_model_path_override
+          : BootstrapRuntimeModelPath(state, target_host_path);
   WriteTextFile(
       ActiveModelPathForNode(state, node_name),
       json{
           {"version", 1},
           {"plane_name", state.plane_name},
           {"model_id", bootstrap_model.model_id},
+          {"source_model_id", bootstrap_model.model_id},
           {"served_model_name",
            bootstrap_model.served_model_name.has_value()
                ? *bootstrap_model.served_model_name
                : bootstrap_model.model_id},
+          {"local_model_path", target_host_path},
           {"cached_local_model_path", target_host_path},
           {"cached_runtime_model_path", runtime_model_path},
           {"runtime_model_path", runtime_model_path},
@@ -2013,6 +2030,28 @@ void BootstrapPlaneModelIfNeeded(
   }
 
   const auto& bootstrap_model = *state.bootstrap_model;
+  const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
+  if (use_vllm_runtime && bootstrap_model.local_path.has_value() &&
+      !bootstrap_model.local_path->empty() &&
+      LooksLikeReadySharedModelDirectory(*bootstrap_model.local_path)) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        BuildAssignmentProgressPayload(
+            "using-shared-model-cache",
+            "Using shared model cache",
+            "Using the ready vLLM model directory directly from shared storage.",
+            72,
+            state.plane_name,
+            node_name));
+    WriteBootstrapActiveModel(
+        state,
+        node_name,
+        *bootstrap_model.local_path,
+        *bootstrap_model.local_path);
+    return;
+  }
+
   const std::string target_path = BootstrapModelTargetPath(state, node_name);
   const auto artifacts = BuildBootstrapModelArtifacts(state, node_name);
   const std::string bootstrap_owner_node = SharedModelBootstrapOwnerNode(state);
