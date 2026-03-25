@@ -1719,7 +1719,8 @@ std::optional<ControllerEndpointTarget> ParseInteractionTarget(
 
 std::optional<std::string> FindInferInstanceName(const comet::DesiredState& desired_state) {
   for (const auto& instance : desired_state.instances) {
-    if (instance.role == "infer" && instance.plane_name == desired_state.plane_name) {
+    if (instance.role == comet::InstanceRole::Infer &&
+        instance.plane_name == desired_state.plane_name) {
       return instance.name;
     }
   }
@@ -1729,7 +1730,8 @@ std::optional<std::string> FindInferInstanceName(const comet::DesiredState& desi
 std::vector<std::string> FindWorkerInstanceNames(const comet::DesiredState& desired_state) {
   std::vector<std::string> names;
   for (const auto& instance : desired_state.instances) {
-    if (instance.role == "worker" && instance.plane_name == desired_state.plane_name) {
+    if (instance.role == comet::InstanceRole::Worker &&
+        instance.plane_name == desired_state.plane_name) {
       names.push_back(instance.name);
     }
   }
@@ -1810,8 +1812,11 @@ std::optional<comet::RuntimeStatus> BuildPlaneScopedRuntimeStatus(
   runtime.runtime_pid = infer_status->runtime_pid;
   runtime.engine_pid = infer_status->engine_pid;
   runtime.supervisor_pid = infer_status->runtime_pid;
-  runtime.active_model_id = desired_state.bootstrap_model.model_id;
-  runtime.active_served_model_name = desired_state.bootstrap_model.served_model_name;
+  if (desired_state.bootstrap_model.has_value()) {
+    runtime.active_model_id = desired_state.bootstrap_model->model_id;
+    runtime.active_served_model_name =
+        desired_state.bootstrap_model->served_model_name.value_or(std::string{});
+  }
   runtime.cached_local_model_path = infer_status->model_path;
   runtime.model_path = infer_status->model_path;
   runtime.gpu_device = infer_status->gpu_device;
