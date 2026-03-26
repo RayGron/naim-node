@@ -7,29 +7,29 @@
             "includePath": [
                 "${workspaceFolder}/common/include",
                 "${workspaceFolder}/vcpkg_installed/x64-linux-root/x64-linux/include",
-                "\\\\wsl.localhost\\Ubuntu\\usr\\include\\c++\\11",
-                "\\\\wsl.localhost\\Ubuntu\\usr\\include\\x86_64-linux-gnu\\c++\\11",
-                "\\\\wsl.localhost\\Ubuntu\\usr\\include\\c++\\11\\backward",
-                "\\\\wsl.localhost\\Ubuntu\\usr\\lib\\gcc\\x86_64-linux-gnu\\11\\include",
-                "\\\\wsl.localhost\\Ubuntu\\usr\\local\\include",
-                "\\\\wsl.localhost\\Ubuntu\\usr\\include\\x86_64-linux-gnu",
-                "\\\\wsl.localhost\\Ubuntu\\usr\\include"
+                "/usr/include/c++/13",
+                "/usr/include/x86_64-linux-gnu/c++/13",
+                "/usr/include/c++/13/backward",
+                "/usr/lib/gcc/x86_64-linux-gnu/13/include",
+                "/usr/local/include",
+                "/usr/include/x86_64-linux-gnu",
+                "/usr/include"
             ],
             "browse": {
                 "path": [
                     "${workspaceFolder}/common/include",
                     "${workspaceFolder}/vcpkg_installed/x64-linux-root/x64-linux/include",
-                    "\\\\wsl.localhost\\Ubuntu\\usr\\include\\c++\\11",
-                    "\\\\wsl.localhost\\Ubuntu\\usr\\include\\x86_64-linux-gnu\\c++\\11",
-                    "\\\\wsl.localhost\\Ubuntu\\usr\\include\\c++\\11\\backward",
-                    "\\\\wsl.localhost\\Ubuntu\\usr\\lib\\gcc\\x86_64-linux-gnu\\11\\include",
-                    "\\\\wsl.localhost\\Ubuntu\\usr\\local\\include",
-                    "\\\\wsl.localhost\\Ubuntu\\usr\\include\\x86_64-linux-gnu",
-                    "\\\\wsl.localhost\\Ubuntu\\usr\\include"
+                    "/usr/include/c++/13",
+                    "/usr/include/x86_64-linux-gnu/c++/13",
+                    "/usr/include/c++/13/backward",
+                    "/usr/lib/gcc/x86_64-linux-gnu/13/include",
+                    "/usr/local/include",
+                    "/usr/include/x86_64-linux-gnu",
+                    "/usr/include"
                 ]
             },
             "cppStandard": "c++20",
-            "intelliSenseMode": "linux-gcc-x64"
+            "intelliSenseMode": "linux-clang-x64"
         }
     ]
 }
