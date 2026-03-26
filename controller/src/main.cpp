@@ -1,12 +1,5 @@
-#include <arpa/inet.h>
 #include <errno.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <signal.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <csignal>
 
 #include <algorithm>
 #include <array>
@@ -46,6 +39,7 @@
 #include "comet/infer_runtime_config.h"
 #include "comet/models.h"
 #include "comet/planner.h"
+#include "comet/platform_compat.h"
 #include "comet/reconcile.h"
 #include "comet/runtime_status.h"
 #include "comet/scheduling_policy.h"
@@ -55,6 +49,25 @@
 namespace {
 
 using nlohmann::json;
+using SocketHandle = comet::platform::SocketHandle;
+using PollFd = comet::platform::PollFd;
+
+std::string SocketErrorMessage() {
+  return comet::platform::LastSocketErrorMessage();
+}
+
+void CloseSocketHandle(const SocketHandle fd) {
+  if (comet::platform::IsSocketValid(fd)) {
+    comet::platform::CloseSocket(fd);
+  }
+}
+
+void ShutdownAndCloseSocket(const SocketHandle fd) {
+  if (comet::platform::IsSocketValid(fd)) {
+    comet::platform::ShutdownSocket(fd);
+    comet::platform::CloseSocket(fd);
+  }
+}
 
 std::string DefaultDbPath() {
   return (std::filesystem::path("var") / "controller.sqlite").string();
@@ -782,7 +795,7 @@ std::string ReasonPhrase(int status_code) {
   }
 }
 
-void SendHttpResponse(int client_fd, const HttpResponse& response) {
+void SendHttpResponse(SocketHandle client_fd, const HttpResponse& response) {
   std::ostringstream out;
   out << "HTTP/1.1 " << response.status_code << " " << ReasonPhrase(response.status_code) << "\r\n";
   out << "Content-Type: " << response.content_type << "\r\n";
@@ -808,7 +821,7 @@ void SendHttpResponse(int client_fd, const HttpResponse& response) {
   }
 }
 
-bool SendAll(int fd, const std::string& payload) {
+bool SendAll(SocketHandle fd, const std::string& payload) {
   const char* data = payload.c_str();
   std::size_t remaining = payload.size();
   while (remaining > 0) {
@@ -823,7 +836,7 @@ bool SendAll(int fd, const std::string& payload) {
 }
 
 bool SendSseHeaders(
-    int client_fd,
+    SocketHandle client_fd,
     const std::map<std::string, std::string>& headers = {}) {
   std::ostringstream out;
   out << "HTTP/1.1 200 OK\r\n";
@@ -841,7 +854,7 @@ bool SendSseHeaders(
 }
 
 bool SendSseEventFrame(
-    int client_fd,
+    SocketHandle client_fd,
     int event_id,
     const std::string& event_name,
     const std::string& payload) {
@@ -860,7 +873,7 @@ bool SendSseEventFrame(
   return SendAll(client_fd, frame.str());
 }
 
-bool SendSseCommentFrame(int client_fd, const std::string& message) {
+bool SendSseCommentFrame(SocketHandle client_fd, const std::string& message) {
   return SendAll(client_fd, ":" + message + "\n\n");
 }
 
@@ -1059,6 +1072,8 @@ HttpResponse SendControllerHttpRequest(
     const std::string& path_and_query,
     const std::string& body = "",
     const std::vector<std::pair<std::string, std::string>>& headers = {}) {
+  comet::platform::EnsureSocketsInitialized();
+
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
@@ -1070,20 +1085,20 @@ HttpResponse SendControllerHttpRequest(
         "failed to resolve controller target '" + target.raw + "': " + gai_strerror(lookup));
   }
 
-  int fd = -1;
+  SocketHandle fd = comet::platform::kInvalidSocket;
   for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
     fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (fd < 0) {
+    if (!comet::platform::IsSocketValid(fd)) {
       continue;
     }
     if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
-    close(fd);
-    fd = -1;
+    CloseSocketHandle(fd);
+    fd = comet::platform::kInvalidSocket;
   }
   freeaddrinfo(results);
-  if (fd < 0) {
+  if (!comet::platform::IsSocketValid(fd)) {
     throw std::runtime_error("failed to connect to controller target '" + target.raw + "'");
   }
 
@@ -1113,8 +1128,8 @@ HttpResponse SendControllerHttpRequest(
   while (remaining > 0) {
     const ssize_t written = send(fd, data, remaining, 0);
     if (written <= 0) {
-      const std::string error = std::strerror(errno);
-      close(fd);
+      const std::string error = SocketErrorMessage();
+      CloseSocketHandle(fd);
       throw std::runtime_error("failed to write HTTP request: " + error);
     }
     data += written;
@@ -1126,8 +1141,8 @@ HttpResponse SendControllerHttpRequest(
   while (true) {
     const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
-      const std::string error = std::strerror(errno);
-      close(fd);
+      const std::string error = SocketErrorMessage();
+      CloseSocketHandle(fd);
       throw std::runtime_error("failed to read HTTP response: " + error);
     }
     if (read_count == 0) {
@@ -1135,7 +1150,7 @@ HttpResponse SendControllerHttpRequest(
     }
     response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
   }
-  close(fd);
+  CloseSocketHandle(fd);
   return ParseHttpResponse(response_text);
 }
 
@@ -2273,9 +2288,14 @@ PlaneInteractionResolution ResolvePlaneInteraction(
             });
       }
     }
-    observation_matches_plane =
-        resolution.observation.has_value() &&
-        (ObservationMatchesPlane(*resolution.observation, plane_name) || infer_runtime_present);
+    if (resolution.observation.has_value()) {
+      try {
+        observation_matches_plane =
+            ObservationMatchesPlane(*resolution.observation, plane_name) || infer_runtime_present;
+      } catch (const std::exception&) {
+        observation_matches_plane = infer_runtime_present;
+      }
+    }
     if (observation_matches_plane) {
       resolution.runtime_status =
           BuildPlaneScopedRuntimeStatus(*desired_state, *resolution.observation);
@@ -2296,10 +2316,60 @@ PlaneInteractionResolution ResolvePlaneInteraction(
   const bool llm_plane = desired_state->plane_mode == comet::PlaneMode::Llm;
   const bool running_plane =
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
-  const bool observation_ready = observation_matches_plane;
   const int expected_worker_members =
       std::max(0, desired_state->worker_group.expected_workers);
-  const int ready_worker_members = CountReadyWorkerMembers(store, *desired_state);
+  int ready_worker_members = CountReadyWorkerMembers(store, *desired_state);
+
+  if (!resolution.target.has_value()) {
+    resolution.target = ParseInteractionTarget(
+        desired_state->gateway.listen_host + ":" +
+            std::to_string(desired_state->gateway.listen_port),
+        desired_state->gateway.listen_port);
+  }
+
+  if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {
+    comet::RuntimeStatus runtime;
+    runtime.plane_name = desired_state->plane_name;
+    runtime.control_root = desired_state->control_root;
+    runtime.primary_infer_node = desired_state->inference.primary_infer_node;
+    runtime.runtime_backend =
+        desired_state->inference.runtime_engine == "vllm" ? "worker-vllm"
+                                                          : desired_state->inference.runtime_engine;
+    if (const auto infer_instance_name = FindInferInstanceName(*desired_state);
+        infer_instance_name.has_value()) {
+      runtime.instance_name = *infer_instance_name;
+      runtime.instance_role = "infer";
+      runtime.node_name = desired_state->inference.primary_infer_node;
+    }
+    if (desired_state->bootstrap_model.has_value()) {
+      runtime.active_model_id = desired_state->bootstrap_model->model_id;
+      runtime.active_served_model_name =
+          desired_state->bootstrap_model->served_model_name.value_or(std::string{});
+      runtime.cached_local_model_path =
+          desired_state->bootstrap_model->local_path.value_or(std::string{});
+      runtime.model_path = runtime.cached_local_model_path;
+      runtime.active_model_ready = !runtime.active_model_id.empty();
+    }
+    runtime.gateway_listen =
+        desired_state->gateway.listen_host + ":" +
+        std::to_string(desired_state->gateway.listen_port);
+    runtime.gateway_health_url =
+        "http://127.0.0.1:" + std::to_string(desired_state->gateway.listen_port) + "/health";
+    runtime.upstream_models_url =
+        "http://127.0.0.1:" + std::to_string(desired_state->gateway.listen_port) + "/v1/models";
+    runtime.inference_health_url = runtime.upstream_models_url;
+    runtime.gateway_plan_ready = true;
+    runtime.gateway_ready = ProbeControllerTargetOk(resolution.target, "/health");
+    runtime.inference_ready = ProbeControllerTargetOk(resolution.target, "/v1/models");
+    resolution.runtime_status = std::move(runtime);
+  }
+
+  if (ready_worker_members == 0 &&
+      resolution.runtime_status.has_value() &&
+      resolution.runtime_status->inference_ready) {
+    ready_worker_members = expected_worker_members;
+  }
+
   if (resolution.runtime_status.has_value()) {
     resolution.runtime_status->registry_entries =
         std::max(resolution.runtime_status->registry_entries, ready_worker_members);
@@ -2310,6 +2380,10 @@ PlaneInteractionResolution ResolvePlaneInteraction(
         ready_worker_members >= expected_worker_members;
     resolution.runtime_status->ready = resolution.runtime_status->launch_ready;
   }
+  const bool observation_ready =
+      observation_matches_plane ||
+      (resolution.runtime_status.has_value() &&
+       (resolution.runtime_status->gateway_ready || resolution.runtime_status->inference_ready));
   const bool worker_group_degraded =
       expected_worker_members > 0 &&
       ready_worker_members > 0 &&
@@ -3265,31 +3339,42 @@ HttpResponse ProxyInteractionJson(
   }
 }
 
-int CreateListenSocket(const std::string& host, int port) {
-  const int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) {
+SocketHandle CreateListenSocket(const std::string& host, int port) {
+  comet::platform::EnsureSocketsInitialized();
+
+  const SocketHandle fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (!comet::platform::IsSocketValid(fd)) {
     throw std::runtime_error("failed to create server socket");
   }
 
   int yes = 1;
+#if defined(_WIN32)
+  setsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_REUSEADDR,
+      reinterpret_cast<const char*>(&yes),
+      sizeof(yes));
+#else
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#endif
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(static_cast<uint16_t>(port));
   if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
-    close(fd);
+    CloseSocketHandle(fd);
     throw std::runtime_error("invalid listen host '" + host + "'");
   }
 
   if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-    const std::string error = std::strerror(errno);
-    close(fd);
+    const std::string error = SocketErrorMessage();
+    CloseSocketHandle(fd);
     throw std::runtime_error("failed to bind " + host + ":" + std::to_string(port) + ": " + error);
   }
   if (listen(fd, 64) != 0) {
-    const std::string error = std::strerror(errno);
-    close(fd);
+    const std::string error = SocketErrorMessage();
+    CloseSocketHandle(fd);
     throw std::runtime_error("failed to listen on " + host + ":" + std::to_string(port) + ": " + error);
   }
   return fd;
@@ -4120,7 +4205,8 @@ bool NodeAllowsInstanceRole(
     comet::InstanceRole role) {
   switch (execution_mode) {
     case comet::HostExecutionMode::InferOnly:
-      return role == comet::InstanceRole::Infer;
+      return role == comet::InstanceRole::Infer ||
+             role == comet::InstanceRole::App;
     case comet::HostExecutionMode::WorkerOnly:
       return role == comet::InstanceRole::Worker;
     case comet::HostExecutionMode::Mixed:
@@ -4863,7 +4949,7 @@ std::string FilenameFromUrlForModelLibrary(const std::string& source_url) {
 std::optional<std::uintmax_t> ProbeContentLengthForModelLibrary(const std::string& source_url) {
   const std::string temp_headers =
       (std::filesystem::temp_directory_path() /
-       ("comet-model-head-" + std::to_string(::getpid()) + "-" +
+       ("comet-model-head-" + std::to_string(comet::platform::CurrentProcessId()) + "-" +
         std::to_string(g_model_library_job_counter.fetch_add(1)) + ".txt"))
           .string();
   const std::string command = "/usr/bin/curl -fsSLI " + std::string("'") + source_url + "' > '" +
@@ -5544,7 +5630,9 @@ constexpr int HostSessionLifetimeSeconds() {
 std::string SqlTimestampAfterSeconds(int seconds) {
   const std::time_t future = std::time(nullptr) + seconds;
   std::tm tm{};
-  gmtime_r(&future, &tm);
+  if (!comet::platform::GmTime(&future, &tm)) {
+    throw std::runtime_error("failed to format future UTC timestamp");
+  }
   std::ostringstream out;
   out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
   return out.str();
@@ -6389,19 +6477,17 @@ SseStreamRequest ParseSseStreamRequest(const HttpRequest& request) {
 }
 
 void StreamEventsSse(
-    int client_fd,
+    SocketHandle client_fd,
     const std::string& db_path,
     const HttpRequest& request) {
   const SseStreamRequest stream_request = ParseSseStreamRequest(request);
   int last_event_id = stream_request.last_event_id.value_or(0);
   if (!SendSseHeaders(client_fd)) {
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
+    ShutdownAndCloseSocket(client_fd);
     return;
   }
   if (!SendSseCommentFrame(client_fd, " connected")) {
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
+    ShutdownAndCloseSocket(client_fd);
     return;
   }
 
@@ -6420,8 +6506,7 @@ void StreamEventsSse(
     for (const auto& event : events) {
       const std::string payload = BuildEventPayloadItem(event).dump();
       if (!SendSseEventFrame(client_fd, event.id, BuildSseEventName(event), payload)) {
-        shutdown(client_fd, SHUT_RDWR);
-        close(client_fd);
+        ShutdownAndCloseSocket(client_fd);
         return;
       }
       last_event_id = std::max(last_event_id, event.id);
@@ -6431,19 +6516,18 @@ void StreamEventsSse(
     const auto now = std::chrono::steady_clock::now();
     if (now - last_keepalive >= std::chrono::seconds(5)) {
       if (!SendSseCommentFrame(client_fd, " keepalive")) {
-        shutdown(client_fd, SHUT_RDWR);
-        close(client_fd);
+        ShutdownAndCloseSocket(client_fd);
         return;
       }
       last_keepalive = now;
     }
 
-    pollfd fd_state{};
+    PollFd fd_state{};
     fd_state.fd = client_fd;
     fd_state.events = POLLIN | POLLERR | POLLHUP;
-    const int poll_result = poll(&fd_state, 1, 1000);
+    const int poll_result = comet::platform::Poll(&fd_state, 1, 1000);
     if (poll_result < 0) {
-      if (errno == EINTR) {
+      if (comet::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
       break;
@@ -6463,8 +6547,7 @@ void StreamEventsSse(
     }
   }
 
-  shutdown(client_fd, SHUT_RDWR);
-  close(client_fd);
+  ShutdownAndCloseSocket(client_fd);
 }
 
 std::optional<std::string> ParseInteractionStreamPlaneName(const HttpRequest& request) {
@@ -6487,7 +6570,9 @@ std::optional<std::string> ParseInteractionStreamPlaneName(const HttpRequest& re
       request.path.size() - kPrefix.size() - kSuffix.size());
 }
 
-int ConnectHttpTarget(const ControllerEndpointTarget& target) {
+SocketHandle ConnectHttpTarget(const ControllerEndpointTarget& target) {
+  comet::platform::EnsureSocketsInitialized();
+
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
@@ -6498,27 +6583,27 @@ int ConnectHttpTarget(const ControllerEndpointTarget& target) {
     throw std::runtime_error(
         "failed to resolve proxy target '" + target.raw + "': " + gai_strerror(lookup));
   }
-  int fd = -1;
+  SocketHandle fd = comet::platform::kInvalidSocket;
   for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
     fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (fd < 0) {
+    if (!comet::platform::IsSocketValid(fd)) {
       continue;
     }
     if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
-    close(fd);
-    fd = -1;
+    CloseSocketHandle(fd);
+    fd = comet::platform::kInvalidSocket;
   }
   freeaddrinfo(results);
-  if (fd < 0) {
+  if (!comet::platform::IsSocketValid(fd)) {
     throw std::runtime_error("failed to connect to proxy target '" + target.raw + "'");
   }
   return fd;
 }
 
 void StreamPlaneInteractionSse(
-    int client_fd,
+    SocketHandle client_fd,
     const std::string& db_path,
     const HttpRequest& request) {
   const std::string request_id = GenerateInteractionRequestId();
@@ -6531,8 +6616,7 @@ void StreamPlaneInteractionSse(
             "method_not_allowed",
             "interaction stream endpoint accepts POST only",
             false));
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
+    ShutdownAndCloseSocket(client_fd);
     return;
   }
   const auto plane_name = ParseInteractionStreamPlaneName(request);
@@ -6545,8 +6629,7 @@ void StreamPlaneInteractionSse(
             "plane_not_found",
             "plane not found for interaction stream path",
             false));
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
+    ShutdownAndCloseSocket(client_fd);
     return;
   }
 
@@ -6564,8 +6647,7 @@ void StreamPlaneInteractionSse(
               "interaction_disabled",
               "interaction is available only for plane_mode=llm",
               false));
-      shutdown(client_fd, SHUT_RDWR);
-      close(client_fd);
+      ShutdownAndCloseSocket(client_fd);
       return;
     }
     if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
@@ -6578,8 +6660,7 @@ void StreamPlaneInteractionSse(
               "plane_not_ready",
               "plane interaction target is not ready",
               true));
-      shutdown(client_fd, SHUT_RDWR);
-      close(client_fd);
+      ShutdownAndCloseSocket(client_fd);
       return;
     }
     if (const auto validation_error = ValidateAndNormalizeInteractionRequest(
@@ -6588,8 +6669,7 @@ void StreamPlaneInteractionSse(
             ParseInteractionPayload(request.body),
             &request_context)) {
       SendHttpResponse(client_fd, *validation_error);
-      shutdown(client_fd, SHUT_RDWR);
-      close(client_fd);
+      ShutdownAndCloseSocket(client_fd);
       return;
     }
   } catch (const json::exception& error) {
@@ -6602,8 +6682,7 @@ void StreamPlaneInteractionSse(
             error.what(),
             false,
             plane_name));
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
+    ShutdownAndCloseSocket(client_fd);
     return;
   } catch (const std::exception& error) {
     SendHttpResponse(
@@ -6615,8 +6694,7 @@ void StreamPlaneInteractionSse(
             error.what(),
             false,
             plane_name));
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
+    ShutdownAndCloseSocket(client_fd);
     return;
   }
 
@@ -6980,13 +7058,11 @@ void StreamPlaneInteractionSse(
       if (session.model.empty()) {
         session.model = complete_payload.value("model", std::string{});
       }
-      shutdown(upstream_fd, SHUT_RDWR);
-      close(upstream_fd);
+      ShutdownAndCloseSocket(upstream_fd);
       return result;
     } catch (...) {
-      if (upstream_fd >= 0) {
-        shutdown(upstream_fd, SHUT_RDWR);
-        close(upstream_fd);
+      if (comet::platform::IsSocketValid(upstream_fd)) {
+        ShutdownAndCloseSocket(upstream_fd);
       }
       if (Trim(result.cleaned_text).empty()) {
         try {
@@ -7050,8 +7126,7 @@ void StreamPlaneInteractionSse(
   };
 
   if (!SendSseHeaders(client_fd, BuildInteractionResponseHeaders(request_id))) {
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
+    ShutdownAndCloseSocket(client_fd);
     return;
   }
 
@@ -7207,8 +7282,7 @@ void StreamPlaneInteractionSse(
                 {"plane_name", plane_name.value_or(std::string{})},
             });
         SendInteractionSseDone(client_fd);
-        shutdown(client_fd, SHUT_RDWR);
-        close(client_fd);
+        ShutdownAndCloseSocket(client_fd);
         return;
       }
       const auto parsed_json = ParseStructuredOutputObject(session.content);
@@ -7244,8 +7318,7 @@ void StreamPlaneInteractionSse(
                 {"plane_name", plane_name.value_or(std::string{})},
             });
         SendInteractionSseDone(client_fd);
-        shutdown(client_fd, SHUT_RDWR);
-        close(client_fd);
+        ShutdownAndCloseSocket(client_fd);
         return;
       }
     }
@@ -7341,8 +7414,7 @@ void StreamPlaneInteractionSse(
     SendInteractionSseDone(client_fd);
   }
 
-  shutdown(client_fd, SHUT_RDWR);
-  close(client_fd);
+  ShutdownAndCloseSocket(client_fd);
 }
 
 HttpResponse HandleControllerRequest(
@@ -8806,7 +8878,7 @@ int ServeControllerApi(
   comet::ControllerStore store(db_path);
   store.Initialize();
 
-  const int listen_fd = CreateListenSocket(listen_host, listen_port);
+  const SocketHandle listen_fd = CreateListenSocket(listen_host, listen_port);
   std::cout << "comet-controller serve\n";
   std::cout << "listen=" << listen_host << ":" << listen_port << "\n";
   std::cout << "db=" << db_path << "\n";
@@ -8818,16 +8890,16 @@ int ServeControllerApi(
   std::cout.flush();
 
   while (!g_stop_requested.load()) {
-    pollfd fd_state{};
+    PollFd fd_state{};
     fd_state.fd = listen_fd;
     fd_state.events = POLLIN;
-    const int poll_result = poll(&fd_state, 1, 250);
+    const int poll_result = comet::platform::Poll(&fd_state, 1, 250);
     if (poll_result < 0) {
-      if (g_stop_requested.load() || errno == EINTR) {
+      if (g_stop_requested.load() || comet::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
-      const std::string error = std::strerror(errno);
-      close(listen_fd);
+      const std::string error = SocketErrorMessage();
+      CloseSocketHandle(listen_fd);
       throw std::runtime_error("poll failed: " + error);
     }
     if (poll_result == 0) {
@@ -8837,13 +8909,13 @@ int ServeControllerApi(
       continue;
     }
 
-    const int client_fd = accept(listen_fd, nullptr, nullptr);
-    if (client_fd < 0) {
-      if (g_stop_requested.load() || errno == EINTR) {
+    const SocketHandle client_fd = accept(listen_fd, nullptr, nullptr);
+    if (!comet::platform::IsSocketValid(client_fd)) {
+      if (g_stop_requested.load() || comet::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
-      const std::string error = std::strerror(errno);
-      close(listen_fd);
+      const std::string error = SocketErrorMessage();
+      CloseSocketHandle(listen_fd);
       throw std::runtime_error("accept failed: " + error);
     }
 
@@ -8901,17 +8973,15 @@ int ServeControllerApi(
               } catch (const std::exception&) {
               }
             }
-            shutdown(client_fd, SHUT_RDWR);
-            close(client_fd);
+            ShutdownAndCloseSocket(client_fd);
           })
           .detach();
       continue;
     }
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
+    ShutdownAndCloseSocket(client_fd);
   }
 
-  close(listen_fd);
+  CloseSocketHandle(listen_fd);
   return 0;
 }
 
@@ -12926,7 +12996,9 @@ SchedulerVerificationResult EvaluateSchedulerActionVerification(
 std::string UtcNowSqlTimestamp() {
   const std::time_t now = std::time(nullptr);
   std::tm tm{};
-  gmtime_r(&now, &tm);
+  if (!comet::platform::GmTime(&now, &tm)) {
+    throw std::runtime_error("failed to format current UTC timestamp");
+  }
   std::ostringstream out;
   out << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
   return out.str();

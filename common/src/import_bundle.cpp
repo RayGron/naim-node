@@ -165,7 +165,7 @@ void ValidateGpuExists(
 bool NodeSupportsInstanceRole(const NodeInventory& node, InstanceRole role) {
   switch (node.execution_mode) {
     case HostExecutionMode::InferOnly:
-      return role == InstanceRole::Infer;
+      return role == InstanceRole::Infer || role == InstanceRole::App;
     case HostExecutionMode::WorkerOnly:
       return role == InstanceRole::Worker;
     case HostExecutionMode::Mixed:

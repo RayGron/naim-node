@@ -50,7 +50,7 @@ detect_cuda_root() {
     "/usr/local/cuda-12.1" \
     "/usr/local/cuda-12.0" \
     "/usr/lib/nvidia-cuda-toolkit"; do
-    if [[ -n "${candidate}" && -x "${candidate}/bin/nvcc" ]]; then
+    if [[ -n "${candidate}" && -x "${candidate}/bin/nvcc" && -f "${candidate}/include/cuda_runtime.h" ]]; then
       cuda_root="${candidate}"
       cuda_nvcc="${candidate}/bin/nvcc"
       return 0
@@ -59,7 +59,7 @@ detect_cuda_root() {
 
   if command -v nvcc >/dev/null 2>&1; then
     candidate="$(dirname -- "$(dirname -- "$(readlink -f "$(command -v nvcc)")")")"
-    if [[ -x "${candidate}/bin/nvcc" ]]; then
+    if [[ -x "${candidate}/bin/nvcc" && -f "${candidate}/include/cuda_runtime.h" ]]; then
       cuda_root="${candidate}"
       cuda_nvcc="${candidate}/bin/nvcc"
       return 0
@@ -125,7 +125,7 @@ fi
 
 build_dir="$("${script_dir}/print-build-dir.sh" "${target_os}" "${target_arch}")"
 "${script_dir}/ensure-vcpkg-deps.sh" "${VCPKG_TRIPLET}"
-vcpkg_installed_dir="${repo_dir}/vcpkg_installed"
+vcpkg_installed_dir="${repo_dir}/vcpkg_installed/${VCPKG_TRIPLET}-root"
 ninja_exe="$("${script_dir}/find-ninja.sh")"
 cmake_prefix_path="${vcpkg_installed_dir}/${VCPKG_TRIPLET}"
 
@@ -165,6 +165,12 @@ if [[ -f "${cache_path}" ]]; then
     if ! grep -Fq "CMAKE_CUDA_COMPILER:FILEPATH=${cuda_nvcc}" "${cache_path}" \
       && ! grep -Fq "CMAKE_CUDA_COMPILER:UNINITIALIZED=${cuda_nvcc}" "${cache_path}" \
       && ! grep -Fq "CMAKE_CUDA_COMPILER:STRING=${cuda_nvcc}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
+  else
+    if grep -Eq '^CUDAToolkit_ROOT:(UNINITIALIZED|PATH|STRING)=' "${cache_path}" \
+      || grep -Eq '^CMAKE_CUDA_COMPILER:(FILEPATH|UNINITIALIZED|STRING)=' "${cache_path}" \
+      || grep -Fq 'GGML_CUDA:BOOL=ON' "${cache_path}"; then
       needs_clean_reconfigure=1
     fi
   fi
@@ -224,6 +230,8 @@ if [[ -n "${cuda_root}" ]]; then
 fi
 if [[ -n "${cuda_nvcc}" ]]; then
   cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
+else
+  cmake_args+=("-DGGML_CUDA=OFF")
 fi
 if [[ -n "${openmp_root}" ]]; then
   cmake_args+=(

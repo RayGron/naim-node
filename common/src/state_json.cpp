@@ -63,6 +63,9 @@ DiskKind ParseDiskKind(const std::string& value) {
   if (value == "worker-private") {
     return DiskKind::WorkerPrivate;
   }
+  if (value == "app-private") {
+    return DiskKind::AppPrivate;
+  }
   throw std::runtime_error("unknown disk kind '" + value + "'");
 }
 
@@ -73,7 +76,18 @@ InstanceRole ParseInstanceRole(const std::string& value) {
   if (value == "worker") {
     return InstanceRole::Worker;
   }
+  if (value == "app") {
+    return InstanceRole::App;
+  }
   throw std::runtime_error("unknown instance role '" + value + "'");
+}
+
+json ToJson(const PublishedPort& port) {
+  return json{
+      {"host_ip", port.host_ip},
+      {"host_port", port.host_port},
+      {"container_port", port.container_port},
+  };
 }
 
 json ToJson(const NodeInventory& node) {
@@ -286,6 +300,7 @@ json ToJson(const InstanceSpec& instance) {
       {"depends_on", instance.depends_on},
       {"environment", instance.environment},
       {"labels", instance.labels},
+      {"published_ports", json::array()},
       {"placement_mode", ToString(instance.placement_mode)},
       {"share_mode", ToString(instance.share_mode)},
       {"gpu_fraction", instance.gpu_fraction},
@@ -299,7 +314,18 @@ json ToJson(const InstanceSpec& instance) {
   if (instance.memory_cap_mb.has_value()) {
     result["memory_cap_mb"] = *instance.memory_cap_mb;
   }
+  for (const auto& port : instance.published_ports) {
+    result["published_ports"].push_back(ToJson(port));
+  }
   return result;
+}
+
+PublishedPort PublishedPortFromJson(const json& value) {
+  PublishedPort port;
+  port.host_ip = value.value("host_ip", port.host_ip);
+  port.host_port = value.value("host_port", port.host_port);
+  port.container_port = value.value("container_port", port.container_port);
+  return port;
 }
 
 NodeInventory NodeInventoryFromJson(const json& value) {
@@ -395,6 +421,13 @@ InstanceSpec InstanceSpecFromJson(const json& value) {
   instance.depends_on = value.value("depends_on", std::vector<std::string>{});
   instance.environment = value.value("environment", std::map<std::string, std::string>{});
   instance.labels = value.value("labels", std::map<std::string, std::string>{});
+  if (value.contains("published_ports") && value.at("published_ports").is_array()) {
+    for (const auto& port : value.at("published_ports")) {
+      if (port.is_object()) {
+        instance.published_ports.push_back(PublishedPortFromJson(port));
+      }
+    }
+  }
   if (value.contains("gpu_device") && !value.at("gpu_device").is_null()) {
     instance.gpu_device = value.at("gpu_device").get<std::string>();
   }

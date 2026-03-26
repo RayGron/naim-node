@@ -65,6 +65,18 @@ std::string MapSignature(const std::map<std::string, std::string>& values) {
   return JoinStrings(entries, ";");
 }
 
+std::string PublishedPortsSignature(const std::vector<PublishedPort>& ports) {
+  std::vector<std::string> entries;
+  entries.reserve(ports.size());
+  for (const auto& port : ports) {
+    entries.push_back(
+        port.host_ip + ":" + std::to_string(port.host_port) + ":" +
+        std::to_string(port.container_port));
+  }
+  std::sort(entries.begin(), entries.end());
+  return JoinStrings(entries, ";");
+}
+
 std::string InstanceSignature(const InstanceSpec& instance) {
   std::vector<std::string> dependencies = instance.depends_on;
   std::sort(dependencies.begin(), dependencies.end());
@@ -78,6 +90,7 @@ std::string InstanceSignature(const InstanceSpec& instance) {
          std::to_string(instance.memory_cap_mb.value_or(0)) + "|" +
          std::to_string(instance.gpu_fraction) + "|" +
          std::to_string(instance.private_disk_size_gb) + "|" +
+         PublishedPortsSignature(instance.published_ports) + "|" +
          JoinStrings(dependencies, ",") + "|" + MapSignature(instance.environment) + "|" +
          MapSignature(instance.labels);
 }

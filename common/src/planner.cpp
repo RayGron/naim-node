@@ -30,6 +30,13 @@ constexpr int kWorkerPublishedPortSpan = 20000;
 constexpr int kWorkerInternalPortBase = 30000;
 constexpr int kWorkerInternalPortSpan = 10000;
 
+std::vector<std::string> DefaultComposeExtraHosts() {
+  return {
+      "host.docker.internal:host-gateway",
+      "controller.internal:host-gateway",
+  };
+}
+
 uint32_t StableWorkerPortHash(const std::string& value) {
   uint32_t hash = 2166136261u;
   for (unsigned char ch : value) {
@@ -108,6 +115,7 @@ ComposeService BuildComposeService(
   service.name = instance.name;
   service.image = instance.image;
   service.command = instance.command;
+  service.extra_hosts = DefaultComposeExtraHosts();
   const bool use_vllm = UsesVllmRuntime(state);
   if (use_vllm && instance.role == InstanceRole::Worker &&
       service.image == "comet/worker-runtime:dev") {
@@ -218,7 +226,7 @@ ComposeService BuildComposeService(
       }
       if (worker_group_leader || !distributed_runtime) {
         service.published_ports.push_back(
-            PublishedPort{"0.0.0.0", published_host_port, state.inference.api_port});
+            PublishedPort{"127.0.0.1", published_host_port, state.inference.api_port});
       }
       if (distributed_runtime) {
         service.shm_size = "1gb";
@@ -226,6 +234,9 @@ ComposeService BuildComposeService(
     }
   }
   service.labels = instance.labels;
+  for (const auto& port : instance.published_ports) {
+    service.published_ports.push_back(port);
+  }
   service.gpu_device = instance.gpu_device;
   if (!service.gpu_device.has_value() && instance.role == InstanceRole::Infer) {
     const auto local_gpu_worker = std::find_if(
@@ -264,12 +275,14 @@ ComposeService BuildComposeService(
                               "http://127.0.0.1:$${COMET_GATEWAY_PORT:-80}/health || "
                               "/runtime/infer/inferctl.sh probe-url "
                               "http://127.0.0.1:$${COMET_INFERENCE_PORT:-8000}/health"
-                            : "CMD-SHELL test -f /tmp/comet-ready";
+                            : (instance.role == InstanceRole::App
+                                   ? "CMD-SHELL curl -fsS http://127.0.0.1:$${PORT:-8080}/health >/dev/null"
+                                   : "CMD-SHELL test -f /tmp/comet-ready");
   if (instance.role == InstanceRole::Infer) {
     service.published_ports.push_back(
         PublishedPort{"127.0.0.1", state.inference.api_port, state.inference.api_port});
     service.published_ports.push_back(
-        PublishedPort{"0.0.0.0", state.gateway.listen_port, state.gateway.listen_port});
+        PublishedPort{"127.0.0.1", state.gateway.listen_port, state.gateway.listen_port});
   }
 
   const auto& shared_disk =
@@ -342,6 +355,8 @@ std::string ToString(InstanceRole role) {
       return "infer";
     case InstanceRole::Worker:
       return "worker";
+    case InstanceRole::App:
+      return "app";
   }
   return "unknown";
 }
@@ -354,6 +369,8 @@ std::string ToString(DiskKind kind) {
       return "infer-private";
     case DiskKind::WorkerPrivate:
       return "worker-private";
+    case DiskKind::AppPrivate:
+      return "app-private";
   }
   return "unknown";
 }

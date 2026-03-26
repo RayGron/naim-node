@@ -52,6 +52,14 @@ project(
   LANGUAGES CXX
 )
 
+function(comet_enable_strict_warnings target_name)
+  if(MSVC)
+    target_compile_options(${target_name} PRIVATE /W4)
+  else()
+    target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+endfunction()
+
 include(FetchContent)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -84,8 +92,20 @@ set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
 set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-if(DEFINED CUDAToolkit_ROOT OR DEFINED CMAKE_CUDA_COMPILER)
+set(_comet_cuda_available OFF)
+if(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/include/cuda_runtime.h")
+  set(_comet_cuda_available ON)
+elseif(DEFINED CMAKE_CUDA_COMPILER)
+  get_filename_component(_comet_cuda_bin_dir "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+  get_filename_component(_comet_cuda_root_from_compiler "${_comet_cuda_bin_dir}" DIRECTORY)
+  if(EXISTS "${_comet_cuda_root_from_compiler}/include/cuda_runtime.h")
+    set(_comet_cuda_available ON)
+  endif()
+endif()
+if(_comet_cuda_available)
   set(GGML_CUDA ON CACHE BOOL "" FORCE)
+else()
+  set(GGML_CUDA OFF CACHE BOOL "" FORCE)
 endif()
 
 if(COMET_LLAMA_CPP_SOURCE_DIR AND EXISTS "${COMET_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
@@ -138,59 +158,67 @@ target_link_libraries(
     unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3
 )
-target_compile_options(comet-common PRIVATE -Wall -Wextra -Wpedantic)
+comet_enable_strict_warnings(comet-common)
 
 add_executable(comet-controller controller/src/main.cpp)
 target_link_libraries(comet-controller PRIVATE comet-common)
-target_compile_options(comet-controller PRIVATE -Wall -Wextra -Wpedantic)
+if(WIN32)
+  target_link_libraries(comet-controller PRIVATE ws2_32)
+endif()
+comet_enable_strict_warnings(comet-controller)
 
 add_executable(comet-hostd hostd/src/main.cpp)
 target_link_libraries(comet-hostd PRIVATE comet-common)
 if(UNIX AND NOT APPLE)
   target_link_libraries(comet-hostd PRIVATE dl)
 endif()
-target_compile_options(comet-hostd PRIVATE -Wall -Wextra -Wpedantic)
+if(WIN32)
+  target_link_libraries(comet-hostd PRIVATE ws2_32)
+endif()
+comet_enable_strict_warnings(comet-hostd)
 
 add_executable(comet-node launcher/src/main.cpp)
 target_link_libraries(comet-node PRIVATE comet-common)
-target_compile_options(comet-node PRIVATE -Wall -Wextra -Wpedantic)
+comet_enable_strict_warnings(comet-node)
 
-add_executable(
-  comet-inferctl
-  runtime/infer/src/main.cpp
-  common/src/runtime_status.cpp
-)
-target_include_directories(comet-inferctl PRIVATE common/include)
-target_include_directories(
-  comet-inferctl
-  BEFORE PRIVATE
-    "${llama_cpp_SOURCE_DIR}/include"
-    "${llama_cpp_SOURCE_DIR}/ggml/include"
-)
-target_link_libraries(
-  comet-inferctl
-  PRIVATE
-    nlohmann_json::nlohmann_json
-    llama
-)
-target_compile_options(comet-inferctl PRIVATE -Wall -Wextra -Wpedantic)
+if(NOT WIN32)
+  add_executable(
+    comet-inferctl
+    runtime/infer/src/main.cpp
+    common/src/runtime_status.cpp
+  )
+  target_include_directories(comet-inferctl PRIVATE common/include)
+  target_include_directories(
+    comet-inferctl
+    BEFORE PRIVATE
+      "${llama_cpp_SOURCE_DIR}/include"
+      "${llama_cpp_SOURCE_DIR}/ggml/include"
+  )
+  target_link_libraries(
+    comet-inferctl
+    PRIVATE
+      nlohmann_json::nlohmann_json
+      llama
+  )
+  comet_enable_strict_warnings(comet-inferctl)
 
-add_executable(
-  comet-workerd
-  runtime/worker/src/main.cpp
-  common/src/runtime_status.cpp
-)
-target_include_directories(comet-workerd PRIVATE common/include)
-target_include_directories(
-  comet-workerd
-  BEFORE PRIVATE
-    "${llama_cpp_SOURCE_DIR}/include"
-    "${llama_cpp_SOURCE_DIR}/ggml/include"
-)
-target_link_libraries(
-  comet-workerd
-  PRIVATE
-    nlohmann_json::nlohmann_json
-    llama
-)
-target_compile_options(comet-workerd PRIVATE -Wall -Wextra -Wpedantic)
+  add_executable(
+    comet-workerd
+    runtime/worker/src/main.cpp
+    common/src/runtime_status.cpp
+  )
+  target_include_directories(comet-workerd PRIVATE common/include)
+  target_include_directories(
+    comet-workerd
+    BEFORE PRIVATE
+      "${llama_cpp_SOURCE_DIR}/include"
+      "${llama_cpp_SOURCE_DIR}/ggml/include"
+  )
+  target_link_libraries(
+    comet-workerd
+    PRIVATE
+      nlohmann_json::nlohmann_json
+      llama
+  )
+  comet_enable_strict_warnings(comet-workerd)
+endif()

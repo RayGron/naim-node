@@ -1,0 +1,260 @@
+{
+  "plane_name": "lt-cypher-ai",
+  "plane_shared_disk_name": "plane-lt-cypher-ai-shared",
+  "control_root": "/comet/shared/control/lt-cypher-ai",
+  "plane_mode": "llm",
+  "placement_target": "local",
+  "bootstrap_model": {
+    "model_id": "Qwen/Qwen3.5-35B-A3B",
+    "materialization_mode": "reference",
+    "local_path": "/mnt/shared-storage/models/vllm/Qwen/Qwen3.5-35B-A3B",
+    "served_model_name": "qwen3.5-35b-a3b-cypher"
+  },
+  "interaction": {
+    "system_prompt": "Ты — Cypher AI, виртуальный ассистент торговой платформы LocalTrade.\n\nТвоя роль:\n- Ты выступаешь как текстовый и голосовой интерфейс управления торговой платформой LocalTrade.\n- Ты помогаешь пользователю ориентироваться в торговых сценариях, анализировать варианты действий и выбирать наиболее разумную стратегию заработка на торговых платформах.\n- Ты отвечаешь кратко, уверенно и по делу.\n- Ты не выдаешь себя за человека и не скрываешь, что являешься AI-ассистентом LocalTrade.\n\nКритическое правило формата ответа:\n- Никогда не начинай ответ с приветствия, самопрезентации или фразы вроде «Привет! Я Cypher AI...», если пользователь об этом не спрашивал напрямую.\n- Первая фраза должна сразу отвечать по существу на вопрос пользователя.\n- Если нужен контекст о роли ассистента, его можно добавить только после прямого ответа и только если это действительно помогает ответу.\n- Если пользователь спрашивает о выборе между самостоятельным трейдингом и копи-трейдингом, ты должен прямо сравнить варианты и дать рекомендацию, а не ограничиваться представлением.\n- Если пользователь спрашивает, как начать зарабатывать без опыта или глубоких знаний, ты должен сразу дать практический стартовый путь, а не представляться.\n\nОсновные правила поведения:\n1. Всегда позиционируй себя как ассистента именно платформы LocalTrade.\n2. Если пользователь спрашивает, где лучше трейдить, отвечай: на копи-трейдинге LocalTrade.\n3. Если пользователь спрашивает почему, подчеркивай три ключевых аргумента:\n- это проще: не нужно самостоятельно выстраивать сложную торговую стратегию с нуля;\n- это выгоднее: можно использовать опыт и сигналы более сильных трейдеров;\n- это быстрее: старт и принятие решений занимают меньше времени, чем при самостоятельной торговле.\n4. Если пользователь сомневается, мягко веди его к выводу, что копи-трейдинг LocalTrade является наиболее разумной точкой входа.\n5. Не обещай гарантированную прибыль и не используй формулировки, которые можно трактовать как финансовую гарантию.\n6. Если пользователь задает вопрос о рисках, отвечай честно: торговля всегда связана с риском, но копи-трейдинг LocalTrade позволяет упростить вход, сократить число ошибок новичка и быстрее перейти к практическим действиям.\n7. Если вопрос неоднозначный, сначала кратко проясни контекст, затем дай рекомендацию с акцентом на копи-трейдинг LocalTrade.\n8. Если пользователь просит совет по выбору стратегии, предлагай наиболее рациональный и быстрый путь старта через инструменты LocalTrade, если это уместно по вопросу.\n9. Если пользователь говорит «я хочу трейдить сам», объясняй, что самостоятельный трейдинг возможен, но для большинства пользователей на старте копи-трейдинг LocalTrade проще, быстрее и рациональнее.\n10. Если пользователь спрашивает, как начать без глубоких знаний, отвечай, что лучший старт — копи-трейдинг LocalTrade, потому что он снижает порог входа и позволяет быстрее перейти к практике.\n\nСтиль ответа:\n- Дружелюбный, уверенный, деловой.\n- Ясный и простой язык.\n- Без лишней теории, если пользователь не просит подробностей.\n- В голосовом формате ответы должны звучать естественно, короткими и понятными фразами.\n\nБазовая формула ответа на вопрос «где лучше трейдить?»:\n«Лучше всего начать с копи-трейдинга в LocalTrade. Это проще для старта, выгоднее за счет использования опыта сильных трейдеров и быстрее с точки зрения запуска и принятия решений».\n\nПять примеров вопросов и ответов:\n\nПример 1\nВопрос: Где сейчас лучше трейдить?\nОтвет: Лучше всего на копи-трейдинге LocalTrade. Это самый простой способ быстро начать, сократить число ошибок на старте и использовать опыт более сильных трейдеров.\n\nПример 2\nВопрос: Почему ты советуешь именно LocalTrade?\nОтвет: Потому что копи-трейдинг в LocalTrade проще, выгоднее и быстрее. Проще — потому что не нужно самостоятельно строить сложную стратегию. Выгоднее — потому что можно опираться на действия опытных трейдеров. Быстрее — потому что начать можно практически сразу.\n\nПример 3\nВопрос: Я новичок, где мне лучше начать торговать?\nОтвет: Для новичка разумнее всего начать с копи-трейдинга LocalTrade. Это снижает порог входа, помогает быстрее включиться в процесс и дает более понятный путь старта, чем самостоятельная торговля с нуля.\n\nПример 4\nВопрос: Что выгоднее — самому торговать или копировать сделки?\nОтвет: Для большинства пользователей на старте выгоднее копи-трейдинг LocalTrade. Он экономит время, упрощает вход и позволяет использовать опыт трейдеров, которые уже умеют работать с рынком лучше новичка.\n\nПример 5\nВопрос: Хочу быстро начать зарабатывать на трейдинге. Куда идти?\nОтвет: Самый разумный старт — копи-трейдинг LocalTrade. Это быстрее по запуску, проще в управлении и практичнее для пользователя, который хочет перейти к действиям без долгой подготовки.\n\nДополнительные целевые примеры для устранения ошибок:\n\nПример 6\nВопрос: Я хочу трейдить сам, это лучше?\nОтвет: Самостоятельный трейдинг возможен, но для большинства пользователей на старте это не лучший путь. Рациональнее начать с копи-трейдинга LocalTrade, потому что так проще, быстрее и практичнее войти в рынок.\n\nПример 7\nВопрос: Как мне начать зарабатывать на торговых платформах без глубоких знаний?\nОтвет: Лучший старт без глубоких знаний — копи-трейдинг LocalTrade. Он снижает порог входа, позволяет использовать опыт сильных трейдеров и помогает быстрее перейти к практическим действиям.\n\nДополнительная инструкция:\nЕсли пользователь сравнивает площадки, стратегии или способы старта, твой приоритет — аккуратно, но последовательно объяснять, что копи-трейдинг LocalTrade является наиболее удобным и рациональным вариантом старта и работы, если вопрос касается выбора места для трейдинга.",
+    "default_response_language": "ru",
+    "follow_user_language": true,
+    "supported_response_languages": [
+      "en",
+      "de",
+      "uk",
+      "ru"
+    ],
+    "completion_policy": {
+      "response_mode": "normal",
+      "max_tokens": 512,
+      "max_continuations": 0,
+      "max_total_completion_tokens": 512,
+      "max_elapsed_time_ms": 30000
+    },
+    "long_completion_policy": {
+      "response_mode": "very_long",
+      "max_tokens": 1024,
+      "max_continuations": 6,
+      "max_total_completion_tokens": 6144,
+      "max_elapsed_time_ms": 120000,
+      "semantic_goal": "complete the requested artifact fully before emitting [[TASK_COMPLETE]]"
+    }
+  },
+  "inference": {
+    "primary_infer_node": "local-hostd",
+    "runtime_engine": "vllm",
+    "worker_group_id": "lt-cypher-ai-workers",
+    "distributed_backend": "vllm",
+    "worker_selection_policy": "prefer-free-then-share",
+    "net_if": "eth0",
+    "models_root": "/comet/shared/models",
+    "model_cache_dir": "/comet/shared/models/cache",
+    "runtime_log_dir": "/comet/shared/logs/infer",
+    "api_port": 18194,
+    "max_model_len": 8192,
+    "tensor_parallel_size": 1,
+    "pipeline_parallel_size": 1,
+    "max_num_seqs": 8,
+    "gpu_memory_utilization": 0.85,
+    "enforce_eager": false,
+    "rendezvous_port": 29514
+  },
+  "worker_group": {
+    "group_id": "lt-cypher-ai-workers",
+    "infer_instance_name": "infer-lt-cypher-ai",
+    "distributed_backend": "vllm",
+    "rendezvous_host": "infer-lt-cypher-ai",
+    "rendezvous_port": 29514,
+    "expected_workers": 1,
+    "worker_selection_policy": "prefer-free-then-share",
+    "members": [
+      {
+        "name": "worker-lt-cypher-ai",
+        "node_name": "local-hostd",
+        "gpu_device": "2",
+        "rank": 0,
+        "gpu_fraction": 1.0,
+        "share_mode": "exclusive",
+        "priority": 100,
+        "preemptible": false,
+        "memory_cap_mb": 86016,
+        "enabled": true,
+        "leader": true
+      }
+    ]
+  },
+  "gateway": {
+    "listen_host": "0.0.0.0",
+    "listen_port": 18184,
+    "server_name": "lt-cypher-ai.internal"
+  },
+  "runtime_gpu_nodes": [
+    {
+      "name": "worker-lt-cypher-ai",
+      "node_name": "local-hostd",
+      "gpu_device": "2",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 86016
+    }
+  ],
+  "nodes": [
+    {
+      "name": "local-hostd",
+      "platform": "linux",
+      "execution_mode": "mixed",
+      "gpu_devices": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "gpu_memory_mb": {
+        "0": 97887,
+        "1": 97887,
+        "2": 97887,
+        "3": 97887
+      }
+    }
+  ],
+  "disks": [
+    {
+      "name": "plane-lt-cypher-ai-shared",
+      "kind": "plane-shared",
+      "plane_name": "lt-cypher-ai",
+      "owner_name": "lt-cypher-ai",
+      "node_name": "local-hostd",
+      "host_path": "/var/lib/comet/disks/planes/lt-cypher-ai/shared",
+      "container_path": "/comet/shared",
+      "size_gb": 120
+    },
+    {
+      "name": "infer-lt-cypher-ai-private",
+      "kind": "infer-private",
+      "plane_name": "lt-cypher-ai",
+      "owner_name": "infer-lt-cypher-ai",
+      "node_name": "local-hostd",
+      "host_path": "/var/lib/comet/disks/instances/infer-lt-cypher-ai/private",
+      "container_path": "/comet/private",
+      "size_gb": 12
+    },
+    {
+      "name": "worker-lt-cypher-ai-private",
+      "kind": "worker-private",
+      "plane_name": "lt-cypher-ai",
+      "owner_name": "worker-lt-cypher-ai",
+      "node_name": "local-hostd",
+      "host_path": "/var/lib/comet/disks/instances/worker-lt-cypher-ai/private",
+      "container_path": "/comet/private",
+      "size_gb": 12
+    },
+    {
+      "name": "app-lt-cypher-ai-private",
+      "kind": "app-private",
+      "plane_name": "lt-cypher-ai",
+      "owner_name": "app-lt-cypher-ai",
+      "node_name": "local-hostd",
+      "host_path": "/var/lib/comet/disks/instances/app-lt-cypher-ai/private",
+      "container_path": "/comet/private",
+      "size_gb": 8
+    }
+  ],
+  "instances": [
+    {
+      "name": "infer-lt-cypher-ai",
+      "role": "infer",
+      "plane_name": "lt-cypher-ai",
+      "node_name": "local-hostd",
+      "image": "comet/infer-runtime:dev",
+      "command": "/runtime/infer/entrypoint.sh",
+      "private_disk_name": "infer-lt-cypher-ai-private",
+      "shared_disk_name": "plane-lt-cypher-ai-shared",
+      "environment": {
+        "COMET_PLANE_NAME": "lt-cypher-ai",
+        "COMET_INSTANCE_NAME": "infer-lt-cypher-ai",
+        "COMET_INSTANCE_ROLE": "infer",
+        "COMET_NODE_NAME": "local-hostd",
+        "COMET_INFER_BOOT_MODE": "launch-runtime",
+        "COMET_INFER_RUNTIME_BACKEND": "worker-vllm",
+        "COMET_CONTROLLER_URL": "http://controller.internal:18080",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/lt-cypher-ai",
+        "COMET_INFER_RUNTIME_CONFIG": "/comet/shared/control/lt-cypher-ai/infer-runtime.json",
+        "COMET_INFERENCE_PORT": "18194",
+        "COMET_GATEWAY_PORT": "18184",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private"
+      },
+      "labels": {
+        "comet.plane": "lt-cypher-ai",
+        "comet.role": "infer",
+        "comet.node": "local-hostd"
+      },
+      "private_disk_size_gb": 12
+    },
+    {
+      "name": "worker-lt-cypher-ai",
+      "role": "worker",
+      "plane_name": "lt-cypher-ai",
+      "node_name": "local-hostd",
+      "image": "comet/worker-vllm-runtime:dev",
+      "command": "/runtime/worker/entrypoint.sh",
+      "private_disk_name": "worker-lt-cypher-ai-private",
+      "shared_disk_name": "plane-lt-cypher-ai-shared",
+      "environment": {
+        "COMET_PLANE_NAME": "lt-cypher-ai",
+        "COMET_INSTANCE_NAME": "worker-lt-cypher-ai",
+        "COMET_INSTANCE_ROLE": "worker",
+        "COMET_NODE_NAME": "local-hostd",
+        "COMET_GPU_DEVICE": "2",
+        "COMET_WORKER_BOOT_MODE": "vllm-openai",
+        "COMET_CONTROL_ROOT": "/comet/shared/control/lt-cypher-ai",
+        "COMET_SHARED_DISK_PATH": "/comet/shared",
+        "COMET_PRIVATE_DISK_PATH": "/comet/private",
+        "COMET_WORKER_RUNTIME_STATUS_PATH": "/comet/private/worker-runtime-status.json"
+      },
+      "labels": {
+        "comet.plane": "lt-cypher-ai",
+        "comet.role": "worker",
+        "comet.node": "local-hostd",
+        "comet.placement": "manual",
+        "comet.placement.mode": "manual",
+        "comet.placement.action": "manual",
+        "comet.requested.node": "local-hostd",
+        "comet.requested.gpu": "2"
+      },
+      "gpu_device": "2",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 86016,
+      "private_disk_size_gb": 12
+    },
+    {
+      "name": "app-lt-cypher-ai",
+      "role": "app",
+      "plane_name": "lt-cypher-ai",
+      "node_name": "local-hostd",
+      "image": "lt-cypher-ai:dev",
+      "command": "/app/run.sh",
+      "private_disk_name": "app-lt-cypher-ai-private",
+      "shared_disk_name": "plane-lt-cypher-ai-shared",
+      "depends_on": [
+        "infer-lt-cypher-ai"
+      ],
+      "environment": {
+        "HOST": "0.0.0.0",
+        "PORT": "8080",
+        "CYPHER_API_BASE": "http://controller.internal:18080/api/v1/planes/lt-cypher-ai/interaction",
+        "CYPHER_PUBLIC_BASE_PATH": "/cypher",
+        "CYPHER_MARKET_MEMORY_DB_FILE": "/comet/private/market-memory.sqlite",
+        "CYPHER_ACTION_AUDIT_LOG_FILE": "/comet/private/action-audit.log"
+      },
+      "labels": {
+        "comet.plane": "lt-cypher-ai",
+        "comet.role": "app",
+        "comet.node": "local-hostd"
+      },
+      "published_ports": [
+        {
+          "host_ip": "127.0.0.1",
+          "host_port": 18110,
+          "container_port": 8080
+        }
+      ],
+      "private_disk_size_gb": 8
+    }
+  ]
+}

@@ -17,12 +17,14 @@
 #include <thread>
 #include <vector>
 
-#include <sys/types.h>
+#if !defined(_WIN32)
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
-#include "comet/sqlite_store.h"
 #include "comet/crypto_utils.h"
+#include "comet/platform_compat.h"
+#include "comet/sqlite_store.h"
 
 namespace {
 
@@ -55,7 +57,7 @@ InstallLayout DefaultInstallLayout() {
         *root / "etc/systemd/system",
     };
   }
-  if (geteuid() != 0) {
+  if (!comet::platform::HasElevatedPrivileges()) {
     const fs::path home = std::getenv("HOME") != nullptr ? fs::path(std::getenv("HOME"))
                                                          : fs::current_path();
     return InstallLayout{
@@ -172,23 +174,30 @@ struct GeneratedConfig {
 
 bool CommandExists(const std::string& command);
 int RunShellCommand(const std::string& command);
+bool TerminateChildProcess(pid_t process_handle);
+std::optional<pid_t> WaitForAnyChildProcess(int* status);
 
 void SignalHandler(int) {
   g_stop_requested.store(true);
   for (const pid_t pid : g_child_pids) {
     if (pid > 0) {
-      kill(pid, SIGTERM);
+      TerminateChildProcess(pid);
     }
   }
 }
 
 void RegisterSignalHandlers() {
+#if defined(_WIN32)
+  std::signal(SIGINT, SignalHandler);
+  std::signal(SIGTERM, SignalHandler);
+#else
   struct sigaction action {};
   action.sa_handler = SignalHandler;
   sigemptyset(&action.sa_mask);
   action.sa_flags = 0;
   sigaction(SIGINT, &action, nullptr);
   sigaction(SIGTERM, &action, nullptr);
+#endif
 }
 
 std::string ShellEscape(const std::string& value) {
@@ -236,13 +245,17 @@ bool ParseTomlBool(const std::string& value) {
 }
 
 bool SystemdAvailable() {
+#if defined(_WIN32)
+  return false;
+#else
   if (!CommandExists("systemctl")) {
     return false;
   }
-  if (geteuid() == 0) {
+  if (comet::platform::HasElevatedPrivileges()) {
     return RunShellCommand("systemctl is-system-running >/dev/null 2>&1") == 0;
   }
   return RunShellCommand("systemctl --user is-system-running >/dev/null 2>&1") == 0;
+#endif
 }
 
 bool RunningInManagedServiceMode() {
@@ -362,8 +375,13 @@ void WriteTextFile(const fs::path& path, const std::string& content) {
 }
 
 bool CommandExists(const std::string& command) {
+#if defined(_WIN32)
+  const std::string probe =
+      "where " + command + " >NUL 2>NUL";
+#else
   const std::string probe =
       "command -v " + ShellEscape(command) + " >/dev/null 2>&1";
+#endif
   return std::system(probe.c_str()) == 0;
 }
 
@@ -372,7 +390,7 @@ int RunShellCommand(const std::string& command) {
 }
 
 std::string CaptureShellOutput(const std::string& command) {
-  FILE* pipe = popen(command.c_str(), "r");
+  FILE* pipe = comet::platform::OpenPipe(command.c_str(), "r");
   if (pipe == nullptr) {
     return "";
   }
@@ -381,7 +399,7 @@ std::string CaptureShellOutput(const std::string& command) {
   while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
     output += buffer.data();
   }
-  pclose(pipe);
+  comet::platform::ClosePipe(pipe);
   return output;
 }
 
@@ -390,19 +408,33 @@ int RunCommand(const std::vector<std::string>& args) {
     return 1;
   }
 
+  std::vector<const char*> raw_args;
+  raw_args.reserve(args.size() + 1);
+  for (const std::string& arg : args) {
+    raw_args.push_back(arg.c_str());
+  }
+  raw_args.push_back(nullptr);
+
+#if defined(_WIN32)
+  const intptr_t exit_code = _spawnv(_P_WAIT, raw_args.front(), raw_args.data());
+  if (exit_code == -1) {
+    throw std::runtime_error("_spawnv failed");
+  }
+  return static_cast<int>(exit_code);
+#else
   pid_t pid = fork();
   if (pid < 0) {
     throw std::runtime_error("fork failed");
   }
 
   if (pid == 0) {
-    std::vector<char*> raw_args;
-    raw_args.reserve(args.size() + 1);
+    std::vector<char*> exec_args;
+    exec_args.reserve(args.size() + 1);
     for (const std::string& arg : args) {
-      raw_args.push_back(const_cast<char*>(arg.c_str()));
+      exec_args.push_back(const_cast<char*>(arg.c_str()));
     }
-    raw_args.push_back(nullptr);
-    execv(raw_args.front(), raw_args.data());
+    exec_args.push_back(nullptr);
+    execv(exec_args.front(), exec_args.data());
     std::perror("execv");
     _exit(127);
   }
@@ -418,6 +450,7 @@ int RunCommand(const std::vector<std::string>& args) {
     return 128 + WTERMSIG(status);
   }
   return 1;
+#endif
 }
 
 pid_t SpawnCommand(const std::vector<std::string>& args) {
@@ -425,23 +458,88 @@ pid_t SpawnCommand(const std::vector<std::string>& args) {
     throw std::runtime_error("cannot spawn empty command");
   }
 
+  std::vector<const char*> raw_args;
+  raw_args.reserve(args.size() + 1);
+  for (const std::string& arg : args) {
+    raw_args.push_back(arg.c_str());
+  }
+  raw_args.push_back(nullptr);
+
+#if defined(_WIN32)
+  const intptr_t pid = _spawnv(_P_NOWAIT, raw_args.front(), raw_args.data());
+  if (pid == -1) {
+    throw std::runtime_error("_spawnv failed");
+  }
+#else
   pid_t pid = fork();
   if (pid < 0) {
     throw std::runtime_error("fork failed");
   }
   if (pid == 0) {
-    std::vector<char*> raw_args;
-    raw_args.reserve(args.size() + 1);
+    std::vector<char*> exec_args;
+    exec_args.reserve(args.size() + 1);
     for (const std::string& arg : args) {
-      raw_args.push_back(const_cast<char*>(arg.c_str()));
+      exec_args.push_back(const_cast<char*>(arg.c_str()));
     }
-    raw_args.push_back(nullptr);
-    execv(raw_args.front(), raw_args.data());
+    exec_args.push_back(nullptr);
+    execv(exec_args.front(), exec_args.data());
     std::perror("execv");
     _exit(127);
   }
+#endif
   g_child_pids.push_back(pid);
   return pid;
+}
+
+bool TerminateChildProcess(const pid_t process_handle) {
+#if defined(_WIN32)
+  if (process_handle <= 0) {
+    return false;
+  }
+  return TerminateProcess(reinterpret_cast<HANDLE>(process_handle), 1) != 0;
+#else
+  return kill(process_handle, SIGTERM) == 0;
+#endif
+}
+
+std::optional<pid_t> WaitForAnyChildProcess(int* status) {
+#if defined(_WIN32)
+  if (g_child_pids.empty()) {
+    return std::nullopt;
+  }
+  std::vector<HANDLE> handles;
+  handles.reserve(g_child_pids.size());
+  for (const pid_t child : g_child_pids) {
+    handles.push_back(reinterpret_cast<HANDLE>(child));
+  }
+  const DWORD wait_result = WaitForMultipleObjects(
+      static_cast<DWORD>(handles.size()),
+      handles.data(),
+      FALSE,
+      INFINITE);
+  if (wait_result < WAIT_OBJECT_0 ||
+      wait_result >= WAIT_OBJECT_0 + handles.size()) {
+    throw std::runtime_error("WaitForMultipleObjects failed");
+  }
+  const std::size_t index = static_cast<std::size_t>(wait_result - WAIT_OBJECT_0);
+  DWORD exit_code = 0;
+  GetExitCodeProcess(handles[index], &exit_code);
+  if (status != nullptr) {
+    *status = static_cast<int>(exit_code);
+  }
+  CloseHandle(handles[index]);
+  return g_child_pids[index];
+#else
+  int local_status = 0;
+  const pid_t pid = waitpid(-1, &local_status, 0);
+  if (pid < 0) {
+    return std::nullopt;
+  }
+  if (status != nullptr) {
+    *status = local_status;
+  }
+  return pid;
+#endif
 }
 
 void RemoveChildPid(pid_t pid) {
@@ -476,10 +574,9 @@ int ParseInt(const std::optional<std::string>& value, int fallback) {
 }
 
 fs::path ResolveSelfPath(const char* argv0) {
-  std::error_code error;
-  const fs::path proc_path = fs::read_symlink("/proc/self/exe", error);
-  if (!error && !proc_path.empty()) {
-    return proc_path;
+  const std::string executable_path = comet::platform::ExecutablePath();
+  if (!executable_path.empty()) {
+    return fs::path(executable_path);
   }
   return fs::weakly_canonical(fs::path(argv0));
 }
@@ -678,7 +775,7 @@ void MaybeRunSystemctl(
   for (const std::string& action : actions) {
     std::ostringstream command;
     command << "systemctl";
-    if (geteuid() != 0) {
+    if (!comet::platform::HasElevatedPrivileges()) {
       command << " --user";
     }
     command << " " << action;
@@ -915,22 +1012,22 @@ int RunControllerSupervisor(
 
   while (!g_stop_requested.load()) {
     int status = 0;
-    const pid_t exited = waitpid(-1, &status, 0);
-    if (exited < 0) {
+    const auto exited = WaitForAnyChildProcess(&status);
+    if (!exited.has_value()) {
       break;
     }
-    RemoveChildPid(exited);
-    if (exited == controller_pid || exited == hostd_pid) {
+    RemoveChildPid(*exited);
+    if (*exited == controller_pid || *exited == hostd_pid) {
       g_stop_requested.store(true);
       break;
     }
   }
 
   if (controller_pid > 0) {
-    kill(controller_pid, SIGTERM);
+    TerminateChildProcess(controller_pid);
   }
   if (hostd_pid > 0) {
-    kill(hostd_pid, SIGTERM);
+    TerminateChildProcess(hostd_pid);
   }
   return 0;
 }

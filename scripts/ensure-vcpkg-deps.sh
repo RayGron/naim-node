@@ -11,7 +11,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "${script_dir}/.." && pwd)"
 vcpkg_root="$("${script_dir}/find-vcpkg.sh" --root)"
 vcpkg_exe="${vcpkg_root}/vcpkg"
-install_root="${repo_dir}/vcpkg_installed"
+install_root="${repo_dir}/vcpkg_installed/${triplet}-root"
 stamp_dir="${install_root}/vcpkg"
 stamp_path="${stamp_dir}/.comet-${triplet}.manifest.sha256"
 cuda_root=""
@@ -69,7 +69,7 @@ detect_cuda_root() {
     "/usr/local/cuda-12.1" \
     "/usr/local/cuda-12.0" \
     "/usr/lib/nvidia-cuda-toolkit"; do
-    if [[ -n "${candidate}" && -x "${candidate}/bin/nvcc" ]]; then
+    if [[ -n "${candidate}" && -x "${candidate}/bin/nvcc" && -f "${candidate}/include/cuda_runtime.h" ]]; then
       cuda_root="${candidate}"
       cuda_nvcc="${candidate}/bin/nvcc"
       return 0
@@ -78,7 +78,7 @@ detect_cuda_root() {
 
   if command -v nvcc >/dev/null 2>&1; then
     candidate="$(dirname -- "$(dirname -- "$(readlink -f "$(command -v nvcc)")")")"
-    if [[ -x "${candidate}/bin/nvcc" ]]; then
+    if [[ -x "${candidate}/bin/nvcc" && -f "${candidate}/include/cuda_runtime.h" ]]; then
       cuda_root="${candidate}"
       cuda_nvcc="${candidate}/bin/nvcc"
       return 0

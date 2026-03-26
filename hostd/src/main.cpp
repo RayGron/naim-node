@@ -1,10 +1,8 @@
-#include <arpa/inet.h>
 #include <chrono>
 #include <ctime>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
-#include <dlfcn.h>
 #include <errno.h>
 #include <filesystem>
 #include <fstream>
@@ -13,23 +11,22 @@
 #include <iostream>
 #include <map>
 #include <memory>
-#include <netdb.h>
-#include <netinet/in.h>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <cstdlib>
 #include <sstream>
-#include <sys/socket.h>
 #include <set>
-#include <sys/statvfs.h>
-#include <sys/types.h>
 #include <thread>
 #include <future>
-#include <unistd.h>
 #include <vector>
 #include <array>
 #include <algorithm>
+
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#include <sys/statvfs.h>
+#endif
 
 #include <nlohmann/json.hpp>
 #include <sodium.h>
@@ -40,6 +37,7 @@
 #include "comet/execution_plan.h"
 #include "comet/infer_runtime_config.h"
 #include "comet/models.h"
+#include "comet/platform_compat.h"
 #include "comet/planner.h"
 #include "comet/runtime_status.h"
 #include "comet/sqlite_store.h"
@@ -48,6 +46,17 @@
 namespace {
 
 using nlohmann::json;
+using SocketHandle = comet::platform::SocketHandle;
+
+std::string SocketErrorMessage() {
+  return comet::platform::LastSocketErrorMessage();
+}
+
+void CloseSocketHandle(const SocketHandle fd) {
+  if (comet::platform::IsSocketValid(fd)) {
+    comet::platform::CloseSocket(fd);
+  }
+}
 
 struct CometNodeConfig {
   std::string storage_root = "/var/lib/comet";
@@ -387,7 +396,8 @@ comet::DesiredState RebaseStateForRuntimeRoot(
   for (auto& disk : state.disks) {
     const bool node_local_disk =
         disk.kind == comet::DiskKind::InferPrivate ||
-        disk.kind == comet::DiskKind::WorkerPrivate;
+        disk.kind == comet::DiskKind::WorkerPrivate ||
+        disk.kind == comet::DiskKind::AppPrivate;
     disk.host_path = RebaseManagedPath(
         disk.host_path,
         storage_root,
@@ -597,7 +607,8 @@ std::string ManagedDiskImagePath(
 
   const bool node_local_disk =
       disk.kind == comet::DiskKind::InferPrivate ||
-      disk.kind == comet::DiskKind::WorkerPrivate;
+      disk.kind == comet::DiskKind::WorkerPrivate ||
+      disk.kind == comet::DiskKind::AppPrivate;
   const std::filesystem::path base(
       RebaseManagedPath(
           std::string(kDefaultManagedStorageRoot) + "/disk-images",
@@ -1185,14 +1196,14 @@ std::vector<std::string> SplitCsvRow(const std::string& line) {
 std::string RunCommandCapture(const std::string& command) {
   std::array<char, 512> buffer{};
   std::string output;
-  FILE* pipe = popen(command.c_str(), "r");
+  FILE* pipe = comet::platform::OpenPipe(command.c_str(), "r");
   if (pipe == nullptr) {
     return output;
   }
   while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
     output.append(buffer.data());
   }
-  pclose(pipe);
+  comet::platform::ClosePipe(pipe);
   return output;
 }
 
@@ -1330,13 +1341,11 @@ std::optional<std::filesystem::path> DetectCometRepoRoot() {
   } catch (...) {
   }
 
-  std::array<char, 4096> buffer{};
-  const auto size = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
-  if (size <= 0) {
+  const std::string executable_path = comet::platform::ExecutablePath();
+  if (executable_path.empty()) {
     return std::nullopt;
   }
-  buffer[static_cast<std::size_t>(size)] = '\0';
-  return FindRepoRootFromPath(std::filesystem::path(buffer.data()).parent_path());
+  return FindRepoRootFromPath(std::filesystem::path(executable_path).parent_path());
 }
 
 bool LocalRuntimeBinaryExists(
@@ -2265,7 +2274,7 @@ bool RunCommandOk(const std::string& command) {
 }
 
 bool HostCanManageRealDisks() {
-  return geteuid() == 0;
+  return comet::platform::HasElevatedPrivileges();
 }
 
 std::string NormalizeManagedPath(const std::string& path) {
@@ -2729,6 +2738,8 @@ HttpResponse SendControllerHttpRequest(
     const std::string& path_and_query,
     const std::string& body = "",
     const std::map<std::string, std::string>& headers = {}) {
+  comet::platform::EnsureSocketsInitialized();
+
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
@@ -2740,20 +2751,20 @@ HttpResponse SendControllerHttpRequest(
         "failed to resolve controller target '" + target.raw + "': " + gai_strerror(lookup));
   }
 
-  int fd = -1;
+  SocketHandle fd = comet::platform::kInvalidSocket;
   for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
     fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (fd < 0) {
+    if (!comet::platform::IsSocketValid(fd)) {
       continue;
     }
     if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
-    close(fd);
-    fd = -1;
+    CloseSocketHandle(fd);
+    fd = comet::platform::kInvalidSocket;
   }
   freeaddrinfo(results);
-  if (fd < 0) {
+  if (!comet::platform::IsSocketValid(fd)) {
     throw std::runtime_error("failed to connect to controller target '" + target.raw + "'");
   }
 
@@ -2778,8 +2789,8 @@ HttpResponse SendControllerHttpRequest(
   while (remaining > 0) {
     const ssize_t written = send(fd, data, remaining, 0);
     if (written <= 0) {
-      const std::string error = std::strerror(errno);
-      close(fd);
+      const std::string error = SocketErrorMessage();
+      CloseSocketHandle(fd);
       throw std::runtime_error("failed to write HTTP request: " + error);
     }
     data += written;
@@ -2791,8 +2802,8 @@ HttpResponse SendControllerHttpRequest(
   while (true) {
     const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
-      const std::string error = std::strerror(errno);
-      close(fd);
+      const std::string error = SocketErrorMessage();
+      CloseSocketHandle(fd);
       throw std::runtime_error("failed to read HTTP response: " + error);
     }
     if (read_count == 0) {
@@ -2800,7 +2811,7 @@ HttpResponse SendControllerHttpRequest(
     }
     response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
   }
-  close(fd);
+  CloseSocketHandle(fd);
   return ParseHttpResponse(response_text);
 }
 
@@ -3402,7 +3413,11 @@ comet::DiskTelemetrySnapshot CollectDiskTelemetry(
     const std::string& node_name) {
   comet::DiskTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
+#if defined(_WIN32)
+  snapshot.source = "filesystem::space";
+#else
   snapshot.source = "statvfs";
+#endif
   snapshot.collected_at = CurrentTimestampString();
 
   for (const auto& disk : state.disks) {
@@ -3487,6 +3502,32 @@ comet::DiskTelemetrySnapshot CollectDiskTelemetry(
       }
     }
 
+#if defined(_WIN32)
+    std::error_code space_error;
+    const auto space_info = std::filesystem::space(disk.host_path, space_error);
+    if (!space_error) {
+      record.total_bytes = space_info.capacity;
+      record.free_bytes = space_info.available;
+      record.used_bytes =
+          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
+      if (record.health == "missing") {
+        record.health = "ok";
+      }
+      if (record.runtime_state == "missing") {
+        record.runtime_state = "available";
+      }
+    } else {
+      record.status_message =
+          record.status_message.empty()
+              ? "filesystem::space unavailable"
+              : record.status_message + "; filesystem::space unavailable";
+      record.fault_count += 1;
+      record.fault_reasons.push_back("filesystem-space-unavailable");
+      if (record.health == "ok") {
+        record.health = "degraded";
+      }
+    }
+#else
     struct statvfs stats {};
     if (statvfs(disk.host_path.c_str(), &stats) == 0) {
       const std::uint64_t block_size = static_cast<std::uint64_t>(stats.f_frsize);
@@ -3511,6 +3552,7 @@ comet::DiskTelemetrySnapshot CollectDiskTelemetry(
         record.health = "degraded";
       }
     }
+#endif
 
     snapshot.items.push_back(std::move(record));
   }
@@ -3896,6 +3938,11 @@ struct NvmlUtilizationInfo {
 std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvml(
     const comet::DesiredState& state,
     const std::string& node_name) {
+#if defined(_WIN32)
+  (void)state;
+  (void)node_name;
+  return std::nullopt;
+#else
   void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
   if (lib == nullptr) {
     return std::nullopt;
@@ -3966,6 +4013,7 @@ std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvml(
   shutdown();
   dlclose(lib);
   return snapshot;
+#endif
 }
 
 void PopulateGpuProcessesFromNvidiaSmi(

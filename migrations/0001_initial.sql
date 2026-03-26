@@ -144,6 +144,15 @@ CREATE TABLE instance_labels (
     FOREIGN KEY (instance_name) REFERENCES instances(name) ON DELETE CASCADE
 );
 
+CREATE TABLE instance_published_ports (
+    instance_name TEXT NOT NULL,
+    host_ip TEXT NOT NULL,
+    host_port INTEGER NOT NULL,
+    container_port INTEGER NOT NULL,
+    PRIMARY KEY (instance_name, host_ip, host_port, container_port),
+    FOREIGN KEY (instance_name) REFERENCES instances(name) ON DELETE CASCADE
+);
+
 CREATE TABLE host_assignments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_name TEXT NOT NULL,

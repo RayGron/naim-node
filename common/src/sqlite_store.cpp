@@ -167,6 +167,15 @@ CREATE TABLE IF NOT EXISTS instance_labels (
     FOREIGN KEY (instance_name) REFERENCES instances(name) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS instance_published_ports (
+    instance_name TEXT NOT NULL,
+    host_ip TEXT NOT NULL,
+    host_port INTEGER NOT NULL,
+    container_port INTEGER NOT NULL,
+    PRIMARY KEY (instance_name, host_ip, host_port, container_port),
+    FOREIGN KEY (instance_name) REFERENCES instances(name) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS host_assignments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_name TEXT NOT NULL,
@@ -798,6 +807,9 @@ DiskKind ParseDiskKind(const std::string& value) {
   if (value == "worker-private") {
     return DiskKind::WorkerPrivate;
   }
+  if (value == "app-private") {
+    return DiskKind::AppPrivate;
+  }
   throw std::runtime_error("unknown disk kind '" + value + "'");
 }
 
@@ -807,6 +819,9 @@ InstanceRole ParseInstanceRole(const std::string& value) {
   }
   if (value == "worker") {
     return InstanceRole::Worker;
+  }
+  if (value == "app") {
+    return InstanceRole::App;
   }
   throw std::runtime_error("unknown instance role '" + value + "'");
 }
@@ -1449,6 +1464,18 @@ void ControllerStore::ReplaceDesiredState(
         label_statement.BindText(3, value);
         label_statement.StepDone();
       }
+
+      for (const auto& port : instance.published_ports) {
+        Statement port_statement(
+            db,
+            "INSERT INTO instance_published_ports(instance_name, host_ip, host_port, "
+            "container_port) VALUES(?1, ?2, ?3, ?4);");
+        port_statement.BindText(1, instance.name);
+        port_statement.BindText(2, port.host_ip);
+        port_statement.BindInt(3, port.host_port);
+        port_statement.BindInt(4, port.container_port);
+        port_statement.StepDone();
+      }
     }
 
     Exec(db, "COMMIT;");
@@ -1724,6 +1751,30 @@ std::optional<DesiredState> ControllerStore::LoadDesiredState(const std::string&
       }
       state.instances[instance_it->second].labels[ToColumnText(statement.raw(), 1)] =
           ToColumnText(statement.raw(), 2);
+    }
+  }
+
+  {
+    Statement statement(
+        db,
+        "SELECT p.instance_name, p.host_ip, p.host_port, p.container_port "
+        "FROM instance_published_ports p "
+        "JOIN instances i ON i.name = p.instance_name "
+        "WHERE i.plane_name = ?1 "
+        "ORDER BY p.instance_name ASC, p.host_ip ASC, p.host_port ASC, p.container_port ASC;");
+    statement.BindText(1, plane_name);
+    while (statement.StepRow()) {
+      const std::string instance_name = ToColumnText(statement.raw(), 0);
+      const auto instance_it = instance_indexes.find(instance_name);
+      if (instance_it == instance_indexes.end()) {
+        throw std::runtime_error(
+            "published port row references unknown instance '" + instance_name + "'");
+      }
+      PublishedPort port;
+      port.host_ip = ToColumnText(statement.raw(), 1);
+      port.host_port = sqlite3_column_int(statement.raw(), 2);
+      port.container_port = sqlite3_column_int(statement.raw(), 3);
+      state.instances[instance_it->second].published_ports.push_back(std::move(port));
     }
   }
 

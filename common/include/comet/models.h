@@ -10,12 +10,20 @@ namespace comet {
 enum class InstanceRole {
   Infer,
   Worker,
+  App,
 };
 
 enum class DiskKind {
   PlaneShared,
   InferPrivate,
   WorkerPrivate,
+  AppPrivate,
+};
+
+struct PublishedPort {
+  std::string host_ip = "127.0.0.1";
+  int host_port = 0;
+  int container_port = 0;
 };
 
 enum class GpuShareMode {
@@ -64,6 +72,7 @@ struct InstanceSpec {
   std::vector<std::string> depends_on;
   std::map<std::string, std::string> environment;
   std::map<std::string, std::string> labels;
+  std::vector<PublishedPort> published_ports;
   std::optional<std::string> gpu_device;
   PlacementMode placement_mode = PlacementMode::Manual;
   GpuShareMode share_mode = GpuShareMode::Exclusive;
@@ -202,12 +211,6 @@ struct DesiredState {
   std::vector<NodeInventory> nodes;
   std::vector<DiskSpec> disks;
   std::vector<InstanceSpec> instances;
-};
-
-struct PublishedPort {
-  std::string host_ip = "127.0.0.1";
-  int host_port = 0;
-  int container_port = 0;
 };
 
 struct ComposeVolume {

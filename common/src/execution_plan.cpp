@@ -42,6 +42,27 @@ std::string MapSignature(const std::map<std::string, std::string>& values) {
   return out.str();
 }
 
+std::string PublishedPortsSignature(const std::vector<PublishedPort>& ports) {
+  std::vector<std::string> entries;
+  entries.reserve(ports.size());
+  for (const auto& port : ports) {
+    entries.push_back(
+        port.host_ip + ":" + std::to_string(port.host_port) + ":" +
+        std::to_string(port.container_port));
+  }
+  std::sort(entries.begin(), entries.end());
+  std::ostringstream out;
+  bool first = true;
+  for (const auto& entry : entries) {
+    if (!first) {
+      out << ";";
+    }
+    first = false;
+    out << entry;
+  }
+  return out.str();
+}
+
 std::string InstanceSignature(const InstanceSpec& instance) {
   return instance.node_name + "|" + instance.image + "|" + instance.command + "|" +
          instance.private_disk_name + "|" + instance.shared_disk_name + "|" +
@@ -49,6 +70,7 @@ std::string InstanceSignature(const InstanceSpec& instance) {
          std::to_string(instance.gpu_fraction) + "|" + std::to_string(instance.priority) + "|" +
          std::to_string(instance.preemptible ? 1 : 0) + "|" +
          std::to_string(instance.memory_cap_mb.value_or(0)) + "|" +
+         PublishedPortsSignature(instance.published_ports) + "|" +
          MapSignature(instance.environment) + "|" + MapSignature(instance.labels);
 }
 

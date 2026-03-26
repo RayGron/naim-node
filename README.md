@@ -141,6 +141,23 @@ Host builds are grouped by platform and architecture:
 
 The executables and static libraries are emitted directly into that folder.
 
+Windows builds use the Windows toolchain directly, even when started from a Remote WSL window:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File scripts\windows\build-target.ps1 x64 Debug
+powershell.exe -ExecutionPolicy Bypass -File scripts\windows\build-target.ps1 x64 Release
+```
+
+Windows release packaging:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File scripts\windows\package-target.ps1 x64
+```
+
+If your Windows CMake setup needs a specific generator or executable path, you can override them with `COMET_WINDOWS_CMAKE_GENERATOR` and `COMET_WINDOWS_CMAKE`.
+
+Current Windows builds focus on the control-plane binaries (`comet-node`, `comet-controller`, `comet-hostd`). The Linux-only runtime executables remain part of the Linux build path.
+
 You can also configure any target layout manually:
 
 ```bash
@@ -173,6 +190,11 @@ The repository ships VS Code build tasks similar to the `maglev` workflow:
 - `Comet: Package Release`
 - `Comet: Check`
 - `Comet macOS: Check`
+
+From a Remote WSL window:
+
+- Linux tasks use the native Linux toolchain inside WSL
+- Windows tasks call `powershell.exe` and require WSL interop to be working, so `cmd.exe /C ver` must succeed inside WSL
 
 Controller-side storage inspection now has two layers:
 
