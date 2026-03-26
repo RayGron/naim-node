@@ -137,6 +137,7 @@ struct HttpResponse {
   int status_code = 200;
   std::string content_type = "application/json";
   std::string body;
+  std::map<std::string, std::string> headers;
 };
 
 struct SseStreamRequest {
@@ -234,7 +235,10 @@ std::string Trim(const std::string& value);
 
 std::string NormalizeLanguageCode(const std::string& value);
 
-HttpResponse BuildJsonResponse(int status_code, const json& payload);
+HttpResponse BuildJsonResponse(
+    int status_code,
+    const json& payload,
+    const std::map<std::string, std::string>& headers = {});
 
 SchedulerRuntimeView LoadSchedulerRuntimeView(
     comet::ControllerStore& store,
@@ -725,12 +729,24 @@ std::string ReasonPhrase(int status_code) {
   switch (status_code) {
     case 200:
       return "OK";
+    case 400:
+      return "Bad Request";
     case 404:
       return "Not Found";
     case 405:
       return "Method Not Allowed";
+    case 409:
+      return "Conflict";
+    case 422:
+      return "Unprocessable Content";
     case 500:
       return "Internal Server Error";
+    case 502:
+      return "Bad Gateway";
+    case 503:
+      return "Service Unavailable";
+    case 504:
+      return "Gateway Timeout";
     default:
       return "Response";
   }
@@ -740,6 +756,12 @@ void SendHttpResponse(int client_fd, const HttpResponse& response) {
   std::ostringstream out;
   out << "HTTP/1.1 " << response.status_code << " " << ReasonPhrase(response.status_code) << "\r\n";
   out << "Content-Type: " << response.content_type << "\r\n";
+  for (const auto& [key, value] : response.headers) {
+    if (Lowercase(key) == "content-type") {
+      continue;
+    }
+    out << key << ": " << value << "\r\n";
+  }
   out << "Content-Length: " << response.body.size() << "\r\n";
   out << "Connection: close\r\n\r\n";
   out << response.body;
@@ -770,11 +792,19 @@ bool SendAll(int fd, const std::string& payload) {
   return true;
 }
 
-bool SendSseHeaders(int client_fd) {
+bool SendSseHeaders(
+    int client_fd,
+    const std::map<std::string, std::string>& headers = {}) {
   std::ostringstream out;
   out << "HTTP/1.1 200 OK\r\n";
   out << "Content-Type: text/event-stream\r\n";
   out << "Cache-Control: no-cache\r\n";
+  for (const auto& [key, value] : headers) {
+    if (Lowercase(key) == "content-type") {
+      continue;
+    }
+    out << key << ": " << value << "\r\n";
+  }
   out << "Connection: keep-alive\r\n";
   out << "X-Accel-Buffering: no\r\n\r\n";
   return SendAll(client_fd, out.str());
@@ -913,6 +943,7 @@ HttpResponse ParseHttpResponse(const std::string& response_text) {
     if (colon != std::string::npos) {
       const std::string key = Lowercase(Trim(line.substr(0, colon)));
       const std::string value = Trim(line.substr(colon + 1));
+      response.headers[key] = value;
       if (key == "content-type") {
         response.content_type = value;
       }
@@ -1158,6 +1189,133 @@ struct StreamedInteractionSegmentResult {
   InteractionSegmentSummary summary;
   std::string cleaned_text;
 };
+
+struct InteractionRequestContext {
+  std::string request_id;
+  json payload = json::object();
+  bool structured_output_json = false;
+  std::string normalized_model;
+};
+
+std::string GenerateInteractionRequestId() {
+  static std::atomic<unsigned long long> counter{0};
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  return "req-" + std::to_string(now) + "-" + std::to_string(++counter);
+}
+
+std::map<std::string, std::string> BuildInteractionResponseHeaders(
+    const std::string& request_id) {
+  return {
+      {"X-Comet-Request-Id", request_id},
+  };
+}
+
+std::string ResolveInteractionServedModelName(
+    const PlaneInteractionResolution& resolution) {
+  if (resolution.runtime_status.has_value() &&
+      !resolution.runtime_status->active_served_model_name.empty()) {
+    return resolution.runtime_status->active_served_model_name;
+  }
+  return resolution.status_payload.value("served_model_name", std::string{});
+}
+
+std::string ResolveInteractionActiveModelId(
+    const PlaneInteractionResolution& resolution) {
+  if (resolution.runtime_status.has_value() &&
+      !resolution.runtime_status->active_model_id.empty()) {
+    return resolution.runtime_status->active_model_id;
+  }
+  return resolution.status_payload.value("active_model_id", std::string{});
+}
+
+json BuildInteractionContractMetadata(
+    const PlaneInteractionResolution& resolution,
+    const std::string& request_id,
+    const std::optional<std::string>& session_id = std::nullopt,
+    const std::optional<int>& segment_count = std::nullopt,
+    const std::optional<int>& continuation_count = std::nullopt) {
+  json metadata{
+      {"request_id", request_id},
+      {"plane_name", resolution.status_payload.value("plane_name", std::string{})},
+      {"served_model_name", ResolveInteractionServedModelName(resolution)},
+      {"active_model_id", ResolveInteractionActiveModelId(resolution)},
+      {"reason", resolution.status_payload.value("reason", std::string{})},
+  };
+  if (session_id.has_value()) {
+    metadata["session_id"] = *session_id;
+  }
+  if (segment_count.has_value()) {
+    metadata["segment_count"] = *segment_count;
+  }
+  if (continuation_count.has_value()) {
+    metadata["continuation_count"] = *continuation_count;
+  }
+  if (resolution.desired_state.interaction.has_value()) {
+    if (resolution.desired_state.interaction->completion_policy.has_value()) {
+      metadata["completion_policy"] = json{
+          {"response_mode",
+           resolution.desired_state.interaction->completion_policy->response_mode},
+          {"max_tokens",
+           resolution.desired_state.interaction->completion_policy->max_tokens},
+      };
+    }
+    if (resolution.desired_state.interaction->long_completion_policy.has_value()) {
+      metadata["long_completion_policy"] = json{
+          {"response_mode",
+           resolution.desired_state.interaction->long_completion_policy->response_mode},
+          {"max_tokens",
+           resolution.desired_state.interaction->long_completion_policy->max_tokens},
+      };
+    }
+  }
+  return metadata;
+}
+
+HttpResponse BuildStandaloneInteractionContractError(
+    int status_code,
+    const std::string& request_id,
+    const std::string& code,
+    const std::string& message,
+    bool retryable,
+    const std::optional<std::string>& plane_name = std::nullopt,
+    const std::optional<std::string>& reason = std::nullopt,
+    const std::optional<std::string>& served_model_name = std::nullopt,
+    const std::optional<std::string>& active_model_id = std::nullopt,
+    const json& details = json::object()) {
+  json payload{
+      {"request_id", request_id},
+      {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
+      {"reason", reason.has_value() ? json(*reason) : json(nullptr)},
+      {"served_model_name",
+       served_model_name.has_value() ? json(*served_model_name) : json(nullptr)},
+      {"active_model_id",
+       active_model_id.has_value() ? json(*active_model_id) : json(nullptr)},
+      {"error",
+       json{
+           {"code", code},
+           {"message", message},
+           {"retryable", retryable},
+       }},
+      {"comet",
+       json{
+           {"request_id", request_id},
+           {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
+           {"served_model_name",
+            served_model_name.has_value() ? json(*served_model_name) : json(nullptr)},
+           {"active_model_id",
+            active_model_id.has_value() ? json(*active_model_id) : json(nullptr)},
+       }},
+  };
+  if (!details.empty()) {
+    payload["error"]["details"] = details;
+  }
+  return BuildJsonResponse(
+      status_code,
+      payload,
+      BuildInteractionResponseHeaders(request_id));
+}
 
 int ClampInteractionPolicyValue(int value, int minimum_value, int maximum_value) {
   return std::max(minimum_value, std::min(value, maximum_value));
@@ -1618,7 +1776,8 @@ std::string BuildInteractionUpstreamBody(
     const PlaneInteractionResolution& resolution,
     json payload,
     bool force_stream,
-    const InteractionCompletionPolicy& policy) {
+    const InteractionCompletionPolicy& policy,
+    bool structured_output_json = false) {
   if (!payload.contains("messages") || !payload.at("messages").is_array()) {
     payload["messages"] = json::array();
   }
@@ -1635,6 +1794,12 @@ std::string BuildInteractionUpstreamBody(
       BuildLanguageInstruction(resolution.desired_state, preferred_language));
   if (policy.require_completion_marker || policy.max_continuations > 0) {
     system_instruction_parts.push_back(BuildSemanticCompletionInstruction(policy));
+  }
+  if (structured_output_json) {
+    system_instruction_parts.push_back(
+        "Structured output requirement: return one valid JSON object only. "
+        "Do not wrap it in markdown fences. "
+        "Do not add commentary before or after the JSON object.");
   }
 
   json merged_messages = json::array();
@@ -1690,6 +1855,7 @@ std::string BuildInteractionUpstreamBody(
   payload.erase("max_total_completion_tokens");
   payload.erase("max_elapsed_time_ms");
   payload.erase("semantic_goal");
+  payload.erase("response_format");
   const bool uses_vllm_runtime =
       resolution.runtime_status.has_value() &&
       Lowercase(resolution.runtime_status->runtime_backend).find("vllm") != std::string::npos;
@@ -2201,18 +2367,171 @@ PlaneInteractionResolution ResolvePlaneInteraction(
   return resolution;
 }
 
-HttpResponse BuildPlaneInteractionError(
-    int status_code,
-    const json& status_payload,
-    const std::string& message) {
-  json payload = status_payload;
-  payload["status"] = "error";
-  payload["message"] = message;
-  return HttpResponse{status_code, "application/json", payload.dump()};
-}
-
 json ParseInteractionPayload(const std::string& body) {
   return body.empty() ? json::object() : json::parse(body);
+}
+
+HttpResponse BuildPlaneInteractionContractError(
+    int status_code,
+    const PlaneInteractionResolution& resolution,
+    const std::string& request_id,
+    const std::string& code,
+    const std::string& message,
+    bool retryable,
+    const json& details = json::object()) {
+  json payload = resolution.status_payload;
+  payload["request_id"] = request_id;
+  payload["error"] = json{
+      {"code", code},
+      {"message", message},
+      {"retryable", retryable},
+  };
+  payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
+  if (!details.empty()) {
+    payload["error"]["details"] = details;
+  }
+  return BuildJsonResponse(
+      status_code,
+      payload,
+      BuildInteractionResponseHeaders(request_id));
+}
+
+bool PayloadContainsUnsupportedInteractionField(
+    const json& payload,
+    std::string* field_name) {
+  static const std::vector<std::string> unsupported_fields = {
+      "tools",
+      "tool_choice",
+      "functions",
+      "function_call",
+  };
+  for (const auto& field : unsupported_fields) {
+    if (payload.contains(field)) {
+      if (field_name != nullptr) {
+        *field_name = field;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+std::optional<HttpResponse> ValidateAndNormalizeInteractionRequest(
+    const PlaneInteractionResolution& resolution,
+    const std::string& request_id,
+    const json& original_payload,
+    InteractionRequestContext* context) {
+  if (context == nullptr) {
+    throw std::invalid_argument("interaction request context is required");
+  }
+  if (!original_payload.is_object()) {
+    return BuildPlaneInteractionContractError(
+        400,
+        resolution,
+        request_id,
+        "malformed_request",
+        "interaction request body must be a JSON object",
+        false);
+  }
+
+  json payload = original_payload;
+  std::string unsupported_field;
+  if (PayloadContainsUnsupportedInteractionField(payload, &unsupported_field)) {
+    return BuildPlaneInteractionContractError(
+        400,
+        resolution,
+        request_id,
+        "unsupported_field",
+        "interaction request field '" + unsupported_field + "' is not supported by comet-node",
+        false,
+        json{{"field", unsupported_field}});
+  }
+
+  if (payload.contains("response_format")) {
+    if (payload.at("response_format").is_object()) {
+      const std::string response_format_type =
+          payload.at("response_format").value("type", std::string{});
+      if (response_format_type == "json_object") {
+        context->structured_output_json = true;
+      } else {
+        return BuildPlaneInteractionContractError(
+            400,
+            resolution,
+            request_id,
+            "unsupported_response_format",
+            "only response_format.type=json_object is supported",
+            false,
+            json{{"field", "response_format"},
+                 {"supported_type", "json_object"},
+                 {"received_type", response_format_type}});
+      }
+    } else {
+      return BuildPlaneInteractionContractError(
+          400,
+          resolution,
+          request_id,
+          "malformed_request",
+          "response_format must be an object",
+          false,
+          json{{"field", "response_format"}});
+    }
+  }
+
+  if (!payload.contains("messages") || !payload.at("messages").is_array()) {
+    return BuildPlaneInteractionContractError(
+        400,
+        resolution,
+        request_id,
+        "malformed_request",
+        "chat completion request is missing messages array",
+        false,
+        json{{"field", "messages"}});
+  }
+
+  const std::string served_model_name = ResolveInteractionServedModelName(resolution);
+  const std::string active_model_id = ResolveInteractionActiveModelId(resolution);
+  if (payload.contains("model") && !payload.at("model").is_null()) {
+    if (!payload.at("model").is_string()) {
+      return BuildPlaneInteractionContractError(
+          400,
+          resolution,
+          request_id,
+          "malformed_request",
+          "model must be a string when provided",
+          false,
+          json{{"field", "model"}});
+    }
+    const std::string requested_model = payload.at("model").get<std::string>();
+    const bool matches_served =
+        !served_model_name.empty() && requested_model == served_model_name;
+    const bool matches_root =
+        !active_model_id.empty() && requested_model == active_model_id;
+    if (!requested_model.empty() && !matches_served && !matches_root) {
+      return BuildPlaneInteractionContractError(
+          409,
+          resolution,
+          request_id,
+          "model_mismatch",
+          "requested model does not match the active model for this plane",
+          false,
+          json{
+              {"requested_model", requested_model},
+              {"served_model_name", served_model_name},
+              {"active_model_id", active_model_id},
+          });
+    }
+  }
+  if (!served_model_name.empty()) {
+    payload["model"] = served_model_name;
+    context->normalized_model = served_model_name;
+  } else if (!active_model_id.empty()) {
+    payload["model"] = active_model_id;
+    context->normalized_model = active_model_id;
+  }
+
+  context->request_id = request_id;
+  context->payload = std::move(payload);
+  return std::nullopt;
 }
 
 std::string RemoveThinkBlocks(std::string value) {
@@ -2396,13 +2715,90 @@ json BuildInteractionSessionPayload(const InteractionSessionResult& result) {
   };
 }
 
-HttpResponse BuildInteractionSessionResponse(const InteractionSessionResult& result) {
+std::optional<json> ParseStructuredOutputObject(const std::string& text) {
+  json parsed = json::parse(text, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    return std::nullopt;
+  }
+  return parsed;
+}
+
+HttpResponse BuildInteractionSessionResponse(
+    const PlaneInteractionResolution& resolution,
+    const InteractionRequestContext& request_context,
+    const InteractionSessionResult& result) {
   const json session_payload = BuildInteractionSessionPayload(result);
+  if (request_context.structured_output_json) {
+    if (result.completion_status != "completed") {
+      return BuildPlaneInteractionContractError(
+          422,
+          resolution,
+          request_context.request_id,
+          "structured_output_truncated",
+          "structured output session ended before a valid JSON object was completed",
+          true,
+          json{
+              {"completion_status", result.completion_status},
+              {"stop_reason", result.stop_reason},
+              {"session", session_payload},
+          });
+    }
+    const auto parsed_json = ParseStructuredOutputObject(result.content);
+    if (!parsed_json.has_value()) {
+      return BuildPlaneInteractionContractError(
+          422,
+          resolution,
+          request_context.request_id,
+          "structured_output_malformed",
+          "structured output session did not produce a valid JSON object",
+          true,
+          json{
+              {"completion_status", result.completion_status},
+              {"stop_reason", result.stop_reason},
+              {"content_excerpt",
+               result.content.size() > 512
+                   ? result.content.substr(0, 512) + "...[truncated]"
+                   : result.content},
+              {"session", session_payload},
+          });
+    }
+    return BuildJsonResponse(
+        200,
+        json{
+            {"id", "chatcmpl-comet-session"},
+            {"object", "chat.completion"},
+            {"request_id", request_context.request_id},
+            {"model", result.model},
+            {"choices",
+             json::array({json{
+                 {"index", 0},
+                 {"message", json{{"role", "assistant"}, {"content", result.content}}},
+                 {"finish_reason", "stop"},
+             }})},
+            {"usage", session_payload.at("usage")},
+            {"session", session_payload},
+            {"comet",
+             BuildInteractionContractMetadata(
+                 resolution,
+                 request_context.request_id,
+                 result.session_id,
+                 static_cast<int>(result.segments.size()),
+                 result.continuation_count)},
+            {"structured_output",
+             json{
+                 {"mode", "json_object"},
+                 {"valid", true},
+                 {"json", *parsed_json},
+             }},
+        },
+        BuildInteractionResponseHeaders(request_context.request_id));
+  }
   return BuildJsonResponse(
       200,
       json{
           {"id", "chatcmpl-comet-session"},
           {"object", "chat.completion"},
+          {"request_id", request_context.request_id},
           {"model", result.model},
           {"choices",
            json::array({json{
@@ -2412,13 +2808,21 @@ HttpResponse BuildInteractionSessionResponse(const InteractionSessionResult& res
            }})},
           {"usage", session_payload.at("usage")},
           {"session", session_payload},
-      });
+          {"comet",
+           BuildInteractionContractMetadata(
+               resolution,
+               request_context.request_id,
+               result.session_id,
+               static_cast<int>(result.segments.size()),
+               result.continuation_count)},
+      },
+      BuildInteractionResponseHeaders(request_context.request_id));
 }
 
 InteractionSessionResult ExecuteInteractionSession(
     const PlaneInteractionResolution& resolution,
-    const std::string& body) {
-  const json original_payload = ParseInteractionPayload(body);
+    const InteractionRequestContext& request_context) {
+  const json& original_payload = request_context.payload;
   const InteractionCompletionPolicy policy =
       ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload).policy;
   InteractionSessionResult result;
@@ -2429,16 +2833,22 @@ InteractionSessionResult ExecuteInteractionSession(
   for (int segment_index = 0;; ++segment_index) {
     const auto segment_started_at = std::chrono::steady_clock::now();
     HttpResponse upstream;
+    std::string upstream_body;
     constexpr int kMaxAttempts = 3;
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
-      const std::string upstream_body = BuildInteractionUpstreamBody(
-          resolution, current_payload, false, policy);
+      upstream_body = BuildInteractionUpstreamBody(
+          resolution,
+          current_payload,
+          false,
+          policy,
+          request_context.structured_output_json);
       upstream = SendControllerHttpRequest(
           *resolution.target,
           "POST",
           "/v1/chat/completions",
           upstream_body,
-          {{"Accept", "application/json"}});
+          {{"Accept", "application/json"},
+           {"X-Comet-Request-Id", request_context.request_id}});
       if (upstream.status_code == 200 || upstream.status_code < 500 ||
           attempt + 1 == kMaxAttempts) {
         break;
@@ -2560,35 +2970,52 @@ bool SendInteractionSseDone(int client_fd) {
 
 HttpResponse ProxyInteractionJson(
     const PlaneInteractionResolution& resolution,
+    const std::string& request_id,
     const std::string& method,
     const std::string& path,
     const std::string& body = "") {
   if (!resolution.status_payload.value("interaction_enabled", false)) {
-    return BuildPlaneInteractionError(
+    return BuildPlaneInteractionContractError(
         409,
-        resolution.status_payload,
-        "interaction is available only for plane_mode=llm");
+        resolution,
+        request_id,
+        "interaction_disabled",
+        "interaction is available only for plane_mode=llm",
+        false);
   }
   if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
-    return BuildPlaneInteractionError(
+    return BuildPlaneInteractionContractError(
         409,
-        resolution.status_payload,
-        "plane interaction target is not ready");
+        resolution,
+        request_id,
+        "plane_not_ready",
+        "plane interaction target is not ready",
+        true);
   }
   try {
-    const std::string upstream_body =
-        method == "POST"
-            ? BuildInteractionUpstreamBody(
-                  resolution,
-                  ParseInteractionPayload(body),
-                  false,
-                      ResolveInteractionCompletionPolicy(
-                          resolution.desired_state,
-                          ParseInteractionPayload(body))
-                      .policy)
-            : body;
+    std::string upstream_body = body;
+    bool structured_output_json = false;
+    if (method == "POST") {
+      InteractionRequestContext request_context;
+      if (const auto validation_error = ValidateAndNormalizeInteractionRequest(
+              resolution,
+              request_id,
+              ParseInteractionPayload(body),
+              &request_context)) {
+        return *validation_error;
+      }
+      structured_output_json = request_context.structured_output_json;
+      upstream_body = BuildInteractionUpstreamBody(
+          resolution,
+          request_context.payload,
+          false,
+          ResolveInteractionCompletionPolicy(
+              resolution.desired_state,
+              request_context.payload)
+              .policy,
+          structured_output_json);
+    }
     HttpResponse upstream;
-    std::string last_error;
     constexpr int kMaxAttempts = 3;
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
       try {
@@ -2597,12 +3024,12 @@ HttpResponse ProxyInteractionJson(
             method,
             path,
             upstream_body,
-            {{"Accept", "application/json"}});
+            {{"Accept", "application/json"},
+             {"X-Comet-Request-Id", request_id}});
         if (upstream.status_code < 500 || attempt + 1 == kMaxAttempts) {
           break;
         }
-      } catch (const std::exception& error) {
-        last_error = error.what();
+      } catch (const std::exception&) {
         if (attempt + 1 == kMaxAttempts) {
           throw;
         }
@@ -2611,17 +3038,40 @@ HttpResponse ProxyInteractionJson(
           std::chrono::milliseconds(250 * (attempt + 1)));
     }
     if (upstream.status_code >= 400) {
-      return BuildPlaneInteractionError(
-          upstream.status_code,
-          resolution.status_payload,
+      return BuildPlaneInteractionContractError(
+          upstream.status_code >= 500 ? 503 : upstream.status_code,
+          resolution,
+          request_id,
+          upstream.status_code >= 500 ? "upstream_unavailable" : "upstream_request_failed",
           upstream.body.empty()
               ? ("upstream interaction request failed with status " +
                  std::to_string(upstream.status_code))
-              : upstream.body);
+              : upstream.body,
+          upstream.status_code >= 500);
+    }
+    upstream.headers["x-comet-request-id"] = request_id;
+    if (path == "/v1/models" && !upstream.body.empty()) {
+      json payload = json::parse(upstream.body);
+      payload["request_id"] = request_id;
+      payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
+      return BuildJsonResponse(
+          200,
+          payload,
+          BuildInteractionResponseHeaders(request_id));
     }
     return upstream;
   } catch (const std::exception& error) {
-    return BuildPlaneInteractionError(502, resolution.status_payload, error.what());
+    const std::string lowered = Lowercase(error.what());
+    const bool timeout_like =
+        lowered.find("timed out") != std::string::npos ||
+        lowered.find("timeout") != std::string::npos;
+    return BuildPlaneInteractionContractError(
+        timeout_like ? 504 : 502,
+        resolution,
+        request_id,
+        timeout_like ? "upstream_timeout" : "upstream_invalid_response",
+        error.what(),
+        true);
   }
 }
 
@@ -4086,7 +4536,10 @@ struct ControllerActionResult {
   std::string output;
 };
 
-HttpResponse BuildJsonResponse(int status_code, const json& payload) {
+HttpResponse BuildJsonResponse(
+    int status_code,
+    const json& payload,
+    const std::map<std::string, std::string>& headers) {
   json enriched = payload;
   if (enriched.is_object()) {
     if (!enriched.contains("api_version")) {
@@ -4099,22 +4552,31 @@ HttpResponse BuildJsonResponse(int status_code, const json& payload) {
       };
     }
     if (status_code >= 400) {
-      json error{
-          {"code", enriched.value("status", "error")},
-          {"message", enriched.value("message", ReasonPhrase(status_code))},
-      };
-      if (enriched.contains("details")) {
-        error["details"] = enriched["details"];
+      if (!enriched.contains("error") || !enriched.at("error").is_object()) {
+        json error{
+            {"code", enriched.value("status", "error")},
+            {"message", enriched.value("message", ReasonPhrase(status_code))},
+        };
+        if (enriched.contains("details")) {
+          error["details"] = enriched["details"];
+        }
+        enriched["error"] = error;
+      } else {
+        if (!enriched["error"].contains("code")) {
+          enriched["error"]["code"] = enriched.value("status", "error");
+        }
+        if (!enriched["error"].contains("message")) {
+          enriched["error"]["message"] = enriched.value("message", ReasonPhrase(status_code));
+        }
       }
       enriched["status"] = "error";
-      enriched["error"] = error;
       enriched.erase("message");
       enriched.erase("details");
       enriched.erase("path");
       enriched.erase("method");
     }
   }
-  return HttpResponse{status_code, "application/json", enriched.dump()};
+  return HttpResponse{status_code, "application/json", enriched.dump(), headers};
 }
 
 json ParseJsonRequestBody(const HttpRequest& request) {
@@ -5156,43 +5618,106 @@ void StreamPlaneInteractionSse(
     int client_fd,
     const std::string& db_path,
     const HttpRequest& request) {
+  const std::string request_id = GenerateInteractionRequestId();
+  if (request.method != "POST") {
+    SendHttpResponse(
+        client_fd,
+        BuildStandaloneInteractionContractError(
+            405,
+            request_id,
+            "method_not_allowed",
+            "interaction stream endpoint accepts POST only",
+            false));
+    shutdown(client_fd, SHUT_RDWR);
+    close(client_fd);
+    return;
+  }
   const auto plane_name = ParseInteractionStreamPlaneName(request);
   if (!plane_name.has_value()) {
     SendHttpResponse(
         client_fd,
-        BuildJsonResponse(
+        BuildStandaloneInteractionContractError(
             404,
-            json{{"status", "not_found"}, {"path", request.path}, {"method", request.method}}));
+            request_id,
+            "plane_not_found",
+            "plane not found for interaction stream path",
+            false));
     shutdown(client_fd, SHUT_RDWR);
     close(client_fd);
     return;
   }
 
-  PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, *plane_name);
-  if (!resolution.status_payload.value("interaction_enabled", false)) {
+  PlaneInteractionResolution resolution;
+  InteractionRequestContext request_context;
+  try {
+    resolution = ResolvePlaneInteraction(db_path, *plane_name);
+    if (!resolution.status_payload.value("interaction_enabled", false)) {
+      SendHttpResponse(
+          client_fd,
+          BuildPlaneInteractionContractError(
+              409,
+              resolution,
+              request_id,
+              "interaction_disabled",
+              "interaction is available only for plane_mode=llm",
+              false));
+      shutdown(client_fd, SHUT_RDWR);
+      close(client_fd);
+      return;
+    }
+    if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
+      SendHttpResponse(
+          client_fd,
+          BuildPlaneInteractionContractError(
+              409,
+              resolution,
+              request_id,
+              "plane_not_ready",
+              "plane interaction target is not ready",
+              true));
+      shutdown(client_fd, SHUT_RDWR);
+      close(client_fd);
+      return;
+    }
+    if (const auto validation_error = ValidateAndNormalizeInteractionRequest(
+            resolution,
+            request_id,
+            ParseInteractionPayload(request.body),
+            &request_context)) {
+      SendHttpResponse(client_fd, *validation_error);
+      shutdown(client_fd, SHUT_RDWR);
+      close(client_fd);
+      return;
+    }
+  } catch (const json::exception& error) {
     SendHttpResponse(
         client_fd,
-        BuildPlaneInteractionError(
-            409,
-            resolution.status_payload,
-            "interaction is available only for plane_mode=llm"));
+        BuildStandaloneInteractionContractError(
+            400,
+            request_id,
+            "malformed_request",
+            error.what(),
+            false,
+            plane_name));
     shutdown(client_fd, SHUT_RDWR);
     close(client_fd);
     return;
-  }
-  if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
+  } catch (const std::exception& error) {
     SendHttpResponse(
         client_fd,
-        BuildPlaneInteractionError(
-            409,
-            resolution.status_payload,
-            "plane interaction target is not ready"));
+        BuildStandaloneInteractionContractError(
+            404,
+            request_id,
+            "plane_not_found",
+            error.what(),
+            false,
+            plane_name));
     shutdown(client_fd, SHUT_RDWR);
     close(client_fd);
     return;
   }
 
-  const json original_payload = ParseInteractionPayload(request.body);
+  const json& original_payload = request_context.payload;
   const InteractionCompletionPolicy policy =
       ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload).policy;
   InteractionSessionResult session;
@@ -5208,13 +5733,19 @@ void StreamPlaneInteractionSse(
     const auto segment_started_at = std::chrono::steady_clock::now();
     try {
       upstream_fd = ConnectHttpTarget(*resolution.target);
-      const std::string body = BuildInteractionUpstreamBody(resolution, payload, true, policy);
+      const std::string body = BuildInteractionUpstreamBody(
+          resolution,
+          payload,
+          true,
+          policy,
+          request_context.structured_output_json);
       std::ostringstream upstream_request;
       upstream_request << "POST /v1/chat/completions HTTP/1.1\r\n";
       upstream_request << "Host: " << resolution.target->host << ":" << resolution.target->port
                        << "\r\n";
       upstream_request << "Connection: close\r\n";
       upstream_request << "Accept: text/event-stream\r\n";
+      upstream_request << "X-Comet-Request-Id: " << request_id << "\r\n";
       upstream_request << "Content-Type: application/json\r\n";
       upstream_request << "Content-Length: " << body.size() << "\r\n\r\n";
       upstream_request << body;
@@ -5312,6 +5843,7 @@ void StreamPlaneInteractionSse(
                     client_fd,
                     "delta",
                     json{
+                        {"request_id", request_id},
                         {"session_id", session.session_id},
                         {"segment_index", segment_index},
                         {"continuation_index", segment_index},
@@ -5384,6 +5916,7 @@ void StreamPlaneInteractionSse(
                     client_fd,
                     "delta",
                     json{
+                        {"request_id", request_id},
                         {"session_id", session.session_id},
                         {"segment_index", segment_index},
                         {"continuation_index", segment_index},
@@ -5457,6 +5990,7 @@ void StreamPlaneInteractionSse(
                 client_fd,
                 "delta",
                 json{
+                    {"request_id", request_id},
                     {"session_id", session.session_id},
                     {"segment_index", segment_index},
                     {"continuation_index", segment_index},
@@ -5471,8 +6005,14 @@ void StreamPlaneInteractionSse(
               *resolution.target,
               "POST",
               "/v1/chat/completions",
-              BuildInteractionUpstreamBody(resolution, payload, false, policy),
-              {{"Accept", "application/json"}});
+              BuildInteractionUpstreamBody(
+                  resolution,
+                  payload,
+                  false,
+                  policy,
+                  request_context.structured_output_json),
+              {{"Accept", "application/json"},
+               {"X-Comet-Request-Id", request_id}});
           if (fallback.status_code == 200 && !fallback.body.empty()) {
             const json fallback_payload = json::parse(fallback.body);
             bool marker_seen_in_fallback = false;
@@ -5486,6 +6026,7 @@ void StreamPlaneInteractionSse(
                       client_fd,
                       "delta",
                       json{
+                          {"request_id", request_id},
                           {"session_id", session.session_id},
                           {"segment_index", segment_index},
                           {"continuation_index", segment_index},
@@ -5549,8 +6090,14 @@ void StreamPlaneInteractionSse(
               *resolution.target,
               "POST",
               "/v1/chat/completions",
-              BuildInteractionUpstreamBody(resolution, payload, false, policy),
-              {{"Accept", "application/json"}});
+              BuildInteractionUpstreamBody(
+                  resolution,
+                  payload,
+                  false,
+                  policy,
+                  request_context.structured_output_json),
+              {{"Accept", "application/json"},
+               {"X-Comet-Request-Id", request_id}});
           if (fallback.status_code == 200 && !fallback.body.empty()) {
             const json fallback_payload = json::parse(fallback.body);
             bool marker_seen_in_fallback = false;
@@ -5564,6 +6111,7 @@ void StreamPlaneInteractionSse(
                       client_fd,
                       "delta",
                       json{
+                          {"request_id", request_id},
                           {"session_id", session.session_id},
                           {"segment_index", segment_index},
                           {"continuation_index", segment_index},
@@ -5597,19 +6145,32 @@ void StreamPlaneInteractionSse(
     }
   };
 
-  if (!SendSseHeaders(client_fd)) {
+  if (!SendSseHeaders(client_fd, BuildInteractionResponseHeaders(request_id))) {
     shutdown(client_fd, SHUT_RDWR);
     close(client_fd);
     return;
   }
 
   try {
+    if (!SendInteractionSseEvent(
+            client_fd,
+            "session_started",
+            json{
+                {"request_id", request_id},
+                {"session_id", session.session_id},
+                {"plane_name", plane_name.value_or(std::string{})},
+                {"served_model_name", ResolveInteractionServedModelName(resolution)},
+                {"active_model_id", ResolveInteractionActiveModelId(resolution)},
+            })) {
+      throw std::runtime_error("failed to write session_started");
+    }
     json current_payload = original_payload;
     for (int segment_index = 0;; ++segment_index) {
       if (!SendInteractionSseEvent(
               client_fd,
               "segment_started",
               json{
+                  {"request_id", request_id},
                   {"session_id", session.session_id},
                   {"segment_index", segment_index},
                   {"continuation_index", segment_index},
@@ -5635,6 +6196,7 @@ void StreamPlaneInteractionSse(
               client_fd,
               "segment_complete",
               json{
+                  {"request_id", request_id},
                   {"session_id", session.session_id},
                   {"segment_index", segment_index},
                   {"continuation_index", segment_index},
@@ -5684,6 +6246,7 @@ void StreamPlaneInteractionSse(
               client_fd,
               "continuation_started",
               json{
+                  {"request_id", request_id},
                   {"session_id", session.session_id},
                   {"continuation_index", session.continuation_count},
                   {"reason",
@@ -5707,16 +6270,120 @@ void StreamPlaneInteractionSse(
     }
 
     const json session_payload = BuildInteractionSessionPayload(session);
-    SendInteractionSseEvent(client_fd, "session_complete", session_payload);
+    if (request_context.structured_output_json) {
+      if (session.completion_status != "completed") {
+        SendInteractionSseEvent(
+            client_fd,
+            "session_failed",
+            json{
+                {"request_id", request_id},
+                {"session_id", session.session_id},
+                {"status", "failed"},
+                {"error",
+                 json{
+                     {"code", "structured_output_truncated"},
+                     {"message",
+                      "structured output session ended before a valid JSON object was completed"},
+                     {"retryable", true},
+                 }},
+                {"session", session_payload},
+            });
+        SendInteractionSseEvent(
+            client_fd,
+            "error",
+            json{
+                {"request_id", request_id},
+                {"error",
+                 json{
+                     {"code", "structured_output_truncated"},
+                     {"message",
+                      "structured output session ended before a valid JSON object was completed"},
+                     {"retryable", true},
+                 }},
+                {"plane_name", plane_name.value_or(std::string{})},
+            });
+        SendInteractionSseDone(client_fd);
+        shutdown(client_fd, SHUT_RDWR);
+        close(client_fd);
+        return;
+      }
+      const auto parsed_json = ParseStructuredOutputObject(session.content);
+      if (!parsed_json.has_value()) {
+        SendInteractionSseEvent(
+            client_fd,
+            "session_failed",
+            json{
+                {"request_id", request_id},
+                {"session_id", session.session_id},
+                {"status", "failed"},
+                {"error",
+                 json{
+                     {"code", "structured_output_malformed"},
+                     {"message",
+                      "structured output session did not produce a valid JSON object"},
+                     {"retryable", true},
+                 }},
+                {"session", session_payload},
+            });
+        SendInteractionSseEvent(
+            client_fd,
+            "error",
+            json{
+                {"request_id", request_id},
+                {"error",
+                 json{
+                     {"code", "structured_output_malformed"},
+                     {"message",
+                      "structured output session did not produce a valid JSON object"},
+                     {"retryable", true},
+                 }},
+                {"plane_name", plane_name.value_or(std::string{})},
+            });
+        SendInteractionSseDone(client_fd);
+        shutdown(client_fd, SHUT_RDWR);
+        close(client_fd);
+        return;
+      }
+    }
+    SendInteractionSseEvent(
+        client_fd,
+        "session_complete",
+        json{
+            {"request_id", request_id},
+            {"session", session_payload},
+            {"comet",
+             BuildInteractionContractMetadata(
+                 resolution,
+                 request_id,
+                 session.session_id,
+                 static_cast<int>(session.segments.size()),
+                 session.continuation_count)},
+        });
     SendInteractionSseEvent(
         client_fd,
         "complete",
         json{
+            {"request_id", request_id},
             {"model", session.model},
             {"finish_reason", session.completion_status == "completed" ? "stop" : "length"},
             {"latency_ms", session.total_latency_ms},
             {"usage", session_payload.at("usage")},
             {"session", session_payload},
+            {"comet",
+             BuildInteractionContractMetadata(
+                 resolution,
+                 request_id,
+                 session.session_id,
+                 static_cast<int>(session.segments.size()),
+                 session.continuation_count)},
+            {"structured_output",
+             request_context.structured_output_json
+                 ? json{
+                       {"mode", "json_object"},
+                       {"valid", true},
+                       {"json", *ParseStructuredOutputObject(session.content)},
+                   }
+                 : json(nullptr)},
             {"completion_status", session.completion_status},
             {"stop_reason", session.stop_reason},
             {"continuation_count", session.continuation_count},
@@ -5727,20 +6394,46 @@ void StreamPlaneInteractionSse(
     SendInteractionSseEvent(
         client_fd,
         "session_failed",
-        json{
-            {"session_id", session.session_id},
-            {"status", "failed"},
-            {"message", error.what()},
-            {"segment_count", static_cast<int>(session.segments.size())},
-            {"continuation_count", session.continuation_count},
-        });
+        [&]() {
+          const std::string lowered = Lowercase(error.what());
+          const bool timeout_like =
+              lowered.find("timed out") != std::string::npos ||
+              lowered.find("timeout") != std::string::npos;
+          return json{
+              {"request_id", request_id},
+              {"session_id", session.session_id},
+              {"status", "failed"},
+              {"error",
+               json{
+                   {"code", timeout_like ? "upstream_timeout" : "stream_session_failed"},
+                   {"message", error.what()},
+                   {"retryable", true},
+               }},
+              {"message", error.what()},
+              {"segment_count", static_cast<int>(session.segments.size())},
+              {"continuation_count", session.continuation_count},
+          };
+        }());
     SendInteractionSseEvent(
         client_fd,
         "error",
-        json{
-            {"message", error.what()},
-            {"plane_name", plane_name.value_or(std::string{})},
-        });
+        [&]() {
+          const std::string lowered = Lowercase(error.what());
+          const bool timeout_like =
+              lowered.find("timed out") != std::string::npos ||
+              lowered.find("timeout") != std::string::npos;
+          return json{
+              {"request_id", request_id},
+              {"error",
+               json{
+                   {"code", timeout_like ? "upstream_timeout" : "stream_session_failed"},
+                   {"message", error.what()},
+                   {"retryable", true},
+               }},
+              {"message", error.what()},
+              {"plane_name", plane_name.value_or(std::string{})},
+          };
+        }());
     SendInteractionSseDone(client_fd);
   }
 
@@ -6522,63 +7215,135 @@ HttpResponse HandleControllerRequest(
     const auto interaction_status_pos = remainder.find("/interaction/status");
     if (interaction_status_pos != std::string::npos &&
         interaction_status_pos + std::string("/interaction/status").size() == remainder.size()) {
-      if (request.method != "GET") {
-        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-      }
+      const std::string request_id = GenerateInteractionRequestId();
       const std::string plane_name = remainder.substr(0, interaction_status_pos);
+      if (request.method != "GET") {
+        return BuildStandaloneInteractionContractError(
+            405,
+            request_id,
+            "method_not_allowed",
+            "interaction status endpoint accepts GET only",
+            false,
+            plane_name);
+      }
       try {
-        return BuildJsonResponse(200, ResolvePlaneInteraction(db_path, plane_name).status_payload);
-      } catch (const std::exception& error) {
+        PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
+        json payload = resolution.status_payload;
+        payload["request_id"] = request_id;
+        payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
         return BuildJsonResponse(
+            200,
+            payload,
+            BuildInteractionResponseHeaders(request_id));
+      } catch (const std::exception& error) {
+        return BuildStandaloneInteractionContractError(
             404,
-            json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+            request_id,
+            "plane_not_found",
+            error.what(),
+            false,
+            plane_name);
       }
     }
     const auto interaction_models_pos = remainder.find("/interaction/models");
     if (interaction_models_pos != std::string::npos &&
         interaction_models_pos + std::string("/interaction/models").size() == remainder.size()) {
-      if (request.method != "GET") {
-        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-      }
+      const std::string request_id = GenerateInteractionRequestId();
       const std::string plane_name = remainder.substr(0, interaction_models_pos);
+      if (request.method != "GET") {
+        return BuildStandaloneInteractionContractError(
+            405,
+            request_id,
+            "method_not_allowed",
+            "interaction models endpoint accepts GET only",
+            false,
+            plane_name);
+      }
       try {
         return ProxyInteractionJson(
             ResolvePlaneInteraction(db_path, plane_name),
+            request_id,
             "GET",
             "/v1/models");
       } catch (const std::exception& error) {
-        return BuildJsonResponse(
+        return BuildStandaloneInteractionContractError(
             404,
-            json{{"status", "not_found"}, {"message", error.what()}, {"path", request.path}});
+            request_id,
+            "plane_not_found",
+            error.what(),
+            false,
+            plane_name);
       }
     }
     const auto interaction_chat_pos = remainder.find("/interaction/chat/completions");
     if (interaction_chat_pos != std::string::npos &&
         interaction_chat_pos + std::string("/interaction/chat/completions").size() ==
             remainder.size()) {
-      if (request.method != "POST") {
-        return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
-      }
+      const std::string request_id = GenerateInteractionRequestId();
       const std::string plane_name = remainder.substr(0, interaction_chat_pos);
+      if (request.method != "POST") {
+        return BuildStandaloneInteractionContractError(
+            405,
+            request_id,
+            "method_not_allowed",
+            "interaction chat completions endpoint accepts POST only",
+            false,
+            plane_name);
+      }
       try {
         const PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
         if (!resolution.status_payload.value("interaction_enabled", false)) {
-          return BuildPlaneInteractionError(
+          return BuildPlaneInteractionContractError(
               409,
-              resolution.status_payload,
-              "interaction is available only for plane_mode=llm");
+              resolution,
+              request_id,
+              "interaction_disabled",
+              "interaction is available only for plane_mode=llm",
+              false);
         }
         if (!resolution.status_payload.value("ready", false) || !resolution.target.has_value()) {
-          return BuildPlaneInteractionError(
+          return BuildPlaneInteractionContractError(
               409,
-              resolution.status_payload,
-              "plane interaction target is not ready");
+              resolution,
+              request_id,
+              "plane_not_ready",
+              "plane interaction target is not ready",
+              true);
         }
-        return BuildInteractionSessionResponse(ExecuteInteractionSession(resolution, request.body));
+        InteractionRequestContext request_context;
+        if (const auto validation_error = ValidateAndNormalizeInteractionRequest(
+                resolution,
+                request_id,
+                ParseInteractionPayload(request.body),
+                &request_context)) {
+          return *validation_error;
+        }
+        try {
+          return BuildInteractionSessionResponse(
+              resolution,
+              request_context,
+              ExecuteInteractionSession(resolution, request_context));
+        } catch (const std::exception& error) {
+          const std::string lowered = Lowercase(error.what());
+          const bool timeout_like =
+              lowered.find("timed out") != std::string::npos ||
+              lowered.find("timeout") != std::string::npos;
+          return BuildPlaneInteractionContractError(
+              timeout_like ? 504 : 502,
+              resolution,
+              request_id,
+              timeout_like ? "upstream_timeout" : "upstream_invalid_response",
+              error.what(),
+              true);
+        }
       } catch (const std::exception& error) {
-        return BuildJsonResponse(
-            502,
-            json{{"status", "error"}, {"message", error.what()}, {"path", request.path}});
+        return BuildStandaloneInteractionContractError(
+            404,
+            request_id,
+            "plane_not_found",
+            error.what(),
+            false,
+            plane_name);
       }
     }
     const auto interaction_stream_pos = remainder.find("/interaction/chat/completions/stream");
