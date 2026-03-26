@@ -561,6 +561,10 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     if (const auto system_prompt = OptionalStringOpt(*interaction, "system_prompt")) {
       settings.system_prompt = *system_prompt;
     }
+    if (const auto analysis_system_prompt =
+            OptionalStringOpt(*interaction, "analysis_system_prompt")) {
+      settings.analysis_system_prompt = *analysis_system_prompt;
+    }
     settings.default_response_language =
         OptionalString(*interaction, "default_response_language", settings.default_response_language);
     if (interaction->contains("supported_response_languages") &&
@@ -613,6 +617,52 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         policy.semantic_goal = *semantic_goal;
       }
       settings.long_completion_policy = std::move(policy);
+    }
+    if (const auto completion_policy =
+            OptionalObject(*interaction, "analysis_completion_policy")) {
+      InteractionSettings::CompletionPolicy policy;
+      policy.response_mode =
+          OptionalString(*completion_policy, "response_mode", policy.response_mode);
+      policy.max_tokens = OptionalInt(*completion_policy, "max_tokens", policy.max_tokens);
+      if (const auto target_completion_tokens =
+              OptionalIntOpt(*completion_policy, "target_completion_tokens")) {
+        policy.target_completion_tokens = *target_completion_tokens;
+      }
+      policy.max_continuations =
+          OptionalInt(*completion_policy, "max_continuations", policy.max_continuations);
+      policy.max_total_completion_tokens = OptionalInt(
+          *completion_policy,
+          "max_total_completion_tokens",
+          policy.max_total_completion_tokens);
+      policy.max_elapsed_time_ms =
+          OptionalInt(*completion_policy, "max_elapsed_time_ms", policy.max_elapsed_time_ms);
+      if (const auto semantic_goal = OptionalStringOpt(*completion_policy, "semantic_goal")) {
+        policy.semantic_goal = *semantic_goal;
+      }
+      settings.analysis_completion_policy = std::move(policy);
+    }
+    if (const auto completion_policy =
+            OptionalObject(*interaction, "analysis_long_completion_policy")) {
+      InteractionSettings::CompletionPolicy policy;
+      policy.response_mode =
+          OptionalString(*completion_policy, "response_mode", policy.response_mode);
+      policy.max_tokens = OptionalInt(*completion_policy, "max_tokens", policy.max_tokens);
+      if (const auto target_completion_tokens =
+              OptionalIntOpt(*completion_policy, "target_completion_tokens")) {
+        policy.target_completion_tokens = *target_completion_tokens;
+      }
+      policy.max_continuations =
+          OptionalInt(*completion_policy, "max_continuations", policy.max_continuations);
+      policy.max_total_completion_tokens = OptionalInt(
+          *completion_policy,
+          "max_total_completion_tokens",
+          policy.max_total_completion_tokens);
+      policy.max_elapsed_time_ms =
+          OptionalInt(*completion_policy, "max_elapsed_time_ms", policy.max_elapsed_time_ms);
+      if (const auto semantic_goal = OptionalStringOpt(*completion_policy, "semantic_goal")) {
+        policy.semantic_goal = *semantic_goal;
+      }
+      settings.analysis_long_completion_policy = std::move(policy);
     }
     state.interaction = std::move(settings);
   }

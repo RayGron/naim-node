@@ -12,6 +12,7 @@
   },
   "interaction": {
     "system_prompt": "You are Vesper QW35. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
+    "analysis_system_prompt": "For repository and codebase analysis tasks, answer only from the repository evidence supplied in the request. Cite concrete file paths for repo-specific claims. If the evidence is insufficient, say exactly what is unknown instead of guessing. Prefer concise findings, execution traces, and explicit limits over generic advice.",
     "default_response_language": "en",
     "supported_response_languages": [
       "en",
@@ -29,10 +30,27 @@
     "long_completion_policy": {
       "response_mode": "very_long",
       "max_tokens": 1024,
+      "target_completion_tokens": 2048,
       "max_continuations": 6,
       "max_total_completion_tokens": 6144,
       "max_elapsed_time_ms": 120000,
-      "semantic_goal": "complete the requested artifact fully before emitting [[TASK_COMPLETE]]"
+      "semantic_goal": "complete the requested artifact or repository analysis fully before emitting [[TASK_COMPLETE]]"
+    },
+    "analysis_completion_policy": {
+      "response_mode": "normal",
+      "max_tokens": 768,
+      "max_continuations": 0,
+      "max_total_completion_tokens": 768,
+      "max_elapsed_time_ms": 45000
+    },
+    "analysis_long_completion_policy": {
+      "response_mode": "very_long",
+      "max_tokens": 1536,
+      "target_completion_tokens": 3072,
+      "max_continuations": 8,
+      "max_total_completion_tokens": 12288,
+      "max_elapsed_time_ms": 180000,
+      "semantic_goal": "complete the requested repository analysis with evidence-backed findings before emitting [[TASK_COMPLETE]]"
     }
   },
   "inference": {
@@ -46,10 +64,10 @@
     "model_cache_dir": "/comet/shared/models/cache",
     "runtime_log_dir": "/comet/shared/logs/infer",
     "api_port": 18095,
-    "max_model_len": 4096,
+    "max_model_len": 8192,
     "tensor_parallel_size": 1,
     "pipeline_parallel_size": 2,
-    "max_num_seqs": 4,
+    "max_num_seqs": 2,
     "gpu_memory_utilization": 0.8,
     "enforce_eager": false,
     "rendezvous_port": 29505

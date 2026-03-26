@@ -177,11 +177,14 @@ struct InteractionSettings {
   };
 
   std::optional<std::string> system_prompt;
+  std::optional<std::string> analysis_system_prompt;
   std::string default_response_language = "en";
   std::vector<std::string> supported_response_languages;
   bool follow_user_language = true;
   std::optional<CompletionPolicy> completion_policy;
   std::optional<CompletionPolicy> long_completion_policy;
+  std::optional<CompletionPolicy> analysis_completion_policy;
+  std::optional<CompletionPolicy> analysis_long_completion_policy;
 };
 
 struct DesiredState {

@@ -1175,6 +1175,8 @@ struct InteractionCompletionPolicy {
 struct ResolvedInteractionPolicy {
   InteractionCompletionPolicy policy;
   std::string mode = "default";
+  bool repository_analysis = false;
+  bool long_form = false;
 };
 
 struct InteractionSegmentSummary {
@@ -1299,6 +1301,25 @@ json BuildInteractionContractMetadata(
            resolution.desired_state.interaction->long_completion_policy->max_tokens},
       };
     }
+    if (resolution.desired_state.interaction->analysis_completion_policy.has_value()) {
+      metadata["analysis_completion_policy"] = json{
+          {"response_mode",
+           resolution.desired_state.interaction->analysis_completion_policy->response_mode},
+          {"max_tokens",
+           resolution.desired_state.interaction->analysis_completion_policy->max_tokens},
+      };
+    }
+    if (resolution.desired_state.interaction->analysis_long_completion_policy
+            .has_value()) {
+      metadata["analysis_long_completion_policy"] = json{
+          {"response_mode",
+           resolution.desired_state.interaction->analysis_long_completion_policy
+               ->response_mode},
+          {"max_tokens",
+           resolution.desired_state.interaction->analysis_long_completion_policy
+               ->max_tokens},
+      };
+    }
   }
   return metadata;
 }
@@ -1360,17 +1381,17 @@ InteractionCompletionPolicy NormalizeConfiguredInteractionCompletionPolicy(
     policy.response_mode = normalized_mode;
   }
   policy.max_tokens =
-      ClampInteractionPolicyValue(configured_policy.max_tokens, 1, 1024);
+      ClampInteractionPolicyValue(configured_policy.max_tokens, 1, 2048);
   if (configured_policy.target_completion_tokens.has_value()) {
     policy.target_completion_tokens = ClampInteractionPolicyValue(
-        *configured_policy.target_completion_tokens, 1, 8192);
+        *configured_policy.target_completion_tokens, 1, 16384);
   }
   policy.max_continuations =
       ClampInteractionPolicyValue(configured_policy.max_continuations, 0, 8);
   policy.max_total_completion_tokens = ClampInteractionPolicyValue(
       configured_policy.max_total_completion_tokens,
       policy.max_tokens,
-      8192);
+      16384);
   policy.max_elapsed_time_ms = ClampInteractionPolicyValue(
       configured_policy.max_elapsed_time_ms, 1000, 600000);
   if (configured_policy.semantic_goal.has_value()) {
@@ -1446,8 +1467,26 @@ bool LooksLikeLongFormTaskRequest(const std::string& text) {
       "историю", "рассказ", "эссе", "статью", "гайд", "руководство",
       "write a story", "write an essay", "write an article", "write a guide",
       "detailed plan", "detailed analysis", "long-form", "long form",
+      "структуру проекта", "архитектуру проекта", "изучи весь проект",
+      "объясни проект", "проследи путь", "по всему репозиторию",
+      "repository-wide", "repo-wide", "entire repository", "whole repository",
+      "cross-file", "cross file", "project structure", "project architecture",
+      "trace the path", "explain the repository", "analyze the whole project",
   };
   return ContainsAnySubstring(normalized, long_form_keywords);
+}
+
+bool LooksLikeRepositoryAnalysisRequest(const std::string& text) {
+  const std::string normalized = NormalizeLanguageCode(text);
+  static const std::vector<std::string> analysis_markers = {
+      "репозитор", "структур", "архитектур", "по проекту", "по репозиторию",
+      "изучи проект", "изучи репозиторий", "кодовая база", "проследи путь",
+      "cross-file", "cross file", "repo-wide", "repository-wide",
+      "repository", "repo ", "project structure", "project architecture",
+      "trace the path", "analyze the project", "analyze the repository",
+      "codebase", "code base", "grounded in files", "with file references",
+  };
+  return ContainsAnySubstring(normalized, analysis_markers);
 }
 
 ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
@@ -1456,8 +1495,26 @@ ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
   ResolvedInteractionPolicy resolved;
   const std::string last_user_message = LastUserMessageContent(payload);
   const bool long_form_task = LooksLikeLongFormTaskRequest(last_user_message);
+  const bool repository_analysis =
+      LooksLikeRepositoryAnalysisRequest(last_user_message);
+  resolved.repository_analysis = repository_analysis;
+  resolved.long_form = long_form_task;
   if (desired_state.interaction.has_value()) {
     const auto& interaction = *desired_state.interaction;
+    if (repository_analysis && long_form_task &&
+        interaction.analysis_long_completion_policy.has_value()) {
+      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
+          *interaction.analysis_long_completion_policy);
+      resolved.mode = "analysis-long";
+      return resolved;
+    }
+    if (repository_analysis && !long_form_task &&
+        interaction.analysis_completion_policy.has_value()) {
+      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
+          *interaction.analysis_completion_policy);
+      resolved.mode = "analysis-default";
+      return resolved;
+    }
     if (long_form_task && interaction.long_completion_policy.has_value()) {
       resolved.policy =
           NormalizeConfiguredInteractionCompletionPolicy(*interaction.long_completion_policy);
@@ -1484,8 +1541,18 @@ ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
     }
   }
   resolved.policy = DefaultChatInteractionCompletionPolicy();
-  resolved.mode = long_form_task ? "long-fallback" : "default-fallback";
+  resolved.mode = repository_analysis
+                      ? (long_form_task ? "analysis-long-fallback"
+                                        : "analysis-default-fallback")
+                      : (long_form_task ? "long-fallback"
+                                        : "default-fallback");
   return resolved;
+}
+
+std::string BuildRepositoryAnalysisInstruction() {
+  return "Repository analysis requirement: answer only from the repository or codebase evidence provided in the request. "
+         "Cite concrete file paths for repo-specific claims. If evidence is insufficient, say exactly what is unknown. "
+         "Do not claim lack of filesystem access when repository context is already present.";
 }
 
 std::string GenerateInteractionSessionId() {
@@ -1806,8 +1873,9 @@ std::string BuildInteractionUpstreamBody(
     const PlaneInteractionResolution& resolution,
     json payload,
     bool force_stream,
-    const InteractionCompletionPolicy& policy,
+    const ResolvedInteractionPolicy& resolved_policy,
     bool structured_output_json = false) {
+  const auto& policy = resolved_policy.policy;
   if (!payload.contains("messages") || !payload.at("messages").is_array()) {
     payload["messages"] = json::array();
   }
@@ -1819,6 +1887,16 @@ std::string BuildInteractionUpstreamBody(
       resolution.desired_state.interaction->system_prompt.has_value() &&
       !resolution.desired_state.interaction->system_prompt->empty()) {
     system_instruction_parts.push_back(*resolution.desired_state.interaction->system_prompt);
+  }
+  if (resolved_policy.repository_analysis &&
+      resolution.desired_state.interaction.has_value() &&
+      resolution.desired_state.interaction->analysis_system_prompt.has_value() &&
+      !resolution.desired_state.interaction->analysis_system_prompt->empty()) {
+    system_instruction_parts.push_back(
+        *resolution.desired_state.interaction->analysis_system_prompt);
+  }
+  if (resolved_policy.repository_analysis) {
+    system_instruction_parts.push_back(BuildRepositoryAnalysisInstruction());
   }
   system_instruction_parts.push_back(
       BuildLanguageInstruction(resolution.desired_state, preferred_language));
@@ -2312,6 +2390,12 @@ PlaneInteractionResolution ResolvePlaneInteraction(
        resolution.desired_state.interaction.has_value()
            ? json(resolution.desired_state.interaction->follow_user_language)
            : json(true)},
+      {"analysis_system_prompt_configured",
+       resolution.desired_state.interaction.has_value() &&
+               resolution.desired_state.interaction->analysis_system_prompt.has_value() &&
+               !resolution.desired_state.interaction->analysis_system_prompt->empty()
+           ? json(true)
+           : json(false)},
       {"completion_policy",
        resolution.desired_state.interaction.has_value() &&
                resolution.desired_state.interaction->completion_policy.has_value()
@@ -2369,6 +2453,80 @@ PlaneInteractionResolution ResolvePlaneInteraction(
                   resolution.desired_state.interaction->long_completion_policy->semantic_goal
                           .has_value()
                       ? json(*resolution.desired_state.interaction->long_completion_policy
+                                  ->semantic_goal)
+                      : json(nullptr)},
+             }
+           : json(nullptr)},
+      {"analysis_completion_policy",
+       resolution.desired_state.interaction.has_value() &&
+               resolution.desired_state.interaction->analysis_completion_policy.has_value()
+           ? json{
+                 {"response_mode",
+                  resolution.desired_state.interaction->analysis_completion_policy
+                      ->response_mode},
+                 {"max_tokens",
+                  resolution.desired_state.interaction->analysis_completion_policy
+                      ->max_tokens},
+                 {"target_completion_tokens",
+                  resolution.desired_state.interaction->analysis_completion_policy
+                          ->target_completion_tokens.has_value()
+                      ? json(*resolution.desired_state.interaction
+                                  ->analysis_completion_policy
+                                  ->target_completion_tokens)
+                      : json(nullptr)},
+                 {"max_continuations",
+                  resolution.desired_state.interaction->analysis_completion_policy
+                      ->max_continuations},
+                 {"max_total_completion_tokens",
+                  resolution.desired_state.interaction->analysis_completion_policy
+                      ->max_total_completion_tokens},
+                 {"max_elapsed_time_ms",
+                  resolution.desired_state.interaction->analysis_completion_policy
+                      ->max_elapsed_time_ms},
+                 {"semantic_goal",
+                  resolution.desired_state.interaction->analysis_completion_policy
+                              ->semantic_goal.has_value()
+                      ? json(*resolution.desired_state.interaction
+                                  ->analysis_completion_policy
+                                  ->semantic_goal)
+                      : json(nullptr)},
+             }
+           : json(nullptr)},
+      {"analysis_long_completion_policy",
+       resolution.desired_state.interaction.has_value() &&
+               resolution.desired_state.interaction->analysis_long_completion_policy
+                   .has_value()
+           ? json{
+                 {"response_mode",
+                  resolution.desired_state.interaction
+                      ->analysis_long_completion_policy->response_mode},
+                 {"max_tokens",
+                  resolution.desired_state.interaction
+                      ->analysis_long_completion_policy->max_tokens},
+                 {"target_completion_tokens",
+                  resolution.desired_state.interaction
+                              ->analysis_long_completion_policy
+                              ->target_completion_tokens.has_value()
+                      ? json(*resolution.desired_state.interaction
+                                  ->analysis_long_completion_policy
+                                  ->target_completion_tokens)
+                      : json(nullptr)},
+                 {"max_continuations",
+                  resolution.desired_state.interaction
+                      ->analysis_long_completion_policy->max_continuations},
+                 {"max_total_completion_tokens",
+                  resolution.desired_state.interaction
+                      ->analysis_long_completion_policy
+                      ->max_total_completion_tokens},
+                 {"max_elapsed_time_ms",
+                  resolution.desired_state.interaction
+                      ->analysis_long_completion_policy->max_elapsed_time_ms},
+                 {"semantic_goal",
+                  resolution.desired_state.interaction
+                              ->analysis_long_completion_policy
+                              ->semantic_goal.has_value()
+                      ? json(*resolution.desired_state.interaction
+                                  ->analysis_long_completion_policy
                                   ->semantic_goal)
                       : json(nullptr)},
              }
@@ -2853,8 +3011,9 @@ InteractionSessionResult ExecuteInteractionSession(
     const PlaneInteractionResolution& resolution,
     const InteractionRequestContext& request_context) {
   const json& original_payload = request_context.payload;
-  const InteractionCompletionPolicy policy =
-      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload).policy;
+  const ResolvedInteractionPolicy resolved_policy =
+      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload);
+  const InteractionCompletionPolicy& policy = resolved_policy.policy;
   InteractionSessionResult result;
   result.session_id = GenerateInteractionSessionId();
   const auto session_started_at = std::chrono::steady_clock::now();
@@ -2870,7 +3029,7 @@ InteractionSessionResult ExecuteInteractionSession(
           resolution,
           current_payload,
           false,
-          policy,
+          resolved_policy,
           request_context.structured_output_json);
       upstream = SendControllerHttpRequest(
           *resolution.target,
@@ -3035,14 +3194,15 @@ HttpResponse ProxyInteractionJson(
         return *validation_error;
       }
       structured_output_json = request_context.structured_output_json;
+      const ResolvedInteractionPolicy resolved_policy =
+          ResolveInteractionCompletionPolicy(
+              resolution.desired_state,
+              request_context.payload);
       upstream_body = BuildInteractionUpstreamBody(
           resolution,
           request_context.payload,
           false,
-          ResolveInteractionCompletionPolicy(
-              resolution.desired_state,
-              request_context.payload)
-              .policy,
+          resolved_policy,
           structured_output_json);
     }
     HttpResponse upstream;
@@ -6461,8 +6621,9 @@ void StreamPlaneInteractionSse(
   }
 
   const json& original_payload = request_context.payload;
-  const InteractionCompletionPolicy policy =
-      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload).policy;
+  const ResolvedInteractionPolicy resolved_policy =
+      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload);
+  const InteractionCompletionPolicy& policy = resolved_policy.policy;
   InteractionSessionResult session;
   session.session_id = GenerateInteractionSessionId();
   const auto session_started_at = std::chrono::steady_clock::now();
@@ -6480,7 +6641,7 @@ void StreamPlaneInteractionSse(
           resolution,
           payload,
           true,
-          policy,
+          resolved_policy,
           request_context.structured_output_json);
       std::ostringstream upstream_request;
       upstream_request << "POST /v1/chat/completions HTTP/1.1\r\n";
@@ -6752,7 +6913,7 @@ void StreamPlaneInteractionSse(
                   resolution,
                   payload,
                   false,
-                  policy,
+                  resolved_policy,
                   request_context.structured_output_json),
               {{"Accept", "application/json"},
                {"X-Comet-Request-Id", request_id}});
@@ -6837,7 +6998,7 @@ void StreamPlaneInteractionSse(
                   resolution,
                   payload,
                   false,
-                  policy,
+                  resolved_policy,
                   request_context.structured_output_json),
               {{"Accept", "application/json"},
                {"X-Comet-Request-Id", request_id}});

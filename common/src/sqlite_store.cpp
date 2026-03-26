@@ -528,6 +528,11 @@ std::optional<InteractionSettings> DeserializeInteractionSettings(const std::str
   if (value.contains("system_prompt") && !value.at("system_prompt").is_null()) {
     interaction.system_prompt = value.at("system_prompt").get<std::string>();
   }
+  if (value.contains("analysis_system_prompt") &&
+      !value.at("analysis_system_prompt").is_null()) {
+    interaction.analysis_system_prompt =
+        value.at("analysis_system_prompt").get<std::string>();
+  }
   interaction.default_response_language =
       value.value("default_response_language", interaction.default_response_language);
   interaction.supported_response_languages =
@@ -583,6 +588,60 @@ std::optional<InteractionSettings> DeserializeInteractionSettings(const std::str
       completion_policy.semantic_goal = policy_value.at("semantic_goal").get<std::string>();
     }
     interaction.long_completion_policy = std::move(completion_policy);
+  }
+  if (value.contains("analysis_completion_policy") &&
+      value.at("analysis_completion_policy").is_object()) {
+    InteractionSettings::CompletionPolicy completion_policy;
+    const auto& policy_value = value.at("analysis_completion_policy");
+    completion_policy.response_mode =
+        policy_value.value("response_mode", completion_policy.response_mode);
+    completion_policy.max_tokens =
+        policy_value.value("max_tokens", completion_policy.max_tokens);
+    if (policy_value.contains("target_completion_tokens") &&
+        !policy_value.at("target_completion_tokens").is_null()) {
+      completion_policy.target_completion_tokens =
+          policy_value.at("target_completion_tokens").get<int>();
+    }
+    completion_policy.max_continuations =
+        policy_value.value("max_continuations", completion_policy.max_continuations);
+    completion_policy.max_total_completion_tokens = policy_value.value(
+        "max_total_completion_tokens",
+        completion_policy.max_total_completion_tokens);
+    completion_policy.max_elapsed_time_ms =
+        policy_value.value("max_elapsed_time_ms", completion_policy.max_elapsed_time_ms);
+    if (policy_value.contains("semantic_goal") &&
+        !policy_value.at("semantic_goal").is_null()) {
+      completion_policy.semantic_goal =
+          policy_value.at("semantic_goal").get<std::string>();
+    }
+    interaction.analysis_completion_policy = std::move(completion_policy);
+  }
+  if (value.contains("analysis_long_completion_policy") &&
+      value.at("analysis_long_completion_policy").is_object()) {
+    InteractionSettings::CompletionPolicy completion_policy;
+    const auto& policy_value = value.at("analysis_long_completion_policy");
+    completion_policy.response_mode =
+        policy_value.value("response_mode", completion_policy.response_mode);
+    completion_policy.max_tokens =
+        policy_value.value("max_tokens", completion_policy.max_tokens);
+    if (policy_value.contains("target_completion_tokens") &&
+        !policy_value.at("target_completion_tokens").is_null()) {
+      completion_policy.target_completion_tokens =
+          policy_value.at("target_completion_tokens").get<int>();
+    }
+    completion_policy.max_continuations =
+        policy_value.value("max_continuations", completion_policy.max_continuations);
+    completion_policy.max_total_completion_tokens = policy_value.value(
+        "max_total_completion_tokens",
+        completion_policy.max_total_completion_tokens);
+    completion_policy.max_elapsed_time_ms =
+        policy_value.value("max_elapsed_time_ms", completion_policy.max_elapsed_time_ms);
+    if (policy_value.contains("semantic_goal") &&
+        !policy_value.at("semantic_goal").is_null()) {
+      completion_policy.semantic_goal =
+          policy_value.at("semantic_goal").get<std::string>();
+    }
+    interaction.analysis_long_completion_policy = std::move(completion_policy);
   }
   return interaction;
 }
