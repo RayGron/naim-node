@@ -261,9 +261,9 @@ ComposeService BuildComposeService(
   }
   service.healthcheck = instance.role == InstanceRole::Infer
                             ? "CMD-SHELL /runtime/infer/inferctl.sh probe-url "
-                              "http://127.0.0.1:${COMET_GATEWAY_PORT:-80}/health || "
+                              "http://127.0.0.1:$${COMET_GATEWAY_PORT:-80}/health || "
                               "/runtime/infer/inferctl.sh probe-url "
-                              "http://127.0.0.1:${COMET_INFERENCE_PORT:-8000}/health"
+                              "http://127.0.0.1:$${COMET_INFERENCE_PORT:-8000}/health"
                             : "CMD-SHELL test -f /tmp/comet-ready";
   if (instance.role == InstanceRole::Infer) {
     service.published_ports.push_back(

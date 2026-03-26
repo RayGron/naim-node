@@ -165,7 +165,7 @@ body {
 
 .main-grid {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 18px;
 }
 
@@ -174,10 +174,68 @@ body {
   padding: 20px;
 }
 
-.plane-sidebar {
+.plane-sidebar,
+.side-menu {
   align-self: start;
   position: sticky;
   top: 24px;
+}
+
+.side-menu {
+  display: grid;
+  gap: 16px;
+}
+
+.side-menu-list {
+  display: grid;
+  gap: 10px;
+}
+
+.side-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(120, 190, 255, 0.14);
+  background: rgba(6, 18, 38, 0.72);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.side-menu-item:hover {
+  border-color: rgba(255, 213, 94, 0.34);
+  background: rgba(8, 24, 48, 0.86);
+  transform: translateY(-1px);
+}
+
+.side-menu-item.is-active {
+  border-color: rgba(255, 213, 94, 0.48);
+  background: linear-gradient(180deg, rgba(20, 42, 78, 0.94), rgba(9, 23, 44, 0.9));
+  box-shadow: inset 0 0 0 1px rgba(255, 213, 94, 0.08);
+}
+
+.side-menu-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.side-menu-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.side-menu-meta {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
 }
 
 .panel-header,
@@ -240,6 +298,16 @@ body {
   gap: 12px;
 }
 
+.page-panel {
+  min-width: 0;
+}
+
+.page-copy {
+  margin: 0 0 16px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
 .bundle-workflow {
   margin-top: 18px;
   padding-top: 16px;
@@ -258,6 +326,22 @@ body {
 .model-library-jobs {
   max-height: 280px;
   overflow: auto;
+}
+
+.model-library-list-expanded,
+.model-library-jobs-expanded {
+  max-height: 520px;
+}
+
+.models-page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
+  gap: 16px;
+}
+
+.models-page-side {
+  display: grid;
+  gap: 16px;
 }
 
 .model-source-textarea {
@@ -919,7 +1003,15 @@ body {
     position: static;
   }
 
+  .side-menu {
+    position: static;
+  }
+
   .panel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .models-page-grid {
     grid-template-columns: 1fr;
   }
 

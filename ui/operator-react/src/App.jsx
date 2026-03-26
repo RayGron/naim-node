@@ -461,51 +461,29 @@ function EmptyState({ title, detail }) {
   );
 }
 
-function OnboardingCard({ bundlePath, setBundlePath, bundleBusy, executeBundleAction, bundleOutput }) {
+function OnboardingCard({ onCreatePlane }) {
   return (
     <section className="onboarding-card">
       <div className="section-label">First plane</div>
-      <h3>Load a plane from the Web UI</h3>
+      <h3>Create a plane from the Web UI</h3>
       <p className="onboarding-copy">
-        The platform is running. Enter a bundle path, preview the plan, then apply it. Controller
-        and hostd are already active and will materialize infer and worker runtime after apply.
+        The platform is running. Create your first plane, paste a desired-state template, then
+        stage and start it from the operator workflow.
       </p>
       <div className="onboarding-steps">
-        <div>1. Enter an absolute bundle path.</div>
-        <div>2. Preview the bundle.</div>
-        <div>3. Apply the bundle.</div>
+        <div>1. Open the plane editor.</div>
+        <div>2. Paste or adjust the desired-state JSON.</div>
+        <div>3. Save the plane, then start it from Dashboard.</div>
       </div>
-      <label className="field-label" htmlFor="bundle-path-input">
-        Bundle path
-      </label>
-      <input
-        id="bundle-path-input"
-        className="text-input"
-        type="text"
-        value={bundlePath}
-        onChange={(event) => setBundlePath(event.target.value)}
-        placeholder="/abs/path/to/plane-bundle"
-        spellCheck="false"
-      />
       <div className="toolbar">
         <button
           className="ghost-button"
           type="button"
-          onClick={() => executeBundleAction("preview")}
-          disabled={bundleBusy !== ""}
+          onClick={onCreatePlane}
         >
-          Preview bundle
-        </button>
-        <button
-          className="ghost-button"
-          type="button"
-          onClick={() => executeBundleAction("apply")}
-          disabled={bundleBusy !== ""}
-        >
-          Stage bundle
+          New plane
         </button>
       </div>
-      {bundleOutput ? <pre className="bundle-output">{bundleOutput}</pre> : null}
     </section>
   );
 }
@@ -988,8 +966,12 @@ function nodeStatusLabel(runtimeLaunchReady, runtimePhase, health) {
 
 function App() {
   const initialPlane = new URLSearchParams(window.location.search).get("plane") || "";
+  const initialPage = new URLSearchParams(window.location.search).get("page") || "dashboard";
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
+  const [selectedPage, setSelectedPage] = useState(
+    ["dashboard", "planes", "models"].includes(initialPage) ? initialPage : "dashboard",
+  );
   const [planeDetail, setPlaneDetail] = useState(null);
   const [dashboard, setDashboard] = useState(null);
   const [hostObservations, setHostObservations] = useState(null);
@@ -1009,9 +991,6 @@ function App() {
   const [draggingDivider, setDraggingDivider] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState("");
-  const [bundlePath, setBundlePath] = useState("");
-  const [bundleBusy, setBundleBusy] = useState("");
-  const [bundleOutput, setBundleOutput] = useState("");
   const [modelLibraryBusy, setModelLibraryBusy] = useState("");
   const [modelDownloadForm, setModelDownloadForm] = useState({
     modelId: "",
@@ -1235,29 +1214,6 @@ function App() {
     }
   }
 
-  async function executeBundleAction(action) {
-    if (!bundlePath.trim()) {
-      setApiError("Bundle path is required.");
-      return;
-    }
-    setBundleBusy(action);
-    setApiError("");
-    try {
-      const payload = await fetchJson(
-        queryPath(`/api/v1/bundles/${action}`, { bundle: bundlePath.trim() }),
-        { method: "POST" },
-      );
-      setBundleOutput(payload.output || JSON.stringify(payload, null, 2));
-      if (action === "apply") {
-        await refreshAll(selectedPlane);
-      }
-    } catch (error) {
-      setApiError(error.message || String(error));
-    } finally {
-      setBundleBusy("");
-    }
-  }
-
   async function openPlaneDialog(mode, planeName = "") {
     setApiError("");
     try {
@@ -1304,16 +1260,15 @@ function App() {
         planeDialog.mode === "edit"
           ? planePath(planeDialog.planeName)
           : "/api/v1/planes";
-      const payload = await fetchJson(path, {
+      await fetchJson(path, {
         method,
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          desired_state: desiredState,
+            desired_state: desiredState,
         }),
       });
-      setBundleOutput(payload.output || JSON.stringify(payload, null, 2));
       setPlaneDialog({
         open: false,
         mode: "new",
@@ -1676,11 +1631,12 @@ function App() {
     } else {
       params.delete("plane");
     }
+    params.set("page", selectedPage);
     const next = params.toString()
       ? `${window.location.pathname}?${params.toString()}`
       : window.location.pathname;
     window.history.replaceState({}, "", next);
-  }, [selectedPlane]);
+  }, [selectedPlane, selectedPage]);
 
   const desiredState = planeDetail?.desired_state || null;
   const planeRecord =
@@ -1754,6 +1710,336 @@ function App() {
     structuredProgress,
   });
   const selectedPlaneDeleting = planeRecord?.state === "deleting";
+  const currentPlaneDisplayState = planeRecord ? planeDisplayState(planeRecord) : "";
+  const currentPlaneDisplayClass = planeRecord ? planeDisplayStateClass(planeRecord) : "is-booting";
+  const activeModelCount = Array.isArray(modelLibrary.items) ? modelLibrary.items.length : 0;
+  const activeModelJobs = Array.isArray(modelLibrary.jobs)
+    ? modelLibrary.jobs.filter((job) => {
+        const status = String(job?.status || "").toLowerCase();
+        return status !== "" && status !== "completed" && status !== "complete" && status !== "failed";
+      }).length
+    : 0;
+  const modelsNavClass = apiError
+    ? "is-critical"
+    : activeModelJobs > 0
+      ? "is-warning"
+      : activeModelCount > 0
+        ? "is-healthy"
+        : "is-booting";
+  const modelsNavLabel = activeModelJobs > 0
+    ? `${activeModelJobs} active`
+    : activeModelCount > 0
+      ? `${activeModelCount} tracked`
+      : "empty";
+  const planesNavLabel = selectedPlane
+    ? currentPlaneDisplayState || "selected"
+    : planes.length > 0
+      ? `${planes.length} total`
+      : "empty";
+  const planesNavMeta = selectedPlane || `${planes.length} registered`;
+  const modelsNavMeta = activeModelJobs > 0
+    ? `${activeModelJobs} download job${activeModelJobs === 1 ? "" : "s"}`
+    : `${activeModelCount} discovered model${activeModelCount === 1 ? "" : "s"}`;
+  const dashboardNavLabel = selectedPlane ? "focused" : "idle";
+  const dashboardNavClass = selectedPlane ? currentPlaneDisplayClass : "is-booting";
+
+  function renderPlanesRegistry() {
+    return (
+      <section className="panel page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Planes</div>
+            <h2>Plane registry</h2>
+          </div>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => openPlaneDialog("new")}
+          >
+            New plane
+          </button>
+        </div>
+        <div className="page-copy">
+          Select a plane to inspect it on Dashboard, or manage its lifecycle directly from the
+          editor and action controls.
+        </div>
+        <div className="plane-list">
+          {planes.length === 0 ? (
+            <OnboardingCard onCreatePlane={() => openPlaneDialog("new")} />
+          ) : (
+            planes.map((plane) => {
+              const selected = plane.name === selectedPlane;
+              const displayState = planeDisplayState(plane);
+              const displayStateClass = planeDisplayStateClass(plane);
+              return (
+                <article
+                  key={plane.name}
+                  className={`plane-card ${selected ? "is-selected" : ""}`}
+                >
+                  <button
+                    className="plane-card-main"
+                    type="button"
+                    aria-label={`plane ${plane.name} ${displayState} generation ${plane.generation ?? "n/a"}`}
+                    onClick={() => {
+                      setSelectedPlane(plane.name);
+                      setSelectedPage("dashboard");
+                      refreshAll(plane.name);
+                    }}
+                  >
+                    <div className="plane-card-top">
+                      <div className="plane-name">{plane.name}</div>
+                      <div className={`pill ${displayStateClass}`}>
+                        {statusDot(displayStateClass)}
+                        <span>{displayState}</span>
+                      </div>
+                    </div>
+                    <div className="plane-card-meta">
+                      <span>gen {plane.generation ?? "n/a"}</span>
+                      <span>applied {plane.applied_generation ?? 0}</span>
+                      <span>{plane.instance_count ?? 0} instances</span>
+                      <span>{plane.node_count ?? 0} nodes</span>
+                    </div>
+                  </button>
+                  <div className="plane-card-actions">
+                    <button
+                      className="ghost-button compact-button icon-button"
+                      type="button"
+                      aria-label={`View plane ${plane.name}`}
+                      title={`View plane ${plane.name}`}
+                      onClick={() => {
+                        setSelectedPlane(plane.name);
+                        setSelectedPage("dashboard");
+                        refreshAll(plane.name);
+                      }}
+                    >
+                      <ActionIcon kind="view" />
+                    </button>
+                    <button
+                      className="ghost-button compact-button icon-button"
+                      type="button"
+                      aria-label={`Edit plane ${plane.name}`}
+                      title={`Edit plane ${plane.name}`}
+                      onClick={() => openPlaneDialog("edit", plane.name)}
+                    >
+                      <ActionIcon kind="edit" />
+                    </button>
+                    <button
+                      className="ghost-button compact-button danger-button icon-button"
+                      type="button"
+                      disabled={actionBusy !== ""}
+                      aria-label={`Delete plane ${plane.name}`}
+                      title={`Delete plane ${plane.name}`}
+                      onClick={async () => {
+                        const confirmed = window.confirm(
+                          `Delete plane ${plane.name}? This will stop it, remove related infer and worker runtime, and then remove it from the controller registry.`,
+                        );
+                        if (!confirmed) {
+                          return;
+                        }
+                        startTransition(() => {
+                          setSelectedPlane(plane.name);
+                          setSelectedPage("planes");
+                        });
+                        await executePlaneAction("delete", plane.name);
+                      }}
+                    >
+                      <ActionIcon kind="delete" />
+                    </button>
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function renderModelsLibrary() {
+    return (
+      <section className="panel page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Models</div>
+            <h2>Model library</h2>
+          </div>
+          <div className="toolbar">
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={modelLibraryBusy !== ""}
+              onClick={() => refreshModelLibrary()}
+            >
+              Refresh models
+            </button>
+          </div>
+        </div>
+        <div className="page-copy">
+          Manage discovered model artifacts and queue new downloads, including multipart model
+          sources.
+        </div>
+        <div className="models-page-grid">
+          <div className="subpanel">
+            <div className="subpanel-header">
+              <div>
+                <div className="section-label">Catalog</div>
+                <h3>Discovered artifacts</h3>
+              </div>
+              <div className={`tag ${modelsNavClass}`}>
+                {statusDot(modelsNavClass)}
+                <span>{modelsNavLabel}</span>
+              </div>
+            </div>
+            <div className="list-column model-library-list model-library-list-expanded">
+              {(modelLibrary.items || []).length === 0 ? (
+                <EmptyState
+                  title="No discovered models"
+                  detail="Add a model URL below or point a plane at a local_path to seed library roots."
+                />
+              ) : (
+                modelLibrary.items.map((item) => (
+                  <article className="list-card" key={item.path}>
+                    <div className="card-row">
+                      <strong>{item.name}</strong>
+                      <span className="tag">{modelLibraryItemSummary(item)}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div>{item.path}</div>
+                      <div>root {item.root || "n/a"}</div>
+                      {Array.isArray(item.referenced_by) && item.referenced_by.length > 0 ? (
+                        <div>used by {item.referenced_by.join(", ")}</div>
+                      ) : (
+                        <div>not referenced by any plane</div>
+                      )}
+                    </div>
+                    <div className="toolbar">
+                      <button
+                        className="ghost-button compact-button danger-button"
+                        type="button"
+                        disabled={modelLibraryBusy !== "" || item.deletable === false}
+                        onClick={() => deleteModelLibraryEntry(item)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="models-page-side">
+            <div className="subpanel">
+              <div className="subpanel-header">
+                <div>
+                  <div className="section-label">Queue</div>
+                  <h3>Download jobs</h3>
+                </div>
+              </div>
+              {(modelLibrary.jobs || []).length > 0 ? (
+                <div className="list-column model-library-jobs model-library-jobs-expanded">
+                  {modelLibrary.jobs.map((job) => (
+                    <article className="list-card" key={job.id}>
+                      <div className="card-row">
+                        <strong>{job.model_id || job.id}</strong>
+                        <span className="tag">{job.status}</span>
+                      </div>
+                      <div className="list-detail">
+                        <div>{job.target_root}{job.target_subdir ? `/${job.target_subdir}` : ""}</div>
+                        <div>{compactBytes(job.bytes_done)} / {compactBytes(job.bytes_total)}</div>
+                        {job.current_item ? <div>{job.current_item}</div> : null}
+                        {job.error_message ? <div>{job.error_message}</div> : null}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No queued downloads"
+                  detail="Multipart and single-file model downloads will appear here while they are running."
+                />
+              )}
+            </div>
+            <div className="subpanel">
+              <div className="subpanel-header">
+                <div>
+                  <div className="section-label">Add model</div>
+                  <h3>Queue download</h3>
+                </div>
+              </div>
+              <label className="field-label" htmlFor="model-target-root">
+                Target root
+              </label>
+              <input
+                id="model-target-root"
+                className="text-input"
+                type="text"
+                value={modelDownloadForm.targetRoot}
+                onChange={(event) =>
+                  setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
+                }
+                placeholder="/abs/path/to/model/library"
+                spellCheck="false"
+              />
+              <label className="field-label" htmlFor="model-target-subdir">
+                Target subdir
+              </label>
+              <input
+                id="model-target-subdir"
+                className="text-input"
+                type="text"
+                value={modelDownloadForm.targetSubdir}
+                onChange={(event) =>
+                  setModelDownloadForm((current) => ({ ...current, targetSubdir: event.target.value }))
+                }
+                placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
+                spellCheck="false"
+              />
+              <label className="field-label" htmlFor="model-id-input">
+                Model id
+              </label>
+              <input
+                id="model-id-input"
+                className="text-input"
+                type="text"
+                value={modelDownloadForm.modelId}
+                onChange={(event) =>
+                  setModelDownloadForm((current) => ({ ...current, modelId: event.target.value }))
+                }
+                placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
+                spellCheck="false"
+              />
+              <label className="field-label" htmlFor="model-source-urls">
+                Source URL(s)
+              </label>
+              <textarea
+                id="model-source-urls"
+                className="editor-textarea model-source-textarea"
+                value={modelDownloadForm.sourceUrls}
+                onChange={(event) =>
+                  setModelDownloadForm((current) => ({ ...current, sourceUrls: event.target.value }))
+                }
+                placeholder="One URL per line. Multipart models are supported."
+              />
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={
+                    modelLibraryBusy !== "" ||
+                    !modelDownloadForm.targetRoot.trim() ||
+                    !modelDownloadForm.sourceUrls.trim()
+                  }
+                  onClick={enqueueModelLibraryDownload}
+                >
+                  Download model
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   useEffect(() => {
     const nextDefault =
@@ -1851,278 +2137,60 @@ function App() {
       </header>
 
       <main className="main-grid">
-        <section className="panel plane-sidebar">
-          <div className="panel-header">
-            <div>
-              <div className="section-label">Planes</div>
-              <h2>Plane registry</h2>
-            </div>
+        <aside className="panel side-menu">
+          <div className="section-label">Navigation</div>
+          <div className="side-menu-list" role="navigation" aria-label="Operator sections">
             <button
-              className="ghost-button"
+              className={`side-menu-item ${selectedPage === "dashboard" ? "is-active" : ""}`}
               type="button"
-              onClick={() => openPlaneDialog("new")}
+              onClick={() => setSelectedPage("dashboard")}
             >
-              New plane
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Dashboard</span>
+                <span className="side-menu-meta">{selectedPlane || "Plane detail and live status"}</span>
+              </div>
+              <span className={`tag ${dashboardNavClass}`}>
+                {statusDot(dashboardNavClass)}
+                <span>{dashboardNavLabel}</span>
+              </span>
+            </button>
+            <button
+              className={`side-menu-item ${selectedPage === "planes" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("planes")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Planes</span>
+                <span className="side-menu-meta">{planesNavMeta}</span>
+              </div>
+              <span className={`tag ${selectedPlane ? currentPlaneDisplayClass : "is-booting"}`}>
+                {statusDot(selectedPlane ? currentPlaneDisplayClass : "is-booting")}
+                <span>{planesNavLabel}</span>
+              </span>
+            </button>
+            <button
+              className={`side-menu-item ${selectedPage === "models" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("models")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Models</span>
+                <span className="side-menu-meta">{modelsNavMeta}</span>
+              </div>
+              <span className={`tag ${modelsNavClass}`}>
+                {statusDot(modelsNavClass)}
+                <span>{modelsNavLabel}</span>
+              </span>
             </button>
           </div>
-          <div className="plane-list">
-            {planes.length === 0 ? (
-              <OnboardingCard
-                bundlePath={bundlePath}
-                setBundlePath={setBundlePath}
-                bundleBusy={bundleBusy}
-                executeBundleAction={executeBundleAction}
-                bundleOutput={bundleOutput}
-              />
-            ) : (
-              planes.map((plane) => {
-                const selected = plane.name === selectedPlane;
-                const displayState = planeDisplayState(plane);
-                const displayStateClass = planeDisplayStateClass(plane);
-                return (
-                  <article
-                    key={plane.name}
-                    className={`plane-card ${selected ? "is-selected" : ""}`}
-                  >
-                    <button
-                      className="plane-card-main"
-                      type="button"
-                      aria-label={`plane ${plane.name} ${displayState} generation ${plane.generation ?? "n/a"}`}
-                      onClick={() => {
-                        setSelectedPlane(plane.name);
-                        refreshAll(plane.name);
-                      }}
-                    >
-                      <div className="plane-card-top">
-                        <div className="plane-name">{plane.name}</div>
-                        <div className={`pill ${displayStateClass}`}>
-                          {statusDot(displayStateClass)}
-                          <span>{displayState}</span>
-                        </div>
-                      </div>
-                      <div className="plane-card-meta">
-                        <span>gen {plane.generation ?? "n/a"}</span>
-                        <span>applied {plane.applied_generation ?? 0}</span>
-                        <span>{plane.instance_count ?? 0} instances</span>
-                        <span>{plane.node_count ?? 0} nodes</span>
-                      </div>
-                    </button>
-                    <div className="plane-card-actions">
-                      <button
-                        className="ghost-button compact-button icon-button"
-                        type="button"
-                        aria-label={`View plane ${plane.name}`}
-                        title={`View plane ${plane.name}`}
-                        onClick={() => openPlaneDialog("view", plane.name)}
-                      >
-                        <ActionIcon kind="view" />
-                      </button>
-                      <button
-                        className="ghost-button compact-button icon-button"
-                        type="button"
-                        aria-label={`Edit plane ${plane.name}`}
-                        title={`Edit plane ${plane.name}`}
-                        onClick={() => openPlaneDialog("edit", plane.name)}
-                      >
-                        <ActionIcon kind="edit" />
-                      </button>
-                      <button
-                        className="ghost-button compact-button danger-button icon-button"
-                        type="button"
-                        disabled={actionBusy !== ""}
-                        aria-label={`Delete plane ${plane.name}`}
-                        title={`Delete plane ${plane.name}`}
-                        onClick={async () => {
-                          const confirmed = window.confirm(
-                            `Delete plane ${plane.name}? This will stop it, remove related infer and worker runtime, and then remove it from the controller registry.`,
-                          );
-                          if (!confirmed) {
-                            return;
-                          }
-                          startTransition(() => {
-                            setSelectedPlane(plane.name);
-                          });
-                          await executePlaneAction("delete", plane.name);
-                        }}
-                      >
-                        <ActionIcon kind="delete" />
-                      </button>
-                    </div>
-                  </article>
-                );
-              })
-            )}
-          </div>
-          <div className="bundle-workflow model-library-panel">
-            <div className="section-label">Models</div>
-            <div className="panel-subtitle">Discovered local model artifacts and download queue</div>
-            <div className="list-column model-library-list">
-              {(modelLibrary.items || []).length === 0 ? (
-                <EmptyState title="No discovered models" detail="Add a model URL below or point a plane at a local_path to seed library roots." />
-              ) : (
-                modelLibrary.items.map((item) => (
-                  <article className="list-card" key={item.path}>
-                    <div className="card-row">
-                      <strong>{item.name}</strong>
-                      <span className="tag">{modelLibraryItemSummary(item)}</span>
-                    </div>
-                    <div className="list-detail">
-                      <div>{item.path}</div>
-                      <div>root {item.root || "n/a"}</div>
-                      {Array.isArray(item.referenced_by) && item.referenced_by.length > 0 ? (
-                        <div>used by {item.referenced_by.join(", ")}</div>
-                      ) : (
-                        <div>not referenced by any plane</div>
-                      )}
-                    </div>
-                    <div className="toolbar">
-                      <button
-                        className="ghost-button compact-button danger-button"
-                        type="button"
-                        disabled={modelLibraryBusy !== "" || item.deletable === false}
-                        onClick={() => deleteModelLibraryEntry(item)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-            {(modelLibrary.jobs || []).length > 0 ? (
-              <div className="list-column model-library-jobs">
-                {modelLibrary.jobs.map((job) => (
-                  <article className="list-card" key={job.id}>
-                    <div className="card-row">
-                      <strong>{job.model_id || job.id}</strong>
-                      <span className="tag">{job.status}</span>
-                    </div>
-                    <div className="list-detail">
-                      <div>{job.target_root}{job.target_subdir ? `/${job.target_subdir}` : ""}</div>
-                      <div>{compactBytes(job.bytes_done)} / {compactBytes(job.bytes_total)}</div>
-                      {job.current_item ? <div>{job.current_item}</div> : null}
-                      {job.error_message ? <div>{job.error_message}</div> : null}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-            <label className="field-label" htmlFor="model-target-root">
-              Target root
-            </label>
-            <input
-              id="model-target-root"
-              className="text-input"
-              type="text"
-              value={modelDownloadForm.targetRoot}
-              onChange={(event) =>
-                setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
-              }
-              placeholder="/abs/path/to/model/library"
-              spellCheck="false"
-            />
-            <label className="field-label" htmlFor="model-target-subdir">
-              Target subdir
-            </label>
-            <input
-              id="model-target-subdir"
-              className="text-input"
-              type="text"
-              value={modelDownloadForm.targetSubdir}
-              onChange={(event) =>
-                setModelDownloadForm((current) => ({ ...current, targetSubdir: event.target.value }))
-              }
-              placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
-              spellCheck="false"
-            />
-            <label className="field-label" htmlFor="model-id-input">
-              Model id
-            </label>
-            <input
-              id="model-id-input"
-              className="text-input"
-              type="text"
-              value={modelDownloadForm.modelId}
-              onChange={(event) =>
-                setModelDownloadForm((current) => ({ ...current, modelId: event.target.value }))
-              }
-              placeholder="Qwen/Qwen3.5-122B-A10B-FP8"
-              spellCheck="false"
-            />
-            <label className="field-label" htmlFor="model-source-urls">
-              Source URL(s)
-            </label>
-            <textarea
-              id="model-source-urls"
-              className="editor-textarea model-source-textarea"
-              value={modelDownloadForm.sourceUrls}
-              onChange={(event) =>
-                setModelDownloadForm((current) => ({ ...current, sourceUrls: event.target.value }))
-              }
-              placeholder="One URL per line. Multipart models are supported."
-            />
-            <div className="toolbar">
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={
-                  modelLibraryBusy !== "" ||
-                  !modelDownloadForm.targetRoot.trim() ||
-                  !modelDownloadForm.sourceUrls.trim()
-                }
-                onClick={enqueueModelLibraryDownload}
-              >
-                Download model
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={modelLibraryBusy !== ""}
-                onClick={() => refreshModelLibrary()}
-              >
-                Refresh models
-              </button>
-            </div>
-          </div>
-          {planes.length > 0 ? (
-            <div className="bundle-workflow">
-              <div className="section-label">Bundle workflow</div>
-              <label className="field-label" htmlFor="bundle-path-input">
-                Bundle path
-              </label>
-              <input
-                id="bundle-path-input"
-                className="text-input"
-                type="text"
-                value={bundlePath}
-                onChange={(event) => setBundlePath(event.target.value)}
-                placeholder="/abs/path/to/plane-bundle"
-                spellCheck="false"
-              />
-              <div className="toolbar">
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() => executeBundleAction("preview")}
-                  disabled={bundleBusy !== ""}
-                >
-                  Preview bundle
-                </button>
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() => executeBundleAction("apply")}
-                  disabled={bundleBusy !== ""}
-                >
-                  Stage bundle
-                </button>
-              </div>
-              {bundleOutput ? <pre className="bundle-output">{bundleOutput}</pre> : null}
-            </div>
-          ) : null}
-        </section>
+        </aside>
 
-        <section className="panel plane-overview">
+        {selectedPage === "planes" ? (
+          renderPlanesRegistry()
+        ) : selectedPage === "models" ? (
+          renderModelsLibrary()
+        ) : (
+          <section className="panel plane-overview">
           <div className="panel-header">
             <div>
               <div className="section-label">Plane detail</div>
@@ -2736,7 +2804,8 @@ function App() {
               )}
             </>
           )}
-        </section>
+          </section>
+        )}
       </main>
       <PlaneEditorDialog
         dialog={planeDialog}
