@@ -1021,6 +1021,8 @@ function App() {
   const interactionSplitRef = useRef(null);
   const chatTranscriptRef = useRef(null);
   const chatTranscriptEndRef = useRef(null);
+  const modelLibraryListRef = useRef(null);
+  const modelLibraryLoadMoreRef = useRef(null);
 
   async function loadPlanes(preferredPlane = selectedPlane) {
     const payload = await fetchJson("/api/v1/planes");
@@ -1760,6 +1762,33 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    const root = modelLibraryListRef.current;
+    const target = modelLibraryLoadMoreRef.current;
+    if (!root || !target || !hasMoreModelItems) {
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) {
+            continue;
+          }
+          setVisibleModelCount((current) =>
+            Math.min(activeModelCount, current + MODEL_LIBRARY_PAGE_SIZE),
+          );
+        }
+      },
+      {
+        root,
+        rootMargin: "0px 0px 120px 0px",
+        threshold: 0.1,
+      },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [activeModelCount, hasMoreModelItems, visibleModelItems.length]);
+
   function renderPlanesRegistry() {
     return (
       <section className="panel page-panel">
@@ -1788,6 +1817,17 @@ function App() {
               const selected = plane.name === selectedPlane;
               const displayState = planeDisplayState(plane);
               const displayStateClass = planeDisplayStateClass(plane);
+              const planeDeleting = plane.state === "deleting";
+              const planeStartDisabled =
+                actionBusy !== "" ||
+                planeDeleting ||
+                plane.state === "running" ||
+                plane.state === "starting";
+              const planeStopDisabled =
+                actionBusy !== "" ||
+                planeDeleting ||
+                plane.state === "stopped" ||
+                plane.state === "stopping";
               return (
                 <article
                   key={plane.name}
@@ -1818,6 +1858,22 @@ function App() {
                     </div>
                   </button>
                   <div className="plane-card-actions">
+                    <button
+                      className="ghost-button compact-button plane-action-button"
+                      type="button"
+                      disabled={planeStartDisabled}
+                      onClick={() => executePlaneAction("start", plane.name)}
+                    >
+                      Start
+                    </button>
+                    <button
+                      className="ghost-button compact-button plane-action-button"
+                      type="button"
+                      disabled={planeStopDisabled}
+                      onClick={() => executePlaneAction("stop", plane.name)}
+                    >
+                      Stop
+                    </button>
                     <button
                       className="ghost-button compact-button icon-button"
                       type="button"
@@ -1874,7 +1930,7 @@ function App() {
 
   function renderModelsLibrary() {
     return (
-      <section className="panel page-panel">
+      <section className="panel page-panel models-page-panel">
         <div className="panel-header">
           <div>
             <div className="section-label">Models</div>
@@ -1913,6 +1969,7 @@ function App() {
             </div>
             <div
               className="list-column model-library-list model-library-list-expanded"
+              ref={modelLibraryListRef}
               onScroll={handleModelLibraryScroll}
             >
               {(modelLibrary.items || []).length === 0 ? (
@@ -1949,6 +2006,13 @@ function App() {
                   </article>
                 ))
               )}
+              {hasMoreModelItems ? (
+                <div
+                  ref={modelLibraryLoadMoreRef}
+                  className="model-library-scroll-sentinel"
+                  aria-hidden="true"
+                />
+              ) : null}
             </div>
             {hasMoreModelItems ? (
               <div className="toolbar">

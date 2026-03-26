@@ -334,8 +334,11 @@ body {
 }
 
 .models-page-stack {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .models-page-grid {
@@ -344,8 +347,18 @@ body {
   gap: 16px;
 }
 
+.models-page-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 240px);
+}
+
 .models-catalog-panel {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .models-catalog-meta {
@@ -361,6 +374,23 @@ body {
 .models-page-side {
   display: grid;
   gap: 16px;
+}
+
+.model-library-list {
+  flex: 1 1 auto;
+  min-height: clamp(320px, 52vh, 880px);
+  max-height: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.model-library-jobs {
+  max-height: min(42vh, 420px);
+}
+
+.model-library-scroll-sentinel {
+  height: 1px;
+  width: 100%;
 }
 
 .model-source-textarea {
@@ -481,7 +511,12 @@ body {
 
 .plane-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.plane-action-button {
+  min-width: 88px;
 }
 
 .compact-button {
@@ -1034,6 +1069,14 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .models-page-panel {
+    min-height: auto;
+  }
+
+  .model-library-list {
+    min-height: clamp(280px, 48vh, 620px);
+  }
+
   .models-catalog-meta {
     display: grid;
     gap: 4px;
@@ -1085,5 +1128,9 @@ body {
   .hero,
   .panel {
     padding: 16px;
+  }
+
+  .model-library-list {
+    min-height: clamp(240px, 44vh, 520px);
   }
 }
