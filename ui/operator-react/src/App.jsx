@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, startTransition } from "react";
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
 const EVENT_LIMIT = 24;
+const MODEL_LIBRARY_PAGE_SIZE = 24;
 const CHAT_LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
   { value: "de", label: "Deutsch" },
@@ -992,6 +993,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState("");
   const [modelLibraryBusy, setModelLibraryBusy] = useState("");
+  const [visibleModelCount, setVisibleModelCount] = useState(MODEL_LIBRARY_PAGE_SIZE);
   const [modelDownloadForm, setModelDownloadForm] = useState({
     modelId: "",
     targetRoot: "",
@@ -1713,6 +1715,8 @@ function App() {
   const currentPlaneDisplayState = planeRecord ? planeDisplayState(planeRecord) : "";
   const currentPlaneDisplayClass = planeRecord ? planeDisplayStateClass(planeRecord) : "is-booting";
   const activeModelCount = Array.isArray(modelLibrary.items) ? modelLibrary.items.length : 0;
+  const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
+  const hasMoreModelItems = activeModelCount > visibleModelCount;
   const activeModelJobs = Array.isArray(modelLibrary.jobs)
     ? modelLibrary.jobs.filter((job) => {
         const status = String(job?.status || "").toLowerCase();
@@ -1742,6 +1746,19 @@ function App() {
     : `${activeModelCount} discovered model${activeModelCount === 1 ? "" : "s"}`;
   const dashboardNavLabel = selectedPlane ? "focused" : "idle";
   const dashboardNavClass = selectedPlane ? currentPlaneDisplayClass : "is-booting";
+
+  function handleModelLibraryScroll(event) {
+    const node = event.currentTarget;
+    if (!hasMoreModelItems) {
+      return;
+    }
+    const remaining = node.scrollHeight - node.scrollTop - node.clientHeight;
+    if (remaining <= 72) {
+      setVisibleModelCount((current) =>
+        Math.min(activeModelCount, current + MODEL_LIBRARY_PAGE_SIZE),
+      );
+    }
+  }
 
   function renderPlanesRegistry() {
     return (
@@ -1878,26 +1895,33 @@ function App() {
           Manage discovered model artifacts and queue new downloads, including multipart model
           sources.
         </div>
-        <div className="models-page-grid">
-          <div className="subpanel">
+        <div className="models-page-stack">
+          <div className="subpanel models-catalog-panel">
             <div className="subpanel-header">
               <div>
                 <div className="section-label">Catalog</div>
-                <h3>Discovered artifacts</h3>
+                <h3>Models</h3>
               </div>
               <div className={`tag ${modelsNavClass}`}>
                 {statusDot(modelsNavClass)}
                 <span>{modelsNavLabel}</span>
               </div>
             </div>
-            <div className="list-column model-library-list model-library-list-expanded">
+            <div className="models-catalog-meta">
+              <span>Loaded {visibleModelItems.length} of {activeModelCount}</span>
+              <span>Scroll to load the next page of tracked artifacts.</span>
+            </div>
+            <div
+              className="list-column model-library-list model-library-list-expanded"
+              onScroll={handleModelLibraryScroll}
+            >
               {(modelLibrary.items || []).length === 0 ? (
                 <EmptyState
                   title="No discovered models"
                   detail="Add a model URL below or point a plane at a local_path to seed library roots."
                 />
               ) : (
-                modelLibrary.items.map((item) => (
+                visibleModelItems.map((item) => (
                   <article className="list-card" key={item.path}>
                     <div className="card-row">
                       <strong>{item.name}</strong>
@@ -1926,8 +1950,23 @@ function App() {
                 ))
               )}
             </div>
+            {hasMoreModelItems ? (
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() =>
+                    setVisibleModelCount((current) =>
+                      Math.min(activeModelCount, current + MODEL_LIBRARY_PAGE_SIZE),
+                    )
+                  }
+                >
+                  Load more
+                </button>
+              </div>
+            ) : null}
           </div>
-          <div className="models-page-side">
+          <div className="models-page-grid">
             <div className="subpanel">
               <div className="subpanel-header">
                 <div>
@@ -2062,6 +2101,16 @@ function App() {
       targetRoot: modelLibrary.roots[0],
     }));
   }, [modelDownloadForm.targetRoot, modelLibrary.roots]);
+
+  useEffect(() => {
+    setVisibleModelCount((current) => {
+      const nextMinimum = Math.min(
+        Math.max(activeModelCount, 0),
+        Math.max(MODEL_LIBRARY_PAGE_SIZE, current),
+      );
+      return nextMinimum === current ? current : nextMinimum;
+    });
+  }, [activeModelCount]);
 
   useEffect(() => {
     if (!llmPlane && selectedTab === "interaction") {

@@ -333,10 +333,29 @@ body {
   max-height: 520px;
 }
 
+.models-page-stack {
+  display: grid;
+  gap: 16px;
+}
+
 .models-page-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+.models-catalog-panel {
+  min-width: 0;
+}
+
+.models-catalog-meta {
+  margin: 0 0 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--text-dim);
+  font-size: 0.9rem;
 }
 
 .models-page-side {
@@ -1013,6 +1032,11 @@ body {
 
   .models-page-grid {
     grid-template-columns: 1fr;
+  }
+
+  .models-catalog-meta {
+    display: grid;
+    gap: 4px;
   }
 
   .interaction-layout {
