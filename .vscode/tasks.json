@@ -64,61 +64,101 @@
     {
       "label": "Comet Windows x64: Build Debug",
       "type": "shell",
-      "command": "./scripts/build-target.sh",
+      "command": "powershell.exe",
       "args": [
-        "windows",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts\\windows\\build-target.ps1",
         "x64",
         "Debug"
       ],
       "group": "build",
-      "problemMatcher": "$gcc",
+      "problemMatcher": "$msCompile",
       "options": {
         "cwd": "${workspaceFolder}"
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "powershell.exe -ExecutionPolicy Bypass -File \"$(wslpath -w \"${workspaceFolder}\")\\\\scripts\\\\windows\\\\build-target.ps1\" x64 Debug"
+        ]
       }
     },
     {
       "label": "Comet Windows x64: Build Release",
       "type": "shell",
-      "command": "./scripts/build-target.sh",
+      "command": "powershell.exe",
       "args": [
-        "windows",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts\\windows\\build-target.ps1",
         "x64",
         "Release"
       ],
       "group": "build",
-      "problemMatcher": "$gcc",
+      "problemMatcher": "$msCompile",
       "options": {
         "cwd": "${workspaceFolder}"
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "powershell.exe -ExecutionPolicy Bypass -File \"$(wslpath -w \"${workspaceFolder}\")\\\\scripts\\\\windows\\\\build-target.ps1\" x64 Release"
+        ]
       }
     },
     {
       "label": "Comet Windows arm64: Build Debug",
       "type": "shell",
-      "command": "./scripts/build-target.sh",
+      "command": "powershell.exe",
       "args": [
-        "windows",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts\\windows\\build-target.ps1",
         "arm64",
         "Debug"
       ],
       "group": "build",
-      "problemMatcher": "$gcc",
+      "problemMatcher": "$msCompile",
       "options": {
         "cwd": "${workspaceFolder}"
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "powershell.exe -ExecutionPolicy Bypass -File \"$(wslpath -w \"${workspaceFolder}\")\\\\scripts\\\\windows\\\\build-target.ps1\" arm64 Debug"
+        ]
       }
     },
     {
       "label": "Comet Windows arm64: Build Release",
       "type": "shell",
-      "command": "./scripts/build-target.sh",
+      "command": "powershell.exe",
       "args": [
-        "windows",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts\\windows\\build-target.ps1",
         "arm64",
         "Release"
       ],
       "group": "build",
-      "problemMatcher": "$gcc",
+      "problemMatcher": "$msCompile",
       "options": {
         "cwd": "${workspaceFolder}"
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "powershell.exe -ExecutionPolicy Bypass -File \"$(wslpath -w \"${workspaceFolder}\")\\\\scripts\\\\windows\\\\build-target.ps1\" arm64 Release"
+        ]
       }
     },
     {
@@ -212,29 +252,49 @@
     {
       "label": "Comet Windows x64: Package Release",
       "type": "shell",
-      "command": "./scripts/package-target.sh",
+      "command": "powershell.exe",
       "args": [
-        "windows",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts\\windows\\package-target.ps1",
         "x64"
       ],
       "group": "build",
-      "problemMatcher": "$gcc",
+      "problemMatcher": "$msCompile",
       "options": {
         "cwd": "${workspaceFolder}"
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "powershell.exe -ExecutionPolicy Bypass -File \"$(wslpath -w \"${workspaceFolder}\")\\\\scripts\\\\windows\\\\package-target.ps1\" x64"
+        ]
       }
     },
     {
       "label": "Comet Windows arm64: Package Release",
       "type": "shell",
-      "command": "./scripts/package-target.sh",
+      "command": "powershell.exe",
       "args": [
-        "windows",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts\\windows\\package-target.ps1",
         "arm64"
       ],
       "group": "build",
-      "problemMatcher": "$gcc",
+      "problemMatcher": "$msCompile",
       "options": {
         "cwd": "${workspaceFolder}"
+      },
+      "linux": {
+        "command": "bash",
+        "args": [
+          "-lc",
+          "powershell.exe -ExecutionPolicy Bypass -File \"$(wslpath -w \"${workspaceFolder}\")\\\\scripts\\\\windows\\\\package-target.ps1\" arm64"
+        ]
       }
     },
     {
