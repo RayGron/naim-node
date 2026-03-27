@@ -1,11 +1,7 @@
 {
   "cmake.useCMakePresets": "always",
-  "cmake.cmakePath": "/usr/bin/cmake",
   "cmake.configureOnOpen": false,
-  "cmake.defaultConfigurePreset": "linux-x64",
-  "cmake.defaultBuildPreset": "linux-x64",
   "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
-  "C_Cpp.default.compilerPath": "/usr/bin/clang++",
   "C_Cpp.default.cppStandard": "c++20",
   "C_Cpp.intelliSenseEngine": "default",
   "files.associations": {

@@ -31,6 +31,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include "controller_command_line.h"
+#include "host_registry_service.h"
+#include "web_ui_service.h"
 #include "comet/compose_renderer.h"
 #include "comet/crypto_utils.h"
 #include "comet/demo_state.h"
@@ -51,6 +54,10 @@ namespace {
 using nlohmann::json;
 using SocketHandle = comet::platform::SocketHandle;
 using PollFd = comet::platform::PollFd;
+using ControllerCommandLine = comet::controller::ControllerCommandLine;
+using HostRegistryService = comet::controller::HostRegistryService;
+using WebUiComposeMode = comet::controller::WebUiComposeMode;
+using WebUiService = comet::controller::WebUiService;
 
 std::string SocketErrorMessage() {
   return comet::platform::LastSocketErrorMessage();
@@ -113,56 +120,11 @@ int DefaultListenPort() {
   return 18080;
 }
 
-int DefaultWebUiPort() {
-  return 18081;
-}
-
 std::string DefaultUiRoot() {
   return (std::filesystem::path("var") / "ui").string();
 }
 
-std::string DefaultWebUiRoot() {
-  return (std::filesystem::path("var") / "web-ui").string();
-}
-
-std::string DefaultWebUiImage() {
-  return "comet/web-ui:dev";
-}
-
-std::string DefaultControllerUpstream() {
-  return "http://host.docker.internal:18080";
-}
-
 std::atomic<bool> g_stop_requested{false};
-
-enum class WebUiComposeMode {
-  Skip,
-  Exec,
-};
-
-std::string NormalizeWebUiControllerUpstreamForCompose(
-    const std::string& controller_upstream,
-    WebUiComposeMode compose_mode) {
-  if (compose_mode != WebUiComposeMode::Exec) {
-    return controller_upstream;
-  }
-
-  const std::vector<std::pair<std::string, std::string>> prefixes = {
-      {"http://127.0.0.1", "http://host.docker.internal"},
-      {"https://127.0.0.1", "https://host.docker.internal"},
-      {"http://localhost", "http://host.docker.internal"},
-      {"https://localhost", "https://host.docker.internal"},
-      {"http://0.0.0.0", "http://host.docker.internal"},
-      {"https://0.0.0.0", "https://host.docker.internal"},
-  };
-
-  for (const auto& [prefix, replacement] : prefixes) {
-    if (controller_upstream.rfind(prefix, 0) == 0) {
-      return replacement + controller_upstream.substr(prefix.size());
-    }
-  }
-  return controller_upstream;
-}
 
 struct HttpRequest {
   std::string method = "GET";
@@ -314,287 +276,6 @@ std::vector<comet::HostAssignment> BuildHostAssignments(
     const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
     const std::vector<comet::HostObservation>& observations,
     const std::optional<comet::SchedulingPolicyReport>& scheduling_report);
-
-void PrintUsage() {
-  std::cout
-      << "Usage:\n"
-      << "  comet-controller show-demo-plan\n"
-      << "  comet-controller render-demo-compose [--node <node-name>]\n"
-      << "  comet-controller init-db [--db <path>]\n"
-      << "  comet-controller seed-demo [--db <path>]\n"
-      << "  comet-controller validate-bundle --bundle <dir>\n"
-      << "  comet-controller preview-bundle --bundle <dir> [--node <node-name>]\n"
-      << "  comet-controller plan-bundle --bundle <dir> [--db <path>]\n"
-      << "  comet-controller plan-host-ops --bundle <dir> [--db <path>] [--artifacts-root <path>] [--node <node-name>]\n"
-      << "  comet-controller apply-state-file --state <path> [--db <path>] [--artifacts-root <path>]\n"
-      << "  comet-controller apply-bundle --bundle <dir> [--db <path>] [--artifacts-root <path>]\n"
-      << "  comet-controller import-bundle --bundle <dir> [--db <path>]\n"
-      << "  comet-controller show-host-assignments [--db <path>] [--node <node-name>]\n"
-      << "  comet-controller show-host-observations [--db <path>] [--plane <plane-name>] [--node <node-name>] [--stale-after <seconds>]\n"
-      << "  comet-controller show-host-health [--db <path>] [--node <node-name>] [--stale-after <seconds>]\n"
-      << "  comet-controller show-disk-state [--db <path>] [--plane <plane-name>] [--node <node-name>]\n"
-      << "  comet-controller show-rollout-actions [--db <path>] [--plane <plane-name>] [--node <node-name>]\n"
-      << "  comet-controller show-rebalance-plan [--db <path>] [--plane <plane-name>] [--node <node-name>]\n"
-      << "  comet-controller show-events [--db <path>] [--plane <plane-name>] [--node <node-name>] [--worker <worker-name>] [--category <category>] [--limit <count>]\n"
-      << "  comet-controller apply-rebalance-proposal --worker <worker-name> [--db <path>] [--artifacts-root <path>]\n"
-      << "  comet-controller reconcile-rebalance-proposals [--db <path>] [--artifacts-root <path>]\n"
-      << "  comet-controller scheduler-tick [--db <path>] [--artifacts-root <path>]\n"
-      << "  comet-controller set-rollout-action-status --id <action-id> --status <pending|acknowledged|ready-to-retry> [--message <text>] [--db <path>]\n"
-      << "  comet-controller enqueue-rollout-eviction --id <action-id> [--db <path>]\n"
-      << "  comet-controller reconcile-rollout-actions [--db <path>] [--artifacts-root <path>]\n"
-      << "  comet-controller apply-ready-rollout-action --id <action-id> [--db <path>] [--artifacts-root <path>]\n"
-      << "  comet-controller show-node-availability [--db <path>] [--node <node-name>]\n"
-      << "  comet-controller set-node-availability --node <node-name> --availability <active|draining|unavailable> [--message <text>] [--db <path>]\n"
-      << "  comet-controller retry-host-assignment --id <assignment-id> [--db <path>]\n"
-      << "  comet-controller list-planes [--db <path>]\n"
-      << "  comet-controller show-plane --plane <plane-name> [--db <path>]\n"
-      << "  comet-controller start-plane --plane <plane-name> [--db <path>]\n"
-      << "  comet-controller stop-plane --plane <plane-name> [--db <path>]\n"
-      << "  comet-controller delete-plane --plane <plane-name> [--db <path>]\n"
-      << "  comet-controller show-hostd-hosts [--db <path>] [--node <node-name>]\n"
-      << "  comet-controller revoke-hostd --node <node-name> [--db <path>] [--message <text>]\n"
-      << "  comet-controller rotate-hostd-key --node <node-name> --public-key <base64-or-file> [--db <path>] [--message <text>]\n"
-      << "  comet-controller ensure-web-ui [--db <path>] [--web-ui-root <path>] [--listen-port <port>] [--controller-upstream <url>] [--compose-mode skip|exec]\n"
-      << "  comet-controller show-web-ui-status [--db <path>] [--web-ui-root <path>]\n"
-      << "  comet-controller stop-web-ui [--db <path>] [--web-ui-root <path>] [--compose-mode skip|exec]\n"
-      << "  comet-controller show-state [--db <path>]\n"
-      << "  comet-controller render-infer-runtime [--db <path>]\n"
-      << "  comet-controller render-compose [--db <path>] [--node <node-name>]\n"
-      << "  comet-controller serve [--db <path>] [--listen-host <host>] [--listen-port <port>] [--ui-root <path>]\n"
-      << "\n"
-      << "Remote operator CLI:\n"
-      << "  most inspection and mutation commands also accept --controller <http://host:port>\n"
-      << "  target resolution order: --controller, COMET_CONTROLLER, ~/.config/comet/controller\n"
-      << "  explicit --db keeps the command local\n";
-}
-
-std::optional<std::string> ParseNodeArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--node" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseDbArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--db" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseBundleArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--bundle" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParsePlaneArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--plane" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseArtifactsRootArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--artifacts-root" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseListenHostArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--listen-host" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<int> ParseListenPortArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--listen-port" && index + 1 < argc) {
-      return std::stoi(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseUiRootArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--ui-root" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseWebUiRootArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--web-ui-root" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseControllerUpstreamArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--controller-upstream" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseComposeModeArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--compose-mode" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseControllerArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--controller" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<int> ParseIdArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--id" && index + 1 < argc) {
-      return std::stoi(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<int> ParseStaleAfterArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--stale-after" && index + 1 < argc) {
-      return std::stoi(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<int> ParseLimitArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--limit" && index + 1 < argc) {
-      return std::stoi(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseAvailabilityArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--availability" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseMessageArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--message" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseStatusArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--status" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseWorkerArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--worker" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParseCategoryArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--category" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> ParsePublicKeyArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--public-key" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
-std::string ReadTextFile(const std::filesystem::path& path) {
-  std::ifstream input(path);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to read file '" + path.string() + "'");
-  }
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-  return buffer.str();
-}
-
-std::string ReadPublicKeyBase64Argument(const std::string& value) {
-  const std::filesystem::path candidate(value);
-  if (std::filesystem::exists(candidate)) {
-    return Trim(ReadTextFile(candidate));
-  }
-  return value;
-}
 
 std::string Trim(const std::string& value) {
   std::size_t start = 0;
@@ -3618,16 +3299,6 @@ std::optional<std::string> FindCookieValue(
   return std::nullopt;
 }
 
-std::optional<std::string> ParseStateFileArg(int argc, char** argv) {
-  for (int index = 2; index < argc; ++index) {
-    const std::string arg = argv[index];
-    if (arg == "--state" && index + 1 < argc) {
-      return std::string(argv[index + 1]);
-    }
-  }
-  return std::nullopt;
-}
-
 std::optional<std::string> FindBearerToken(const HttpRequest& request) {
   const auto authorization = FindHeaderString(request, "authorization");
   if (!authorization.has_value()) {
@@ -4184,12 +3855,6 @@ struct EventsViewData {
   std::vector<comet::EventRecord> events;
 };
 
-struct RegisteredHostsViewData {
-  std::string db_path;
-  std::optional<std::string> node_name;
-  std::vector<comet::RegisteredHostRecord> hosts;
-};
-
 std::string SerializeEventPayload(const json& payload) {
   return payload.dump();
 }
@@ -4524,18 +4189,6 @@ EventsViewData LoadEventsViewData(
   };
 }
 
-RegisteredHostsViewData LoadRegisteredHostsViewData(
-    const std::string& db_path,
-    const std::optional<std::string>& node_name) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  return RegisteredHostsViewData{
-      db_path,
-      node_name,
-      store.LoadRegisteredHosts(node_name),
-  };
-}
-
 json BuildEventPayloadItem(const comet::EventRecord& event) {
   json payload = json::object();
   if (!event.payload_json.empty()) {
@@ -4706,44 +4359,6 @@ json BuildHostAssignmentsPayload(
       {"db_path", view.db_path},
       {"node_name", view.node_name.has_value() ? json(*view.node_name) : json(nullptr)},
       {"assignments", assignments},
-  };
-}
-
-json BuildRegisteredHostsPayload(
-    const std::string& db_path,
-    const std::optional<std::string>& node_name) {
-  const auto view = LoadRegisteredHostsViewData(db_path, node_name);
-  json items = json::array();
-  for (const auto& host : view.hosts) {
-    items.push_back(json{
-        {"node_name", host.node_name},
-        {"advertised_address", host.advertised_address.empty() ? json(nullptr) : json(host.advertised_address)},
-        {"transport_mode", host.transport_mode},
-        {"execution_mode", host.execution_mode.empty() ? json("mixed") : json(host.execution_mode)},
-        {"registration_state", host.registration_state},
-        {"session_state", host.session_state},
-        {"controller_public_key_fingerprint",
-         host.controller_public_key_fingerprint.empty()
-             ? json(nullptr)
-             : json(host.controller_public_key_fingerprint)},
-        {"host_public_key_fingerprint",
-         host.public_key_base64.empty()
-             ? json(nullptr)
-             : json(comet::ComputeKeyFingerprintHex(host.public_key_base64))},
-        {"status_message", host.status_message.empty() ? json(nullptr) : json(host.status_message)},
-        {"last_session_at", host.last_session_at.empty() ? json(nullptr) : json(host.last_session_at)},
-        {"session_expires_at",
-         host.session_expires_at.empty() ? json(nullptr) : json(host.session_expires_at)},
-        {"last_heartbeat_at",
-         host.last_heartbeat_at.empty() ? json(nullptr) : json(host.last_heartbeat_at)},
-        {"updated_at", host.updated_at},
-    });
-  }
-  return json{
-      {"service", "comet-controller"},
-      {"db_path", view.db_path},
-      {"node_name", view.node_name.has_value() ? json(*view.node_name) : json(nullptr)},
-      {"items", items},
   };
 }
 
@@ -5756,17 +5371,6 @@ int RetryHostAssignment(const std::string& db_path, int assignment_id);
 int StartPlane(const std::string& db_path, const std::string& plane_name);
 
 int StopPlane(const std::string& db_path, const std::string& plane_name);
-
-int RevokeHostd(
-    const std::string& db_path,
-    const std::string& node_name,
-    const std::optional<std::string>& status_message);
-
-int RotateHostdKey(
-    const std::string& db_path,
-    const std::string& node_name,
-    const std::string& public_key_base64,
-    const std::optional<std::string>& status_message);
 
 struct ControllerActionResult {
   std::string action_name;
@@ -7028,6 +6632,30 @@ ControllerActionResult ExecuteStartPlaneAction(
       [&]() { return StartPlane(db_path, plane_name); });
 }
 
+HostRegistryService MakeHostRegistryService(const std::string& db_path) {
+  return HostRegistryService(
+      db_path,
+      [](comet::ControllerStore& store,
+         const std::string& event_type,
+         const std::string& message,
+         const json& payload,
+         const std::string& node_name,
+         const std::string& severity) {
+        AppendControllerEvent(
+            store,
+            "host-registry",
+            event_type,
+            message,
+            payload,
+            "",
+            node_name,
+            "",
+            std::nullopt,
+            std::nullopt,
+            severity);
+      });
+}
+
 ControllerActionResult ExecuteStopPlaneAction(
     const std::string& db_path,
     const std::string& plane_name) {
@@ -7048,9 +6676,10 @@ ControllerActionResult ExecuteRevokeHostdAction(
     const std::string& db_path,
     const std::string& node_name,
     const std::optional<std::string>& status_message) {
+  const auto service = MakeHostRegistryService(db_path);
   return RunControllerActionResult(
       "revoke-hostd",
-      [&]() { return RevokeHostd(db_path, node_name, status_message); });
+      [&]() { return service.RevokeHost(node_name, status_message); });
 }
 
 ControllerActionResult ExecuteRotateHostdKeyAction(
@@ -7058,28 +6687,28 @@ ControllerActionResult ExecuteRotateHostdKeyAction(
     const std::string& node_name,
     const std::string& public_key_base64,
     const std::optional<std::string>& status_message) {
+  const auto service = MakeHostRegistryService(db_path);
   return RunControllerActionResult(
       "rotate-hostd-key",
-      [&]() { return RotateHostdKey(db_path, node_name, public_key_base64, status_message); });
+      [&]() { return service.RotateHostKey(node_name, public_key_base64, status_message); });
 }
 
 int ExecuteRemoteControllerCommand(
     const ControllerEndpointTarget& target,
     const std::string& command,
-    int argc,
-    char** argv) {
-  const auto plane_name = ParsePlaneArg(argc, argv);
-  const auto node_name = ParseNodeArg(argc, argv);
-  const auto stale_after = ParseStaleAfterArg(argc, argv);
-  const auto bundle_dir = ParseBundleArg(argc, argv);
-  const auto artifacts_root = ParseArtifactsRootArg(argc, argv);
-  const auto action_id = ParseIdArg(argc, argv);
-  const auto worker_name = ParseWorkerArg(argc, argv);
-  const auto limit = ParseLimitArg(argc, argv);
-  const auto category = ParseCategoryArg(argc, argv);
-  const auto message = ParseMessageArg(argc, argv);
-  const auto status = ParseStatusArg(argc, argv);
-  const auto availability = ParseAvailabilityArg(argc, argv);
+    const ControllerCommandLine& cli) {
+  const auto plane_name = cli.plane();
+  const auto node_name = cli.node();
+  const auto stale_after = cli.stale_after();
+  const auto bundle_dir = cli.bundle();
+  const auto artifacts_root = cli.artifacts_root();
+  const auto action_id = cli.id();
+  const auto worker_name = cli.worker();
+  const auto limit = cli.limit();
+  const auto category = cli.category();
+  const auto message = cli.message();
+  const auto status = cli.status();
+  const auto availability = cli.availability();
 
   if (command == "list-planes") {
     std::cout << SendControllerJsonRequest(target, "GET", "/api/v1/planes").dump(2) << "\n";
@@ -7153,7 +6782,7 @@ int ExecuteRemoteControllerCommand(
       std::cerr << "error: --node is required\n";
       return 1;
     }
-    const auto public_key = ParsePublicKeyArg(argc, argv);
+    const auto public_key = cli.public_key_base64();
     if (!public_key.has_value()) {
       std::cerr << "error: --public-key is required\n";
       return 1;
@@ -7164,7 +6793,7 @@ int ExecuteRemoteControllerCommand(
             "POST",
             "/api/v1/hostd/hosts/" + UrlEncode(*node_name) + "/rotate-key",
             json{
-                {"public_key_base64", ReadPublicKeyBase64Argument(*public_key)},
+                {"public_key_base64", *public_key},
                 {"message", message.value_or("")},
             }));
   }
@@ -9207,7 +8836,7 @@ HttpResponse HandleControllerRequest(
     try {
       return BuildJsonResponse(
           200,
-          BuildRegisteredHostsPayload(db_path, FindQueryString(request, "node")));
+          MakeHostRegistryService(db_path).BuildPayload(FindQueryString(request, "node")));
     } catch (const std::exception& error) {
       return BuildJsonResponse(
           500,
@@ -10766,20 +10395,6 @@ std::string ResolveArtifactsRoot(
     const std::optional<std::string>& artifacts_root_arg,
     const std::string& fallback_artifacts_root) {
   return artifacts_root_arg.value_or(fallback_artifacts_root);
-}
-
-std::string ResolveWebUiRoot(const std::optional<std::string>& web_ui_root_arg) {
-  return web_ui_root_arg.value_or(DefaultWebUiRoot());
-}
-
-WebUiComposeMode ResolveComposeMode(const std::optional<std::string>& compose_mode_arg) {
-  if (!compose_mode_arg.has_value() || *compose_mode_arg == "exec") {
-    return WebUiComposeMode::Exec;
-  }
-  if (*compose_mode_arg == "skip") {
-    return WebUiComposeMode::Skip;
-  }
-  throw std::runtime_error("unsupported compose mode '" + *compose_mode_arg + "'");
 }
 
 std::optional<comet::HostAssignment> FindLatestHostAssignmentForNode(
@@ -14068,85 +13683,6 @@ void RemoveFileIfExists(const std::string& path) {
   }
 }
 
-std::string ResolvedDockerCommand() {
-  if (std::system("docker version >/dev/null 2>&1") == 0) {
-    return "docker";
-  }
-  const std::string windows_docker =
-      "/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe";
-  if (std::filesystem::exists(windows_docker) &&
-      std::system(("\"" + windows_docker + "\" version >/dev/null 2>&1").c_str()) == 0) {
-    return "\"" + windows_docker + "\"";
-  }
-  throw std::runtime_error("no working Docker CLI found for web-ui lifecycle");
-}
-
-void RunCommandOrThrow(const std::string& command) {
-  if (std::system(command.c_str()) != 0) {
-    throw std::runtime_error("command failed: " + command);
-  }
-}
-
-std::string WebUiComposePath(const std::string& web_ui_root) {
-  return (std::filesystem::path(web_ui_root) / "docker-compose.yml").string();
-}
-
-std::string WebUiStatePath(const std::string& web_ui_root) {
-  return (std::filesystem::path(web_ui_root) / "web-ui-state.json").string();
-}
-
-json LoadWebUiStateJson(const std::string& web_ui_root) {
-  const std::string path = WebUiStatePath(web_ui_root);
-  if (!std::filesystem::exists(path)) {
-    return json::object();
-  }
-  std::ifstream input(path);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open web-ui state file: " + path);
-  }
-  return json::parse(input, nullptr, true, true);
-}
-
-void SaveWebUiStateJson(const std::string& web_ui_root, const json& state) {
-  WriteTextFile(WebUiStatePath(web_ui_root), state.dump(2) + "\n");
-}
-
-std::string RenderWebUiComposeYaml(
-    const std::string& image,
-    int listen_port,
-    const std::string& controller_upstream) {
-  std::ostringstream out;
-  out << "services:\n";
-  out << "  comet-web-ui:\n";
-  out << "    image: " << image << "\n";
-  out << "    container_name: comet-web-ui\n";
-  out << "    restart: unless-stopped\n";
-  out << "    environment:\n";
-  out << "      COMET_CONTROLLER_UPSTREAM: " << controller_upstream << "\n";
-  out << "    security_opt:\n";
-  out << "      - apparmor=unconfined\n";
-  out << "    extra_hosts:\n";
-  out << "      - \"host.docker.internal:host-gateway\"\n";
-  out << "    ports:\n";
-  out << "      - \"" << listen_port << ":8080\"\n";
-  return out.str();
-}
-
-bool WebUiComposeRunning(const std::string& web_ui_root) {
-  const std::string compose_path = WebUiComposePath(web_ui_root);
-  if (!std::filesystem::exists(compose_path)) {
-    return false;
-  }
-  try {
-    const std::string command =
-        ResolvedDockerCommand() + " compose -f '" + compose_path +
-        "' ps --services --status running | grep -Fx 'comet-web-ui' >/dev/null 2>&1";
-    return std::system(command.c_str()) == 0;
-  } catch (...) {
-    return false;
-  }
-}
-
 void MaterializeComposeArtifacts(
     const comet::DesiredState& desired_state,
     const std::vector<comet::NodeExecutionPlan>& host_plans) {
@@ -15386,14 +14922,6 @@ int ShowHostAssignments(
   const auto view = LoadHostAssignmentsViewData(db_path, node_name);
   std::cout << "db: " << view.db_path << "\n";
   PrintHostAssignments(view.assignments);
-  return 0;
-}
-
-int ShowRegisteredHosts(
-    const std::string& db_path,
-    const std::optional<std::string>& node_name) {
-  const json payload = BuildRegisteredHostsPayload(db_path, node_name);
-  std::cout << payload.dump(2) << "\n";
   return 0;
 }
 
@@ -16802,81 +16330,6 @@ int DeletePlane(const std::string& db_path, const std::string& plane_name) {
   return 0;
 }
 
-int RevokeHostd(
-    const std::string& db_path,
-    const std::string& node_name,
-    const std::optional<std::string>& status_message) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  auto host = store.LoadRegisteredHost(node_name);
-  if (!host.has_value()) {
-    throw std::runtime_error("registered host '" + node_name + "' not found");
-  }
-  const std::string previous_state = host->registration_state;
-  host->registration_state = "revoked";
-  host->session_state = "revoked";
-  host->session_token.clear();
-  host->session_expires_at.clear();
-  host->session_host_sequence = 0;
-  host->session_controller_sequence = 0;
-  host->status_message = status_message.value_or("revoked by operator");
-  store.UpsertRegisteredHost(*host);
-  AppendControllerEvent(
-      store,
-      "host-registry",
-      "revoked",
-      host->status_message,
-      json{{"previous_registration_state", previous_state}},
-      "",
-      node_name,
-      "",
-      std::nullopt,
-      std::nullopt,
-      "warning");
-  std::cout << "host revoked: " << node_name
-            << " previous_registration_state=" << previous_state << "\n";
-  return 0;
-}
-
-int RotateHostdKey(
-    const std::string& db_path,
-    const std::string& node_name,
-    const std::string& public_key_base64,
-    const std::optional<std::string>& status_message) {
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  auto host = store.LoadRegisteredHost(node_name);
-  if (!host.has_value()) {
-    throw std::runtime_error("registered host '" + node_name + "' not found");
-  }
-  const std::string previous_fingerprint =
-      host->public_key_base64.empty() ? std::string{} : comet::ComputeKeyFingerprintHex(host->public_key_base64);
-  host->public_key_base64 = Trim(public_key_base64);
-  host->registration_state = "registered";
-  host->session_state = "rotation-pending";
-  host->session_token.clear();
-  host->session_expires_at.clear();
-  host->session_host_sequence = 0;
-  host->session_controller_sequence = 0;
-  host->status_message = status_message.value_or("host public key rotated by operator");
-  store.UpsertRegisteredHost(*host);
-  AppendControllerEvent(
-      store,
-      "host-registry",
-      "rotated-key",
-      host->status_message,
-      json{
-          {"previous_fingerprint",
-           previous_fingerprint.empty() ? json(nullptr) : json(previous_fingerprint)},
-          {"next_fingerprint", comet::ComputeKeyFingerprintHex(host->public_key_base64)},
-      },
-      "",
-      node_name);
-  std::cout << "host key rotated: " << node_name
-            << " fingerprint=" << comet::ComputeKeyFingerprintHex(host->public_key_base64) << "\n";
-  return 0;
-}
-
 int ShowDiskState(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
@@ -16896,123 +16349,6 @@ int ShowDiskState(
     std::cout << "node_filter: " << *view.node_name << "\n";
   }
   PrintDetailedDiskState(*view.desired_state, view.runtime_states, view.observations, view.node_name);
-  return 0;
-}
-
-int EnsureWebUi(
-    const std::string& db_path,
-    const std::string& web_ui_root,
-    int listen_port,
-    const std::string& controller_upstream,
-    WebUiComposeMode compose_mode) {
-  const std::string image = DefaultWebUiImage();
-  const std::string effective_controller_upstream =
-      NormalizeWebUiControllerUpstreamForCompose(controller_upstream, compose_mode);
-  const std::string compose_path = WebUiComposePath(web_ui_root);
-  WriteTextFile(
-      compose_path,
-      RenderWebUiComposeYaml(image, listen_port, effective_controller_upstream));
-
-  json state{
-      {"image", image},
-      {"listen_port", listen_port},
-      {"controller_upstream", effective_controller_upstream},
-      {"requested_controller_upstream", controller_upstream},
-      {"compose_path", compose_path},
-      {"web_ui_root", web_ui_root},
-      {"materialized", true},
-      {"running", false},
-      {"status", compose_mode == WebUiComposeMode::Exec ? "starting" : "materialized"},
-  };
-  if (compose_mode == WebUiComposeMode::Exec) {
-    RunCommandOrThrow(ResolvedDockerCommand() + " compose -f '" + compose_path + "' up -d");
-    state["running"] = true;
-    state["status"] = "running";
-  }
-  SaveWebUiStateJson(web_ui_root, state);
-
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  AppendControllerEvent(
-      store,
-      "web-ui",
-      "ensured",
-      "materialized comet-web-ui sidecar",
-      json{
-          {"web_ui_root", web_ui_root},
-          {"listen_port", listen_port},
-          {"controller_upstream", effective_controller_upstream},
-          {"requested_controller_upstream", controller_upstream},
-          {"compose_mode", compose_mode == WebUiComposeMode::Exec ? "exec" : "skip"},
-      });
-
-  std::cout << "web-ui ensured\n";
-  std::cout << "root=" << web_ui_root << "\n";
-  std::cout << "compose_path=" << compose_path << "\n";
-  std::cout << "image=" << image << "\n";
-  std::cout << "listen_port=" << listen_port << "\n";
-  std::cout << "controller_upstream=" << effective_controller_upstream << "\n";
-  if (effective_controller_upstream != controller_upstream) {
-    std::cout << "requested_controller_upstream=" << controller_upstream << "\n";
-  }
-  std::cout << "compose_mode="
-            << (compose_mode == WebUiComposeMode::Exec ? "exec" : "skip") << "\n";
-  return 0;
-}
-
-int ShowWebUiStatus(const std::string& web_ui_root) {
-  const json state = LoadWebUiStateJson(web_ui_root);
-  const bool compose_exists = std::filesystem::exists(WebUiComposePath(web_ui_root));
-  const bool running = WebUiComposeRunning(web_ui_root);
-
-  std::cout << "web-ui:\n";
-  std::cout << "  root=" << web_ui_root << "\n";
-  std::cout << "  state_path=" << WebUiStatePath(web_ui_root) << "\n";
-  std::cout << "  compose_path=" << WebUiComposePath(web_ui_root) << "\n";
-  std::cout << "  materialized=" << (compose_exists ? "yes" : "no") << "\n";
-  std::cout << "  running=" << (running ? "yes" : "no") << "\n";
-  if (!state.empty()) {
-    std::cout << "  image=" << state.value("image", DefaultWebUiImage()) << "\n";
-    std::cout << "  listen_port=" << state.value("listen_port", DefaultWebUiPort()) << "\n";
-    std::cout << "  controller_upstream="
-              << state.value("controller_upstream", DefaultControllerUpstream()) << "\n";
-    std::cout << "  status=" << state.value("status", std::string("unknown")) << "\n";
-  }
-  return 0;
-}
-
-int StopWebUi(
-    const std::string& db_path,
-    const std::string& web_ui_root,
-    WebUiComposeMode compose_mode) {
-  const std::string compose_path = WebUiComposePath(web_ui_root);
-  if (compose_mode == WebUiComposeMode::Exec && std::filesystem::exists(compose_path)) {
-    RunCommandOrThrow(ResolvedDockerCommand() + " compose -f '" + compose_path + "' down --remove-orphans");
-  }
-  RemoveFileIfExists(compose_path);
-  json state = LoadWebUiStateJson(web_ui_root);
-  state["materialized"] = false;
-  state["running"] = false;
-  state["status"] = "stopped";
-  SaveWebUiStateJson(web_ui_root, state);
-
-  comet::ControllerStore store(db_path);
-  store.Initialize();
-  AppendControllerEvent(
-      store,
-      "web-ui",
-      "stopped",
-      "stopped comet-web-ui sidecar",
-      json{
-          {"web_ui_root", web_ui_root},
-          {"compose_mode", compose_mode == WebUiComposeMode::Exec ? "exec" : "skip"},
-      });
-
-  std::cout << "web-ui stopped\n";
-  std::cout << "root=" << web_ui_root << "\n";
-  std::cout << "compose_path=" << compose_path << "\n";
-  std::cout << "compose_mode="
-            << (compose_mode == WebUiComposeMode::Exec ? "exec" : "skip") << "\n";
   return 0;
 }
 
@@ -17041,408 +16377,415 @@ int RenderInferRuntime(const std::string& db_path) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    PrintUsage();
-    return 1;
-  }
+class ControllerApp final {
+ public:
+  ControllerApp(int argc, char** argv) : cli_(argc, argv) {}
 
-  const std::string command = argv[1];
-  if (command == "show-demo-plan") {
-    ShowDemoPlan();
-    return 0;
-  }
-
-  if (command == "render-demo-compose") {
-    return RenderDemoCompose(ParseNodeArg(argc, argv));
-  }
-
-  try {
-    const auto db_arg = ParseDbArg(argc, argv);
-    const auto controller_target = ResolveControllerTarget(ParseControllerArg(argc, argv), db_arg);
-    if (controller_target.has_value()) {
-      return ExecuteRemoteControllerCommand(
-          ParseControllerEndpointTarget(*controller_target),
-          command,
-          argc,
-          argv);
+  int Run() {
+    if (!cli_.HasCommand()) {
+      cli_.PrintUsage(std::cout);
+      return 1;
     }
 
-    const std::string db_path = ResolveDbPath(db_arg);
-
-    if (command == "init-db") {
-      return InitDb(db_path);
+    const std::string& command = cli_.command();
+    if (command == "show-demo-plan") {
+      ShowDemoPlan();
+      return 0;
     }
 
-    if (command == "seed-demo") {
-      return SeedDemo(db_path);
+    if (command == "render-demo-compose") {
+      return RenderDemoCompose(cli_.node());
     }
 
-    if (command == "validate-bundle") {
-      const auto bundle_dir = ParseBundleArg(argc, argv);
-      if (!bundle_dir.has_value()) {
-        std::cerr << "error: --bundle is required\n";
-        return 1;
+    try {
+      const auto db_arg = cli_.db();
+      const auto controller_target = ResolveControllerTarget(cli_.controller(), db_arg);
+      if (controller_target.has_value()) {
+        return ExecuteRemoteControllerCommand(
+            ParseControllerEndpointTarget(*controller_target),
+            command,
+            cli_);
       }
-      return EmitControllerActionResult(ExecuteValidateBundleAction(*bundle_dir));
-    }
 
-    if (command == "preview-bundle") {
-      const auto bundle_dir = ParseBundleArg(argc, argv);
-      if (!bundle_dir.has_value()) {
-        std::cerr << "error: --bundle is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecutePreviewBundleAction(*bundle_dir, ParseNodeArg(argc, argv)));
-    }
-
-    if (command == "plan-bundle") {
-      const auto bundle_dir = ParseBundleArg(argc, argv);
-      if (!bundle_dir.has_value()) {
-        std::cerr << "error: --bundle is required\n";
-        return 1;
-      }
-      return PlanBundle(db_path, *bundle_dir);
-    }
-
-    if (command == "apply-bundle") {
-      const auto bundle_dir = ParseBundleArg(argc, argv);
-      if (!bundle_dir.has_value()) {
-        std::cerr << "error: --bundle is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteApplyBundleAction(
-              db_path,
-              *bundle_dir,
-              ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv))));
-    }
-
-    if (command == "apply-state-file") {
-      const auto state_path = ParseStateFileArg(argc, argv);
-      if (!state_path.has_value()) {
-        std::cerr << "error: --state is required\n";
-        return 1;
-      }
-      const auto desired_state = comet::LoadDesiredStateJson(*state_path);
-      if (!desired_state.has_value()) {
-        throw std::runtime_error("failed to load desired state file '" + *state_path + "'");
-      }
-      return ApplyDesiredState(
+      const std::string db_path = ResolveDbPath(db_arg);
+      HostRegistryService host_registry_service = MakeHostRegistryService(db_path);
+      WebUiService web_ui_service(
           db_path,
-          *desired_state,
-          ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv)),
-          "state-file:" + *state_path);
-    }
+          [](comet::ControllerStore& store,
+             const std::string& event_type,
+             const std::string& message,
+             const json& payload) {
+            AppendControllerEvent(store, "web-ui", event_type, message, payload);
+          });
 
-    if (command == "plan-host-ops") {
-      const auto bundle_dir = ParseBundleArg(argc, argv);
-      if (!bundle_dir.has_value()) {
-        std::cerr << "error: --bundle is required\n";
-        return 1;
+      if (command == "init-db") {
+        return InitDb(db_path);
       }
-      return PlanHostOps(
-          db_path,
-          *bundle_dir,
-          ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv)),
-          ParseNodeArg(argc, argv));
-    }
 
-    if (command == "show-state") {
-      return ShowState(db_path);
-    }
-
-    if (command == "show-hostd-hosts") {
-      return ShowRegisteredHosts(db_path, ParseNodeArg(argc, argv));
-    }
-
-    if (command == "revoke-hostd") {
-      const auto node_name = ParseNodeArg(argc, argv);
-      if (!node_name.has_value()) {
-        std::cerr << "error: --node is required\n";
-        return 1;
+      if (command == "seed-demo") {
+        return SeedDemo(db_path);
       }
-      return EmitControllerActionResult(
-          ExecuteRevokeHostdAction(db_path, *node_name, ParseMessageArg(argc, argv)));
-    }
 
-    if (command == "rotate-hostd-key") {
-      const auto node_name = ParseNodeArg(argc, argv);
-      if (!node_name.has_value()) {
-        std::cerr << "error: --node is required\n";
-        return 1;
-      }
-      const auto public_key = ParsePublicKeyArg(argc, argv);
-      if (!public_key.has_value()) {
-        std::cerr << "error: --public-key is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteRotateHostdKeyAction(
-              db_path,
-              *node_name,
-              ReadPublicKeyBase64Argument(*public_key),
-              ParseMessageArg(argc, argv)));
-    }
-
-    if (command == "list-planes") {
-      return ListPlanes(db_path);
-    }
-
-    if (command == "show-plane") {
-      const auto plane_name = ParsePlaneArg(argc, argv);
-      if (!plane_name.has_value()) {
-        std::cerr << "error: --plane is required\n";
-        return 1;
-      }
-      return ShowPlane(db_path, *plane_name);
-    }
-
-    if (command == "start-plane") {
-      const auto plane_name = ParsePlaneArg(argc, argv);
-      if (!plane_name.has_value()) {
-        std::cerr << "error: --plane is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(ExecuteStartPlaneAction(db_path, *plane_name));
-    }
-
-    if (command == "stop-plane") {
-      const auto plane_name = ParsePlaneArg(argc, argv);
-      if (!plane_name.has_value()) {
-        std::cerr << "error: --plane is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(ExecuteStopPlaneAction(db_path, *plane_name));
-    }
-
-    if (command == "delete-plane") {
-      const auto plane_name = ParsePlaneArg(argc, argv);
-      if (!plane_name.has_value()) {
-        std::cerr << "error: --plane is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(ExecuteDeletePlaneAction(db_path, *plane_name));
-    }
-
-    if (command == "ensure-web-ui") {
-      return EnsureWebUi(
-          db_path,
-          ResolveWebUiRoot(ParseWebUiRootArg(argc, argv)),
-          ParseListenPortArg(argc, argv).value_or(DefaultWebUiPort()),
-          ParseControllerUpstreamArg(argc, argv).value_or(DefaultControllerUpstream()),
-          ResolveComposeMode(ParseComposeModeArg(argc, argv)));
-    }
-
-    if (command == "show-web-ui-status") {
-      return ShowWebUiStatus(ResolveWebUiRoot(ParseWebUiRootArg(argc, argv)));
-    }
-
-    if (command == "stop-web-ui") {
-      return StopWebUi(
-          db_path,
-          ResolveWebUiRoot(ParseWebUiRootArg(argc, argv)),
-          ResolveComposeMode(ParseComposeModeArg(argc, argv)));
-    }
-
-    if (command == "show-host-assignments") {
-      return ShowHostAssignments(db_path, ParseNodeArg(argc, argv));
-    }
-
-    if (command == "show-host-observations") {
-      return ShowHostObservations(
-          db_path,
-          ParsePlaneArg(argc, argv),
-          ParseNodeArg(argc, argv),
-          ParseStaleAfterArg(argc, argv).value_or(DefaultStaleAfterSeconds()));
-    }
-
-    if (command == "show-host-health") {
-      return ShowHostHealth(
-          db_path,
-          ParseNodeArg(argc, argv),
-          ParseStaleAfterArg(argc, argv).value_or(DefaultStaleAfterSeconds()));
-    }
-
-    if (command == "show-disk-state") {
-      return ShowDiskState(db_path, ParseNodeArg(argc, argv), ParsePlaneArg(argc, argv));
-    }
-
-    if (command == "show-rollout-actions") {
-      return ShowRolloutActions(
-          db_path,
-          ParseNodeArg(argc, argv),
-          ParsePlaneArg(argc, argv));
-    }
-
-    if (command == "show-rebalance-plan") {
-      return ShowRebalancePlan(
-          db_path,
-          ParseNodeArg(argc, argv),
-          ParsePlaneArg(argc, argv));
-    }
-
-    if (command == "show-events") {
-      return ShowEvents(
-          db_path,
-          ParsePlaneArg(argc, argv),
-          ParseNodeArg(argc, argv),
-          ParseWorkerArg(argc, argv),
-          ParseCategoryArg(argc, argv),
-          ParseLimitArg(argc, argv).value_or(100));
-    }
-
-    if (command == "apply-rebalance-proposal") {
-      const auto worker_name = ParseWorkerArg(argc, argv);
-      if (!worker_name.has_value()) {
-        std::cerr << "error: --worker is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteApplyRebalanceProposalAction(
-              db_path,
-              *worker_name,
-              ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv))));
-    }
-
-    if (command == "reconcile-rebalance-proposals") {
-      return EmitControllerActionResult(
-          ExecuteReconcileRebalanceProposalsAction(
-              db_path,
-              ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv))));
-    }
-
-    if (command == "scheduler-tick") {
-      return EmitControllerActionResult(
-          ExecuteSchedulerTickAction(
-              db_path,
-              ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv))));
-    }
-
-    if (command == "set-rollout-action-status") {
-      const auto action_id = ParseIdArg(argc, argv);
-      if (!action_id.has_value()) {
-        std::cerr << "error: --id is required\n";
-        return 1;
-      }
-      const auto requested_status = ParseStatusArg(argc, argv);
-      if (!requested_status.has_value()) {
-        std::cerr << "error: --status is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteSetRolloutActionStatusAction(
-              db_path,
-              *action_id,
-              comet::ParseRolloutActionStatus(*requested_status),
-              ParseMessageArg(argc, argv)));
-    }
-
-    if (command == "enqueue-rollout-eviction") {
-      const auto action_id = ParseIdArg(argc, argv);
-      if (!action_id.has_value()) {
-        std::cerr << "error: --id is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteEnqueueRolloutEvictionAction(db_path, *action_id));
-    }
-
-    if (command == "reconcile-rollout-actions") {
-      return EmitControllerActionResult(
-          ExecuteReconcileRolloutActionsAction(
-              db_path,
-              ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv))));
-    }
-
-    if (command == "apply-ready-rollout-action") {
-      const auto action_id = ParseIdArg(argc, argv);
-      if (!action_id.has_value()) {
-        std::cerr << "error: --id is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteApplyReadyRolloutActionAction(
-              db_path,
-              *action_id,
-              ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv))));
-    }
-
-    if (command == "show-node-availability") {
-      return ShowNodeAvailability(db_path, ParseNodeArg(argc, argv));
-    }
-
-    if (command == "set-node-availability") {
-      const auto requested_node_name = ParseNodeArg(argc, argv);
-      if (!requested_node_name.has_value()) {
-        std::cerr << "error: --node is required\n";
-        return 1;
-      }
-      const auto requested_availability = ParseAvailabilityArg(argc, argv);
-      if (!requested_availability.has_value()) {
-        std::cerr << "error: --availability is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteSetNodeAvailabilityAction(
-              db_path,
-              *requested_node_name,
-              comet::ParseNodeAvailability(*requested_availability),
-              ParseMessageArg(argc, argv)));
-    }
-
-    if (command == "retry-host-assignment") {
-      const auto assignment_id = ParseIdArg(argc, argv);
-      if (!assignment_id.has_value()) {
-        std::cerr << "error: --id is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteRetryHostAssignmentAction(db_path, *assignment_id));
-    }
-
-    if (command == "import-bundle") {
-      const auto bundle_dir = ParseBundleArg(argc, argv);
-      if (!bundle_dir.has_value()) {
-        std::cerr << "error: --bundle is required\n";
-        return 1;
-      }
-      return EmitControllerActionResult(
-          ExecuteImportBundleAction(db_path, *bundle_dir));
-    }
-
-    if (command == "render-compose") {
-      return RenderCompose(db_path, ParseNodeArg(argc, argv));
-    }
-
-    if (command == "render-infer-runtime") {
-      return RenderInferRuntime(db_path);
-    }
-
-    if (command == "serve") {
-      std::optional<std::filesystem::path> ui_root;
-      if (const auto requested_ui_root = ParseUiRootArg(argc, argv);
-          requested_ui_root.has_value()) {
-        ui_root = std::filesystem::path(*requested_ui_root);
-      } else {
-        const std::filesystem::path default_ui_root = DefaultUiRoot();
-        if (std::filesystem::exists(default_ui_root)) {
-          ui_root = default_ui_root;
+      if (command == "validate-bundle") {
+        const auto bundle_dir = cli_.bundle();
+        if (!bundle_dir.has_value()) {
+          std::cerr << "error: --bundle is required\n";
+          return 1;
         }
+        return EmitControllerActionResult(ExecuteValidateBundleAction(*bundle_dir));
       }
-      return ServeControllerApi(
-          db_path,
-          ResolveArtifactsRoot(ParseArtifactsRootArg(argc, argv)),
-          ParseListenHostArg(argc, argv).value_or(DefaultListenHost()),
-          ParseListenPortArg(argc, argv).value_or(DefaultListenPort()),
-          ui_root);
+
+      if (command == "preview-bundle") {
+        const auto bundle_dir = cli_.bundle();
+        if (!bundle_dir.has_value()) {
+          std::cerr << "error: --bundle is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(ExecutePreviewBundleAction(*bundle_dir, cli_.node()));
+      }
+
+      if (command == "plan-bundle") {
+        const auto bundle_dir = cli_.bundle();
+        if (!bundle_dir.has_value()) {
+          std::cerr << "error: --bundle is required\n";
+          return 1;
+        }
+        return PlanBundle(db_path, *bundle_dir);
+      }
+
+      if (command == "apply-bundle") {
+        const auto bundle_dir = cli_.bundle();
+        if (!bundle_dir.has_value()) {
+          std::cerr << "error: --bundle is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteApplyBundleAction(
+                db_path,
+                *bundle_dir,
+                ResolveArtifactsRoot(cli_.artifacts_root())));
+      }
+
+      if (command == "apply-state-file") {
+        const auto state_path = cli_.state_file();
+        if (!state_path.has_value()) {
+          std::cerr << "error: --state is required\n";
+          return 1;
+        }
+        const auto desired_state = comet::LoadDesiredStateJson(*state_path);
+        if (!desired_state.has_value()) {
+          throw std::runtime_error("failed to load desired state file '" + *state_path + "'");
+        }
+        return ApplyDesiredState(
+            db_path,
+            *desired_state,
+            ResolveArtifactsRoot(cli_.artifacts_root()),
+            "state-file:" + *state_path);
+      }
+
+      if (command == "plan-host-ops") {
+        const auto bundle_dir = cli_.bundle();
+        if (!bundle_dir.has_value()) {
+          std::cerr << "error: --bundle is required\n";
+          return 1;
+        }
+        return PlanHostOps(
+            db_path,
+            *bundle_dir,
+            ResolveArtifactsRoot(cli_.artifacts_root()),
+            cli_.node());
+      }
+
+      if (command == "show-state") {
+        return ShowState(db_path);
+      }
+
+      if (command == "show-hostd-hosts") {
+        return host_registry_service.ShowHosts(cli_.node());
+      }
+
+      if (command == "revoke-hostd") {
+        const auto node_name = cli_.node();
+        if (!node_name.has_value()) {
+          std::cerr << "error: --node is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteRevokeHostdAction(db_path, *node_name, cli_.message()));
+      }
+
+      if (command == "rotate-hostd-key") {
+        const auto node_name = cli_.node();
+        if (!node_name.has_value()) {
+          std::cerr << "error: --node is required\n";
+          return 1;
+        }
+        const auto public_key = cli_.public_key_base64();
+        if (!public_key.has_value()) {
+          std::cerr << "error: --public-key is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteRotateHostdKeyAction(db_path, *node_name, *public_key, cli_.message()));
+      }
+
+      if (command == "list-planes") {
+        return ListPlanes(db_path);
+      }
+
+      if (command == "show-plane") {
+        const auto plane_name = cli_.plane();
+        if (!plane_name.has_value()) {
+          std::cerr << "error: --plane is required\n";
+          return 1;
+        }
+        return ShowPlane(db_path, *plane_name);
+      }
+
+      if (command == "start-plane") {
+        const auto plane_name = cli_.plane();
+        if (!plane_name.has_value()) {
+          std::cerr << "error: --plane is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(ExecuteStartPlaneAction(db_path, *plane_name));
+      }
+
+      if (command == "stop-plane") {
+        const auto plane_name = cli_.plane();
+        if (!plane_name.has_value()) {
+          std::cerr << "error: --plane is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(ExecuteStopPlaneAction(db_path, *plane_name));
+      }
+
+      if (command == "delete-plane") {
+        const auto plane_name = cli_.plane();
+        if (!plane_name.has_value()) {
+          std::cerr << "error: --plane is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(ExecuteDeletePlaneAction(db_path, *plane_name));
+      }
+
+      if (command == "ensure-web-ui") {
+        return web_ui_service.Ensure(
+            WebUiService::ResolveWebUiRoot(cli_.web_ui_root()),
+            cli_.listen_port().value_or(WebUiService::DefaultWebUiPort()),
+            cli_.controller_upstream().value_or(WebUiService::DefaultControllerUpstream()),
+            WebUiService::ResolveComposeMode(cli_.compose_mode()));
+      }
+
+      if (command == "show-web-ui-status") {
+        return web_ui_service.ShowStatus(WebUiService::ResolveWebUiRoot(cli_.web_ui_root()));
+      }
+
+      if (command == "stop-web-ui") {
+        return web_ui_service.Stop(
+            WebUiService::ResolveWebUiRoot(cli_.web_ui_root()),
+            WebUiService::ResolveComposeMode(cli_.compose_mode()));
+      }
+
+      if (command == "show-host-assignments") {
+        return ShowHostAssignments(db_path, cli_.node());
+      }
+
+      if (command == "show-host-observations") {
+        return ShowHostObservations(
+            db_path,
+            cli_.plane(),
+            cli_.node(),
+            cli_.stale_after().value_or(DefaultStaleAfterSeconds()));
+      }
+
+      if (command == "show-host-health") {
+        return ShowHostHealth(
+            db_path,
+            cli_.node(),
+            cli_.stale_after().value_or(DefaultStaleAfterSeconds()));
+      }
+
+      if (command == "show-disk-state") {
+        return ShowDiskState(db_path, cli_.node(), cli_.plane());
+      }
+
+      if (command == "show-rollout-actions") {
+        return ShowRolloutActions(db_path, cli_.node(), cli_.plane());
+      }
+
+      if (command == "show-rebalance-plan") {
+        return ShowRebalancePlan(db_path, cli_.node(), cli_.plane());
+      }
+
+      if (command == "show-events") {
+        return ShowEvents(
+            db_path,
+            cli_.plane(),
+            cli_.node(),
+            cli_.worker(),
+            cli_.category(),
+            cli_.limit().value_or(100));
+      }
+
+      if (command == "apply-rebalance-proposal") {
+        const auto worker_name = cli_.worker();
+        if (!worker_name.has_value()) {
+          std::cerr << "error: --worker is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteApplyRebalanceProposalAction(
+                db_path,
+                *worker_name,
+                ResolveArtifactsRoot(cli_.artifacts_root())));
+      }
+
+      if (command == "reconcile-rebalance-proposals") {
+        return EmitControllerActionResult(
+            ExecuteReconcileRebalanceProposalsAction(
+                db_path,
+                ResolveArtifactsRoot(cli_.artifacts_root())));
+      }
+
+      if (command == "scheduler-tick") {
+        return EmitControllerActionResult(
+            ExecuteSchedulerTickAction(
+                db_path,
+                ResolveArtifactsRoot(cli_.artifacts_root())));
+      }
+
+      if (command == "set-rollout-action-status") {
+        const auto action_id = cli_.id();
+        if (!action_id.has_value()) {
+          std::cerr << "error: --id is required\n";
+          return 1;
+        }
+        const auto requested_status = cli_.status();
+        if (!requested_status.has_value()) {
+          std::cerr << "error: --status is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteSetRolloutActionStatusAction(
+                db_path,
+                *action_id,
+                comet::ParseRolloutActionStatus(*requested_status),
+                cli_.message()));
+      }
+
+      if (command == "enqueue-rollout-eviction") {
+        const auto action_id = cli_.id();
+        if (!action_id.has_value()) {
+          std::cerr << "error: --id is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteEnqueueRolloutEvictionAction(db_path, *action_id));
+      }
+
+      if (command == "reconcile-rollout-actions") {
+        return EmitControllerActionResult(
+            ExecuteReconcileRolloutActionsAction(
+                db_path,
+                ResolveArtifactsRoot(cli_.artifacts_root())));
+      }
+
+      if (command == "apply-ready-rollout-action") {
+        const auto action_id = cli_.id();
+        if (!action_id.has_value()) {
+          std::cerr << "error: --id is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteApplyReadyRolloutActionAction(
+                db_path,
+                *action_id,
+                ResolveArtifactsRoot(cli_.artifacts_root())));
+      }
+
+      if (command == "show-node-availability") {
+        return ShowNodeAvailability(db_path, cli_.node());
+      }
+
+      if (command == "set-node-availability") {
+        const auto requested_node_name = cli_.node();
+        if (!requested_node_name.has_value()) {
+          std::cerr << "error: --node is required\n";
+          return 1;
+        }
+        const auto requested_availability = cli_.availability();
+        if (!requested_availability.has_value()) {
+          std::cerr << "error: --availability is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteSetNodeAvailabilityAction(
+                db_path,
+                *requested_node_name,
+                comet::ParseNodeAvailability(*requested_availability),
+                cli_.message()));
+      }
+
+      if (command == "retry-host-assignment") {
+        const auto assignment_id = cli_.id();
+        if (!assignment_id.has_value()) {
+          std::cerr << "error: --id is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(
+            ExecuteRetryHostAssignmentAction(db_path, *assignment_id));
+      }
+
+      if (command == "import-bundle") {
+        const auto bundle_dir = cli_.bundle();
+        if (!bundle_dir.has_value()) {
+          std::cerr << "error: --bundle is required\n";
+          return 1;
+        }
+        return EmitControllerActionResult(ExecuteImportBundleAction(db_path, *bundle_dir));
+      }
+
+      if (command == "render-compose") {
+        return RenderCompose(db_path, cli_.node());
+      }
+
+      if (command == "render-infer-runtime") {
+        return RenderInferRuntime(db_path);
+      }
+
+      if (command == "serve") {
+        std::optional<std::filesystem::path> ui_root;
+        if (const auto requested_ui_root = cli_.ui_root();
+            requested_ui_root.has_value()) {
+          ui_root = std::filesystem::path(*requested_ui_root);
+        } else {
+          const std::filesystem::path default_ui_root = DefaultUiRoot();
+          if (std::filesystem::exists(default_ui_root)) {
+            ui_root = default_ui_root;
+          }
+        }
+        return ServeControllerApi(
+            db_path,
+            ResolveArtifactsRoot(cli_.artifacts_root()),
+            cli_.listen_host().value_or(DefaultListenHost()),
+            cli_.listen_port().value_or(DefaultListenPort()),
+            ui_root);
+      }
+    } catch (const std::exception& error) {
+      std::cerr << "error: " << error.what() << "\n";
+      return 1;
     }
-  } catch (const std::exception& error) {
-    std::cerr << "error: " << error.what() << "\n";
+
+    cli_.PrintUsage(std::cout);
     return 1;
   }
 
-  PrintUsage();
-  return 1;
+ private:
+  ControllerCommandLine cli_;
+};
+
+int main(int argc, char** argv) {
+  ControllerApp app(argc, argv);
+  return app.Run();
 }

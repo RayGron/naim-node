@@ -160,7 +160,13 @@ target_link_libraries(
 )
 comet_enable_strict_warnings(comet-common)
 
-add_executable(comet-controller controller/src/main.cpp)
+add_executable(
+  comet-controller
+  controller/src/controller_command_line.cpp
+  controller/src/host_registry_service.cpp
+  controller/src/web_ui_service.cpp
+  controller/src/main.cpp
+)
 target_link_libraries(comet-controller PRIVATE comet-common)
 if(WIN32)
   target_link_libraries(comet-controller PRIVATE ws2_32)
