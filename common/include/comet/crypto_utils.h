@@ -20,6 +20,10 @@ void InitializeCrypto();
 SigningKeypair GenerateSigningKeypair();
 std::string ComputeKeyFingerprintHex(const std::string& public_key_base64);
 std::string RandomTokenBase64(int byte_count = 32);
+std::string HashPassword(const std::string& password);
+bool VerifyPasswordHash(
+    const std::string& password,
+    const std::string& password_hash);
 
 std::string SignDetachedBase64(
     const std::string& message,

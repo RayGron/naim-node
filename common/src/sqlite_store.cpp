@@ -70,6 +70,71 @@ CREATE TABLE IF NOT EXISTS registered_hosts (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL,
+    password_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_admin
+    ON users(role)
+    WHERE role = 'admin';
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    credential_id TEXT NOT NULL UNIQUE,
+    public_key TEXT NOT NULL,
+    counter INTEGER NOT NULL DEFAULT 0,
+    transports_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS registration_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    created_by_user_id INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    used_by_user_id INTEGER,
+    used_at TEXT NOT NULL DEFAULT '',
+    revoked_at TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (used_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_ssh_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    public_key TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TEXT NOT NULL DEFAULT '',
+    last_used_at TEXT NOT NULL DEFAULT '',
+    UNIQUE (user_id, fingerprint),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    session_kind TEXT NOT NULL,
+    plane_name TEXT NOT NULL DEFAULT '',
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TEXT NOT NULL DEFAULT '',
+    last_used_at TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS plane_nodes (
     plane_name TEXT NOT NULL,
     node_name TEXT NOT NULL,
@@ -2041,6 +2106,519 @@ std::vector<RegisteredHostRecord> ControllerStore::LoadRegisteredHosts(
     });
   }
   return hosts;
+}
+
+int ControllerStore::LoadUserCount() const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(db, "SELECT COUNT(*) FROM users;");
+  if (!statement.StepRow()) {
+    return 0;
+  }
+  return sqlite3_column_int(statement.raw(), 0);
+}
+
+std::optional<UserRecord> ControllerStore::LoadUserById(int user_id) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
+      "FROM users WHERE id = ?1;");
+  statement.BindInt(1, user_id);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return UserRecord{
+      sqlite3_column_int(statement.raw(), 0),
+      ToColumnText(statement.raw(), 1),
+      ToColumnText(statement.raw(), 2),
+      ToColumnText(statement.raw(), 3),
+      ToColumnText(statement.raw(), 4),
+      ToColumnText(statement.raw(), 5),
+      ToColumnText(statement.raw(), 6),
+  };
+}
+
+std::optional<UserRecord> ControllerStore::LoadUserByUsername(const std::string& username) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
+      "FROM users WHERE username = ?1;");
+  statement.BindText(1, username);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return UserRecord{
+      sqlite3_column_int(statement.raw(), 0),
+      ToColumnText(statement.raw(), 1),
+      ToColumnText(statement.raw(), 2),
+      ToColumnText(statement.raw(), 3),
+      ToColumnText(statement.raw(), 4),
+      ToColumnText(statement.raw(), 5),
+      ToColumnText(statement.raw(), 6),
+  };
+}
+
+std::vector<UserRecord> ControllerStore::LoadUsers() const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, username, role, password_hash, created_at, updated_at, last_login_at "
+      "FROM users ORDER BY id ASC;");
+  std::vector<UserRecord> users;
+  while (statement.StepRow()) {
+    users.push_back(UserRecord{
+        sqlite3_column_int(statement.raw(), 0),
+        ToColumnText(statement.raw(), 1),
+        ToColumnText(statement.raw(), 2),
+        ToColumnText(statement.raw(), 3),
+        ToColumnText(statement.raw(), 4),
+        ToColumnText(statement.raw(), 5),
+        ToColumnText(statement.raw(), 6),
+    });
+  }
+  return users;
+}
+
+UserRecord ControllerStore::CreateBootstrapAdmin(
+    const std::string& username,
+    const std::string& password_hash) {
+  sqlite3* db = AsSqlite(db_);
+  Exec(db, "BEGIN IMMEDIATE;");
+  try {
+    Statement count_statement(db, "SELECT COUNT(*) FROM users;");
+    if (!count_statement.StepRow()) {
+      throw std::runtime_error("failed to count users");
+    }
+    if (sqlite3_column_int(count_statement.raw(), 0) != 0) {
+      throw std::runtime_error("bootstrap admin can be created only when user base is empty");
+    }
+    Statement insert_statement(
+        db,
+        "INSERT INTO users(username, role, password_hash, updated_at) "
+        "VALUES (?1, 'admin', ?2, CURRENT_TIMESTAMP);");
+    insert_statement.BindText(1, username);
+    insert_statement.BindText(2, password_hash);
+    insert_statement.StepDone();
+    const int user_id = static_cast<int>(sqlite3_last_insert_rowid(db));
+    Exec(db, "COMMIT;");
+    return *LoadUserById(user_id);
+  } catch (...) {
+    Exec(db, "ROLLBACK;");
+    throw;
+  }
+}
+
+UserRecord ControllerStore::CreateInvitedUser(
+    const std::string& invite_token,
+    const std::string& username,
+    const std::string& password_hash) {
+  sqlite3* db = AsSqlite(db_);
+  Exec(db, "BEGIN IMMEDIATE;");
+  try {
+    Statement invite_statement(
+        db,
+        "SELECT id FROM registration_invites "
+        "WHERE token = ?1 AND revoked_at = '' AND used_at = '' AND expires_at >= CURRENT_TIMESTAMP;");
+    invite_statement.BindText(1, invite_token);
+    if (!invite_statement.StepRow()) {
+      throw std::runtime_error("invite token is missing, expired, or already used");
+    }
+    const int invite_id = sqlite3_column_int(invite_statement.raw(), 0);
+    Statement insert_statement(
+        db,
+        "INSERT INTO users(username, role, password_hash, updated_at) "
+        "VALUES (?1, 'user', ?2, CURRENT_TIMESTAMP);");
+    insert_statement.BindText(1, username);
+    insert_statement.BindText(2, password_hash);
+    insert_statement.StepDone();
+    const int user_id = static_cast<int>(sqlite3_last_insert_rowid(db));
+    Statement update_invite_statement(
+        db,
+        "UPDATE registration_invites "
+        "SET used_by_user_id = ?2, used_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?1;");
+    update_invite_statement.BindInt(1, invite_id);
+    update_invite_statement.BindInt(2, user_id);
+    update_invite_statement.StepDone();
+    Exec(db, "COMMIT;");
+    return *LoadUserById(user_id);
+  } catch (...) {
+    Exec(db, "ROLLBACK;");
+    throw;
+  }
+}
+
+void ControllerStore::UpdateUserLastLoginAt(int user_id, const std::string& last_login_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE users SET last_login_at = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1;");
+  statement.BindInt(1, user_id);
+  statement.BindText(2, last_login_at);
+  statement.StepDone();
+}
+
+void ControllerStore::InsertWebAuthnCredential(const WebAuthnCredentialRecord& credential) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "INSERT INTO webauthn_credentials("
+      " user_id, credential_id, public_key, counter, transports_json, updated_at"
+      ") VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP);");
+  statement.BindInt(1, credential.user_id);
+  statement.BindText(2, credential.credential_id);
+  statement.BindText(3, credential.public_key);
+  statement.BindInt(4, static_cast<int>(credential.counter));
+  statement.BindText(5, credential.transports_json);
+  statement.StepDone();
+}
+
+void ControllerStore::UpdateWebAuthnCredentialCounter(
+    const std::string& credential_id,
+    std::uint32_t counter,
+    const std::string& last_used_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE webauthn_credentials "
+      "SET counter = ?2, last_used_at = ?3, updated_at = CURRENT_TIMESTAMP "
+      "WHERE credential_id = ?1;");
+  statement.BindText(1, credential_id);
+  statement.BindInt(2, static_cast<int>(counter));
+  statement.BindText(3, last_used_at);
+  statement.StepDone();
+}
+
+std::vector<WebAuthnCredentialRecord> ControllerStore::LoadWebAuthnCredentialsForUser(int user_id) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, user_id, credential_id, public_key, counter, transports_json, created_at, updated_at, last_used_at "
+      "FROM webauthn_credentials WHERE user_id = ?1 ORDER BY id ASC;");
+  statement.BindInt(1, user_id);
+  std::vector<WebAuthnCredentialRecord> credentials;
+  while (statement.StepRow()) {
+    credentials.push_back(WebAuthnCredentialRecord{
+        sqlite3_column_int(statement.raw(), 0),
+        sqlite3_column_int(statement.raw(), 1),
+        ToColumnText(statement.raw(), 2),
+        ToColumnText(statement.raw(), 3),
+        static_cast<std::uint32_t>(sqlite3_column_int(statement.raw(), 4)),
+        ToColumnText(statement.raw(), 5),
+        ToColumnText(statement.raw(), 6),
+        ToColumnText(statement.raw(), 7),
+        ToColumnText(statement.raw(), 8),
+    });
+  }
+  return credentials;
+}
+
+std::optional<WebAuthnCredentialRecord> ControllerStore::LoadWebAuthnCredentialById(
+    const std::string& credential_id) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, user_id, credential_id, public_key, counter, transports_json, created_at, updated_at, last_used_at "
+      "FROM webauthn_credentials WHERE credential_id = ?1;");
+  statement.BindText(1, credential_id);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return WebAuthnCredentialRecord{
+      sqlite3_column_int(statement.raw(), 0),
+      sqlite3_column_int(statement.raw(), 1),
+      ToColumnText(statement.raw(), 2),
+      ToColumnText(statement.raw(), 3),
+      static_cast<std::uint32_t>(sqlite3_column_int(statement.raw(), 4)),
+      ToColumnText(statement.raw(), 5),
+      ToColumnText(statement.raw(), 6),
+      ToColumnText(statement.raw(), 7),
+      ToColumnText(statement.raw(), 8),
+  };
+}
+
+RegistrationInviteRecord ControllerStore::CreateRegistrationInvite(
+    int created_by_user_id,
+    const std::string& token,
+    const std::string& expires_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "INSERT INTO registration_invites(token, created_by_user_id, expires_at) "
+      "VALUES (?1, ?2, ?3);");
+  statement.BindText(1, token);
+  statement.BindInt(2, created_by_user_id);
+  statement.BindText(3, expires_at);
+  statement.StepDone();
+  return *LoadRegistrationInviteByToken(token);
+}
+
+std::optional<RegistrationInviteRecord> ControllerStore::LoadRegistrationInviteByToken(
+    const std::string& token) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, token, created_by_user_id, expires_at, created_at, used_by_user_id, used_at, revoked_at "
+      "FROM registration_invites WHERE token = ?1;");
+  statement.BindText(1, token);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return RegistrationInviteRecord{
+      sqlite3_column_int(statement.raw(), 0),
+      ToColumnText(statement.raw(), 1),
+      sqlite3_column_int(statement.raw(), 2),
+      ToColumnText(statement.raw(), 3),
+      ToColumnText(statement.raw(), 4),
+      ToOptionalColumnInt(statement.raw(), 5),
+      ToColumnText(statement.raw(), 6),
+      ToColumnText(statement.raw(), 7),
+  };
+}
+
+std::vector<RegistrationInviteRecord> ControllerStore::LoadActiveRegistrationInvites() const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, token, created_by_user_id, expires_at, created_at, used_by_user_id, used_at, revoked_at "
+      "FROM registration_invites "
+      "WHERE revoked_at = '' AND used_at = '' AND expires_at >= CURRENT_TIMESTAMP "
+      "ORDER BY created_at DESC, id DESC;");
+  std::vector<RegistrationInviteRecord> invites;
+  while (statement.StepRow()) {
+    invites.push_back(RegistrationInviteRecord{
+        sqlite3_column_int(statement.raw(), 0),
+        ToColumnText(statement.raw(), 1),
+        sqlite3_column_int(statement.raw(), 2),
+        ToColumnText(statement.raw(), 3),
+        ToColumnText(statement.raw(), 4),
+        ToOptionalColumnInt(statement.raw(), 5),
+        ToColumnText(statement.raw(), 6),
+        ToColumnText(statement.raw(), 7),
+    });
+  }
+  return invites;
+}
+
+bool ControllerStore::MarkRegistrationInviteUsed(
+    const std::string& token,
+    int used_by_user_id,
+    const std::string& used_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE registration_invites "
+      "SET used_by_user_id = ?2, used_at = ?3 "
+      "WHERE token = ?1 AND revoked_at = '' AND used_at = '' AND expires_at >= CURRENT_TIMESTAMP;");
+  statement.BindText(1, token);
+  statement.BindInt(2, used_by_user_id);
+  statement.BindText(3, used_at);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
+}
+
+bool ControllerStore::RevokeRegistrationInvite(
+    int invite_id,
+    const std::string& revoked_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE registration_invites "
+      "SET revoked_at = ?2 "
+      "WHERE id = ?1 AND revoked_at = '' AND used_at = '';");
+  statement.BindInt(1, invite_id);
+  statement.BindText(2, revoked_at);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
+}
+
+void ControllerStore::InsertUserSshKey(const UserSshKeyRecord& ssh_key) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "INSERT INTO user_ssh_keys(user_id, label, public_key, fingerprint) "
+      "VALUES (?1, ?2, ?3, ?4);");
+  statement.BindInt(1, ssh_key.user_id);
+  statement.BindText(2, ssh_key.label);
+  statement.BindText(3, ssh_key.public_key);
+  statement.BindText(4, ssh_key.fingerprint);
+  statement.StepDone();
+}
+
+std::vector<UserSshKeyRecord> ControllerStore::LoadActiveUserSshKeys(int user_id) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, user_id, label, public_key, fingerprint, created_at, revoked_at, last_used_at "
+      "FROM user_ssh_keys WHERE user_id = ?1 AND revoked_at = '' ORDER BY id ASC;");
+  statement.BindInt(1, user_id);
+  std::vector<UserSshKeyRecord> ssh_keys;
+  while (statement.StepRow()) {
+    ssh_keys.push_back(UserSshKeyRecord{
+        sqlite3_column_int(statement.raw(), 0),
+        sqlite3_column_int(statement.raw(), 1),
+        ToColumnText(statement.raw(), 2),
+        ToColumnText(statement.raw(), 3),
+        ToColumnText(statement.raw(), 4),
+        ToColumnText(statement.raw(), 5),
+        ToColumnText(statement.raw(), 6),
+        ToColumnText(statement.raw(), 7),
+    });
+  }
+  return ssh_keys;
+}
+
+std::optional<UserSshKeyRecord> ControllerStore::LoadActiveUserSshKeyByFingerprint(
+    int user_id,
+    const std::string& fingerprint) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, user_id, label, public_key, fingerprint, created_at, revoked_at, last_used_at "
+      "FROM user_ssh_keys WHERE user_id = ?1 AND fingerprint = ?2 AND revoked_at = '';");
+  statement.BindInt(1, user_id);
+  statement.BindText(2, fingerprint);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return UserSshKeyRecord{
+      sqlite3_column_int(statement.raw(), 0),
+      sqlite3_column_int(statement.raw(), 1),
+      ToColumnText(statement.raw(), 2),
+      ToColumnText(statement.raw(), 3),
+      ToColumnText(statement.raw(), 4),
+      ToColumnText(statement.raw(), 5),
+      ToColumnText(statement.raw(), 6),
+      ToColumnText(statement.raw(), 7),
+  };
+}
+
+std::optional<UserSshKeyRecord> ControllerStore::LoadActiveUserSshKeyById(int ssh_key_id) const {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "SELECT id, user_id, label, public_key, fingerprint, created_at, revoked_at, last_used_at "
+      "FROM user_ssh_keys WHERE id = ?1 AND revoked_at = '';");
+  statement.BindInt(1, ssh_key_id);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return UserSshKeyRecord{
+      sqlite3_column_int(statement.raw(), 0),
+      sqlite3_column_int(statement.raw(), 1),
+      ToColumnText(statement.raw(), 2),
+      ToColumnText(statement.raw(), 3),
+      ToColumnText(statement.raw(), 4),
+      ToColumnText(statement.raw(), 5),
+      ToColumnText(statement.raw(), 6),
+      ToColumnText(statement.raw(), 7),
+  };
+}
+
+bool ControllerStore::RevokeUserSshKey(
+    int ssh_key_id,
+    const std::string& revoked_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE user_ssh_keys SET revoked_at = ?2 WHERE id = ?1 AND revoked_at = '';");
+  statement.BindInt(1, ssh_key_id);
+  statement.BindText(2, revoked_at);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
+}
+
+void ControllerStore::TouchUserSshKey(
+    int ssh_key_id,
+    const std::string& last_used_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE user_ssh_keys SET last_used_at = ?2 WHERE id = ?1;");
+  statement.BindInt(1, ssh_key_id);
+  statement.BindText(2, last_used_at);
+  statement.StepDone();
+}
+
+void ControllerStore::InsertAuthSession(const AuthSessionRecord& session) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "INSERT INTO auth_sessions(token, user_id, session_kind, plane_name, expires_at, last_used_at) "
+      "VALUES (?1, ?2, ?3, ?4, ?5, ?6);");
+  statement.BindText(1, session.token);
+  statement.BindInt(2, session.user_id);
+  statement.BindText(3, session.session_kind);
+  statement.BindText(4, session.plane_name);
+  statement.BindText(5, session.expires_at);
+  statement.BindText(6, session.last_used_at);
+  statement.StepDone();
+}
+
+std::optional<AuthSessionRecord> ControllerStore::LoadActiveAuthSession(
+    const std::string& token,
+    const std::optional<std::string>& session_kind,
+    const std::optional<std::string>& plane_name) const {
+  sqlite3* db = AsSqlite(db_);
+  std::string sql =
+      "SELECT token, user_id, session_kind, plane_name, expires_at, created_at, revoked_at, last_used_at "
+      "FROM auth_sessions WHERE token = ?1 AND revoked_at = '' AND expires_at >= CURRENT_TIMESTAMP";
+  if (session_kind.has_value()) {
+    sql += " AND session_kind = ?2";
+  }
+  if (plane_name.has_value()) {
+    sql += session_kind.has_value() ? " AND plane_name = ?3" : " AND plane_name = ?2";
+  }
+  sql += ";";
+  Statement statement(db, sql);
+  statement.BindText(1, token);
+  int next_index = 2;
+  if (session_kind.has_value()) {
+    statement.BindText(next_index++, *session_kind);
+  }
+  if (plane_name.has_value()) {
+    statement.BindText(next_index++, *plane_name);
+  }
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  return AuthSessionRecord{
+      ToColumnText(statement.raw(), 0),
+      sqlite3_column_int(statement.raw(), 1),
+      ToColumnText(statement.raw(), 2),
+      ToColumnText(statement.raw(), 3),
+      ToColumnText(statement.raw(), 4),
+      ToColumnText(statement.raw(), 5),
+      ToColumnText(statement.raw(), 6),
+      ToColumnText(statement.raw(), 7),
+  };
+}
+
+bool ControllerStore::RevokeAuthSession(
+    const std::string& token,
+    const std::string& revoked_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE auth_sessions SET revoked_at = ?2 WHERE token = ?1 AND revoked_at = '';");
+  statement.BindText(1, token);
+  statement.BindText(2, revoked_at);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
+}
+
+bool ControllerStore::TouchAuthSession(
+    const std::string& token,
+    const std::string& last_used_at) {
+  sqlite3* db = AsSqlite(db_);
+  Statement statement(
+      db,
+      "UPDATE auth_sessions SET last_used_at = ?2 WHERE token = ?1;");
+  statement.BindText(1, token);
+  statement.BindText(2, last_used_at);
+  statement.StepDone();
+  return sqlite3_changes(db) > 0;
 }
 
 bool ControllerStore::UpdatePlaneState(

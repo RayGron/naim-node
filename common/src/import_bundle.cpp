@@ -526,6 +526,7 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       "/comet/shared/control/" + state.plane_name);
   state.plane_mode =
       ParsePlaneMode(OptionalString(plane_json, "plane_mode", "compute"));
+  state.protected_plane = plane_json.value("protected", state.protected_plane);
   if (const auto placement_target = OptionalStringOpt(plane_json, "placement_target")) {
     state.placement_target = *placement_target;
   }

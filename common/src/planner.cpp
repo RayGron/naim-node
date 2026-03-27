@@ -134,6 +134,8 @@ ComposeService BuildComposeService(
     }
   }
   service.environment = instance.environment;
+  service.environment["COMET_PLANE_NAME"] = state.plane_name;
+  service.environment["COMET_PLANE_PROTECTED"] = state.protected_plane ? "1" : "0";
   if (use_vllm) {
     if (instance.role == InstanceRole::Infer) {
       service.environment["COMET_INFER_RUNTIME_BACKEND"] = "worker-vllm";

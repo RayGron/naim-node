@@ -268,6 +268,8 @@ void AppendControllerEvent(
 
 std::string UtcNowSqlTimestamp();
 
+std::string SqlTimestampAfterSeconds(int seconds);
+
 std::optional<long long> TimestampAgeSeconds(const std::string& timestamp_text);
 
 std::string Trim(const std::string& value);
@@ -3576,6 +3578,174 @@ std::optional<std::string> FindHeaderString(
   return it->second;
 }
 
+std::optional<std::string> FindCookieValue(
+    const HttpRequest& request,
+    const std::string& key) {
+  const auto cookie_header = FindHeaderString(request, "cookie");
+  if (!cookie_header.has_value()) {
+    return std::nullopt;
+  }
+  std::istringstream input(*cookie_header);
+  std::string item;
+  while (std::getline(input, item, ';')) {
+    const auto equals = item.find('=');
+    if (equals == std::string::npos) {
+      continue;
+    }
+    std::string name = item.substr(0, equals);
+    std::string value = item.substr(equals + 1);
+    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) {
+      name.erase(name.begin());
+    }
+    while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) {
+      name.pop_back();
+    }
+    if (name == key && !value.empty()) {
+      return value;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> FindBearerToken(const HttpRequest& request) {
+  const auto authorization = FindHeaderString(request, "authorization");
+  if (!authorization.has_value()) {
+    return std::nullopt;
+  }
+  constexpr std::string_view kPrefix = "bearer ";
+  const std::string lowered = Lowercase(*authorization);
+  if (lowered.rfind(std::string(kPrefix), 0) != 0) {
+    return std::nullopt;
+  }
+  const std::string token = authorization->substr(kPrefix.size());
+  return token.empty() ? std::nullopt : std::optional<std::string>(token);
+}
+
+std::optional<std::string> FindControllerSessionToken(const HttpRequest& request) {
+  if (const auto header_token = FindHeaderString(request, "x-comet-session-token");
+      header_token.has_value()) {
+    return header_token;
+  }
+  if (const auto cookie_token = FindCookieValue(request, "comet.sid"); cookie_token.has_value()) {
+    return cookie_token;
+  }
+  return FindBearerToken(request);
+}
+
+std::string SanitizeTokenForPath(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (unsigned char ch : value) {
+    if (std::isalnum(ch) || ch == '-' || ch == '_') {
+      out.push_back(static_cast<char>(ch));
+    } else {
+      out.push_back('_');
+    }
+  }
+  return out;
+}
+
+bool RunCommand(const std::string& command) {
+  const int rc = std::system(command.c_str());
+  return rc == 0;
+}
+
+std::string EscapeShellArg(const std::string& value) {
+  std::string escaped = "'";
+  for (char ch : value) {
+    if (ch == '\'') {
+      escaped += "'\\''";
+    } else {
+      escaped.push_back(ch);
+    }
+  }
+  escaped.push_back('\'');
+  return escaped;
+}
+
+std::string ComputeSshPublicKeyFingerprint(const std::string& public_key) {
+  const std::filesystem::path temp_dir =
+      std::filesystem::temp_directory_path() /
+      ("comet-ssh-key-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
+  std::filesystem::create_directories(temp_dir);
+  const std::filesystem::path key_path = temp_dir / "key.pub";
+  try {
+    {
+      std::ofstream out(key_path);
+      out << public_key << "\n";
+    }
+    const std::string command =
+        "ssh-keygen -lf " + EscapeShellArg(key_path.string()) + " 2>/dev/null";
+    std::array<char, 512> buffer{};
+    std::string output;
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr) {
+      throw std::runtime_error("failed to spawn ssh-keygen for fingerprint");
+    }
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+      output += buffer.data();
+    }
+    const int rc = pclose(pipe);
+    if (rc != 0 || output.empty()) {
+      throw std::runtime_error("ssh-keygen rejected SSH public key");
+    }
+    std::istringstream input(output);
+    std::string bits;
+    std::string fingerprint;
+    input >> bits >> fingerprint;
+    if (fingerprint.empty()) {
+      throw std::runtime_error("failed to parse SSH key fingerprint");
+    }
+    std::filesystem::remove_all(temp_dir);
+    return fingerprint;
+  } catch (...) {
+    std::filesystem::remove_all(temp_dir);
+    throw;
+  }
+}
+
+bool VerifySshDetachedSignature(
+    const std::string& principal,
+    const std::string& public_key,
+    const std::string& message,
+    const std::string& signature_text) {
+  const std::filesystem::path temp_dir =
+      std::filesystem::temp_directory_path() /
+      ("comet-ssh-verify-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
+  std::filesystem::create_directories(temp_dir);
+  const std::filesystem::path allowed_signers_path = temp_dir / "allowed_signers";
+  const std::filesystem::path message_path = temp_dir / "message.txt";
+  const std::filesystem::path signature_path = temp_dir / "signature.txt";
+  try {
+    {
+      std::ofstream out(allowed_signers_path);
+      out << principal << " " << public_key << "\n";
+    }
+    {
+      std::ofstream out(message_path);
+      out << message;
+    }
+    {
+      std::ofstream out(signature_path);
+      out << signature_text;
+    }
+    const std::string command =
+        "ssh-keygen -Y verify"
+        " -f " + EscapeShellArg(allowed_signers_path.string()) +
+        " -I " + EscapeShellArg(principal) +
+        " -n " + EscapeShellArg("comet-plane-auth") +
+        " -s " + EscapeShellArg(signature_path.string()) +
+        " < " + EscapeShellArg(message_path.string()) +
+        " >/dev/null 2>/dev/null";
+    const bool verified = RunCommand(command);
+    std::filesystem::remove_all(temp_dir);
+    return verified;
+  } catch (...) {
+    std::filesystem::remove_all(temp_dir);
+    throw;
+  }
+}
+
 bool StartsWithPath(const std::string& value, const std::string& prefix) {
   return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
 }
@@ -3593,6 +3763,349 @@ struct HostObservationsViewData {
   int stale_after_seconds = 0;
   std::vector<comet::HostObservation> observations;
 };
+
+int BrowserSessionLifetimeSeconds() {
+  return 12 * 60 * 60;
+}
+
+int InviteLifetimeSeconds() {
+  return 60 * 60;
+}
+
+int SshChallengeLifetimeSeconds() {
+  return 5 * 60;
+}
+
+int SshSessionLifetimeSeconds() {
+  return 60 * 60;
+}
+
+json BuildUserPayload(const comet::UserRecord& user) {
+  return json{
+      {"id", user.id},
+      {"username", user.username},
+      {"role", user.role},
+      {"created_at", user.created_at},
+      {"last_login_at", user.last_login_at.empty() ? json(nullptr) : json(user.last_login_at)},
+  };
+}
+
+json BuildWebAuthnCredentialPayload(const comet::WebAuthnCredentialRecord& credential) {
+  json transports = json::array();
+  try {
+    transports = credential.transports_json.empty()
+                     ? json::array()
+                     : json::parse(credential.transports_json);
+  } catch (...) {
+    transports = json::array();
+  }
+  return json{
+      {"id", credential.id},
+      {"user_id", credential.user_id},
+      {"credential_id", credential.credential_id},
+      {"public_key", credential.public_key},
+      {"counter", credential.counter},
+      {"transports", transports},
+      {"created_at", credential.created_at},
+      {"last_used_at", credential.last_used_at.empty() ? json(nullptr) : json(credential.last_used_at)},
+  };
+}
+
+json BuildInvitePayload(const comet::RegistrationInviteRecord& invite) {
+  return json{
+      {"id", invite.id},
+      {"token", invite.token},
+      {"created_by_user_id", invite.created_by_user_id},
+      {"expires_at", invite.expires_at},
+      {"created_at", invite.created_at},
+      {"used_by_user_id", invite.used_by_user_id.has_value() ? json(*invite.used_by_user_id) : json(nullptr)},
+      {"used_at", invite.used_at.empty() ? json(nullptr) : json(invite.used_at)},
+      {"revoked_at", invite.revoked_at.empty() ? json(nullptr) : json(invite.revoked_at)},
+  };
+}
+
+json BuildSshKeyPayload(const comet::UserSshKeyRecord& ssh_key) {
+  return json{
+      {"id", ssh_key.id},
+      {"user_id", ssh_key.user_id},
+      {"label", ssh_key.label},
+      {"fingerprint", ssh_key.fingerprint},
+      {"public_key", ssh_key.public_key},
+      {"created_at", ssh_key.created_at},
+      {"revoked_at", ssh_key.revoked_at.empty() ? json(nullptr) : json(ssh_key.revoked_at)},
+      {"last_used_at", ssh_key.last_used_at.empty() ? json(nullptr) : json(ssh_key.last_used_at)},
+  };
+}
+
+std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>> AuthenticateControllerUserSession(
+    comet::ControllerStore& store,
+    const HttpRequest& request,
+    const std::optional<std::string>& session_kind = std::optional<std::string>("web")) {
+  const auto token = FindControllerSessionToken(request);
+  if (!token.has_value()) {
+    return std::nullopt;
+  }
+  const auto session = store.LoadActiveAuthSession(*token, session_kind);
+  if (!session.has_value()) {
+    return std::nullopt;
+  }
+  const auto user = store.LoadUserById(session->user_id);
+  if (!user.has_value()) {
+    return std::nullopt;
+  }
+  store.TouchAuthSession(session->token, UtcNowSqlTimestamp());
+  return std::make_pair(*user, *session);
+}
+
+std::optional<comet::UserRecord> RequireControllerAdminUser(
+    comet::ControllerStore& store,
+    const HttpRequest& request) {
+  const auto session = AuthenticateControllerUserSession(store, request);
+  if (!session.has_value() || session->first.role != "admin") {
+    return std::nullopt;
+  }
+  return session->first;
+}
+
+std::string BuildSshChallengeMessage(
+    const std::string& username,
+    const std::string& plane_name,
+    const std::string& challenge_token,
+    const std::string& expires_at) {
+  return "comet-plane-auth\n" + username + "\n" + plane_name + "\n" + challenge_token + "\n" +
+         expires_at + "\n";
+}
+
+struct PendingWebAuthnFlow {
+  std::string flow_id;
+  std::string flow_kind;
+  std::string username;
+  std::string password_hash;
+  std::string invite_token;
+  int user_id = 0;
+  std::string challenge;
+  std::string rp_id;
+  std::string origin;
+  std::string expires_at;
+};
+
+struct PendingSshChallenge {
+  std::string challenge_id;
+  int user_id = 0;
+  int ssh_key_id = 0;
+  std::string username;
+  std::string plane_name;
+  std::string fingerprint;
+  std::string challenge_token;
+  std::string message;
+  std::string expires_at;
+};
+
+std::mutex g_pending_webauthn_mutex;
+std::map<std::string, PendingWebAuthnFlow> g_pending_webauthn_flows;
+std::mutex g_pending_ssh_mutex;
+std::map<std::string, PendingSshChallenge> g_pending_ssh_challenges;
+
+std::optional<std::string> GetEnvString(const char* key) {
+  if (const char* value = std::getenv(key); value != nullptr && value[0] != '\0') {
+    return std::string(value);
+  }
+  return std::nullopt;
+}
+
+std::string RequestHostHeader(const HttpRequest& request) {
+  if (const auto forwarded = FindHeaderString(request, "x-forwarded-host"); forwarded.has_value()) {
+    return *forwarded;
+  }
+  if (const auto host = FindHeaderString(request, "host"); host.has_value()) {
+    return *host;
+  }
+  return "127.0.0.1:18081";
+}
+
+std::string HostWithoutPort(const std::string& host_header) {
+  if (host_header.empty()) {
+    return host_header;
+  }
+  if (host_header.front() == '[') {
+    const auto close = host_header.find(']');
+    return close == std::string::npos ? host_header : host_header.substr(1, close - 1);
+  }
+  const auto colon = host_header.find(':');
+  return colon == std::string::npos ? host_header : host_header.substr(0, colon);
+}
+
+std::string RequestScheme(const HttpRequest& request) {
+  if (const auto forwarded = FindHeaderString(request, "x-forwarded-proto"); forwarded.has_value()) {
+    return Lowercase(*forwarded);
+  }
+  return "http";
+}
+
+std::string ResolveWebAuthnRpId(const HttpRequest& request) {
+  if (const auto env = GetEnvString("COMET_WEBAUTHN_RP_ID"); env.has_value()) {
+    return *env;
+  }
+  return HostWithoutPort(RequestHostHeader(request));
+}
+
+std::string ResolveWebAuthnOrigin(const HttpRequest& request) {
+  if (const auto env = GetEnvString("COMET_WEBAUTHN_ORIGIN"); env.has_value()) {
+    return *env;
+  }
+  return RequestScheme(request) + "://" + RequestHostHeader(request);
+}
+
+std::string ResolveWebAuthnRpName() {
+  return GetEnvString("COMET_WEBAUTHN_RP_NAME").value_or("comet-node");
+}
+
+std::filesystem::path ResolveWebAuthnHelperPath() {
+  if (const auto env = GetEnvString("COMET_WEBAUTHN_HELPER"); env.has_value()) {
+    return std::filesystem::path(*env);
+  }
+  std::vector<std::filesystem::path> roots = {
+      std::filesystem::current_path(),
+      std::filesystem::current_path().parent_path(),
+  };
+  std::error_code error;
+  const std::filesystem::path proc_exe = std::filesystem::read_symlink("/proc/self/exe", error);
+  if (!error && !proc_exe.empty()) {
+    roots.push_back(proc_exe.parent_path());
+    roots.push_back(proc_exe.parent_path().parent_path());
+  }
+  for (const auto& root : roots) {
+    const auto candidate =
+        root / "ui" / "operator-react" / "scripts" / "webauthn-helper.mjs";
+    if (std::filesystem::exists(candidate)) {
+      return candidate;
+    }
+  }
+  throw std::runtime_error("failed to locate WebAuthn helper script");
+}
+
+json RunWebAuthnHelper(const std::string& action, const json& payload) {
+  const std::filesystem::path temp_dir =
+      std::filesystem::temp_directory_path() /
+      ("comet-webauthn-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
+  std::filesystem::create_directories(temp_dir);
+  const std::filesystem::path input_path = temp_dir / "input.json";
+  const std::filesystem::path output_path = temp_dir / "output.json";
+  try {
+    {
+      std::ofstream out(input_path);
+      out << payload.dump();
+    }
+    const std::string node_bin = GetEnvString("COMET_NODE_BIN").value_or("node");
+    const std::string command =
+        EscapeShellArg(node_bin) + " " +
+        EscapeShellArg(ResolveWebAuthnHelperPath().string()) + " " +
+        EscapeShellArg(action) + " " +
+        EscapeShellArg(input_path.string()) + " > " +
+        EscapeShellArg(output_path.string());
+    if (!RunCommand(command)) {
+      throw std::runtime_error("WebAuthn helper command failed");
+    }
+    std::ifstream input(output_path);
+    if (!input.is_open()) {
+      throw std::runtime_error("failed to open WebAuthn helper output");
+    }
+    json result = json::parse(input, nullptr, true, true);
+    std::filesystem::remove_all(temp_dir);
+    return result;
+  } catch (...) {
+    std::filesystem::remove_all(temp_dir);
+    throw;
+  }
+}
+
+void CleanupExpiredPendingAuthFlows() {
+  const std::string now = UtcNowSqlTimestamp();
+  {
+    std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+    for (auto it = g_pending_webauthn_flows.begin(); it != g_pending_webauthn_flows.end();) {
+      if (it->second.expires_at < now) {
+        it = g_pending_webauthn_flows.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_pending_ssh_mutex);
+    for (auto it = g_pending_ssh_challenges.begin(); it != g_pending_ssh_challenges.end();) {
+      if (it->second.expires_at < now) {
+        it = g_pending_ssh_challenges.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+}
+
+std::string SessionCookieHeader(const std::string& token, const HttpRequest& request) {
+  std::string value = "comet.sid=" + token + "; Path=/; HttpOnly; SameSite=Strict";
+  if (RequestScheme(request) == "https") {
+    value += "; Secure";
+  }
+  return value;
+}
+
+std::string ClearSessionCookieHeader(const HttpRequest& request) {
+  std::string value =
+      "comet.sid=; Path=/; HttpOnly; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  if (RequestScheme(request) == "https") {
+    value += "; Secure";
+  }
+  return value;
+}
+
+std::string CreateControllerSession(
+    comet::ControllerStore& store,
+    int user_id,
+    const std::string& session_kind,
+    const std::string& plane_name = "") {
+  const std::string now = UtcNowSqlTimestamp();
+  const std::string token = comet::RandomTokenBase64(32);
+  store.InsertAuthSession(comet::AuthSessionRecord{
+      token,
+      user_id,
+      session_kind,
+      plane_name,
+      SqlTimestampAfterSeconds(
+          session_kind == "ssh" ? SshSessionLifetimeSeconds() : BrowserSessionLifetimeSeconds()),
+      now,
+      "",
+      now,
+  });
+  store.UpdateUserLastLoginAt(user_id, now);
+  return token;
+}
+
+std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>> AuthenticateProtectedPlaneRequest(
+    comet::ControllerStore& store,
+    const HttpRequest& request,
+    const std::string& plane_name) {
+  if (const auto web_session = AuthenticateControllerUserSession(store, request, std::optional<std::string>("web"));
+      web_session.has_value()) {
+    return web_session;
+  }
+  const auto token = FindControllerSessionToken(request);
+  if (!token.has_value()) {
+    return std::nullopt;
+  }
+  const auto ssh_session =
+      store.LoadActiveAuthSession(*token, std::optional<std::string>("ssh"), plane_name);
+  if (!ssh_session.has_value()) {
+    return std::nullopt;
+  }
+  const auto user = store.LoadUserById(ssh_session->user_id);
+  if (!user.has_value()) {
+    return std::nullopt;
+  }
+  store.TouchAuthSession(ssh_session->token, UtcNowSqlTimestamp());
+  return std::make_pair(*user, *ssh_session);
+}
 
 struct HostHealthViewData {
   std::string db_path;
@@ -7423,11 +7936,759 @@ HttpResponse HandleControllerRequest(
     const HttpRequest& request,
     const std::optional<std::filesystem::path>& ui_root) {
   const ScopedCurrentHttpRequest scoped_request(request);
+  CleanupExpiredPendingAuthFlows();
   if (request.path == "/health" || request.path == "/api/v1/health") {
     if (request.method != "GET") {
       return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
     }
     return BuildJsonResponse(200, BuildControllerHealthPayload(db_path));
+  }
+  if (request.path == "/api/v1/auth/state") {
+    if (request.method != "GET") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto session = AuthenticateControllerUserSession(store, request);
+      return BuildJsonResponse(
+          200,
+          json{
+              {"service", "comet-controller"},
+              {"setup_required", store.LoadUserCount() == 0},
+              {"authenticated", session.has_value()},
+              {"user", session.has_value() ? BuildUserPayload(session->first) : json(nullptr)},
+              {"rp_id", ResolveWebAuthnRpId(request)},
+              {"origin", ResolveWebAuthnOrigin(request)},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
+    }
+  }
+  if (request.path == "/api/v1/auth/me") {
+    if (request.method != "GET") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto session = AuthenticateControllerUserSession(store, request);
+      if (!session.has_value()) {
+        return BuildJsonResponse(
+            401,
+            json{{"status", "unauthorized"}, {"message", "authentication required"}},
+            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
+      }
+      return BuildJsonResponse(200, json{{"user", BuildUserPayload(session->first)}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
+    }
+  }
+  if (request.path == "/api/v1/auth/logout") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      if (const auto token = FindControllerSessionToken(request); token.has_value()) {
+        store.RevokeAuthSession(*token, UtcNowSqlTimestamp());
+      }
+      return BuildJsonResponse(
+          200,
+          json{{"logged_out", true}},
+          {{"Set-Cookie", ClearSessionCookieHeader(request)}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
+    }
+  }
+  if (request.path == "/api/v1/auth/bootstrap/begin") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string username = Trim(body.value("username", std::string{}));
+      const std::string password = body.value("password", std::string{});
+      if (username.empty() || password.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "username and password are required"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      if (store.LoadUserCount() != 0) {
+        return BuildJsonResponse(
+            409,
+            json{{"status", "conflict"}, {"message", "bootstrap is available only when user base is empty"}});
+      }
+      const std::string flow_id = comet::RandomTokenBase64(24);
+      const std::string challenge = comet::RandomTokenBase64(32);
+      const PendingWebAuthnFlow flow{
+          flow_id,
+          "bootstrap",
+          username,
+          comet::HashPassword(password),
+          "",
+          0,
+          challenge,
+          ResolveWebAuthnRpId(request),
+          ResolveWebAuthnOrigin(request),
+          SqlTimestampAfterSeconds(5 * 60),
+      };
+      const json options = RunWebAuthnHelper(
+          "generate-registration-options",
+          json{
+              {"rpName", ResolveWebAuthnRpName()},
+              {"rpID", flow.rp_id},
+              {"userName", username},
+              {"challenge", challenge},
+          });
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        g_pending_webauthn_flows[flow_id] = flow;
+      }
+      return BuildJsonResponse(
+          200,
+          json{
+              {"flow_id", flow_id},
+              {"expires_at", flow.expires_at},
+              {"options", options},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
+    }
+  }
+  if (request.path == "/api/v1/auth/bootstrap/finish") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string flow_id = body.value("flow_id", std::string{});
+      if (flow_id.empty() || !body.contains("response")) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "flow_id and response are required"}});
+      }
+      std::optional<PendingWebAuthnFlow> flow;
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        const auto it = g_pending_webauthn_flows.find(flow_id);
+        if (it != g_pending_webauthn_flows.end()) {
+          flow = it->second;
+        }
+      }
+      if (!flow.has_value() || flow->flow_kind != "bootstrap" || flow->expires_at < UtcNowSqlTimestamp()) {
+        return BuildJsonResponse(
+            410,
+            json{{"status", "expired"}, {"message", "bootstrap flow is missing or expired"}});
+      }
+      const json verification = RunWebAuthnHelper(
+          "verify-registration",
+          json{
+              {"response", body.at("response")},
+              {"expectedChallenge", flow->challenge},
+              {"expectedOrigin", flow->origin},
+              {"expectedRPID", flow->rp_id},
+          });
+      if (!verification.value("verified", false)) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "WebAuthn registration verification failed"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto user = store.CreateBootstrapAdmin(flow->username, flow->password_hash);
+      const json credential = verification.at("registrationInfo");
+      store.InsertWebAuthnCredential(comet::WebAuthnCredentialRecord{
+          0,
+          user.id,
+          credential.value("credentialID", std::string{}),
+          credential.value("credentialPublicKey", std::string{}),
+          static_cast<std::uint32_t>(credential.value("counter", 0)),
+          json(credential.value("transports", json::array())).dump(),
+          "",
+          "",
+          "",
+      });
+      const std::string session_token = CreateControllerSession(store, user.id, "web");
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        g_pending_webauthn_flows.erase(flow_id);
+      }
+      return BuildJsonResponse(
+          200,
+          json{{"user", BuildUserPayload(user)}},
+          {{"Set-Cookie", SessionCookieHeader(session_token, request)}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/auth/login/begin") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string username = Trim(body.value("username", std::string{}));
+      if (username.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "username is required"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto user = store.LoadUserByUsername(username);
+      if (!user.has_value()) {
+        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "user not found"}});
+      }
+      const auto credentials = store.LoadWebAuthnCredentialsForUser(user->id);
+      if (credentials.empty()) {
+        return BuildJsonResponse(
+            409,
+            json{{"status", "conflict"}, {"message", "user has no registered WebAuthn credentials"}});
+      }
+      json allow_credentials = json::array();
+      for (const auto& credential : credentials) {
+        json transports = json::array();
+        try {
+          transports = credential.transports_json.empty()
+                           ? json::array()
+                           : json::parse(credential.transports_json);
+        } catch (...) {
+          transports = json::array();
+        }
+        allow_credentials.push_back(
+            json{{"id", credential.credential_id}, {"transports", transports}});
+      }
+      const std::string flow_id = comet::RandomTokenBase64(24);
+      const std::string challenge = comet::RandomTokenBase64(32);
+      const PendingWebAuthnFlow flow{
+          flow_id,
+          "login",
+          username,
+          "",
+          "",
+          user->id,
+          challenge,
+          ResolveWebAuthnRpId(request),
+          ResolveWebAuthnOrigin(request),
+          SqlTimestampAfterSeconds(5 * 60),
+      };
+      const json options = RunWebAuthnHelper(
+          "generate-authentication-options",
+          json{
+              {"rpID", flow.rp_id},
+              {"challenge", challenge},
+              {"allowCredentials", allow_credentials},
+          });
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        g_pending_webauthn_flows[flow_id] = flow;
+      }
+      return BuildJsonResponse(
+          200,
+          json{{"flow_id", flow_id}, {"expires_at", flow.expires_at}, {"options", options}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
+    }
+  }
+  if (request.path == "/api/v1/auth/login/finish") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string flow_id = body.value("flow_id", std::string{});
+      if (flow_id.empty() || !body.contains("response")) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "flow_id and response are required"}});
+      }
+      std::optional<PendingWebAuthnFlow> flow;
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        const auto it = g_pending_webauthn_flows.find(flow_id);
+        if (it != g_pending_webauthn_flows.end()) {
+          flow = it->second;
+        }
+      }
+      if (!flow.has_value() || flow->flow_kind != "login" || flow->expires_at < UtcNowSqlTimestamp()) {
+        return BuildJsonResponse(
+            410,
+            json{{"status", "expired"}, {"message", "login flow is missing or expired"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const std::string credential_id = body.at("response").value("id", std::string{});
+      const auto credential = store.LoadWebAuthnCredentialById(credential_id);
+      if (!credential.has_value() || credential->user_id != flow->user_id) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "credential is not registered for this user"}});
+      }
+      const json verification = RunWebAuthnHelper(
+          "verify-authentication",
+          json{
+              {"response", body.at("response")},
+              {"expectedChallenge", flow->challenge},
+              {"expectedOrigin", flow->origin},
+              {"expectedRPID", flow->rp_id},
+              {"credential",
+               {
+                   {"id", credential->credential_id},
+                   {"publicKey", credential->public_key},
+                   {"counter", credential->counter},
+                   {"transports",
+                    credential->transports_json.empty() ? json::array() : json::parse(credential->transports_json)},
+               }},
+          });
+      if (!verification.value("verified", false)) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "WebAuthn authentication verification failed"}});
+      }
+      const json auth_info = verification.at("authenticationInfo");
+      store.UpdateWebAuthnCredentialCounter(
+          credential->credential_id,
+          static_cast<std::uint32_t>(auth_info.value("newCounter", credential->counter)),
+          UtcNowSqlTimestamp());
+      const auto user = store.LoadUserById(flow->user_id);
+      if (!user.has_value()) {
+        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "user not found"}});
+      }
+      const std::string session_token = CreateControllerSession(store, user->id, "web");
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        g_pending_webauthn_flows.erase(flow_id);
+      }
+      return BuildJsonResponse(
+          200,
+          json{{"user", BuildUserPayload(*user)}},
+          {{"Set-Cookie", SessionCookieHeader(session_token, request)}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (StartsWithPath(request.path, "/api/v1/auth/invite/")) {
+    if (request.method != "GET") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const std::string token = request.path.substr(std::string("/api/v1/auth/invite/").size());
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto invite = store.LoadRegistrationInviteByToken(token);
+      const bool valid =
+          invite.has_value() && invite->revoked_at.empty() && invite->used_at.empty() &&
+          invite->expires_at >= UtcNowSqlTimestamp();
+      return BuildJsonResponse(
+          valid ? 200 : 404,
+          json{
+              {"valid", valid},
+              {"invite", valid ? BuildInvitePayload(*invite) : json(nullptr)},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
+    }
+  }
+  if (request.path == "/api/v1/auth/register/begin") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string invite_token = body.value("invite_token", std::string{});
+      const std::string username = Trim(body.value("username", std::string{}));
+      const std::string password = body.value("password", std::string{});
+      if (invite_token.empty() || username.empty() || password.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "invite_token, username, and password are required"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto invite = store.LoadRegistrationInviteByToken(invite_token);
+      if (!invite.has_value() || !invite->revoked_at.empty() || !invite->used_at.empty() ||
+          invite->expires_at < UtcNowSqlTimestamp()) {
+        return BuildJsonResponse(
+            404,
+            json{{"status", "not_found"}, {"message", "invite is missing, expired, revoked, or already used"}});
+      }
+      if (store.LoadUserByUsername(username).has_value()) {
+        return BuildJsonResponse(
+            409,
+            json{{"status", "conflict"}, {"message", "username is already taken"}});
+      }
+      const std::string flow_id = comet::RandomTokenBase64(24);
+      const std::string challenge = comet::RandomTokenBase64(32);
+      const PendingWebAuthnFlow flow{
+          flow_id,
+          "register",
+          username,
+          comet::HashPassword(password),
+          invite_token,
+          0,
+          challenge,
+          ResolveWebAuthnRpId(request),
+          ResolveWebAuthnOrigin(request),
+          SqlTimestampAfterSeconds(5 * 60),
+      };
+      const json options = RunWebAuthnHelper(
+          "generate-registration-options",
+          json{
+              {"rpName", ResolveWebAuthnRpName()},
+              {"rpID", flow.rp_id},
+              {"userName", username},
+              {"challenge", challenge},
+          });
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        g_pending_webauthn_flows[flow_id] = flow;
+      }
+      return BuildJsonResponse(
+          200,
+          json{{"flow_id", flow_id}, {"expires_at", flow.expires_at}, {"options", options}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(500, json{{"status", "internal_error"}, {"message", error.what()}});
+    }
+  }
+  if (request.path == "/api/v1/auth/register/finish") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string flow_id = body.value("flow_id", std::string{});
+      if (flow_id.empty() || !body.contains("response")) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "flow_id and response are required"}});
+      }
+      std::optional<PendingWebAuthnFlow> flow;
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        const auto it = g_pending_webauthn_flows.find(flow_id);
+        if (it != g_pending_webauthn_flows.end()) {
+          flow = it->second;
+        }
+      }
+      if (!flow.has_value() || flow->flow_kind != "register" || flow->expires_at < UtcNowSqlTimestamp()) {
+        return BuildJsonResponse(
+            410,
+            json{{"status", "expired"}, {"message", "registration flow is missing or expired"}});
+      }
+      const json verification = RunWebAuthnHelper(
+          "verify-registration",
+          json{
+              {"response", body.at("response")},
+              {"expectedChallenge", flow->challenge},
+              {"expectedOrigin", flow->origin},
+              {"expectedRPID", flow->rp_id},
+          });
+      if (!verification.value("verified", false)) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "WebAuthn registration verification failed"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto user = store.CreateInvitedUser(flow->invite_token, flow->username, flow->password_hash);
+      const json credential = verification.at("registrationInfo");
+      store.InsertWebAuthnCredential(comet::WebAuthnCredentialRecord{
+          0,
+          user.id,
+          credential.value("credentialID", std::string{}),
+          credential.value("credentialPublicKey", std::string{}),
+          static_cast<std::uint32_t>(credential.value("counter", 0)),
+          json(credential.value("transports", json::array())).dump(),
+          "",
+          "",
+          "",
+      });
+      const std::string session_token = CreateControllerSession(store, user.id, "web");
+      {
+        std::lock_guard<std::mutex> lock(g_pending_webauthn_mutex);
+        g_pending_webauthn_flows.erase(flow_id);
+      }
+      return BuildJsonResponse(
+          200,
+          json{{"user", BuildUserPayload(user)}},
+          {{"Set-Cookie", SessionCookieHeader(session_token, request)}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/auth/invites") {
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto admin = RequireControllerAdminUser(store, request);
+      if (!admin.has_value()) {
+        return BuildJsonResponse(
+            401,
+            json{{"status", "unauthorized"}, {"message", "admin session is required"}},
+            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
+      }
+      if (request.method == "GET") {
+        json items = json::array();
+        for (const auto& invite : store.LoadActiveRegistrationInvites()) {
+          json item = BuildInvitePayload(invite);
+          item["registration_url"] = ResolveWebAuthnOrigin(request) + "/register/" + invite.token;
+          items.push_back(std::move(item));
+        }
+        return BuildJsonResponse(200, json{{"items", items}});
+      }
+      if (request.method == "POST") {
+        const std::string token = SanitizeTokenForPath(comet::RandomTokenBase64(18));
+        const auto invite =
+            store.CreateRegistrationInvite(admin->id, token, SqlTimestampAfterSeconds(InviteLifetimeSeconds()));
+        json item = BuildInvitePayload(invite);
+        item["registration_url"] = ResolveWebAuthnOrigin(request) + "/register/" + invite.token;
+        return BuildJsonResponse(200, json{{"invite", item}});
+      }
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (StartsWithPath(request.path, "/api/v1/auth/invites/")) {
+    if (request.method != "DELETE") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto admin = RequireControllerAdminUser(store, request);
+      if (!admin.has_value()) {
+        return BuildJsonResponse(
+            401,
+            json{{"status", "unauthorized"}, {"message", "admin session is required"}},
+            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
+      }
+      const int invite_id = std::stoi(request.path.substr(std::string("/api/v1/auth/invites/").size()));
+      const bool revoked = store.RevokeRegistrationInvite(invite_id, UtcNowSqlTimestamp());
+      return BuildJsonResponse(
+          revoked ? 200 : 404,
+          json{{"revoked", revoked}},
+          revoked ? std::map<std::string, std::string>{}
+                  : std::map<std::string, std::string>{});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/auth/ssh-keys") {
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto session = AuthenticateControllerUserSession(store, request);
+      if (!session.has_value()) {
+        return BuildJsonResponse(
+            401,
+            json{{"status", "unauthorized"}, {"message", "authentication required"}},
+            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
+      }
+      if (request.method == "GET") {
+        json items = json::array();
+        for (const auto& key : store.LoadActiveUserSshKeys(session->first.id)) {
+          items.push_back(BuildSshKeyPayload(key));
+        }
+        return BuildJsonResponse(200, json{{"items", items}});
+      }
+      if (request.method == "POST") {
+        const json body = ParseJsonRequestBody(request);
+        const std::string public_key = Trim(body.value("public_key", std::string{}));
+        if (public_key.empty()) {
+          return BuildJsonResponse(
+              400,
+              json{{"status", "bad_request"}, {"message", "public_key is required"}});
+        }
+        const comet::UserSshKeyRecord ssh_key{
+            0,
+            session->first.id,
+            Trim(body.value("label", std::string{})),
+            public_key,
+            ComputeSshPublicKeyFingerprint(public_key),
+            "",
+            "",
+            "",
+        };
+        store.InsertUserSshKey(ssh_key);
+        const auto created =
+            store.LoadActiveUserSshKeyByFingerprint(session->first.id, ssh_key.fingerprint);
+        return BuildJsonResponse(
+            200,
+            json{{"ssh_key", created.has_value() ? BuildSshKeyPayload(*created) : BuildSshKeyPayload(ssh_key)}});
+      }
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (StartsWithPath(request.path, "/api/v1/auth/ssh-keys/")) {
+    if (request.method != "DELETE") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto session = AuthenticateControllerUserSession(store, request);
+      if (!session.has_value()) {
+        return BuildJsonResponse(
+            401,
+            json{{"status", "unauthorized"}, {"message", "authentication required"}},
+            {{"Set-Cookie", ClearSessionCookieHeader(request)}});
+      }
+      const int ssh_key_id = std::stoi(request.path.substr(std::string("/api/v1/auth/ssh-keys/").size()));
+      const auto ssh_key = store.LoadActiveUserSshKeyById(ssh_key_id);
+      if (!ssh_key.has_value() || ssh_key->user_id != session->first.id) {
+        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "SSH key not found"}});
+      }
+      const bool revoked = store.RevokeUserSshKey(ssh_key_id, UtcNowSqlTimestamp());
+      return BuildJsonResponse(revoked ? 200 : 404, json{{"revoked", revoked}});
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/auth/ssh/challenge") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string username = Trim(body.value("username", std::string{}));
+      const std::string plane_name = Trim(body.value("plane_name", std::string{}));
+      const std::string fingerprint = Trim(body.value("fingerprint", std::string{}));
+      if (username.empty() || plane_name.empty() || fingerprint.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "username, plane_name, and fingerprint are required"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto desired_state = store.LoadDesiredState(plane_name);
+      if (!desired_state.has_value() || !desired_state->protected_plane) {
+        return BuildJsonResponse(
+            404,
+            json{{"status", "not_found"}, {"message", "protected plane not found"}});
+      }
+      const auto user = store.LoadUserByUsername(username);
+      if (!user.has_value()) {
+        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "user not found"}});
+      }
+      const auto ssh_key = store.LoadActiveUserSshKeyByFingerprint(user->id, fingerprint);
+      if (!ssh_key.has_value()) {
+        return BuildJsonResponse(
+            404,
+            json{{"status", "not_found"}, {"message", "SSH key fingerprint not found for user"}});
+      }
+      PendingSshChallenge challenge;
+      challenge.challenge_id = comet::RandomTokenBase64(24);
+      challenge.user_id = user->id;
+      challenge.ssh_key_id = ssh_key->id;
+      challenge.username = user->username;
+      challenge.plane_name = plane_name;
+      challenge.fingerprint = fingerprint;
+      challenge.challenge_token = comet::RandomTokenBase64(24);
+      challenge.expires_at = SqlTimestampAfterSeconds(SshChallengeLifetimeSeconds());
+      challenge.message = BuildSshChallengeMessage(
+          challenge.username,
+          challenge.plane_name,
+          challenge.challenge_token,
+          challenge.expires_at);
+      {
+        std::lock_guard<std::mutex> lock(g_pending_ssh_mutex);
+        g_pending_ssh_challenges[challenge.challenge_id] = challenge;
+      }
+      return BuildJsonResponse(
+          200,
+          json{
+              {"challenge_id", challenge.challenge_id},
+              {"challenge_token", challenge.challenge_token},
+              {"expires_at", challenge.expires_at},
+              {"message", challenge.message},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
+  }
+  if (request.path == "/api/v1/auth/ssh/verify") {
+    if (request.method != "POST") {
+      return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
+    }
+    try {
+      const json body = ParseJsonRequestBody(request);
+      const std::string challenge_id = body.value("challenge_id", std::string{});
+      const std::string signature = body.value("signature", std::string{});
+      if (challenge_id.empty() || signature.empty()) {
+        return BuildJsonResponse(
+            400,
+            json{{"status", "bad_request"}, {"message", "challenge_id and signature are required"}});
+      }
+      std::optional<PendingSshChallenge> challenge;
+      {
+        std::lock_guard<std::mutex> lock(g_pending_ssh_mutex);
+        const auto it = g_pending_ssh_challenges.find(challenge_id);
+        if (it != g_pending_ssh_challenges.end()) {
+          challenge = it->second;
+        }
+      }
+      if (!challenge.has_value() || challenge->expires_at < UtcNowSqlTimestamp()) {
+        return BuildJsonResponse(
+            410,
+            json{{"status", "expired"}, {"message", "SSH challenge is missing or expired"}});
+      }
+      comet::ControllerStore store(db_path);
+      store.Initialize();
+      const auto ssh_key = store.LoadActiveUserSshKeyById(challenge->ssh_key_id);
+      if (!ssh_key.has_value()) {
+        return BuildJsonResponse(404, json{{"status", "not_found"}, {"message", "SSH key not found"}});
+      }
+      if (!VerifySshDetachedSignature(
+              challenge->username,
+              ssh_key->public_key,
+              challenge->message,
+              signature)) {
+        return BuildJsonResponse(
+            403,
+            json{{"status", "forbidden"}, {"message", "SSH signature verification failed"}});
+      }
+      store.TouchUserSshKey(ssh_key->id, UtcNowSqlTimestamp());
+      const std::string session_token =
+          CreateControllerSession(store, challenge->user_id, "ssh", challenge->plane_name);
+      {
+        std::lock_guard<std::mutex> lock(g_pending_ssh_mutex);
+        g_pending_ssh_challenges.erase(challenge_id);
+      }
+      return BuildJsonResponse(
+          200,
+          json{
+              {"token", session_token},
+              {"plane_name", challenge->plane_name},
+              {"expires_at", SqlTimestampAfterSeconds(SshSessionLifetimeSeconds())},
+          });
+    } catch (const std::exception& error) {
+      return BuildJsonResponse(
+          500,
+          json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+    }
   }
   if (request.path == "/api/v1/hostd/register") {
     if (request.method != "POST") {
@@ -8047,6 +9308,29 @@ HttpResponse HandleControllerRequest(
       }
     }
   }
+  if (StartsWithPath(request.path, "/api/v1/") && request.path != "/api/v1/health" &&
+      !StartsWithPath(request.path, "/api/v1/auth/") &&
+      !StartsWithPath(request.path, "/api/v1/hostd/")) {
+    const bool interaction_request =
+        StartsWithPath(request.path, "/api/v1/planes/") &&
+        request.path.find("/interaction/") != std::string::npos;
+    if (!interaction_request) {
+      try {
+        comet::ControllerStore store(db_path);
+        store.Initialize();
+        if (!AuthenticateControllerUserSession(store, request).has_value()) {
+          return BuildJsonResponse(
+              401,
+              json{{"status", "unauthorized"}, {"message", "authentication required"}},
+              {{"Set-Cookie", ClearSessionCookieHeader(request)}});
+        }
+      } catch (const std::exception& error) {
+        return BuildJsonResponse(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}});
+      }
+    }
+  }
   if (request.path == "/api/v1/bundles/validate") {
     if (request.method != "POST") {
       return BuildJsonResponse(405, json{{"status", "method_not_allowed"}});
@@ -8237,6 +9521,19 @@ HttpResponse HandleControllerRequest(
       }
       try {
         PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
+        if (resolution.desired_state.protected_plane) {
+          comet::ControllerStore store(db_path);
+          store.Initialize();
+          if (!AuthenticateProtectedPlaneRequest(store, request, plane_name).has_value()) {
+            return BuildStandaloneInteractionContractError(
+                401,
+                request_id,
+                "unauthorized",
+                "protected plane requires an authenticated WebAuthn session or SSH API session",
+                false,
+                plane_name);
+          }
+        }
         json payload = resolution.status_payload;
         payload["request_id"] = request_id;
         payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
@@ -8269,8 +9566,22 @@ HttpResponse HandleControllerRequest(
             plane_name);
       }
       try {
+        const PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
+        if (resolution.desired_state.protected_plane) {
+          comet::ControllerStore store(db_path);
+          store.Initialize();
+          if (!AuthenticateProtectedPlaneRequest(store, request, plane_name).has_value()) {
+            return BuildStandaloneInteractionContractError(
+                401,
+                request_id,
+                "unauthorized",
+                "protected plane requires an authenticated WebAuthn session or SSH API session",
+                false,
+                plane_name);
+          }
+        }
         return ProxyInteractionJson(
-            ResolvePlaneInteraction(db_path, plane_name),
+            resolution,
             request_id,
             "GET",
             "/v1/models");
@@ -8301,6 +9612,19 @@ HttpResponse HandleControllerRequest(
       }
       try {
         const PlaneInteractionResolution resolution = ResolvePlaneInteraction(db_path, plane_name);
+        if (resolution.desired_state.protected_plane) {
+          comet::ControllerStore store(db_path);
+          store.Initialize();
+          if (!AuthenticateProtectedPlaneRequest(store, request, plane_name).has_value()) {
+            return BuildStandaloneInteractionContractError(
+                401,
+                request_id,
+                "unauthorized",
+                "protected plane requires an authenticated WebAuthn session or SSH API session",
+                false,
+                plane_name);
+          }
+        }
         if (!resolution.status_payload.value("interaction_enabled", false)) {
           return BuildPlaneInteractionContractError(
               409,
@@ -12308,7 +13632,7 @@ std::string ResolvedDockerCommand() {
   throw std::runtime_error("no working Docker CLI found for web-ui lifecycle");
 }
 
-void RunCommand(const std::string& command) {
+void RunCommandOrThrow(const std::string& command) {
   if (std::system(command.c_str()) != 0) {
     throw std::runtime_error("command failed: " + command);
   }
@@ -15151,7 +16475,7 @@ int EnsureWebUi(
       {"status", compose_mode == WebUiComposeMode::Exec ? "starting" : "materialized"},
   };
   if (compose_mode == WebUiComposeMode::Exec) {
-    RunCommand(ResolvedDockerCommand() + " compose -f '" + compose_path + "' up -d");
+    RunCommandOrThrow(ResolvedDockerCommand() + " compose -f '" + compose_path + "' up -d");
     state["running"] = true;
     state["status"] = "running";
   }
@@ -15213,7 +16537,7 @@ int StopWebUi(
     WebUiComposeMode compose_mode) {
   const std::string compose_path = WebUiComposePath(web_ui_root);
   if (compose_mode == WebUiComposeMode::Exec && std::filesystem::exists(compose_path)) {
-    RunCommand(ResolvedDockerCommand() + " compose -f '" + compose_path + "' down --remove-orphans");
+    RunCommandOrThrow(ResolvedDockerCommand() + " compose -f '" + compose_path + "' down --remove-orphans");
   }
   RemoveFileIfExists(compose_path);
   json state = LoadWebUiStateJson(web_ui_root);

@@ -136,6 +136,37 @@ std::string RandomTokenBase64(int byte_count) {
   return EncodeBase64(bytes.data(), bytes.size());
 }
 
+std::string HashPassword(const std::string& password) {
+  EnsureCrypto();
+  if (password.empty()) {
+    throw std::runtime_error("password must not be empty");
+  }
+  std::string hash(crypto_pwhash_STRBYTES, '\0');
+  if (crypto_pwhash_str(
+          hash.data(),
+          password.c_str(),
+          password.size(),
+          crypto_pwhash_OPSLIMIT_INTERACTIVE,
+          crypto_pwhash_MEMLIMIT_INTERACTIVE) != 0) {
+    throw std::runtime_error("failed to hash password");
+  }
+  hash.resize(std::strlen(hash.c_str()));
+  return hash;
+}
+
+bool VerifyPasswordHash(
+    const std::string& password,
+    const std::string& password_hash) {
+  EnsureCrypto();
+  if (password.empty() || password_hash.empty()) {
+    return false;
+  }
+  return crypto_pwhash_str_verify(
+             password_hash.c_str(),
+             password.c_str(),
+             password.size()) == 0;
+}
+
 std::string SignDetachedBase64(
     const std::string& message,
     const std::string& private_key_base64) {

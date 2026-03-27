@@ -201,6 +201,7 @@ struct DesiredState {
   std::string plane_shared_disk_name;
   std::string control_root;
   PlaneMode plane_mode = PlaneMode::Compute;
+  bool protected_plane = false;
   std::optional<std::string> placement_target;
   std::optional<BootstrapModelSpec> bootstrap_model;
   std::optional<InteractionSettings> interaction;

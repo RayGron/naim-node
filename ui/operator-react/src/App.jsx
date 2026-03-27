@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, startTransition } from "react";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
@@ -10,6 +11,15 @@ const CHAT_LANGUAGE_OPTIONS = [
   { value: "uk", label: "Українська" },
   { value: "ru", label: "Русский" },
 ];
+
+class HttpError extends Error {
+  constructor(status, message, payload) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
 
 function fetchJson(path, init = {}) {
   return fetch(path, {
@@ -26,7 +36,7 @@ function fetchJson(path, init = {}) {
         payload?.message ||
         payload?.status ||
         response.statusText;
-      throw new Error(message);
+      throw new HttpError(response.status, message, payload);
     }
     return payload;
   });
@@ -968,11 +978,36 @@ function nodeStatusLabel(runtimeLaunchReady, runtimePhase, health) {
 function App() {
   const initialPlane = new URLSearchParams(window.location.search).get("plane") || "";
   const initialPage = new URLSearchParams(window.location.search).get("page") || "dashboard";
+  const initialInviteToken = window.location.pathname.startsWith("/register/")
+    ? decodeURIComponent(window.location.pathname.slice("/register/".length))
+    : "";
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
   const [selectedPage, setSelectedPage] = useState(
-    ["dashboard", "planes", "models"].includes(initialPage) ? initialPage : "dashboard",
+    ["dashboard", "planes", "models", "access"].includes(initialPage) ? initialPage : "dashboard",
   );
+  const [authState, setAuthState] = useState({
+    loading: true,
+    authenticated: false,
+    setupRequired: false,
+    user: null,
+  });
+  const [authMode, setAuthMode] = useState(initialInviteToken ? "register" : "login");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [authForm, setAuthForm] = useState({
+    username: "",
+    password: "",
+    inviteToken: initialInviteToken,
+  });
+  const [adminInvites, setAdminInvites] = useState([]);
+  const [sshKeys, setSshKeys] = useState([]);
+  const [accessBusy, setAccessBusy] = useState("");
+  const [accessError, setAccessError] = useState("");
+  const [sshKeyForm, setSshKeyForm] = useState({
+    label: "",
+    publicKey: "",
+  });
   const [planeDetail, setPlaneDetail] = useState(null);
   const [dashboard, setDashboard] = useState(null);
   const [hostObservations, setHostObservations] = useState(null);
@@ -1024,6 +1059,81 @@ function App() {
   const modelLibraryListRef = useRef(null);
   const modelLibraryLoadMoreRef = useRef(null);
 
+  function resetProtectedData() {
+    setPlanes([]);
+    setPlaneDetail(null);
+    setDashboard(null);
+    setHostObservations(null);
+    setDiskState(null);
+    setRolloutState(null);
+    setRebalancePlan(null);
+    setEvents([]);
+    setInteractionStatus(null);
+    setModelLibrary({ items: [], roots: [], jobs: [] });
+    setChatMessages([]);
+    setChatError("");
+    setApiHealthy(false);
+    setStreamHealthy(false);
+  }
+
+  function handleUnauthorized() {
+    resetProtectedData();
+    setAuthState((current) => ({
+      ...current,
+      loading: false,
+      authenticated: false,
+      user: null,
+    }));
+    setAdminInvites([]);
+    setSshKeys([]);
+    setSelectedPage("dashboard");
+    setAuthError("");
+  }
+
+  async function refreshAuthState() {
+    const payload = await fetchJson("/api/v1/auth/state");
+    const nextState = {
+      loading: false,
+      authenticated: payload.authenticated === true,
+      setupRequired: payload.setup_required === true,
+      user: payload.user || null,
+    };
+    setAuthState(nextState);
+    setAuthMode(
+      nextState.setupRequired
+        ? "bootstrap"
+        : authForm.inviteToken
+          ? "register"
+          : nextState.authenticated
+            ? authMode
+            : "login",
+    );
+    return nextState;
+  }
+
+  async function refreshAccessData() {
+    if (!authState.authenticated) {
+      return;
+    }
+    try {
+      const [sshKeysPayload, invitesPayload] = await Promise.all([
+        fetchJson("/api/v1/auth/ssh-keys"),
+        authState.user?.role === "admin"
+          ? fetchJson("/api/v1/auth/invites")
+          : Promise.resolve({ items: [] }),
+      ]);
+      setSshKeys(Array.isArray(sshKeysPayload.items) ? sshKeysPayload.items : []);
+      setAdminInvites(Array.isArray(invitesPayload.items) ? invitesPayload.items : []);
+      setAccessError("");
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    }
+  }
+
   async function loadPlanes(preferredPlane = selectedPlane) {
     const payload = await fetchJson("/api/v1/planes");
     const items = Array.isArray(payload.items) ? payload.items : [];
@@ -1044,12 +1154,20 @@ function App() {
   }
 
   async function refreshModelLibrary() {
-    const payload = await fetchJson(modelLibraryPath());
-    setModelLibrary({
-      items: Array.isArray(payload.items) ? payload.items : [],
-      roots: Array.isArray(payload.roots) ? payload.roots : [],
-      jobs: Array.isArray(payload.jobs) ? payload.jobs : [],
-    });
+    try {
+      const payload = await fetchJson(modelLibraryPath());
+      setModelLibrary({
+        items: Array.isArray(payload.items) ? payload.items : [],
+        roots: Array.isArray(payload.roots) ? payload.roots : [],
+        jobs: Array.isArray(payload.jobs) ? payload.jobs : [],
+      });
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      throw error;
+    }
   }
 
   async function refreshAll(planeOverride) {
@@ -1117,10 +1235,165 @@ function App() {
       setApiHealthy(true);
       setLastRefreshAt(new Date().toISOString());
     } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       setApiHealthy(false);
       setApiError(error.message || String(error));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function completeAuthentication(method, beginPayload) {
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const begin = await fetchJson(`/api/v1/auth/${method}/begin`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(beginPayload),
+      });
+      const response =
+        method === "login"
+          ? await startAuthentication({ optionsJSON: begin.options })
+          : await startRegistration({ optionsJSON: begin.options });
+      await fetchJson(`/api/v1/auth/${method}/finish`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          flow_id: begin.flow_id,
+          response,
+        }),
+      });
+      if (method === "register" && window.location.pathname.startsWith("/register/")) {
+        window.history.replaceState({}, "", "/");
+      }
+      const nextAuth = await refreshAuthState();
+      if (nextAuth.authenticated) {
+        await Promise.all([refreshAccessData(), refreshAll(selectedPlane), refreshModelLibrary()]);
+      }
+    } catch (error) {
+      setAuthError(error.message || String(error));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleBootstrapSubmit(event) {
+    event.preventDefault();
+    await completeAuthentication("bootstrap", {
+      username: authForm.username.trim(),
+      password: authForm.password,
+    });
+  }
+
+  async function handleLoginSubmit(event) {
+    event.preventDefault();
+    await completeAuthentication("login", {
+      username: authForm.username.trim(),
+    });
+  }
+
+  async function handleRegisterSubmit(event) {
+    event.preventDefault();
+    await completeAuthentication("register", {
+      invite_token: authForm.inviteToken.trim(),
+      username: authForm.username.trim(),
+      password: authForm.password,
+    });
+  }
+
+  async function handleLogout() {
+    setAccessBusy("logout");
+    try {
+      await fetchJson("/api/v1/auth/logout", { method: "POST" });
+    } catch (_) {
+      // The server clears the cookie even when the session is already gone.
+    } finally {
+      setAccessBusy("");
+      handleUnauthorized();
+    }
+  }
+
+  async function handleCreateInvite() {
+    setAccessBusy("create-invite");
+    try {
+      await fetchJson("/api/v1/auth/invites", { method: "POST" });
+      await refreshAccessData();
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    } finally {
+      setAccessBusy("");
+    }
+  }
+
+  async function handleRevokeInvite(inviteId) {
+    setAccessBusy(`revoke-invite:${inviteId}`);
+    try {
+      await fetchJson(`/api/v1/auth/invites/${inviteId}`, { method: "DELETE" });
+      await refreshAccessData();
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    } finally {
+      setAccessBusy("");
+    }
+  }
+
+  async function handleAddSshKey(event) {
+    event.preventDefault();
+    setAccessBusy("create-ssh-key");
+    setAccessError("");
+    try {
+      await fetchJson("/api/v1/auth/ssh-keys", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          label: sshKeyForm.label.trim(),
+          public_key: sshKeyForm.publicKey.trim(),
+        }),
+      });
+      setSshKeyForm({ label: "", publicKey: "" });
+      await refreshAccessData();
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    } finally {
+      setAccessBusy("");
+    }
+  }
+
+  async function handleDeleteSshKey(keyId) {
+    setAccessBusy(`delete-ssh-key:${keyId}`);
+    try {
+      await fetchJson(`/api/v1/auth/ssh-keys/${keyId}`, { method: "DELETE" });
+      await refreshAccessData();
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setAccessError(error.message || String(error));
+    } finally {
+      setAccessBusy("");
     }
   }
 
@@ -1538,8 +1811,21 @@ function App() {
   }
 
   useEffect(() => {
-    refreshAll(initialPlane);
-    refreshModelLibrary().catch(() => {});
+    refreshAuthState()
+      .then((nextAuth) => {
+        if (!nextAuth.authenticated) {
+          return;
+        }
+        return Promise.all([
+          refreshAll(initialPlane),
+          refreshModelLibrary().catch(() => {}),
+          refreshAccessData(),
+        ]);
+      })
+      .catch((error) => {
+        setAuthState((current) => ({ ...current, loading: false }));
+        setAuthError(error.message || String(error));
+      });
     return () => {
       if (refreshTimerRef.current) {
         clearTimeout(refreshTimerRef.current);
@@ -1548,14 +1834,17 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!authState.authenticated) {
+      return undefined;
+    }
     const timer = setInterval(() => {
       refreshAll(selectedPlane);
     }, AUTO_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [selectedPlane]);
+  }, [authState.authenticated, selectedPlane]);
 
   useEffect(() => {
-    if (!selectedPlane) {
+    if (!authState.authenticated || !selectedPlane) {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
@@ -1590,7 +1879,7 @@ function App() {
         eventSourceRef.current = null;
       }
     };
-  }, [selectedPlane]);
+  }, [authState.authenticated, selectedPlane]);
 
   useEffect(() => {
     setSelectedTab("status");
@@ -2144,6 +2433,274 @@ function App() {
     );
   }
 
+  function renderAccessPage() {
+    return (
+      <section className="panel page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Access</div>
+            <h2>User profile</h2>
+          </div>
+          <div className="toolbar">
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={accessBusy !== ""}
+              onClick={() => refreshAccessData()}
+            >
+              Refresh access
+            </button>
+            <button
+              className="ghost-button danger-button"
+              type="button"
+              disabled={accessBusy !== ""}
+              onClick={handleLogout}
+            >
+              Log out
+            </button>
+          </div>
+        </div>
+        {accessError ? <div className="error-banner">{accessError}</div> : null}
+        <div className="panel-grid">
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Identity</h3>
+              <span className="subpanel-meta">Controller-owned WebAuthn session</span>
+            </div>
+            <div className="list-card">
+              <div className="metric-grid compact-metric-grid">
+                <div className="metric-row"><span>User</span><strong>{authState.user?.username || "n/a"}</strong></div>
+                <div className="metric-row"><span>Role</span><strong>{authState.user?.role || "n/a"}</strong></div>
+                <div className="metric-row"><span>Last login</span><strong>{formatTimestamp(authState.user?.last_login_at)}</strong></div>
+              </div>
+            </div>
+          </section>
+
+          {authState.user?.role === "admin" ? (
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>Registration invites</h3>
+                <span className="subpanel-meta">One-time links valid for one hour</span>
+              </div>
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={accessBusy !== ""}
+                  onClick={handleCreateInvite}
+                >
+                  Create invite
+                </button>
+              </div>
+              <div className="list-column">
+                {adminInvites.length === 0 ? (
+                  <EmptyState title="No active invites" detail="Create a one-time link for a new user." />
+                ) : (
+                  adminInvites.map((invite) => (
+                    <article className="list-card" key={invite.id}>
+                      <div className="card-row">
+                        <strong>Invite #{invite.id}</strong>
+                        <span className="tag">{formatTimestamp(invite.expires_at)}</span>
+                      </div>
+                      <div className="list-detail">
+                        <div>{invite.registration_url}</div>
+                        <div>expires {formatTimestamp(invite.expires_at)}</div>
+                      </div>
+                      <div className="toolbar">
+                        <button
+                          className="ghost-button compact-button"
+                          type="button"
+                          onClick={() => navigator.clipboard?.writeText(invite.registration_url || "")}
+                        >
+                          Copy
+                        </button>
+                        <button
+                          className="ghost-button compact-button danger-button"
+                          type="button"
+                          disabled={accessBusy !== ""}
+                          onClick={() => handleRevokeInvite(invite.id)}
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>SSH public keys</h3>
+              <span className="subpanel-meta">Used for protected plane API access</span>
+            </div>
+            <form className="list-card access-form-card" onSubmit={handleAddSshKey}>
+              <label className="field-label" htmlFor="ssh-key-label">Label</label>
+              <input
+                id="ssh-key-label"
+                className="text-input"
+                type="text"
+                value={sshKeyForm.label}
+                onChange={(event) =>
+                  setSshKeyForm((current) => ({ ...current, label: event.target.value }))
+                }
+                placeholder="Laptop"
+              />
+              <label className="field-label" htmlFor="ssh-key-public">Public key</label>
+              <textarea
+                id="ssh-key-public"
+                className="editor-textarea"
+                value={sshKeyForm.publicKey}
+                onChange={(event) =>
+                  setSshKeyForm((current) => ({ ...current, publicKey: event.target.value }))
+                }
+                placeholder="ssh-ed25519 AAAA..."
+              />
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="submit"
+                  disabled={accessBusy !== "" || !sshKeyForm.publicKey.trim()}
+                >
+                  Add SSH key
+                </button>
+              </div>
+            </form>
+            <div className="list-column">
+              {sshKeys.length === 0 ? (
+                <EmptyState title="No SSH keys" detail="Attach a public key to enable SSH API authorization." />
+              ) : (
+                sshKeys.map((key) => (
+                  <article className="list-card" key={key.id}>
+                    <div className="card-row">
+                      <strong>{key.label || "SSH key"}</strong>
+                      <span className="tag">{key.fingerprint}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div>{key.public_key}</div>
+                      <div>created {formatTimestamp(key.created_at)}</div>
+                    </div>
+                    <div className="toolbar">
+                      <button
+                        className="ghost-button compact-button danger-button"
+                        type="button"
+                        disabled={accessBusy !== ""}
+                        onClick={() => handleDeleteSshKey(key.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+      </section>
+    );
+  }
+
+  function renderAuthShell() {
+    const isBootstrap = authMode === "bootstrap";
+    const isRegister = authMode === "register";
+    const title = isBootstrap
+      ? "Create the first admin"
+      : isRegister
+        ? "Complete invite registration"
+        : "Sign in with a passkey";
+    const detail = isBootstrap
+      ? "The controller has no users yet. Create the initial admin and register a WebAuthn credential."
+      : isRegister
+        ? "Finish account activation from a one-time invite link. Password is stored only for enrollment; future login uses WebAuthn."
+        : "Enter your username and continue with WebAuthn authentication.";
+    return (
+      <div className="app-shell auth-shell">
+        <div className="starfield" aria-hidden="true" />
+        <main className="auth-layout">
+          <section className="panel auth-panel">
+            <div className="panel-header">
+              <div>
+                <div className="section-label">Protected Access</div>
+                <h2>{title}</h2>
+              </div>
+            </div>
+            <div className="page-copy">{detail}</div>
+            {authError ? <div className="error-banner">{authError}</div> : null}
+            <form
+              className="auth-form"
+              onSubmit={
+                isBootstrap
+                  ? handleBootstrapSubmit
+                  : isRegister
+                    ? handleRegisterSubmit
+                    : handleLoginSubmit
+              }
+            >
+              {isRegister ? (
+                <>
+                  <label className="field-label" htmlFor="invite-token">Invite token</label>
+                  <input
+                    id="invite-token"
+                    className="text-input"
+                    type="text"
+                    value={authForm.inviteToken}
+                    onChange={(event) =>
+                      setAuthForm((current) => ({ ...current, inviteToken: event.target.value }))
+                    }
+                    spellCheck="false"
+                  />
+                </>
+              ) : null}
+              <label className="field-label" htmlFor="auth-username">Username</label>
+              <input
+                id="auth-username"
+                className="text-input"
+                type="text"
+                value={authForm.username}
+                onChange={(event) =>
+                  setAuthForm((current) => ({ ...current, username: event.target.value }))
+                }
+                autoComplete="username webauthn"
+                spellCheck="false"
+              />
+              {isBootstrap || isRegister ? (
+                <>
+                  <label className="field-label" htmlFor="auth-password">Password</label>
+                  <input
+                    id="auth-password"
+                    className="text-input"
+                    type="password"
+                    value={authForm.password}
+                    onChange={(event) =>
+                      setAuthForm((current) => ({ ...current, password: event.target.value }))
+                    }
+                    autoComplete="new-password"
+                  />
+                </>
+              ) : null}
+              <div className="toolbar">
+                <button className="ghost-button" type="submit" disabled={authBusy}>
+                  {authBusy ? "Working..." : isBootstrap ? "Create admin" : isRegister ? "Register user" : "Continue"}
+                </button>
+                {!isBootstrap ? (
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    disabled={authBusy}
+                    onClick={() => setAuthMode(initialInviteToken ? "register" : "login")}
+                  >
+                    Reset
+                  </button>
+                ) : null}
+              </div>
+            </form>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   useEffect(() => {
     const nextDefault =
       normalizeChatLanguage(desiredState?.interaction?.default_response_language) ||
@@ -2165,6 +2722,15 @@ function App() {
       targetRoot: modelLibrary.roots[0],
     }));
   }, [modelDownloadForm.targetRoot, modelLibrary.roots]);
+
+  useEffect(() => {
+    if (!authState.authenticated) {
+      setAdminInvites([]);
+      setSshKeys([]);
+      return;
+    }
+    refreshAccessData();
+  }, [authState.authenticated, authState.user?.role]);
 
   useEffect(() => {
     setVisibleModelCount((current) => {
@@ -2217,6 +2783,28 @@ function App() {
     return () => clearTimeout(timer);
   }, [operationProgress?.complete]);
 
+  if (authState.loading) {
+    return (
+      <div className="app-shell auth-shell">
+        <div className="starfield" aria-hidden="true" />
+        <main className="auth-layout">
+          <section className="panel auth-panel">
+            <div className="panel-header">
+              <div>
+                <div className="section-label">Protected Access</div>
+                <h2>Loading access policy</h2>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (!authState.authenticated) {
+    return renderAuthShell();
+  }
+
   return (
     <div className="app-shell">
       <div className="starfield" aria-hidden="true" />
@@ -2230,6 +2818,12 @@ function App() {
           </p>
         </div>
         <div className="hero-meta">
+          <div className="meta-card">
+            <span className="meta-label">Signed in as</span>
+            <span className="meta-value">
+              {authState.user?.username || "n/a"} ({authState.user?.role || "n/a"})
+            </span>
+          </div>
           <div className="status-chip">
             {statusDot(apiHealthy ? "is-healthy" : apiError ? "is-critical" : "is-booting")}
             <span>{apiHealthy ? "API ready" : apiError ? "API error" : "API pending"}</span>
@@ -2295,6 +2889,20 @@ function App() {
                 <span>{modelsNavLabel}</span>
               </span>
             </button>
+            <button
+              className={`side-menu-item ${selectedPage === "access" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("access")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Access</span>
+                <span className="side-menu-meta">Invites, SSH keys, and logout</span>
+              </div>
+              <span className="tag is-healthy">
+                {statusDot("is-healthy")}
+                <span>{authState.user?.role || "user"}</span>
+              </span>
+            </button>
           </div>
         </aside>
 
@@ -2302,6 +2910,8 @@ function App() {
           renderPlanesRegistry()
         ) : selectedPage === "models" ? (
           renderModelsLibrary()
+        ) : selectedPage === "access" ? (
+          renderAccessPage()
         ) : (
           <section className="panel plane-overview">
           <div className="panel-header">

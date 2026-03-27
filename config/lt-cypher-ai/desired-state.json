@@ -3,6 +3,7 @@
   "plane_shared_disk_name": "plane-lt-cypher-ai-shared",
   "control_root": "/comet/shared/control/lt-cypher-ai",
   "plane_mode": "llm",
+  "protected": false,
   "placement_target": "local",
   "bootstrap_model": {
     "model_id": "Qwen/Qwen3.5-35B-A3B",

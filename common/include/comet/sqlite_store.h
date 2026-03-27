@@ -194,6 +194,61 @@ struct RegisteredHostRecord {
   std::string updated_at;
 };
 
+struct UserRecord {
+  int id = 0;
+  std::string username;
+  std::string role;
+  std::string password_hash;
+  std::string created_at;
+  std::string updated_at;
+  std::string last_login_at;
+};
+
+struct WebAuthnCredentialRecord {
+  int id = 0;
+  int user_id = 0;
+  std::string credential_id;
+  std::string public_key;
+  std::uint32_t counter = 0;
+  std::string transports_json = "[]";
+  std::string created_at;
+  std::string updated_at;
+  std::string last_used_at;
+};
+
+struct RegistrationInviteRecord {
+  int id = 0;
+  std::string token;
+  int created_by_user_id = 0;
+  std::string expires_at;
+  std::string created_at;
+  std::optional<int> used_by_user_id;
+  std::string used_at;
+  std::string revoked_at;
+};
+
+struct UserSshKeyRecord {
+  int id = 0;
+  int user_id = 0;
+  std::string label;
+  std::string public_key;
+  std::string fingerprint;
+  std::string created_at;
+  std::string revoked_at;
+  std::string last_used_at;
+};
+
+struct AuthSessionRecord {
+  std::string token;
+  int user_id = 0;
+  std::string session_kind;
+  std::string plane_name;
+  std::string expires_at;
+  std::string created_at;
+  std::string revoked_at;
+  std::string last_used_at;
+};
+
 class ControllerStore {
  public:
   explicit ControllerStore(std::string db_path);
@@ -223,6 +278,63 @@ class ControllerStore {
   std::optional<RegisteredHostRecord> LoadRegisteredHost(const std::string& node_name) const;
   std::vector<RegisteredHostRecord> LoadRegisteredHosts(
       const std::optional<std::string>& node_name = std::nullopt) const;
+  int LoadUserCount() const;
+  std::optional<UserRecord> LoadUserById(int user_id) const;
+  std::optional<UserRecord> LoadUserByUsername(const std::string& username) const;
+  std::vector<UserRecord> LoadUsers() const;
+  UserRecord CreateBootstrapAdmin(
+      const std::string& username,
+      const std::string& password_hash);
+  UserRecord CreateInvitedUser(
+      const std::string& invite_token,
+      const std::string& username,
+      const std::string& password_hash);
+  void UpdateUserLastLoginAt(int user_id, const std::string& last_login_at);
+  void InsertWebAuthnCredential(const WebAuthnCredentialRecord& credential);
+  void UpdateWebAuthnCredentialCounter(
+      const std::string& credential_id,
+      std::uint32_t counter,
+      const std::string& last_used_at);
+  std::vector<WebAuthnCredentialRecord> LoadWebAuthnCredentialsForUser(int user_id) const;
+  std::optional<WebAuthnCredentialRecord> LoadWebAuthnCredentialById(
+      const std::string& credential_id) const;
+  RegistrationInviteRecord CreateRegistrationInvite(
+      int created_by_user_id,
+      const std::string& token,
+      const std::string& expires_at);
+  std::optional<RegistrationInviteRecord> LoadRegistrationInviteByToken(
+      const std::string& token) const;
+  std::vector<RegistrationInviteRecord> LoadActiveRegistrationInvites() const;
+  bool MarkRegistrationInviteUsed(
+      const std::string& token,
+      int used_by_user_id,
+      const std::string& used_at);
+  bool RevokeRegistrationInvite(
+      int invite_id,
+      const std::string& revoked_at);
+  void InsertUserSshKey(const UserSshKeyRecord& ssh_key);
+  std::vector<UserSshKeyRecord> LoadActiveUserSshKeys(int user_id) const;
+  std::optional<UserSshKeyRecord> LoadActiveUserSshKeyByFingerprint(
+      int user_id,
+      const std::string& fingerprint) const;
+  std::optional<UserSshKeyRecord> LoadActiveUserSshKeyById(int ssh_key_id) const;
+  bool RevokeUserSshKey(
+      int ssh_key_id,
+      const std::string& revoked_at);
+  void TouchUserSshKey(
+      int ssh_key_id,
+      const std::string& last_used_at);
+  void InsertAuthSession(const AuthSessionRecord& session);
+  std::optional<AuthSessionRecord> LoadActiveAuthSession(
+      const std::string& token,
+      const std::optional<std::string>& session_kind = std::nullopt,
+      const std::optional<std::string>& plane_name = std::nullopt) const;
+  bool RevokeAuthSession(
+      const std::string& token,
+      const std::string& revoked_at);
+  bool TouchAuthSession(
+      const std::string& token,
+      const std::string& last_used_at);
   bool UpdatePlaneState(
       const std::string& plane_name,
       const std::string& state);

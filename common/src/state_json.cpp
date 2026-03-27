@@ -621,6 +621,7 @@ json DesiredStateToJson(const DesiredState& state) {
       {"plane_shared_disk_name", state.plane_shared_disk_name},
       {"control_root", state.control_root},
       {"plane_mode", ToString(state.plane_mode)},
+      {"protected", state.protected_plane},
       {"inference",
        {
            {"primary_infer_node", state.inference.primary_infer_node},
@@ -695,6 +696,7 @@ DesiredState DesiredStateFromJson(const json& value) {
   state.control_root =
       value.value("control_root", "/comet/shared/control/" + state.plane_name);
   state.plane_mode = ParsePlaneMode(value.value("plane_mode", std::string("compute")));
+  state.protected_plane = value.value("protected", state.protected_plane);
   if (value.contains("placement_target") && !value.at("placement_target").is_null()) {
     state.placement_target = value.at("placement_target").get<std::string>();
   }
