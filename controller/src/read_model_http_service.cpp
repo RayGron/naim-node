@@ -1,4 +1,4 @@
-#include "read_model_http_service.h"
+#include "../include/read_model_http_service.h"
 
 #include <stdexcept>
 #include <utility>

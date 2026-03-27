@@ -1,4 +1,4 @@
-#include "hostd_http_service.h"
+#include "../include/hostd_http_service.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -6,7 +6,7 @@
 #include <string>
 #include <utility>
 
-#include "controller_action.h"
+#include "../include/controller_action.h"
 
 #include "comet/crypto_utils.h"
 #include "comet/models.h"

@@ -1,4 +1,4 @@
-#include "host_registry_service.h"
+#include "../include/host_registry_service.h"
 
 #include <cctype>
 #include <iostream>

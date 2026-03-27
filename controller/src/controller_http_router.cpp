@@ -1,10 +1,10 @@
-#include "controller_http_router.h"
+#include "../include/controller_http_router.h"
 
 #include <cctype>
 
-#include "controller_action.h"
-#include "controller_http_server_support.h"
-#include "interaction_service.h"
+#include "../include/controller_action.h"
+#include "../include/controller_http_server_support.h"
+#include "../include/interaction_service.h"
 #include "comet/sqlite_store.h"
 
 using nlohmann::json;

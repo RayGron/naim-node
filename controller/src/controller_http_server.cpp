@@ -1,4 +1,4 @@
-#include "controller_http_server.h"
+#include "../include/controller_http_server.h"
 
 #include <algorithm>
 #include <array>
@@ -8,8 +8,8 @@
 #include <stdexcept>
 #include <thread>
 
-#include "controller_http_server_support.h"
-#include "controller_network_manager.h"
+#include "../include/controller_http_server_support.h"
+#include "../include/controller_network_manager.h"
 
 using nlohmann::json;
 

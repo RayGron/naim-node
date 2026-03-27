@@ -1,10 +1,10 @@
-#include "controller_network_manager.h"
+#include "../include/controller_network_manager.h"
 
 #include <cctype>
 #include <sstream>
 #include <stdexcept>
 
-#include "controller_http_transport.h"
+#include "../include/controller_http_transport.h"
 
 namespace comet::controller {
 

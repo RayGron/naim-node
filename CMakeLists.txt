@@ -187,6 +187,7 @@ add_executable(
   controller/src/web_ui_service.cpp
   controller/src/main.cpp
 )
+target_include_directories(comet-controller PRIVATE controller/include)
 target_link_libraries(comet-controller PRIVATE comet-common)
 if(WIN32)
   target_link_libraries(comet-controller PRIVATE ws2_32)
