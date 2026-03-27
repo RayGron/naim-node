@@ -4,10 +4,10 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  run-plane.sh [plane-name] [--controller-url <url>] [--artifacts-root <path>] [--wait-seconds <n>] [--cpu] [--no-wait]
+  run-plane.sh [plane-name] [--desired-state <path>] [--controller-url <url>] [--artifacts-root <path>] [--wait-seconds <n>] [--cpu] [--no-wait]
 
-Loads config/<plane-name>/desired-state.json into the local controller, starts the plane,
-and waits until interaction/status reports ready. The desired state is taken directly from the repo.
+Loads a plane desired-state into the local controller, starts the plane,
+and waits until interaction/status reports ready.
 EOF
 }
 
@@ -15,6 +15,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
 plane_name="qwen35-9b-min"
+desired_state_path=""
 controller_url="http://127.0.0.1:18080"
 artifacts_root="/var/lib/comet-node/artifacts"
 wait_seconds="900"
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --controller-url)
       controller_url="${2:-}"
+      shift 2
+      ;;
+    --desired-state)
+      desired_state_path="${2:-}"
       shift 2
       ;;
     --artifacts-root)
@@ -59,7 +64,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-desired_state_path="${repo_root}/config/${plane_name}/desired-state.json"
+if [[ -z "${desired_state_path}" ]]; then
+  desired_state_path="${repo_root}/config/${plane_name}/desired-state.json"
+fi
+if [[ ! -f "${desired_state_path}" ]]; then
+  sibling_app_desired_state="${repo_root}/../${plane_name}/deploy/comet-node/desired-state.json"
+  if [[ -f "${sibling_app_desired_state}" ]]; then
+    desired_state_path="${sibling_app_desired_state}"
+  fi
+fi
 if [[ ! -f "${desired_state_path}" ]]; then
   echo "error: desired state not found: ${desired_state_path}" >&2
   exit 1

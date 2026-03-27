@@ -679,8 +679,10 @@ Then:
   as system services, and starts them
 - on GPU hosts, the install command also installs a CUDA toolkit automatically when `nvidia-smi`
   is present but `nvcc` is not yet available
-- the run command loads `config/<plane>/desired-state.json` from the repository, starts the
-  plane, and waits until `interaction/status` becomes ready
+- the run command loads `config/<plane>/desired-state.json` by default, but it can also take
+  `--desired-state <path>` or auto-discover a sibling app-owned config at
+  `../<plane>/deploy/comet-node/desired-state.json`
+- this lets application repos such as `lt-cypher-ai` own their own canonical plane config
 - `config/comet-node-config.json` is the machine-level storage config for managed disks and
   heavy cached model files
 
