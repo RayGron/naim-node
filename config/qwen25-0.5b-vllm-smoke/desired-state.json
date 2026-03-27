@@ -51,47 +51,17 @@
     "rendezvous_host": "infer-qwen25-0.5b-vllm-smoke",
     "rendezvous_port": 29500,
     "expected_workers": 1,
-    "worker_selection_policy": "prefer-free-then-share",
-    "members": [
-      {
-        "name": "worker-qwen25-0.5b-vllm-smoke",
-        "node_name": "local-hostd",
-        "gpu_device": "0",
-        "rank": 0,
-        "gpu_fraction": 1.0,
-        "share_mode": "exclusive",
-        "priority": 100,
-        "preemptible": false,
-        "memory_cap_mb": 16384,
-        "enabled": true,
-        "leader": true
-      }
-    ]
+    "worker_selection_policy": "prefer-free-then-share"
   },
   "gateway": {
     "listen_port": 18087,
     "server_name": "qwen25-0.5b-vllm-smoke.local"
   },
-  "runtime_gpu_nodes": [
-    {
-      "name": "worker-qwen25-0.5b-vllm-smoke",
-      "node_name": "local-hostd",
-      "gpu_device": "0",
-      "gpu_fraction": 1.0,
-      "memory_cap_mb": 16384
-    }
-  ],
   "nodes": [
     {
       "name": "local-hostd",
       "platform": "linux",
-      "execution_mode": "mixed",
-      "gpu_devices": [
-        "0"
-      ],
-      "gpu_memory_mb": {
-        "0": 24576
-      }
+      "execution_mode": "mixed"
     }
   ],
   "disks": [
@@ -172,7 +142,6 @@
         "COMET_INSTANCE_NAME": "worker-qwen25-0.5b-vllm-smoke",
         "COMET_INSTANCE_ROLE": "worker",
         "COMET_NODE_NAME": "local-hostd",
-        "COMET_GPU_DEVICE": "0",
         "COMET_WORKER_BOOT_MODE": "vllm-openai",
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen25-0.5b-vllm-smoke",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
@@ -182,17 +151,12 @@
       "labels": {
         "comet.plane": "qwen25-0.5b-vllm-smoke",
         "comet.role": "worker",
-        "comet.node": "local-hostd",
-        "comet.placement": "manual",
-        "comet.placement.mode": "manual",
-        "comet.placement.action": "manual",
-        "comet.requested.node": "local-hostd",
-        "comet.requested.gpu": "0"
+        "comet.node": "local-hostd"
       },
-      "gpu_device": "0",
       "gpu_fraction": 1.0,
       "memory_cap_mb": 16384,
-      "private_disk_size_gb": 8
+      "private_disk_size_gb": 8,
+      "placement_mode": "auto"
     }
   ]
 }

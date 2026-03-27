@@ -50,85 +50,27 @@
     "rendezvous_host": "infer-qwen25-0.5b-vllm-split",
     "rendezvous_port": 29510,
     "expected_workers": 2,
-    "worker_selection_policy": "prefer-free-then-share",
-    "members": [
-      {
-        "name": "worker-qwen25-0.5b-vllm-split-a",
-        "node_name": "worker-hostd-a",
-        "gpu_device": "0",
-        "rank": 0,
-        "gpu_fraction": 1.0,
-        "share_mode": "exclusive",
-        "priority": 100,
-        "preemptible": false,
-        "memory_cap_mb": 8192,
-        "enabled": true,
-        "leader": true
-      },
-      {
-        "name": "worker-qwen25-0.5b-vllm-split-b",
-        "node_name": "worker-hostd-b",
-        "gpu_device": "1",
-        "rank": 1,
-        "gpu_fraction": 1.0,
-        "share_mode": "exclusive",
-        "priority": 100,
-        "preemptible": false,
-        "memory_cap_mb": 8192,
-        "enabled": true,
-        "leader": false
-      }
-    ]
+    "worker_selection_policy": "prefer-free-then-share"
   },
   "gateway": {
     "listen_port": 18089,
     "server_name": "qwen25-0.5b-vllm-split.local"
   },
-  "runtime_gpu_nodes": [
-    {
-      "name": "worker-qwen25-0.5b-vllm-split-a",
-      "node_name": "worker-hostd-a",
-      "gpu_device": "0",
-      "gpu_fraction": 1.0,
-      "memory_cap_mb": 8192
-    },
-    {
-      "name": "worker-qwen25-0.5b-vllm-split-b",
-      "node_name": "worker-hostd-b",
-      "gpu_device": "1",
-      "gpu_fraction": 1.0,
-      "memory_cap_mb": 8192
-    }
-  ],
   "nodes": [
     {
       "name": "infer-hostd",
       "platform": "linux",
-      "execution_mode": "infer-only",
-      "gpu_devices": [],
-      "gpu_memory_mb": {}
+      "execution_mode": "infer-only"
     },
     {
       "name": "worker-hostd-a",
       "platform": "linux",
-      "execution_mode": "worker-only",
-      "gpu_devices": [
-        "0"
-      ],
-      "gpu_memory_mb": {
-        "0": 24576
-      }
+      "execution_mode": "worker-only"
     },
     {
       "name": "worker-hostd-b",
       "platform": "linux",
-      "execution_mode": "worker-only",
-      "gpu_devices": [
-        "1"
-      ],
-      "gpu_memory_mb": {
-        "1": 24576
-      }
+      "execution_mode": "worker-only"
     }
   ],
   "disks": [
@@ -239,7 +181,6 @@
         "COMET_INSTANCE_NAME": "worker-qwen25-0.5b-vllm-split-a",
         "COMET_INSTANCE_ROLE": "worker",
         "COMET_NODE_NAME": "worker-hostd-a",
-        "COMET_GPU_DEVICE": "0",
         "COMET_WORKER_BOOT_MODE": "vllm-openai",
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen25-0.5b-vllm-split",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
@@ -249,17 +190,12 @@
       "labels": {
         "comet.plane": "qwen25-0.5b-vllm-split",
         "comet.role": "worker",
-        "comet.node": "worker-hostd-a",
-        "comet.placement": "manual",
-        "comet.placement.mode": "manual",
-        "comet.placement.action": "manual",
-        "comet.requested.node": "worker-hostd-a",
-        "comet.requested.gpu": "0"
+        "comet.node": "worker-hostd-a"
       },
-      "gpu_device": "0",
       "gpu_fraction": 1.0,
       "memory_cap_mb": 8192,
-      "private_disk_size_gb": 8
+      "private_disk_size_gb": 8,
+      "placement_mode": "auto"
     },
     {
       "name": "worker-qwen25-0.5b-vllm-split-b",
@@ -275,7 +211,6 @@
         "COMET_INSTANCE_NAME": "worker-qwen25-0.5b-vllm-split-b",
         "COMET_INSTANCE_ROLE": "worker",
         "COMET_NODE_NAME": "worker-hostd-b",
-        "COMET_GPU_DEVICE": "1",
         "COMET_WORKER_BOOT_MODE": "vllm-openai",
         "COMET_CONTROL_ROOT": "/comet/shared/control/qwen25-0.5b-vllm-split",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
@@ -285,17 +220,12 @@
       "labels": {
         "comet.plane": "qwen25-0.5b-vllm-split",
         "comet.role": "worker",
-        "comet.node": "worker-hostd-b",
-        "comet.placement": "manual",
-        "comet.placement.mode": "manual",
-        "comet.placement.action": "manual",
-        "comet.requested.node": "worker-hostd-b",
-        "comet.requested.gpu": "1"
+        "comet.node": "worker-hostd-b"
       },
-      "gpu_device": "1",
       "gpu_fraction": 1.0,
       "memory_cap_mb": 8192,
-      "private_disk_size_gb": 8
+      "private_disk_size_gb": 8,
+      "placement_mode": "auto"
     }
   ]
 }
