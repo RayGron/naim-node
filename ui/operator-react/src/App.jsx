@@ -459,6 +459,33 @@ function instanceRole(instance) {
   return instance?.kind || instance?.role || "instance";
 }
 
+function formatInstanceRoleSummary(instances) {
+  const roleCounts = new Map();
+  for (const instance of instances || []) {
+    const role = instanceRole(instance);
+    roleCounts.set(role, (roleCounts.get(role) || 0) + 1);
+  }
+
+  const preferredOrder = ["infer", "worker", "app"];
+  const parts = [];
+
+  for (const role of preferredOrder) {
+    const count = roleCounts.get(role) || 0;
+    if (count > 0) {
+      parts.push(`${count} ${role}`);
+      roleCounts.delete(role);
+    }
+  }
+
+  for (const [role, count] of roleCounts.entries()) {
+    if (count > 0) {
+      parts.push(`${count} ${role}`);
+    }
+  }
+
+  return parts.length > 0 ? parts.join(" / ") : "0 instances";
+}
+
 function statusDot(className) {
   return <span className={`status-dot ${className}`} aria-hidden="true" />;
 }
@@ -1952,8 +1979,7 @@ function App() {
   const observedRuntime = deriveObservedRuntime(observationItems, nodeItems);
   const observedInstances = observedRuntime.observedInstances;
   const displayedInstances = observedInstances.length > 0 ? observedInstances : instances;
-  const inferItems = displayedInstances.filter((item) => instanceRole(item) === "infer");
-  const workerItems = displayedInstances.filter((item) => instanceRole(item) === "worker");
+  const instanceRoleSummary = formatInstanceRoleSummary(displayedInstances);
   const alertSummary = dashboard?.alerts || {
     critical: 0,
     warning: 0,
@@ -2996,7 +3022,7 @@ function App() {
                 <SummaryCard
                   label="Instances"
                   value={displayedInstanceCount}
-                  meta={`${inferItems.length} infer / ${workerItems.length} worker`}
+                  meta={instanceRoleSummary}
                 />
                 <SummaryCard
                   label="Rollout"
