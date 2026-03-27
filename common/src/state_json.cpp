@@ -432,10 +432,16 @@ InstanceSpec InstanceSpecFromJson(const json& value) {
     instance.gpu_device = value.at("gpu_device").get<std::string>();
   }
   instance.placement_mode =
-      ParsePlacementMode(value.value("placement_mode", std::string("manual")));
+      value.contains("placement_mode")
+          ? ParsePlacementMode(value.at("placement_mode").get<std::string>())
+          : (instance.role == InstanceRole::Worker &&
+                     (!instance.gpu_device.has_value() || instance.gpu_device->empty())
+                 ? PlacementMode::Auto
+                 : PlacementMode::Manual);
   instance.share_mode =
       ParseGpuShareMode(value.value("share_mode", std::string("exclusive")));
-  instance.gpu_fraction = value.value("gpu_fraction", 0.0);
+  instance.gpu_fraction =
+      value.value("gpu_fraction", instance.role == InstanceRole::Worker ? 1.0 : 0.0);
   instance.priority = value.value("priority", 100);
   instance.preemptible = value.value("preemptible", false);
   if (value.contains("memory_cap_mb") && !value.at("memory_cap_mb").is_null()) {

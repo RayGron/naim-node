@@ -63,54 +63,18 @@
     "rendezvous_host": "infer-lt-cypher-ai",
     "rendezvous_port": 29514,
     "expected_workers": 1,
-    "worker_selection_policy": "prefer-free-then-share",
-    "members": [
-      {
-        "name": "worker-lt-cypher-ai",
-        "node_name": "local-hostd",
-        "gpu_device": "2",
-        "rank": 0,
-        "gpu_fraction": 1.0,
-        "share_mode": "exclusive",
-        "priority": 100,
-        "preemptible": false,
-        "memory_cap_mb": 86016,
-        "enabled": true,
-        "leader": true
-      }
-    ]
+    "worker_selection_policy": "prefer-free-then-share"
   },
   "gateway": {
     "listen_host": "0.0.0.0",
     "listen_port": 18184,
     "server_name": "lt-cypher-ai.internal"
   },
-  "runtime_gpu_nodes": [
-    {
-      "name": "worker-lt-cypher-ai",
-      "node_name": "local-hostd",
-      "gpu_device": "2",
-      "gpu_fraction": 1.0,
-      "memory_cap_mb": 86016
-    }
-  ],
   "nodes": [
     {
       "name": "local-hostd",
       "platform": "linux",
-      "execution_mode": "mixed",
-      "gpu_devices": [
-        "0",
-        "1",
-        "2",
-        "3"
-      ],
-      "gpu_memory_mb": {
-        "0": 97887,
-        "1": 97887,
-        "2": 97887,
-        "3": 97887
-      }
+      "execution_mode": "mixed"
     }
   ],
   "disks": [
@@ -201,7 +165,6 @@
         "COMET_INSTANCE_NAME": "worker-lt-cypher-ai",
         "COMET_INSTANCE_ROLE": "worker",
         "COMET_NODE_NAME": "local-hostd",
-        "COMET_GPU_DEVICE": "2",
         "COMET_WORKER_BOOT_MODE": "vllm-openai",
         "COMET_CONTROL_ROOT": "/comet/shared/control/lt-cypher-ai",
         "COMET_SHARED_DISK_PATH": "/comet/shared",
@@ -211,14 +174,9 @@
       "labels": {
         "comet.plane": "lt-cypher-ai",
         "comet.role": "worker",
-        "comet.node": "local-hostd",
-        "comet.placement": "manual",
-        "comet.placement.mode": "manual",
-        "comet.placement.action": "manual",
-        "comet.requested.node": "local-hostd",
-        "comet.requested.gpu": "2"
+        "comet.node": "local-hostd"
       },
-      "gpu_device": "2",
+      "placement_mode": "auto",
       "gpu_fraction": 1.0,
       "memory_cap_mb": 86016,
       "private_disk_size_gb": 12

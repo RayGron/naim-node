@@ -1266,8 +1266,9 @@ bool NodeUsesGpuRuntime(
     }
   }
   for (const auto& instance : desired_node_state.instances) {
-    if (instance.node_name == node_name && instance.gpu_device.has_value() &&
-        !instance.gpu_device->empty()) {
+    if (instance.node_name == node_name &&
+        (instance.role == comet::InstanceRole::Worker ||
+         (instance.gpu_device.has_value() && !instance.gpu_device->empty()))) {
       return true;
     }
   }
