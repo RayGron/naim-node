@@ -3964,15 +3964,30 @@ std::filesystem::path ResolveWebAuthnHelperPath() {
   if (const auto env = GetEnvString("COMET_WEBAUTHN_HELPER"); env.has_value()) {
     return std::filesystem::path(*env);
   }
-  std::vector<std::filesystem::path> roots = {
-      std::filesystem::current_path(),
-      std::filesystem::current_path().parent_path(),
+  std::vector<std::filesystem::path> roots;
+  auto append_ancestors = [&roots](std::filesystem::path path) {
+    std::error_code error;
+    path = std::filesystem::weakly_canonical(path, error);
+    if (error || path.empty()) {
+      error.clear();
+      path = path.lexically_normal();
+    }
+    while (!path.empty()) {
+      if (std::find(roots.begin(), roots.end(), path) == roots.end()) {
+        roots.push_back(path);
+      }
+      const auto parent = path.parent_path();
+      if (parent == path) {
+        break;
+      }
+      path = parent;
+    }
   };
+  append_ancestors(std::filesystem::current_path());
   std::error_code error;
   const std::filesystem::path proc_exe = std::filesystem::read_symlink("/proc/self/exe", error);
   if (!error && !proc_exe.empty()) {
-    roots.push_back(proc_exe.parent_path());
-    roots.push_back(proc_exe.parent_path().parent_path());
+    append_ancestors(proc_exe.parent_path());
   }
   for (const auto& root : roots) {
     const auto candidate =
