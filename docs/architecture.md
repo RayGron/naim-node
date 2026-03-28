@@ -1,5 +1,12 @@
 # Architecture Notes
 
+## Refactoring Snapshot
+
+Последний зафиксированный structural refactoring snapshot:
+
+- report: `docs/refactoring-report-2026-03-28.md`
+- architecture scheme: `docs/refactored-architecture-2026-03-28.md`
+
 ## Roles
 
 - `comet-controller` owns desired state, scheduling decisions, reconciliation, and API surface

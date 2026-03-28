@@ -156,7 +156,8 @@ std::map<std::string, comet::HostAssignment> BuildLatestPlaneAssignmentsByNode(
 
 }  // namespace
 
-HostdHttpService::HostdHttpService(Deps deps) : deps_(std::move(deps)) {}
+HostdHttpService::HostdHttpService(HostdHttpSupport support)
+    : support_(std::move(support)) {}
 
 std::optional<HttpResponse> HostdHttpService::HandleRequest(
     const std::string& db_path,
@@ -197,7 +198,7 @@ std::optional<HttpResponse> HostdHttpService::HandleRequest(
   if (request.path == "/api/v1/hostd/disk-runtime-state/load") {
     return HandleDiskRuntimeStateLoad(db_path, request);
   }
-  return deps_.build_json_response(404, json{{"status", "not_found"}}, {});
+  return support_.build_json_response(404, json{{"status", "not_found"}}, {});
 }
 
 namespace {
@@ -205,9 +206,9 @@ namespace {
 class HostdRequestContext {
  public:
   HostdRequestContext(
-      const HostdHttpService::Deps& deps,
+      const HostdHttpSupport& support,
       const std::string& db_path)
-      : deps_(deps), db_path_(db_path), store_(db_path) {
+      : support_(support), db_path_(db_path), store_(db_path) {
     store_.Initialize();
   }
 
@@ -217,7 +218,7 @@ class HostdRequestContext {
       int status_code,
       const json& payload,
       const std::map<std::string, std::string>& headers = {}) const {
-    return deps_.build_json_response(status_code, payload, headers);
+    return support_.build_json_response(status_code, payload, headers);
   }
 
   std::optional<comet::RegisteredHostRecord> Authenticate(
@@ -243,7 +244,7 @@ class HostdRequestContext {
     }
     if (!host->session_expires_at.empty()) {
       const auto expires_age =
-          deps_.timestamp_age_seconds(host->session_expires_at);
+          support_.timestamp_age_seconds(host->session_expires_at);
       if (expires_age.has_value() && *expires_age >= 0) {
         return std::nullopt;
       }
@@ -276,7 +277,7 @@ class HostdRequestContext {
         host->session_token,
         BuildHostRequestAad(message_type, host->node_name, sequence_number));
     host->session_host_sequence = sequence_number;
-    host->session_expires_at = deps_.sql_timestamp_after_seconds(600);
+    host->session_expires_at = support_.sql_timestamp_after_seconds(600);
     store_.UpsertRegisteredHost(*host);
     if (decrypted.empty()) {
       return json::object();
@@ -307,7 +308,7 @@ class HostdRequestContext {
 
   comet::controller::HostRegistryService MakeHostRegistryService() const {
     return comet::controller::HostRegistryService(
-        db_path_, deps_.host_registry_event_sink);
+        db_path_, support_.host_registry_event_sink());
   }
 
   void EmitHostRegistryEvent(
@@ -316,14 +317,14 @@ class HostdRequestContext {
       const json& payload,
       const std::string& node_name,
       const std::string& severity) {
-    deps_.host_registry_event_sink(
+    support_.host_registry_event_sink()(
         store_, event_type, message, payload, node_name, severity);
   }
 
-  const HostdHttpService::Deps& deps() const { return deps_; }
+  const HostdHttpSupport& support() const { return support_; }
 
  private:
-  const HostdHttpService::Deps& deps_;
+  const HostdHttpSupport& support_;
   std::string db_path_;
   comet::ControllerStore store_;
 };
@@ -334,19 +335,19 @@ HttpResponse HostdHttpService::HandleRegister(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "POST") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
     const json body = ParseJsonBody(request);
     const std::string node_name = body.value("node_name", std::string{});
     if (node_name.empty()) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required field 'node_name'"}},
           {});
     }
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     comet::RegisteredHostRecord host;
     if (const auto current = context.store().LoadRegisteredHost(node_name);
         current.has_value()) {
@@ -392,7 +393,7 @@ HttpResponse HostdHttpService::HandleRegister(
              {"node_name", node_name},
              {"registration_state", host.registration_state}});
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -405,16 +406,16 @@ HttpResponse HostdHttpService::HandleHosts(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "GET") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     return context.Json(
         200,
         context.MakeHostRegistryService().BuildPayload(
             FindQueryStringValue(request, "node")));
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -429,13 +430,13 @@ HttpResponse HostdHttpService::HandleHostPath(
   const std::string remainder =
       request.path.substr(std::string("/api/v1/hostd/hosts/").size());
   if (remainder.empty()) {
-    return deps_.build_json_response(404, json{{"status", "not_found"}}, {});
+    return support_.build_json_response(404, json{{"status", "not_found"}}, {});
   }
   const auto revoke_pos = remainder.find("/revoke");
   if (revoke_pos != std::string::npos &&
       revoke_pos + std::string("/revoke").size() == remainder.size()) {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     const std::string node_name = remainder.substr(0, revoke_pos);
@@ -446,8 +447,8 @@ HttpResponse HostdHttpService::HandleHostPath(
               ? std::make_optional(body["message"].get<std::string>())
               : std::nullopt;
       const auto service =
-          comet::controller::HostRegistryService(db_path, deps_.host_registry_event_sink);
-      return deps_.build_json_response(
+          comet::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+      return support_.build_json_response(
           200,
           comet::controller::BuildControllerActionPayload(
               comet::controller::RunControllerActionResult(
@@ -455,7 +456,7 @@ HttpResponse HostdHttpService::HandleHostPath(
                   [&]() { return service.RevokeHost(node_name, message); })),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -467,7 +468,7 @@ HttpResponse HostdHttpService::HandleHostPath(
   if (rotate_pos != std::string::npos &&
       rotate_pos + std::string("/rotate-key").size() == remainder.size()) {
     if (request.method != "POST") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     const std::string node_name = remainder.substr(0, rotate_pos);
@@ -476,7 +477,7 @@ HttpResponse HostdHttpService::HandleHostPath(
       const std::string public_key_base64 =
           body.value("public_key_base64", std::string{});
       if (public_key_base64.empty()) {
-        return deps_.build_json_response(
+        return support_.build_json_response(
             400,
             json{{"status", "bad_request"},
                  {"message", "missing required field 'public_key_base64'"}},
@@ -487,8 +488,8 @@ HttpResponse HostdHttpService::HandleHostPath(
               ? std::make_optional(body["message"].get<std::string>())
               : std::nullopt;
       const auto service =
-          comet::controller::HostRegistryService(db_path, deps_.host_registry_event_sink);
-      return deps_.build_json_response(
+          comet::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+      return support_.build_json_response(
           200,
           comet::controller::BuildControllerActionPayload(
               comet::controller::RunControllerActionResult(
@@ -499,7 +500,7 @@ HttpResponse HostdHttpService::HandleHostPath(
                   })),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -507,26 +508,26 @@ HttpResponse HostdHttpService::HandleHostPath(
           {});
     }
   }
-  return deps_.build_json_response(404, json{{"status", "not_found"}}, {});
+  return support_.build_json_response(404, json{{"status", "not_found"}}, {});
 }
 
 HttpResponse HostdHttpService::HandleSessionOpen(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "POST") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
     const json body = ParseJsonBody(request);
     const std::string node_name = body.value("node_name", std::string{});
     if (node_name.empty()) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           400,
           json{{"status", "bad_request"},
                {"message", "missing required field 'node_name'"}},
           {});
     }
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     auto current = context.store().LoadRegisteredHost(node_name);
     if (!current.has_value()) {
       return context.Json(
@@ -559,9 +560,9 @@ HttpResponse HostdHttpService::HandleSessionOpen(
                {"message", "invalid host session signature"}});
     }
     current->session_state = "connected";
-    current->last_session_at = deps_.utc_now_sql_timestamp();
+    current->last_session_at = support_.utc_now_sql_timestamp();
     current->session_token = comet::RandomTokenBase64(32);
-    current->session_expires_at = deps_.sql_timestamp_after_seconds(600);
+    current->session_expires_at = support_.sql_timestamp_after_seconds(600);
     current->session_host_sequence = 0;
     current->session_controller_sequence = 0;
     current->status_message =
@@ -586,7 +587,7 @@ HttpResponse HostdHttpService::HandleSessionOpen(
             {"controller_sequence", current->session_controller_sequence},
         });
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -599,10 +600,10 @@ HttpResponse HostdHttpService::HandleSessionHeartbeat(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "POST") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     const auto authenticated = context.Authenticate(request);
     if (!authenticated.has_value()) {
       return context.Json(
@@ -623,7 +624,7 @@ HttpResponse HostdHttpService::HandleSessionHeartbeat(
     }
     current.session_state =
         decrypted.value("session_state", std::string("connected"));
-    current.last_heartbeat_at = deps_.utc_now_sql_timestamp();
+    current.last_heartbeat_at = support_.utc_now_sql_timestamp();
     current.last_session_at = current.last_heartbeat_at;
     current.status_message =
         decrypted.value("status_message", std::string("heartbeat"));
@@ -638,7 +639,7 @@ HttpResponse HostdHttpService::HandleSessionHeartbeat(
             {"last_heartbeat_at", current.last_heartbeat_at},
         });
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -651,10 +652,10 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "GET" && request.method != "POST") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     std::optional<std::string> node_name = FindQueryStringValue(request, "node");
     std::optional<comet::RegisteredHostRecord> authenticated;
     bool encrypted_request = false;
@@ -705,7 +706,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     }
     return context.Json(200, payload);
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -721,15 +722,15 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
       request.path.substr(std::string("/api/v1/hostd/assignments/").size());
   const auto slash = remainder.find('/');
   if (slash == std::string::npos) {
-    return deps_.build_json_response(404, json{{"status", "not_found"}}, {});
+    return support_.build_json_response(404, json{{"status", "not_found"}}, {});
   }
   const int assignment_id = std::stoi(remainder.substr(0, slash));
   const std::string action = remainder.substr(slash + 1);
   if (request.method != "POST") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     const auto assignment = context.store().LoadHostAssignment(assignment_id);
     if (!assignment.has_value()) {
       return context.Json(
@@ -814,7 +815,7 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
     }
     return context.Json(404, json{{"status", "not_found"}});
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -827,10 +828,10 @@ HttpResponse HostdHttpService::HandleObservations(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "POST") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     const auto authenticated = context.Authenticate(request);
     if (!authenticated.has_value()) {
       return context.Json(
@@ -862,7 +863,7 @@ HttpResponse HostdHttpService::HandleObservations(
              {"node_name", observation.node_name},
              {"updated", true}});
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -875,10 +876,10 @@ HttpResponse HostdHttpService::HandleEvents(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "POST") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     const auto authenticated = context.Authenticate(request);
     if (!authenticated.has_value()) {
       return context.Json(
@@ -919,7 +920,7 @@ HttpResponse HostdHttpService::HandleEvents(
         "events/append",
         json{{"service", "comet-controller"}, {"appended", true}});
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -932,7 +933,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeState(
     const std::string& db_path,
     const HttpRequest& request) const {
   try {
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     if (request.method == "GET") {
       const auto disk_name = FindQueryStringValue(request, "disk_name");
       const auto node_name = FindQueryStringValue(request, "node");
@@ -995,7 +996,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeState(
     }
     return context.Json(405, json{{"status", "method_not_allowed"}});
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},
@@ -1008,10 +1009,10 @@ HttpResponse HostdHttpService::HandleDiskRuntimeStateLoad(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "POST") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    HostdRequestContext context(deps_, db_path);
+    HostdRequestContext context(support_, db_path);
     const auto authenticated = context.Authenticate(request);
     if (!authenticated.has_value()) {
       return context.Json(
@@ -1049,7 +1050,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeStateLoad(
                  : json(nullptr)},
         });
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"},
              {"message", error.what()},

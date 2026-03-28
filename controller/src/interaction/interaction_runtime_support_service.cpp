@@ -1,6 +1,7 @@
 #include "interaction/interaction_runtime_support_service.h"
 
 #include <algorithm>
+#include <map>
 
 namespace {
 
@@ -9,6 +10,50 @@ std::string NormalizeInteractionHost(const std::string& host) {
     return "127.0.0.1";
   }
   return host;
+}
+
+struct ReplicaGroupSummary {
+  int expected_replica_groups = 0;
+  int ready_replica_groups = 0;
+  int degraded_replica_groups = 0;
+  int ready_worker_members = 0;
+};
+
+ReplicaGroupSummary SummarizeReplicaGroups(
+    const comet::DesiredState& desired_state,
+    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
+  std::map<std::string, std::pair<int, int>> groups;
+  for (const auto& member : desired_state.worker_group.members) {
+    if (!member.enabled) {
+      continue;
+    }
+    const std::string key =
+        member.replica_group_id.empty() ? std::string("replica-0") : member.replica_group_id;
+    auto& group = groups[key];
+    group.first = std::max(group.first, std::max(1, member.replica_size));
+
+    const auto status_it = std::find_if(
+        instance_statuses.begin(),
+        instance_statuses.end(),
+        [&](const comet::RuntimeProcessStatus& status) {
+          return status.instance_name == member.name;
+        });
+    if (status_it != instance_statuses.end() && status_it->ready) {
+      ++group.second;
+    }
+  }
+
+  ReplicaGroupSummary summary;
+  summary.expected_replica_groups = static_cast<int>(groups.size());
+  for (const auto& [_, group] : groups) {
+    summary.ready_worker_members += group.second;
+    if (group.second >= std::max(1, group.first)) {
+      ++summary.ready_replica_groups;
+    } else {
+      ++summary.degraded_replica_groups;
+    }
+  }
+  return summary;
 }
 
 }  // namespace
@@ -115,14 +160,8 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   }
 
   const auto worker_instance_names = FindWorkerInstanceNames(desired_state);
-  int ready_workers = 0;
-  for (const auto& worker_name : worker_instance_names) {
-    const auto worker_status =
-        FindInstanceRuntimeStatus(instance_statuses, worker_name);
-    if (worker_status.has_value() && worker_status->ready) {
-      ++ready_workers;
-    }
-  }
+  const ReplicaGroupSummary replica_summary =
+      SummarizeReplicaGroups(desired_state, instance_statuses);
 
   runtime.plane_name = desired_state.plane_name;
   runtime.control_root = desired_state.control_root;
@@ -130,12 +169,16 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   runtime.instance_name = infer_status->instance_name;
   runtime.instance_role = infer_status->instance_role;
   runtime.node_name = infer_status->node_name;
+  runtime.data_parallel_mode = desired_state.inference.data_parallel_mode;
   runtime.runtime_backend =
       desired_state.inference.runtime_engine == "vllm" ? "worker-vllm"
                                                        : runtime.runtime_backend;
   runtime.runtime_phase = infer_status->runtime_phase;
+  runtime.replica_groups_expected = replica_summary.expected_replica_groups;
+  runtime.replica_groups_ready = replica_summary.ready_replica_groups;
+  runtime.replica_groups_degraded = replica_summary.degraded_replica_groups;
   runtime.enabled_gpu_nodes = static_cast<int>(worker_instance_names.size());
-  runtime.registry_entries = ready_workers;
+  runtime.registry_entries = replica_summary.ready_worker_members;
   runtime.runtime_pid = infer_status->runtime_pid;
   runtime.engine_pid = infer_status->engine_pid;
   runtime.supervisor_pid = infer_status->runtime_pid;
@@ -164,10 +207,13 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
       ParseInteractionTarget(runtime.gateway_listen, desired_state.gateway.listen_port);
   runtime.gateway_ready = ProbeControllerTargetOk(target, "/health");
   runtime.inference_ready = ProbeControllerTargetOk(target, "/v1/models");
+  const bool replica_topology_ready =
+      replica_summary.expected_replica_groups == 0 ||
+      replica_summary.ready_replica_groups > 0;
   runtime.launch_ready =
       runtime.gateway_ready &&
       runtime.inference_ready &&
-      ready_workers >= std::max(0, desired_state.worker_group.expected_workers);
+      replica_topology_ready;
   runtime.ready =
       runtime.active_model_ready && runtime.gateway_ready &&
       runtime.inference_ready && runtime.launch_ready;

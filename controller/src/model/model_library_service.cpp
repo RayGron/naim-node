@@ -29,8 +29,8 @@ struct MultipartGroup {
 
 }  // namespace
 
-ModelLibraryService::ModelLibraryService(Deps deps)
-    : deps_(std::move(deps)), state_(std::make_shared<State>()) {}
+ModelLibraryService::ModelLibraryService(ModelLibrarySupport support)
+    : support_(std::move(support)), state_(std::make_shared<State>()) {}
 
 json ModelLibraryService::BuildPayload(const std::string& db_path) const {
   const auto roots = DiscoverRoots(db_path);
@@ -65,17 +65,17 @@ HttpResponse ModelLibraryService::DeleteEntryByPath(
     const HttpRequest& request) const {
   json body = json::object();
   if (!request.body.empty()) {
-    body = deps_.parse_json_request_body(request);
+    body = support_.parse_json_request_body(request);
   }
   const std::string path = [&]() {
     if (body.contains("path") && body.at("path").is_string()) {
       return body.at("path").get<std::string>();
     }
-    const auto query = deps_.find_query_string(request, "path");
+    const auto query = support_.find_query_string(request, "path");
     return query.value_or(std::string{});
   }();
   if (path.empty() || !IsUsableAbsoluteHostPath(path)) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
              {"message", "path must be an absolute host path"}},
@@ -90,13 +90,13 @@ HttpResponse ModelLibraryService::DeleteEntryByPath(
         return entry.path == normalized_path;
       });
   if (it == entries.end()) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         404,
         json{{"status", "not_found"}, {"message", "model entry not found"}},
         {});
   }
   if (!it->deletable) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         409,
         json{{"status", "conflict"},
              {"message", "model is referenced by one or more planes"},
@@ -109,7 +109,7 @@ HttpResponse ModelLibraryService::DeleteEntryByPath(
   if (it->kind == "directory") {
     std::filesystem::remove_all(it->path, error);
     if (error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.message()}},
           {});
@@ -119,7 +119,7 @@ HttpResponse ModelLibraryService::DeleteEntryByPath(
     for (const auto& current_path : it->paths) {
       std::filesystem::remove(current_path, error);
       if (error) {
-        return deps_.build_json_response(
+        return support_.build_json_response(
             500,
             json{{"status", "internal_error"}, {"message", error.message()}},
             {});
@@ -127,7 +127,7 @@ HttpResponse ModelLibraryService::DeleteEntryByPath(
       deleted_paths.push_back(current_path);
     }
   }
-  return deps_.build_json_response(
+  return support_.build_json_response(
       200,
       json{{"status", "deleted"},
            {"path", it->path},
@@ -137,7 +137,7 @@ HttpResponse ModelLibraryService::DeleteEntryByPath(
 
 HttpResponse ModelLibraryService::EnqueueDownload(
     const HttpRequest& request) const {
-  const json body = deps_.parse_json_request_body(request);
+  const json body = support_.parse_json_request_body(request);
   const std::string target_root = body.value("target_root", std::string{});
   const std::string target_subdir = body.value("target_subdir", std::string{});
   const std::string model_id = body.value("model_id", std::string{});
@@ -149,14 +149,14 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     source_urls.push_back(source_url);
   }
   if (target_root.empty() || !IsUsableAbsoluteHostPath(target_root)) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
              {"message", "target_root must be an absolute host path"}},
         {});
   }
   if (source_urls.empty()) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
              {"message", "source_url or source_urls is required"}},
@@ -182,7 +182,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
           NormalizePathString(destination_root / filename));
     }
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         400,
         json{{"status", "bad_request"}, {"message", error.what()}},
         {});
@@ -197,14 +197,14 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   job.source_urls = source_urls;
   job.target_paths = target_paths;
   job.part_count = static_cast<int>(source_urls.size());
-  job.created_at = deps_.utc_now_sql_timestamp();
+  job.created_at = support_.utc_now_sql_timestamp();
   job.updated_at = job.created_at;
   {
     std::lock_guard<std::mutex> lock(state_->jobs_mutex);
     state_->jobs.emplace(job_id, job);
   }
   StartDownloadJob(job_id);
-  return deps_.build_json_response(
+  return support_.build_json_response(
       202,
       json{{"status", "accepted"}, {"job", BuildJobPayload(job)}},
       {});
@@ -500,7 +500,7 @@ void ModelLibraryService::UpdateJob(
     return;
   }
   update(it->second);
-  it->second.updated_at = deps_.utc_now_sql_timestamp();
+  it->second.updated_at = support_.utc_now_sql_timestamp();
 }
 
 std::vector<ModelLibraryService::ModelLibraryEntry>

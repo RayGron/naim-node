@@ -241,6 +241,7 @@ def build_worker_group_member_contract(
         "plane_name": env("COMET_PLANE_NAME"),
         "control_root": control_root,
         "group_id": env("COMET_WORKER_GROUP_ID", "default-worker-group"),
+        "data_parallel_mode": env("COMET_DATA_PARALLEL_MODE", "off"),
         "distributed_backend": env("COMET_DISTRIBUTED_BACKEND", "vllm"),
         "worker_selection_policy": env(
             "COMET_WORKER_SELECTION_POLICY", "prefer-free-then-share"
@@ -251,6 +252,10 @@ def build_worker_group_member_contract(
         "rank": env_int("COMET_WORKER_GROUP_RANK", 0),
         "world_size": env_int("COMET_WORKER_GROUP_WORLD_SIZE", 1),
         "leader": env_bool("COMET_WORKER_GROUP_LEADER", False),
+        "replica_group_id": env("COMET_WORKER_REPLICA_GROUP_ID"),
+        "replica_index": env_int("COMET_WORKER_REPLICA_INDEX", 0),
+        "replica_size": env_int("COMET_WORKER_REPLICA_SIZE", env_int("COMET_WORKER_GROUP_WORLD_SIZE", 1)),
+        "replica_leader": env_bool("COMET_WORKER_REPLICA_LEADER", env_bool("COMET_WORKER_GROUP_LEADER", False)),
         "gpu_device": env("COMET_GPU_DEVICE", env("COMET_WORKER_GPU_DEVICE")),
         "ready": ready,
         "phase": phase,
@@ -449,7 +454,7 @@ def main() -> int:
             last_activity_at="",
         ),
     )
-    if env_bool("COMET_WORKER_GROUP_LEADER", False):
+    if env_bool("COMET_WRITE_LEGACY_WORKER_UPSTREAM", False):
         write_json(
             upstream_file,
             build_worker_upstream_contract(
@@ -503,7 +508,7 @@ def main() -> int:
                 last_activity_at=now,
             ),
         )
-        if env_bool("COMET_WORKER_GROUP_LEADER", False):
+        if env_bool("COMET_WRITE_LEGACY_WORKER_UPSTREAM", False):
             write_json(
                 upstream_file,
                 build_worker_upstream_contract(
@@ -557,7 +562,7 @@ def main() -> int:
             last_activity_at=utc_now_iso(),
         ),
     )
-    if env_bool("COMET_WORKER_GROUP_LEADER", False):
+    if env_bool("COMET_WRITE_LEGACY_WORKER_UPSTREAM", False):
         write_json(
             upstream_file,
             build_worker_upstream_contract(

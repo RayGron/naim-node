@@ -5,6 +5,8 @@
 #include <limits>
 #include <stdexcept>
 
+#include "comet/state/worker_group_topology.h"
+
 namespace comet::controller {
 
 void DesiredStatePolicyService::ApplyRegisteredHostExecutionModes(
@@ -226,7 +228,6 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
   desired_state->runtime_gpu_nodes.clear();
   desired_state->worker_group.members.clear();
 
-  int rank = 0;
   for (const auto& instance : desired_state->instances) {
     if (instance.role != comet::InstanceRole::Worker) {
       continue;
@@ -250,20 +251,20 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
     member.name = instance.name;
     member.node_name = instance.node_name;
     member.gpu_device = instance.gpu_device.value_or("");
-    member.rank = rank;
+    member.rank = static_cast<int>(desired_state->worker_group.members.size());
     member.gpu_fraction = instance.gpu_fraction;
     member.share_mode = instance.share_mode;
     member.priority = instance.priority;
     member.preemptible = instance.preemptible;
     member.memory_cap_mb = instance.memory_cap_mb;
     member.enabled = true;
-    member.leader = rank == 0;
     desired_state->worker_group.members.push_back(std::move(member));
-    ++rank;
   }
 
   if (desired_state->worker_group.expected_workers <= 0) {
-    desired_state->worker_group.expected_workers = rank;
+    desired_state->worker_group.expected_workers = comet::DefaultWorkersPerReplica(
+        desired_state->inference,
+        comet::EligibleWorkerMemberCount(desired_state->worker_group));
   }
   if (desired_state->worker_group.infer_instance_name.empty()) {
     if (const auto* infer = FindInferInstance(*desired_state); infer != nullptr) {
@@ -274,6 +275,8 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
     desired_state->worker_group.rendezvous_host =
         desired_state->worker_group.infer_instance_name;
   }
+  comet::ValidateReplicaPacking(desired_state->inference, desired_state->worker_group);
+  comet::AssignReplicaTopology(desired_state->inference, &desired_state->worker_group);
 }
 
 void DesiredStatePolicyService::ApplyObservedHostGpuInventory(

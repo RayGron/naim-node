@@ -8,6 +8,8 @@
 #include <sstream>
 #include <thread>
 
+#include "comet/state/worker_group_topology.h"
+
 namespace comet::controller {
 
 namespace {
@@ -2365,9 +2367,35 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const bool llm_plane = desired_state->plane_mode == comet::PlaneMode::Llm;
   const bool running_plane =
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
+  const bool data_parallel =
+      comet::DataParallelEnabled(desired_state->inference);
   const int expected_worker_members =
       std::max(0, desired_state->worker_group.expected_workers);
   int ready_worker_members = count_ready_worker_members_(store, *desired_state);
+  int expected_replica_groups =
+      resolution.runtime_status.has_value() && resolution.runtime_status->replica_groups_expected > 0
+          ? resolution.runtime_status->replica_groups_expected
+          : comet::ExpectedReplicaGroupCount(
+                desired_state->inference,
+                desired_state->worker_group);
+  int ready_replica_groups =
+      resolution.runtime_status.has_value() ? resolution.runtime_status->replica_groups_ready : 0;
+  const bool need_fallback_replica_counts =
+      !resolution.runtime_status.has_value() ||
+      (expected_replica_groups > 0 && ready_replica_groups == 0);
+  if (need_fallback_replica_counts) {
+    if (data_parallel) {
+      ready_replica_groups =
+          expected_worker_members > 0 ? ready_worker_members / expected_worker_members : 0;
+      ready_replica_groups = std::min(expected_replica_groups, ready_replica_groups);
+    } else if (expected_worker_members <= 0 ||
+               ready_worker_members >= expected_worker_members) {
+      ready_replica_groups = expected_replica_groups > 0 ? 1 : 0;
+    }
+  }
+  int degraded_replica_groups =
+      resolution.runtime_status.has_value() ? resolution.runtime_status->replica_groups_degraded
+                                            : std::max(0, expected_replica_groups - ready_replica_groups);
 
   if (!resolution.target.has_value()) {
     resolution.target = parse_interaction_target_(
@@ -2425,11 +2453,17 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   if (resolution.runtime_status.has_value()) {
     resolution.runtime_status->registry_entries =
         std::max(resolution.runtime_status->registry_entries, ready_worker_members);
+    resolution.runtime_status->data_parallel_mode = desired_state->inference.data_parallel_mode;
+    resolution.runtime_status->replica_groups_expected = expected_replica_groups;
+    resolution.runtime_status->replica_groups_ready = ready_replica_groups;
+    resolution.runtime_status->replica_groups_degraded = degraded_replica_groups;
+    const bool replica_topology_ready =
+        expected_replica_groups == 0 || ready_replica_groups > 0;
     resolution.runtime_status->launch_ready =
         resolution.runtime_status->active_model_ready &&
         resolution.runtime_status->inference_ready &&
         resolution.runtime_status->gateway_ready &&
-        ready_worker_members >= expected_worker_members;
+        replica_topology_ready;
     resolution.runtime_status->ready = resolution.runtime_status->launch_ready;
   }
   const bool observation_ready =
@@ -2440,6 +2474,8 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const bool worker_group_degraded =
       expected_worker_members > 0 && ready_worker_members > 0 &&
       ready_worker_members < expected_worker_members;
+  const bool replica_group_degraded =
+      expected_replica_groups > 0 && ready_replica_groups < expected_replica_groups;
   const auto local_runtime_blocker =
       describe_unsupported_controller_local_runtime_(*desired_state, primary_node);
   const bool runtime_ready =
@@ -2463,9 +2499,13 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     reason = "runtime_status_missing";
   } else if (!resolution.runtime_status->active_model_ready) {
     reason = "active_model_missing";
-  } else if (expected_worker_members > 0 &&
-             ready_worker_members < expected_worker_members) {
-    reason = "worker_group_partial";
+  } else if (data_parallel && expected_replica_groups > 0 && ready_replica_groups == 0) {
+    reason = "no_ready_replicas";
+  } else if (expected_replica_groups > 0 && ready_replica_groups < expected_replica_groups) {
+    reason = data_parallel
+                 ? (ready_worker_members > 0 ? "replica_group_partial"
+                                             : "replica_group_missing")
+                 : "worker_group_partial";
   } else if (!resolution.runtime_status->gateway_ready) {
     reason = "gateway_not_ready";
   } else if (!resolution.runtime_status->inference_ready) {
@@ -2474,6 +2514,17 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
                  : "inference_not_ready";
   } else if (!resolution.target.has_value()) {
     reason = "gateway_target_missing";
+  }
+
+  nlohmann::json degraded_reasons = nlohmann::json::array();
+  if (data_parallel && expected_replica_groups > 0 && ready_replica_groups == 0) {
+    degraded_reasons.push_back("no_ready_replicas");
+  } else if (replica_group_degraded) {
+    degraded_reasons.push_back(
+        data_parallel
+            ? (ready_worker_members > 0 ? "replica_group_partial"
+                                        : "replica_group_missing")
+            : "worker_group_partial");
   }
 
   resolution.status_payload = nlohmann::json{
@@ -2493,9 +2544,14 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
        desired_state->worker_group.group_id.empty()
            ? nlohmann::json(nullptr)
            : nlohmann::json(desired_state->worker_group.group_id)},
+      {"data_parallel_mode", desired_state->inference.data_parallel_mode},
       {"worker_group_expected", expected_worker_members},
       {"worker_group_ready", ready_worker_members},
-      {"degraded", worker_group_degraded},
+      {"replica_groups_expected", expected_replica_groups},
+      {"replica_groups_ready", ready_replica_groups},
+      {"replica_groups_degraded", degraded_replica_groups},
+      {"degraded", worker_group_degraded || replica_group_degraded},
+      {"degraded_reasons", degraded_reasons},
       {"active_model_id",
        resolution.runtime_status.has_value() &&
                !resolution.runtime_status->active_model_id.empty()

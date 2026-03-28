@@ -5,7 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/models.h"
+#include "comet/state/sqlite_store.h"
 
 namespace comet::hostd {
 

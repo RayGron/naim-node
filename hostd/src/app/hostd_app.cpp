@@ -1,5 +1,10 @@
 #include "app/hostd_app.h"
 
+#include "app/hostd_bootstrap_model_support.h"
+#include "app/hostd_composition_root.h"
+#include "app/hostd_controller_transport_support.h"
+#include "app/hostd_local_state_support.h"
+#include "app/hostd_telemetry_support.h"
 #include "backend/hostd_backend.h"
 #include "backend/hostd_backend_factory.h"
 #include "backend/http_hostd_backend_support.h"
@@ -58,19 +63,8 @@
 namespace {
 
 using nlohmann::json;
-using SocketHandle = comet::platform::SocketHandle;
 using ComposeMode = comet::hostd::ComposeMode;
 using HostdBackend = comet::hostd::HostdBackend;
-
-std::string SocketErrorMessage() {
-  return comet::platform::LastSocketErrorMessage();
-}
-
-void CloseSocketHandle(const SocketHandle fd) {
-  if (comet::platform::IsSocketValid(fd)) {
-    comet::platform::CloseSocket(fd);
-  }
-}
 
 constexpr const char* kDefaultManagedStorageRoot = "/var/lib/comet";
 
@@ -85,6 +79,10 @@ std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
     const std::string& state_root,
     const std::string& node_name,
     const std::optional<std::string>& plane_name = std::nullopt);
+std::string SharedDiskHostPathForContainerPath(
+    const comet::DiskSpec& shared_disk,
+    const std::string& container_path,
+    const std::string& fallback_relative_path);
 
 bool HasPathPrefix(
     const std::filesystem::path& path,
@@ -436,92 +434,21 @@ void EnsureParentDirectory(const std::string& path) {
   }
 }
 
-void RemoveStateFileIfExists(const std::string& path) {
-  RemoveFileIfExists(path);
-}
-
 std::string LocalPlaneRoot(
     const std::string& state_root,
     const std::string& node_name,
     const std::string& plane_name) {
-  return (std::filesystem::path(state_root) / node_name / "planes" / plane_name).string();
-}
-
-std::string LocalGenerationPath(const std::string& state_root, const std::string& node_name) {
-  return (std::filesystem::path(state_root) / node_name / "applied-generation.txt").string();
-}
-
-std::string LocalPlaneGenerationPath(
-    const std::string& state_root,
-    const std::string& node_name,
-    const std::string& plane_name) {
-  return (std::filesystem::path(LocalPlaneRoot(state_root, node_name, plane_name)) /
-          "applied-generation.txt")
-      .string();
-}
-
-std::vector<std::string> ListLocalPlaneNames(
-    const std::string& state_root,
-    const std::string& node_name) {
-  std::vector<std::string> result;
-  const std::filesystem::path planes_root =
-      std::filesystem::path(state_root) / node_name / "planes";
-  if (!std::filesystem::exists(planes_root)) {
-    return result;
-  }
-  for (const auto& entry : std::filesystem::directory_iterator(planes_root)) {
-    if (!entry.is_directory()) {
-      continue;
-    }
-    result.push_back(entry.path().filename().string());
-  }
-  std::sort(result.begin(), result.end());
-  return result;
-}
-
-std::optional<int> LoadGenerationFromPath(const std::string& path) {
-  if (!std::filesystem::exists(path)) {
-    return std::nullopt;
-  }
-
-  std::ifstream input(path);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open generation file: " + path);
-  }
-
-  int generation = 0;
-  input >> generation;
-  if (!input.good() && !input.eof()) {
-    throw std::runtime_error("failed to parse generation file: " + path);
-  }
-  return generation;
+  return comet::hostd::local_state_support::LocalPlaneRoot(state_root, node_name, plane_name);
 }
 
 std::optional<int> LoadLocalAppliedGeneration(
     const std::string& state_root,
     const std::string& node_name,
     const std::optional<std::string>& plane_name = std::nullopt) {
-  if (plane_name.has_value()) {
-    return LoadGenerationFromPath(LocalPlaneGenerationPath(state_root, node_name, *plane_name));
-  }
-
-  const std::string aggregate_path = LocalGenerationPath(state_root, node_name);
-  if (std::filesystem::exists(aggregate_path)) {
-    return LoadGenerationFromPath(aggregate_path);
-  }
-
-  const auto plane_names = ListLocalPlaneNames(state_root, node_name);
-  std::optional<int> generation;
-  for (const auto& current_plane_name : plane_names) {
-    const auto plane_generation =
-        LoadGenerationFromPath(LocalPlaneGenerationPath(state_root, node_name, current_plane_name));
-    if (!plane_generation.has_value()) {
-      continue;
-    }
-    generation = generation.has_value() ? std::max(*generation, *plane_generation)
-                                        : *plane_generation;
-  }
-  return generation;
+  return comet::hostd::local_state_support::LoadLocalAppliedGeneration(
+      state_root,
+      node_name,
+      plane_name);
 }
 
 void SaveLocalAppliedGeneration(
@@ -529,22 +456,11 @@ void SaveLocalAppliedGeneration(
     const std::string& node_name,
     int generation,
     const std::optional<std::string>& plane_name = std::nullopt) {
-  const std::string path = plane_name.has_value()
-                               ? LocalPlaneGenerationPath(state_root, node_name, *plane_name)
-                               : LocalGenerationPath(state_root, node_name);
-  const std::filesystem::path file_path(path);
-  if (file_path.has_parent_path()) {
-    std::filesystem::create_directories(file_path.parent_path());
-  }
-
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  if (!output.is_open()) {
-    throw std::runtime_error("failed to open generation file for write: " + path);
-  }
-  output << generation << "\n";
-  if (!output.good()) {
-    throw std::runtime_error("failed to write generation file: " + path);
-  }
+  comet::hostd::local_state_support::SaveLocalAppliedGeneration(
+      state_root,
+      node_name,
+      generation,
+      plane_name);
 }
 
 std::string RunCommandCapture(const std::string& command);
@@ -637,160 +553,50 @@ bool NodeHasInferInstance(const comet::DesiredState& state) {
 }
 
 std::string LocalStatePath(const std::string& state_root, const std::string& node_name) {
-  return (std::filesystem::path(state_root) / node_name / "applied-state.json").string();
+  return comet::hostd::local_state_support::LocalStatePath(state_root, node_name);
 }
 
 std::string LocalPlaneStatePath(
     const std::string& state_root,
     const std::string& node_name,
     const std::string& plane_name) {
-  return (std::filesystem::path(LocalPlaneRoot(state_root, node_name, plane_name)) /
-          "applied-state.json")
-      .string();
-}
-
-std::optional<comet::DesiredState> LoadStateFromPath(const std::string& path) {
-  return comet::LoadDesiredStateJson(path);
-}
-
-comet::DesiredState MergeLocalAppliedStates(const std::vector<comet::DesiredState>& states) {
-  if (states.empty()) {
-    throw std::runtime_error("cannot merge empty local state list");
-  }
-
-  comet::DesiredState merged = states.front();
-  if (states.size() > 1) {
-    merged.plane_name.clear();
-    merged.plane_shared_disk_name.clear();
-  }
-  merged.runtime_gpu_nodes.clear();
-  merged.nodes.clear();
-  merged.disks.clear();
-  merged.instances.clear();
-
-  std::set<std::string> seen_nodes;
-  std::set<std::string> seen_runtime_gpu_nodes;
-  for (const auto& state : states) {
-    for (const auto& node : state.nodes) {
-      if (seen_nodes.insert(node.name).second) {
-        merged.nodes.push_back(node);
-      }
-    }
-    for (const auto& runtime_gpu_node : state.runtime_gpu_nodes) {
-      const std::string key = runtime_gpu_node.node_name + ":" + runtime_gpu_node.gpu_device;
-      if (seen_runtime_gpu_nodes.insert(key).second) {
-        merged.runtime_gpu_nodes.push_back(runtime_gpu_node);
-      }
-    }
-    merged.disks.insert(merged.disks.end(), state.disks.begin(), state.disks.end());
-    merged.instances.insert(merged.instances.end(), state.instances.begin(), state.instances.end());
-  }
-  return merged;
-}
-
-std::vector<comet::DesiredState> LoadAllLocalAppliedStates(
-    const std::string& state_root,
-    const std::string& node_name) {
-  std::vector<comet::DesiredState> result;
-  const auto plane_names = ListLocalPlaneNames(state_root, node_name);
-  for (const auto& plane_name : plane_names) {
-    const auto plane_state =
-        LoadStateFromPath(LocalPlaneStatePath(state_root, node_name, plane_name));
-    if (plane_state.has_value()) {
-      result.push_back(*plane_state);
-    }
-  }
-  if (!result.empty()) {
-    return result;
-  }
-
-  const auto aggregate_state = LoadStateFromPath(LocalStatePath(state_root, node_name));
-  if (aggregate_state.has_value()) {
-    result.push_back(*aggregate_state);
-  }
-  return result;
+  return comet::hostd::local_state_support::LocalPlaneStatePath(
+      state_root,
+      node_name,
+      plane_name);
 }
 
 std::optional<comet::DesiredState> LoadLocalAppliedState(
     const std::string& state_root,
     const std::string& node_name,
     const std::optional<std::string>& plane_name = std::nullopt) {
-  if (plane_name.has_value()) {
-    return LoadStateFromPath(LocalPlaneStatePath(state_root, node_name, *plane_name));
-  }
-
-  const auto states = LoadAllLocalAppliedStates(state_root, node_name);
-  if (states.empty()) {
-    return std::nullopt;
-  }
-  return MergeLocalAppliedStates(states);
+  return comet::hostd::local_state_support::LoadLocalAppliedState(
+      state_root,
+      node_name,
+      plane_name);
 }
 
 void RewriteAggregateLocalState(const std::string& state_root, const std::string& node_name) {
-  std::vector<comet::DesiredState> states;
-  for (const auto& plane_name : ListLocalPlaneNames(state_root, node_name)) {
-    const auto plane_state =
-        LoadStateFromPath(LocalPlaneStatePath(state_root, node_name, plane_name));
-    if (plane_state.has_value()) {
-      states.push_back(*plane_state);
-    }
-  }
-  if (states.empty()) {
-    RemoveStateFileIfExists(LocalStatePath(state_root, node_name));
-    return;
-  }
-  comet::SaveDesiredStateJson(
-      MergeLocalAppliedStates(states),
-      LocalStatePath(state_root, node_name));
+  comet::hostd::local_state_support::RewriteAggregateLocalState(state_root, node_name);
 }
 
 void RewriteAggregateLocalGeneration(
     const std::string& state_root,
     const std::string& node_name) {
-  std::optional<int> generation;
-  for (const auto& plane_name : ListLocalPlaneNames(state_root, node_name)) {
-    const auto plane_generation =
-        LoadGenerationFromPath(LocalPlaneGenerationPath(state_root, node_name, plane_name));
-    if (!plane_generation.has_value()) {
-      continue;
-    }
-    generation = generation.has_value() ? std::max(*generation, *plane_generation)
-                                        : *plane_generation;
-  }
-  if (generation.has_value()) {
-    SaveLocalAppliedGeneration(state_root, node_name, *generation, std::nullopt);
-  } else {
-    RemoveStateFileIfExists(LocalGenerationPath(state_root, node_name));
-  }
+  comet::hostd::local_state_support::RewriteAggregateLocalGeneration(state_root, node_name);
 }
 
 std::optional<comet::RuntimeStatus> LoadLocalRuntimeStatus(
     const std::string& state_root,
     const std::string& node_name,
     const std::optional<std::string>& plane_name = std::nullopt) {
-  if (plane_name.has_value()) {
-    const auto local_state = LoadLocalAppliedState(state_root, node_name, plane_name);
-    if (!local_state.has_value()) {
-      return std::nullopt;
-    }
-    const auto runtime_status_path = RuntimeStatusPathForNode(*local_state, node_name);
-    if (!runtime_status_path.has_value()) {
-      return std::nullopt;
-    }
-    return comet::LoadRuntimeStatusJson(*runtime_status_path);
-  }
-
-  for (const auto& local_state : LoadAllLocalAppliedStates(state_root, node_name)) {
-    const auto runtime_status_path = RuntimeStatusPathForNode(local_state, node_name);
-    if (!runtime_status_path.has_value()) {
-      continue;
-    }
-    const auto runtime_status = comet::LoadRuntimeStatusJson(*runtime_status_path);
-    if (runtime_status.has_value()) {
-      return runtime_status;
-    }
-  }
-  return std::nullopt;
+  return comet::hostd::local_state_support::LoadLocalRuntimeStatus(
+      state_root,
+      node_name,
+      [](const comet::DesiredState& state, const std::string& current_node_name) {
+        return RuntimeStatusPathForNode(state, current_node_name);
+      },
+      plane_name);
 }
 
 void SaveLocalAppliedState(
@@ -798,28 +604,21 @@ void SaveLocalAppliedState(
     const std::string& node_name,
     const comet::DesiredState& state,
     const std::optional<std::string>& plane_name = std::nullopt) {
-  const std::string effective_plane_name =
-      plane_name.has_value() ? *plane_name : state.plane_name;
-  const std::string path = plane_name.has_value()
-                               ? LocalPlaneStatePath(state_root, node_name, effective_plane_name)
-                               : LocalStatePath(state_root, node_name);
-  comet::SaveDesiredStateJson(state, path);
+  comet::hostd::local_state_support::SaveLocalAppliedState(
+      state_root,
+      node_name,
+      state,
+      plane_name);
 }
 
 void RemoveLocalAppliedPlaneState(
     const std::string& state_root,
     const std::string& node_name,
     const std::string& plane_name) {
-  RemoveStateFileIfExists(LocalPlaneStatePath(state_root, node_name, plane_name));
-  RemoveStateFileIfExists(LocalPlaneGenerationPath(state_root, node_name, plane_name));
-  std::error_code error;
-  std::filesystem::remove(
-      std::filesystem::path(LocalPlaneRoot(state_root, node_name, plane_name)),
-      error);
-  if (error) {
-    throw std::runtime_error(
-        "failed to remove plane state root for plane '" + plane_name + "': " + error.message());
-  }
+  comet::hostd::local_state_support::RemoveLocalAppliedPlaneState(
+      state_root,
+      node_name,
+      plane_name);
 }
 
 void WaitForLocalRuntimeStatus(
@@ -827,37 +626,22 @@ void WaitForLocalRuntimeStatus(
     const std::string& node_name,
     const std::optional<std::string>& plane_name,
     std::chrono::seconds timeout) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (const auto runtime_status = LoadLocalRuntimeStatus(state_root, node_name, plane_name);
-        runtime_status.has_value() &&
-        runtime_status->ready &&
-        runtime_status->launch_ready &&
-        runtime_status->inference_ready &&
-        (runtime_status->gateway_health_url.empty() || runtime_status->gateway_ready)) {
-      return;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-  }
-  throw std::runtime_error(
-      "timed out waiting for plane runtime readiness on node '" + node_name + "'");
-}
-
-bool InstanceProducesRuntimeStatus(const comet::InstanceSpec& instance) {
-  return instance.role == comet::InstanceRole::Infer ||
-         instance.role == comet::InstanceRole::Worker;
+  comet::hostd::local_state_support::WaitForLocalRuntimeStatus(
+      state_root,
+      node_name,
+      [](const comet::DesiredState& state, const std::string& current_node_name) {
+        return RuntimeStatusPathForNode(state, current_node_name);
+      },
+      plane_name,
+      timeout);
 }
 
 std::size_t ExpectedRuntimeStatusCountForNode(
     const comet::DesiredState& desired_node_state,
     const std::string& node_name) {
-  std::size_t count = 0;
-  for (const auto& instance : desired_node_state.instances) {
-    if (instance.node_name == node_name && InstanceProducesRuntimeStatus(instance)) {
-      ++count;
-    }
-  }
-  return count;
+  return comet::hostd::local_state_support::ExpectedRuntimeStatusCountForNode(
+      desired_node_state,
+      node_name);
 }
 
 void WaitForLocalInstanceRuntimeStatuses(
@@ -866,26 +650,20 @@ void WaitForLocalInstanceRuntimeStatuses(
     const std::optional<std::string>& plane_name,
     std::size_t expected_count,
     std::chrono::seconds timeout) {
-  if (expected_count == 0) {
-    return;
-  }
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    const auto statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name, plane_name);
-    std::size_t ready_count = 0;
-    for (const auto& status : statuses) {
-      if (status.ready &&
-          (status.runtime_phase == "running" || status.runtime_phase == "ready")) {
-        ++ready_count;
-      }
-    }
-    if (ready_count >= expected_count) {
-      return;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-  }
-  throw std::runtime_error(
-      "timed out waiting for instance runtime readiness on node '" + node_name + "'");
+  comet::hostd::local_state_support::WaitForLocalInstanceRuntimeStatuses(
+      state_root,
+      node_name,
+      [](const std::string& current_state_root,
+         const std::string& current_node_name,
+         const std::optional<std::string>& current_plane_name) {
+        return LoadLocalInstanceRuntimeStatuses(
+            current_state_root,
+            current_node_name,
+            current_plane_name);
+      },
+      plane_name,
+      expected_count,
+      timeout);
 }
 
 void PrintLocalStateSummary(
@@ -893,33 +671,15 @@ void PrintLocalStateSummary(
     const std::string& state_path,
     const std::string& node_name,
     const std::optional<int>& generation) {
-  std::cout << "hostd local state for node=" << node_name << "\n";
-  std::cout << "state_path=" << state_path << "\n";
-  if (generation.has_value()) {
-    std::cout << "applied_generation=" << *generation << "\n";
-  }
-  std::cout << "plane=" << state.plane_name << "\n";
-  std::cout << "disks=" << state.disks.size() << "\n";
-  std::cout << "instances=" << state.instances.size() << "\n";
-  for (const auto& disk : state.disks) {
-    std::cout << "  - disk=" << disk.name
-              << " kind=" << comet::ToString(disk.kind)
-              << " host_path=" << disk.host_path
-              << " realized=directory-backed"
-              << " exists=" << (std::filesystem::exists(disk.host_path) ? "yes" : "no")
-              << "\n";
-  }
-  for (const auto& instance : state.instances) {
-    std::cout << "  - " << instance.name << " role=" << comet::ToString(instance.role)
-              << " image=" << instance.image << "\n";
-  }
+  comet::hostd::local_state_support::PrintLocalStateSummary(
+      state,
+      state_path,
+      node_name,
+      generation);
 }
 
 std::string RequireSingleNodeName(const comet::DesiredState& state) {
-  if (state.nodes.empty()) {
-    throw std::runtime_error("desired node state is empty");
-  }
-  return state.nodes.front().name;
+  return comet::hostd::local_state_support::RequireSingleNodeName(state);
 }
 
 std::string Trim(const std::string& value) {
@@ -934,26 +694,6 @@ std::string Trim(const std::string& value) {
     --end;
   }
   return value.substr(start, end - start);
-}
-
-std::vector<std::string> SplitCsvRow(const std::string& line) {
-  std::vector<std::string> result;
-  std::string current;
-  bool in_quotes = false;
-  for (char ch : line) {
-    if (ch == '"') {
-      in_quotes = !in_quotes;
-      continue;
-    }
-    if (ch == ',' && !in_quotes) {
-      result.push_back(Trim(current));
-      current.clear();
-      continue;
-    }
-    current.push_back(ch);
-  }
-  result.push_back(Trim(current));
-  return result;
 }
 
 std::string RunCommandCapture(const std::string& command) {
@@ -1452,16 +1192,80 @@ void PublishAssignmentProgress(
     const std::optional<int>& assignment_id,
     const json& progress);
 
-const comet::DiskSpec& RequirePlaneSharedDiskForNode(
-    const comet::DesiredState& state,
-    const std::string& node_name) {
-  for (const auto& disk : state.disks) {
-    if (disk.node_name == node_name && disk.kind == comet::DiskKind::PlaneShared) {
-      return disk;
-    }
-  }
-  throw std::runtime_error(
-      "plane '" + state.plane_name + "' is missing a plane-shared disk for node '" + node_name + "'");
+comet::hostd::HostdBootstrapModelSupport MakeHostdBootstrapModelSupport() {
+  return comet::hostd::HostdBootstrapModelSupport(
+      comet::hostd::HostdBootstrapModelSupport::Deps{
+          [](const comet::DesiredState& state, const std::string& node_name)
+              -> const comet::DiskSpec* {
+            for (const auto& disk : state.disks) {
+              if (disk.node_name == node_name &&
+                  disk.kind == comet::DiskKind::PlaneShared) {
+                return &disk;
+              }
+            }
+            return nullptr;
+          },
+          [](const comet::DiskSpec& shared_disk,
+              const std::string& container_path,
+              const std::string& fallback_relative_path) {
+            return SharedDiskHostPathForContainerPath(
+                shared_disk,
+                container_path,
+                fallback_relative_path);
+          },
+          [](const comet::DesiredState& state,
+              const std::string& node_name,
+              const std::string& filename) {
+            return ControlFilePathForNode(state, node_name, filename);
+          },
+          [](const comet::DesiredState& state) {
+            return RequireSingleNodeName(state);
+          },
+          [](const std::string& command) {
+            return RunCommandCapture(command);
+          },
+          [](const std::string& value) {
+            return ShellQuote(value);
+          },
+          [](const std::string& value) {
+            return NormalizeLowercase(value);
+          },
+          [](const std::string& value) {
+            return Trim(value);
+          },
+          [](const std::string& path, const std::string& contents) {
+            WriteTextFile(path, contents);
+          },
+          [](const std::string& path) {
+            RemoveFileIfExists(path);
+          },
+          [](const std::string& path) {
+            EnsureParentDirectory(path);
+          },
+          [](const std::string& phase,
+              const std::string& title,
+              const std::string& detail,
+              int percent,
+              const std::string& plane_name,
+              const std::string& node_name,
+              const std::optional<std::uintmax_t>& bytes_done,
+              const std::optional<std::uintmax_t>& bytes_total) {
+            return BuildAssignmentProgressPayload(
+                phase,
+                title,
+                detail,
+                percent,
+                plane_name,
+                node_name,
+                bytes_done,
+                bytes_total);
+          },
+          [](HostdBackend* backend,
+              const std::optional<int>& assignment_id,
+              const json& progress) {
+            PublishAssignmentProgress(backend, assignment_id, progress);
+          },
+      });
 }
 
 std::string SharedDiskHostPathForContainerPath(
@@ -1485,714 +1289,6 @@ std::string SharedDiskHostPathForContainerPath(
     }
   }
   return (std::filesystem::path(shared_disk.host_path) / relative_path).string();
-}
-
-std::string FilenameFromUrl(const std::string& source_url) {
-  const auto query = source_url.find_first_of("?#");
-  const std::string without_query =
-      query == std::string::npos ? source_url : source_url.substr(0, query);
-  const std::string filename = std::filesystem::path(without_query).filename().string();
-  if (filename.empty()) {
-    throw std::runtime_error("failed to infer filename from bootstrap model URL: " + source_url);
-  }
-  return filename;
-}
-
-struct BootstrapModelArtifact {
-  std::optional<std::string> local_path;
-  std::optional<std::string> source_url;
-  std::string target_host_path;
-};
-
-std::vector<BootstrapModelArtifact> BuildBootstrapModelArtifacts(
-    const comet::DesiredState& state,
-    const std::string& node_name) {
-  const auto& shared_disk = RequirePlaneSharedDiskForNode(state, node_name);
-  const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
-  const std::filesystem::path target_root =
-      SharedDiskHostPathForContainerPath(
-          shared_disk,
-          use_vllm_runtime ? state.inference.model_cache_dir : state.inference.gguf_cache_dir,
-          use_vllm_runtime ? "models/cache" : "models/gguf");
-  std::vector<BootstrapModelArtifact> artifacts;
-  std::string filename = use_vllm_runtime ? "model" : "model.gguf";
-  if (!state.bootstrap_model.has_value()) {
-    artifacts.push_back(BootstrapModelArtifact{
-        std::nullopt,
-        std::nullopt,
-        (target_root / filename).string(),
-    });
-    return artifacts;
-  }
-
-  const auto& bootstrap_model = *state.bootstrap_model;
-  if (!bootstrap_model.source_urls.empty()) {
-    artifacts.reserve(bootstrap_model.source_urls.size());
-    for (const auto& source_url : bootstrap_model.source_urls) {
-      artifacts.push_back(BootstrapModelArtifact{
-          std::nullopt,
-          source_url,
-          (target_root / FilenameFromUrl(source_url)).string(),
-      });
-    }
-    return artifacts;
-  }
-
-  if (bootstrap_model.target_filename.has_value() && !bootstrap_model.target_filename->empty()) {
-    filename = *bootstrap_model.target_filename;
-  } else if (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) {
-    filename = std::filesystem::path(*bootstrap_model.local_path).filename().string();
-  } else if (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) {
-    filename = FilenameFromUrl(*bootstrap_model.source_url);
-  }
-  if (filename.empty()) {
-    filename = use_vllm_runtime ? "model" : "model.gguf";
-  }
-  artifacts.push_back(BootstrapModelArtifact{
-      bootstrap_model.local_path,
-      bootstrap_model.source_url,
-      (target_root / filename).string(),
-  });
-  return artifacts;
-}
-
-std::string BootstrapModelTargetPath(
-    const comet::DesiredState& state,
-    const std::string& node_name) {
-  const auto artifacts = BuildBootstrapModelArtifacts(state, node_name);
-  if (artifacts.empty()) {
-    throw std::runtime_error(
-        "failed to resolve bootstrap model target path for plane '" + state.plane_name + "'");
-  }
-  return artifacts.front().target_host_path;
-}
-
-std::string ActiveModelPathForNode(
-    const comet::DesiredState& state,
-    const std::string& node_name) {
-  const auto active_model_path = ControlFilePathForNode(state, node_name, "active-model.json");
-  if (!active_model_path.has_value()) {
-    throw std::runtime_error(
-        "plane '" + state.plane_name + "' is missing infer control path for node '" + node_name + "'");
-  }
-  return *active_model_path;
-}
-
-std::string BootstrapRuntimeModelPath(
-    const comet::DesiredState& state,
-    const std::string& target_host_path) {
-  const auto& shared_disk = RequirePlaneSharedDiskForNode(state, RequireSingleNodeName(state));
-  const std::filesystem::path target_path(target_host_path);
-  const std::filesystem::path shared_root(shared_disk.host_path);
-  std::string relative = target_path.lexically_relative(shared_root).generic_string();
-  if (relative.empty() || relative == ".") {
-    relative = target_path.filename().string();
-  }
-  return (std::filesystem::path(shared_disk.container_path) / relative).generic_string();
-}
-
-std::optional<std::uintmax_t> FileSizeIfExists(const std::string& path) {
-  std::error_code error;
-  if (!std::filesystem::exists(path, error) || error) {
-    return std::nullopt;
-  }
-  if (std::filesystem::is_directory(path, error)) {
-    if (error) {
-      return std::nullopt;
-    }
-    std::uintmax_t total = 0;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(path, error)) {
-      if (error) {
-        return std::nullopt;
-      }
-      if (!entry.is_regular_file(error)) {
-        if (error) {
-          return std::nullopt;
-        }
-        continue;
-      }
-      total += entry.file_size(error);
-      if (error) {
-        return std::nullopt;
-      }
-    }
-    return total;
-  }
-  const auto size = std::filesystem::file_size(path, error);
-  if (error) {
-    return std::nullopt;
-  }
-  return size;
-}
-
-bool LooksLikeRecognizedModelDirectory(const std::string& path) {
-  std::error_code error;
-  const std::filesystem::path root(path);
-  if (!std::filesystem::exists(root, error) || error ||
-      !std::filesystem::is_directory(root, error) || error) {
-    return false;
-  }
-  return std::filesystem::exists(root / "config.json", error) ||
-         std::filesystem::exists(root / "params.json", error);
-}
-
-bool LooksLikeReadySharedModelDirectory(const std::string& path) {
-  if (!LooksLikeRecognizedModelDirectory(path)) {
-    return false;
-  }
-  std::error_code error;
-  return std::filesystem::exists(
-             std::filesystem::path(path) / ".comet-model-ready",
-             error) &&
-         !error;
-}
-
-std::string SharedModelBootstrapOwnerNode(const comet::DesiredState& state) {
-  if (!state.inference.primary_infer_node.empty()) {
-    return state.inference.primary_infer_node;
-  }
-  return RequireSingleNodeName(state);
-}
-
-std::string ComputeFileSha256Hex(const std::string& path) {
-  comet::InitializeCrypto();
-  std::ifstream input(path, std::ios::binary);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open file for sha256: " + path);
-  }
-  crypto_hash_sha256_state context;
-  crypto_hash_sha256_init(&context);
-  std::array<char, 1024 * 1024> buffer{};
-  while (input.good()) {
-    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const auto count = input.gcount();
-    if (count > 0) {
-      crypto_hash_sha256_update(
-          &context,
-          reinterpret_cast<const unsigned char*>(buffer.data()),
-          static_cast<unsigned long long>(count));
-    }
-  }
-  std::array<unsigned char, crypto_hash_sha256_BYTES> digest{};
-  crypto_hash_sha256_final(&context, digest.data());
-  std::ostringstream out;
-  out << std::hex << std::setfill('0');
-  for (unsigned char byte : digest) {
-    out << std::setw(2) << static_cast<int>(byte);
-  }
-  return out.str();
-}
-
-std::optional<std::uintmax_t> ProbeContentLength(const std::string& source_url) {
-  const std::string output = RunCommandCapture(
-      "/usr/bin/curl -fsSLI " + ShellQuote(source_url) + " 2>/dev/null || true");
-  std::optional<std::uintmax_t> content_length;
-  std::istringstream input(output);
-  std::string line;
-  while (std::getline(input, line)) {
-    const std::string trimmed = Trim(line);
-    if (trimmed.empty()) {
-      continue;
-    }
-    const auto colon = trimmed.find(':');
-    if (colon == std::string::npos) {
-      continue;
-    }
-    const std::string key = NormalizeLowercase(Trim(trimmed.substr(0, colon)));
-    if (key != "content-length") {
-      continue;
-    }
-    try {
-      content_length = static_cast<std::uintmax_t>(std::stoull(Trim(trimmed.substr(colon + 1))));
-    } catch (...) {
-      content_length = std::nullopt;
-    }
-  }
-  return content_length;
-}
-
-void CopyFileWithProgress(
-    const std::string& source_path,
-    const std::string& target_path,
-    HostdBackend* backend,
-    const std::optional<int>& assignment_id,
-    const std::string& plane_name,
-    const std::string& node_name,
-    std::size_t part_index = 0,
-    std::size_t part_count = 1,
-    std::uintmax_t aggregate_prefix = 0,
-    const std::optional<std::uintmax_t>& aggregate_total = std::nullopt) {
-  if (std::filesystem::is_directory(source_path)) {
-    const auto total_size = FileSizeIfExists(source_path);
-    const std::filesystem::path source_root(source_path);
-    const std::filesystem::path target_root(target_path);
-    const std::filesystem::path temp_root = target_root.string() + ".partdir";
-    std::filesystem::remove_all(temp_root);
-    std::filesystem::create_directories(temp_root);
-    std::uintmax_t copied = 0;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(source_root)) {
-      const auto relative = entry.path().lexically_relative(source_root);
-      const auto temp_target = temp_root / relative;
-      if (entry.is_directory()) {
-        std::filesystem::create_directories(temp_target);
-        continue;
-      }
-      if (!entry.is_regular_file()) {
-        continue;
-      }
-      EnsureParentDirectory(temp_target.string());
-      std::ifstream input(entry.path(), std::ios::binary);
-      if (!input.is_open()) {
-        throw std::runtime_error(
-            "failed to open bootstrap model source file: " + entry.path().string());
-      }
-      std::ofstream output(temp_target, std::ios::binary | std::ios::trunc);
-      if (!output.is_open()) {
-        throw std::runtime_error(
-            "failed to open bootstrap model target file: " + temp_target.string());
-      }
-      std::array<char, 1024 * 1024> buffer{};
-      while (input.good()) {
-        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        const auto count = input.gcount();
-        if (count <= 0) {
-          break;
-        }
-        output.write(buffer.data(), count);
-        copied += static_cast<std::uintmax_t>(count);
-        const std::uintmax_t overall_done = aggregate_prefix + copied;
-        int percent = 40;
-        if (aggregate_total.has_value() && *aggregate_total > 0) {
-          percent =
-              20 + static_cast<int>((static_cast<double>(overall_done) / *aggregate_total) * 40.0);
-        } else if (total_size.has_value() && *total_size > 0) {
-          percent = 20 + static_cast<int>((static_cast<double>(copied) / *total_size) * 40.0);
-        }
-        PublishAssignmentProgress(
-            backend,
-            assignment_id,
-            BuildAssignmentProgressPayload(
-                "acquiring-model",
-                "Acquiring model",
-                part_count > 1
-                    ? ("Copying bootstrap model part " + std::to_string(part_index + 1) + "/" +
-                       std::to_string(part_count) + " into the plane shared disk.")
-                    : "Copying bootstrap model into the plane shared disk.",
-                percent,
-                plane_name,
-                node_name,
-                aggregate_total.has_value() ? std::optional<std::uintmax_t>(overall_done)
-                                            : std::optional<std::uintmax_t>(copied),
-                aggregate_total.has_value() ? aggregate_total : total_size));
-      }
-      output.close();
-      if (!output.good()) {
-        throw std::runtime_error(
-            "failed to write bootstrap model target file: " + temp_target.string());
-      }
-    }
-    std::filesystem::remove_all(target_root);
-    EnsureParentDirectory(target_root.string());
-    std::filesystem::rename(temp_root, target_root);
-    return;
-  }
-
-  const auto total_size = FileSizeIfExists(source_path);
-  EnsureParentDirectory(target_path);
-  const std::string temp_path = target_path + ".part";
-  std::ifstream input(source_path, std::ios::binary);
-  if (!input.is_open()) {
-    throw std::runtime_error("failed to open bootstrap model source: " + source_path);
-  }
-  std::ofstream output(temp_path, std::ios::binary | std::ios::trunc);
-  if (!output.is_open()) {
-    throw std::runtime_error("failed to open bootstrap model target: " + temp_path);
-  }
-  std::array<char, 1024 * 1024> buffer{};
-  std::uintmax_t copied = 0;
-  while (input.good()) {
-    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const auto count = input.gcount();
-    if (count <= 0) {
-      break;
-    }
-    output.write(buffer.data(), count);
-    copied += static_cast<std::uintmax_t>(count);
-    const std::uintmax_t overall_done = aggregate_prefix + copied;
-    int percent = 40;
-    if (aggregate_total.has_value() && *aggregate_total > 0) {
-      percent = 20 + static_cast<int>((static_cast<double>(overall_done) / *aggregate_total) * 40.0);
-    } else if (total_size.has_value() && *total_size > 0) {
-      percent = 20 + static_cast<int>((static_cast<double>(copied) / *total_size) * 40.0);
-    }
-    PublishAssignmentProgress(
-        backend,
-        assignment_id,
-        BuildAssignmentProgressPayload(
-            "acquiring-model",
-            "Acquiring model",
-            part_count > 1
-                ? ("Copying bootstrap model part " + std::to_string(part_index + 1) + "/" +
-                   std::to_string(part_count) + " into the plane shared disk.")
-                : "Copying bootstrap model into the plane shared disk.",
-            percent,
-            plane_name,
-            node_name,
-            aggregate_total.has_value() ? std::optional<std::uintmax_t>(overall_done)
-                                        : std::optional<std::uintmax_t>(copied),
-            aggregate_total.has_value() ? aggregate_total : total_size));
-  }
-  output.close();
-  if (!output.good()) {
-    throw std::runtime_error("failed to write bootstrap model target: " + temp_path);
-  }
-  std::filesystem::rename(temp_path, target_path);
-}
-
-void DownloadFileWithProgress(
-    const std::string& source_url,
-    const std::string& target_path,
-    HostdBackend* backend,
-    const std::optional<int>& assignment_id,
-    const std::string& plane_name,
-    const std::string& node_name,
-    std::size_t part_index = 0,
-    std::size_t part_count = 1,
-    std::uintmax_t aggregate_prefix = 0,
-    const std::optional<std::uintmax_t>& aggregate_total = std::nullopt) {
-  EnsureParentDirectory(target_path);
-  const std::string temp_path = target_path + ".part";
-  std::filesystem::remove(temp_path);
-  const auto content_length = ProbeContentLength(source_url);
-  auto future = std::async(
-      std::launch::async,
-      [command = "/usr/bin/curl -fL --silent --show-error --output " + ShellQuote(temp_path) +
-                     " " + ShellQuote(source_url)]() {
-        return std::system(command.c_str());
-      });
-  while (future.wait_for(std::chrono::milliseconds(500)) != std::future_status::ready) {
-    const auto bytes_done = FileSizeIfExists(temp_path).value_or(0);
-    const std::uintmax_t overall_done = aggregate_prefix + bytes_done;
-    int percent = 40;
-    if (aggregate_total.has_value() && *aggregate_total > 0) {
-      percent = 20 + static_cast<int>((static_cast<double>(overall_done) / *aggregate_total) * 40.0);
-    } else if (content_length.has_value() && *content_length > 0) {
-      percent = 20 + static_cast<int>((static_cast<double>(bytes_done) / *content_length) * 40.0);
-    }
-    PublishAssignmentProgress(
-        backend,
-        assignment_id,
-        BuildAssignmentProgressPayload(
-            "acquiring-model",
-            "Acquiring model",
-            part_count > 1
-                ? ("Downloading bootstrap model part " + std::to_string(part_index + 1) + "/" +
-                   std::to_string(part_count) + " into the plane shared disk.")
-                : "Downloading bootstrap model into the plane shared disk.",
-            percent,
-            plane_name,
-            node_name,
-            aggregate_total.has_value() ? std::optional<std::uintmax_t>(overall_done)
-                                        : std::optional<std::uintmax_t>(bytes_done),
-            aggregate_total.has_value() ? aggregate_total : content_length));
-  }
-  const int rc = future.get();
-  if (rc != 0) {
-    throw std::runtime_error("failed to download bootstrap model from " + source_url);
-  }
-  std::filesystem::rename(temp_path, target_path);
-}
-
-void WriteBootstrapActiveModel(
-    const comet::DesiredState& state,
-    const std::string& node_name,
-    const std::string& target_host_path,
-    const std::optional<std::string>& runtime_model_path_override = std::nullopt) {
-  const auto& bootstrap_model = *state.bootstrap_model;
-  const std::string runtime_model_path =
-      runtime_model_path_override.has_value()
-          ? *runtime_model_path_override
-          : BootstrapRuntimeModelPath(state, target_host_path);
-  WriteTextFile(
-      ActiveModelPathForNode(state, node_name),
-      json{
-          {"version", 1},
-          {"plane_name", state.plane_name},
-          {"model_id", bootstrap_model.model_id},
-          {"source_model_id", bootstrap_model.model_id},
-          {"served_model_name",
-           bootstrap_model.served_model_name.has_value()
-               ? *bootstrap_model.served_model_name
-               : bootstrap_model.model_id},
-          {"local_model_path", target_host_path},
-          {"cached_local_model_path", target_host_path},
-          {"cached_runtime_model_path", runtime_model_path},
-          {"runtime_model_path", runtime_model_path},
-      }
-          .dump(2));
-}
-
-void BootstrapPlaneModelIfNeeded(
-    const comet::DesiredState& state,
-    const std::string& node_name,
-    HostdBackend* backend,
-    const std::optional<int>& assignment_id) {
-  if (state.instances.empty()) {
-    return;
-  }
-
-  const auto& shared_disk = RequirePlaneSharedDiskForNode(state, node_name);
-  if (!std::filesystem::exists(shared_disk.host_path)) {
-    throw std::runtime_error(
-        "plane shared disk path does not exist after ensure-disk: " + shared_disk.host_path);
-  }
-
-  PublishAssignmentProgress(
-      backend,
-      assignment_id,
-      BuildAssignmentProgressPayload(
-          "ensuring-shared-disk",
-          "Ensuring shared disk",
-          "Plane shared disk is mounted and ready for model/bootstrap data.",
-          12,
-          state.plane_name,
-          node_name));
-
-  const std::string active_model_path = ActiveModelPathForNode(state, node_name);
-  if (!state.bootstrap_model.has_value()) {
-    RemoveFileIfExists(active_model_path);
-    return;
-  }
-
-  const auto& bootstrap_model = *state.bootstrap_model;
-  const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
-  if (bootstrap_model.materialization_mode == "reference" &&
-      bootstrap_model.local_path.has_value() &&
-      !bootstrap_model.local_path->empty()) {
-    const std::filesystem::path reference_path(*bootstrap_model.local_path);
-    std::error_code error;
-    if (!std::filesystem::exists(reference_path, error) || error) {
-      throw std::runtime_error(
-          "bootstrap model reference path does not exist: " + *bootstrap_model.local_path);
-    }
-    PublishAssignmentProgress(
-        backend,
-        assignment_id,
-        BuildAssignmentProgressPayload(
-            "using-model-reference",
-            "Using model reference",
-            "Using the configured model path directly without copying it into the plane shared disk.",
-            72,
-            state.plane_name,
-            node_name));
-    WriteBootstrapActiveModel(
-        state,
-        node_name,
-        *bootstrap_model.local_path,
-        *bootstrap_model.local_path);
-    return;
-  }
-  if (use_vllm_runtime && bootstrap_model.local_path.has_value() &&
-      !bootstrap_model.local_path->empty() &&
-      LooksLikeReadySharedModelDirectory(*bootstrap_model.local_path)) {
-    PublishAssignmentProgress(
-        backend,
-        assignment_id,
-        BuildAssignmentProgressPayload(
-            "using-shared-model-cache",
-            "Using shared model cache",
-            "Using the ready vLLM model directory directly from shared storage.",
-            72,
-            state.plane_name,
-            node_name));
-    WriteBootstrapActiveModel(
-        state,
-        node_name,
-        *bootstrap_model.local_path,
-        *bootstrap_model.local_path);
-    return;
-  }
-
-  const std::string target_path = BootstrapModelTargetPath(state, node_name);
-  const auto artifacts = BuildBootstrapModelArtifacts(state, node_name);
-  const std::string bootstrap_owner_node = SharedModelBootstrapOwnerNode(state);
-  const bool shared_bootstrap_owned_elsewhere =
-      bootstrap_owner_node != node_name &&
-      std::any_of(
-          artifacts.begin(),
-          artifacts.end(),
-          [](const BootstrapModelArtifact& artifact) {
-            return artifact.local_path.has_value() && !artifact.local_path->empty();
-          });
-  if (shared_bootstrap_owned_elsewhere) {
-    for (int attempt = 0; attempt < 300; ++attempt) {
-      if (LooksLikeRecognizedModelDirectory(target_path) || std::filesystem::exists(target_path)) {
-        WriteBootstrapActiveModel(state, node_name, target_path);
-        return;
-      }
-      PublishAssignmentProgress(
-          backend,
-          assignment_id,
-          BuildAssignmentProgressPayload(
-              "waiting-for-model",
-              "Waiting for shared model",
-              "Waiting for " + bootstrap_owner_node +
-                  " to finish copying the shared model into the plane disk.",
-              18,
-              state.plane_name,
-              node_name));
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-    throw std::runtime_error(
-        "timed out waiting for shared model bootstrap on node '" + bootstrap_owner_node + "'");
-  }
-  bool already_present = !artifacts.empty();
-  std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
-  for (const auto& artifact : artifacts) {
-    if (!std::filesystem::exists(artifact.target_host_path)) {
-      already_present = false;
-    }
-    std::optional<std::uintmax_t> expected_size;
-    if (artifact.local_path.has_value() && !artifact.local_path->empty()) {
-      expected_size = FileSizeIfExists(*artifact.local_path);
-      const auto target_size = FileSizeIfExists(artifact.target_host_path);
-      const bool source_is_directory =
-          std::filesystem::is_directory(*artifact.local_path);
-      const bool target_has_model_root =
-          !source_is_directory || LooksLikeRecognizedModelDirectory(artifact.target_host_path);
-      if (!expected_size.has_value() || !target_size.has_value() || *expected_size != *target_size) {
-        already_present = false;
-      } else if (!target_has_model_root) {
-        already_present = false;
-      }
-    } else if (artifact.source_url.has_value() && !artifact.source_url->empty()) {
-      expected_size = ProbeContentLength(*artifact.source_url);
-      const auto target_size = FileSizeIfExists(artifact.target_host_path);
-      if (!expected_size.has_value() || !target_size.has_value() || *expected_size != *target_size) {
-        already_present = false;
-      }
-    } else if (!std::filesystem::exists(artifact.target_host_path)) {
-      already_present = false;
-    }
-    if (!expected_size.has_value()) {
-      aggregate_total = std::nullopt;
-    } else if (aggregate_total.has_value()) {
-      *aggregate_total += *expected_size;
-    }
-  }
-  if (already_present && bootstrap_model.sha256.has_value() && artifacts.size() == 1) {
-    if (std::filesystem::is_directory(target_path)) {
-      throw std::runtime_error(
-          "bootstrap_model.sha256 is not supported for directory-based bootstrap models");
-    }
-    PublishAssignmentProgress(
-        backend,
-        assignment_id,
-        BuildAssignmentProgressPayload(
-            "verifying-model",
-            "Verifying model",
-            "Checking the existing shared-disk model checksum.",
-            68,
-            state.plane_name,
-            node_name));
-    already_present = NormalizeLowercase(ComputeFileSha256Hex(target_path)) ==
-                      NormalizeLowercase(*bootstrap_model.sha256);
-  } else if (bootstrap_model.sha256.has_value() && artifacts.size() > 1) {
-    throw std::runtime_error(
-        "bootstrap_model.sha256 is not supported with multipart bootstrap_model.source_urls");
-  }
-
-  if (!already_present) {
-    std::uintmax_t aggregate_prefix = 0;
-    for (std::size_t index = 0; index < artifacts.size(); ++index) {
-      const auto& artifact = artifacts[index];
-      bool artifact_present = std::filesystem::exists(artifact.target_host_path);
-      std::optional<std::uintmax_t> artifact_size = FileSizeIfExists(artifact.target_host_path);
-      if (artifact.local_path.has_value() && !artifact.local_path->empty()) {
-        const auto source_size = FileSizeIfExists(*artifact.local_path);
-        artifact_present = artifact_present && source_size.has_value() && artifact_size.has_value() &&
-                           *source_size == *artifact_size;
-        if (!artifact_present) {
-          CopyFileWithProgress(
-              *artifact.local_path,
-              artifact.target_host_path,
-              backend,
-              assignment_id,
-              state.plane_name,
-              node_name,
-              index,
-              artifacts.size(),
-              aggregate_prefix,
-              aggregate_total);
-          artifact_size = FileSizeIfExists(artifact.target_host_path);
-        }
-      } else if (artifact.source_url.has_value() && !artifact.source_url->empty()) {
-        const auto remote_size = ProbeContentLength(*artifact.source_url);
-        artifact_present = artifact_present && remote_size.has_value() && artifact_size.has_value() &&
-                           *remote_size == *artifact_size;
-        if (!artifact_present) {
-          DownloadFileWithProgress(
-              *artifact.source_url,
-              artifact.target_host_path,
-              backend,
-              assignment_id,
-              state.plane_name,
-              node_name,
-              index,
-              artifacts.size(),
-              aggregate_prefix,
-              aggregate_total);
-          artifact_size = FileSizeIfExists(artifact.target_host_path);
-        }
-      }
-      if (artifact_size.has_value()) {
-        aggregate_prefix += *artifact_size;
-      }
-    }
-  }
-
-  if (bootstrap_model.sha256.has_value() && artifacts.size() == 1) {
-    if (std::filesystem::is_directory(target_path)) {
-      throw std::runtime_error(
-          "bootstrap_model.sha256 is not supported for directory-based bootstrap models");
-    }
-    PublishAssignmentProgress(
-        backend,
-        assignment_id,
-        BuildAssignmentProgressPayload(
-            "verifying-model",
-            "Verifying model",
-            "Verifying the model checksum in the shared disk.",
-            72,
-            state.plane_name,
-            node_name));
-    if (NormalizeLowercase(ComputeFileSha256Hex(target_path)) !=
-        NormalizeLowercase(*bootstrap_model.sha256)) {
-      throw std::runtime_error(
-          "bootstrap model checksum mismatch for " + target_path);
-    }
-  }
-
-  const bool has_source =
-      (bootstrap_model.local_path.has_value() && !bootstrap_model.local_path->empty()) ||
-      (bootstrap_model.source_url.has_value() && !bootstrap_model.source_url->empty()) ||
-      !bootstrap_model.source_urls.empty();
-  if (!has_source && !std::filesystem::exists(target_path)) {
-    RemoveFileIfExists(active_model_path);
-    return;
-  }
-
-  PublishAssignmentProgress(
-      backend,
-      assignment_id,
-      BuildAssignmentProgressPayload(
-          "activating-model",
-          "Activating model",
-          "Writing active-model.json for infer and worker runtime.",
-          80,
-          state.plane_name,
-          node_name));
-  WriteBootstrapActiveModel(state, node_name, target_path);
 }
 
 bool RunCommandOk(const std::string& command) {
@@ -2484,21 +1580,6 @@ std::string ResolvedDockerCommand() {
   return resolved;
 }
 
-std::string CurrentTimestampString() {
-  const std::time_t now = std::time(nullptr);
-  std::tm tm{};
-#if defined(_WIN32)
-  localtime_s(&tm, &now);
-#else
-  localtime_r(&now, &tm);
-#endif
-  char buffer[32];
-  if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm) == 0) {
-    return {};
-  }
-  return buffer;
-}
-
 std::optional<std::tm> ParseDisplayTimestamp(const std::string& value) {
   if (value.empty()) {
     return std::nullopt;
@@ -2527,323 +1608,6 @@ std::string FormatDisplayTimestamp(const std::string& value) {
 std::string SerializeEventPayload(const json& payload) {
   return payload.dump();
 }
-
-struct HttpResponse {
-  int status_code = 200;
-  std::string content_type = "application/json";
-  std::string body;
-};
-
-struct ControllerEndpointTarget {
-  std::string raw;
-  std::string host;
-  int port = 18080;
-  std::string base_path;
-};
-
-std::string Trim(const std::string& text);
-
-std::string Lowercase(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return value;
-}
-
-ControllerEndpointTarget ParseControllerTarget(const std::string& raw_target) {
-  std::string target = Trim(raw_target);
-  if (target.empty()) {
-    throw std::runtime_error("empty controller target");
-  }
-
-  ControllerEndpointTarget parsed;
-  parsed.raw = target;
-  if (target.rfind("http://", 0) == 0) {
-    target = target.substr(7);
-  } else if (target.rfind("https://", 0) == 0) {
-    throw std::runtime_error("https controller targets are not supported yet");
-  }
-
-  const std::size_t slash = target.find('/');
-  if (slash != std::string::npos) {
-    parsed.base_path = target.substr(slash);
-    target = target.substr(0, slash);
-    if (parsed.base_path == "/") {
-      parsed.base_path.clear();
-    }
-  }
-
-  const std::size_t colon = target.rfind(':');
-  if (colon != std::string::npos) {
-    parsed.host = target.substr(0, colon);
-    parsed.port = std::stoi(target.substr(colon + 1));
-  } else {
-    parsed.host = target;
-  }
-  if (parsed.host.empty()) {
-    throw std::runtime_error("invalid controller target '" + raw_target + "'");
-  }
-  return parsed;
-}
-
-HttpResponse ParseHttpResponse(const std::string& response_text) {
-  HttpResponse response;
-  const std::size_t headers_end = response_text.find("\r\n\r\n");
-  const std::string header_text =
-      headers_end == std::string::npos ? response_text : response_text.substr(0, headers_end);
-  response.body =
-      headers_end == std::string::npos ? std::string{} : response_text.substr(headers_end + 4);
-
-  const std::size_t line_end = header_text.find("\r\n");
-  const std::string first_line =
-      line_end == std::string::npos ? header_text : header_text.substr(0, line_end);
-  std::stringstream stream(first_line);
-  std::string http_version;
-  stream >> http_version >> response.status_code;
-
-  std::size_t offset = line_end == std::string::npos ? header_text.size() : line_end + 2;
-  while (offset < header_text.size()) {
-    const std::size_t next = header_text.find("\r\n", offset);
-    const std::string line = header_text.substr(
-        offset,
-        next == std::string::npos ? std::string::npos : next - offset);
-    const std::size_t colon = line.find(':');
-    if (colon != std::string::npos) {
-      const std::string key = Lowercase(Trim(line.substr(0, colon)));
-      const std::string value = Trim(line.substr(colon + 1));
-      if (key == "content-type") {
-        response.content_type = value;
-      }
-    }
-    if (next == std::string::npos) {
-      break;
-    }
-    offset = next + 2;
-  }
-  return response;
-}
-
-HttpResponse SendControllerHttpRequest(
-    const ControllerEndpointTarget& target,
-    const std::string& method,
-    const std::string& path_and_query,
-    const std::string& body = "",
-    const std::map<std::string, std::string>& headers = {}) {
-  comet::platform::EnsureSocketsInitialized();
-
-  addrinfo hints{};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  addrinfo* results = nullptr;
-  const std::string port_text = std::to_string(target.port);
-  const int lookup = getaddrinfo(target.host.c_str(), port_text.c_str(), &hints, &results);
-  if (lookup != 0) {
-    throw std::runtime_error(
-        "failed to resolve controller target '" + target.raw + "': " + gai_strerror(lookup));
-  }
-
-  SocketHandle fd = comet::platform::kInvalidSocket;
-  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
-    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (!comet::platform::IsSocketValid(fd)) {
-      continue;
-    }
-    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
-      break;
-    }
-    CloseSocketHandle(fd);
-    fd = comet::platform::kInvalidSocket;
-  }
-  freeaddrinfo(results);
-  if (!comet::platform::IsSocketValid(fd)) {
-    throw std::runtime_error("failed to connect to controller target '" + target.raw + "'");
-  }
-
-  const std::string request_path = target.base_path + path_and_query;
-  std::ostringstream request;
-  request << method << " " << request_path << " HTTP/1.1\r\n";
-  request << "Host: " << target.host << ":" << target.port << "\r\n";
-  request << "Connection: close\r\n";
-  for (const auto& [key, value] : headers) {
-    request << key << ": " << value << "\r\n";
-  }
-  if (!body.empty()) {
-    request << "Content-Type: application/json\r\n";
-    request << "Content-Length: " << body.size() << "\r\n";
-  }
-  request << "\r\n";
-  request << body;
-
-  const std::string request_text = request.str();
-  const char* data = request_text.c_str();
-  std::size_t remaining = request_text.size();
-  while (remaining > 0) {
-    const ssize_t written = send(fd, data, remaining, 0);
-    if (written <= 0) {
-      const std::string error = SocketErrorMessage();
-      CloseSocketHandle(fd);
-      throw std::runtime_error("failed to write HTTP request: " + error);
-    }
-    data += written;
-    remaining -= static_cast<std::size_t>(written);
-  }
-
-  std::string response_text;
-  std::array<char, 8192> buffer{};
-  while (true) {
-    const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
-    if (read_count < 0) {
-      const std::string error = SocketErrorMessage();
-      CloseSocketHandle(fd);
-      throw std::runtime_error("failed to read HTTP response: " + error);
-    }
-    if (read_count == 0) {
-      break;
-    }
-    response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
-  }
-  CloseSocketHandle(fd);
-  return ParseHttpResponse(response_text);
-}
-
-json SendControllerJsonRequest(
-    const ControllerEndpointTarget& target,
-    const std::string& method,
-    const std::string& path_and_query,
-    const json& body = json(),
-    const std::map<std::string, std::string>& headers = {}) {
-  const HttpResponse response =
-      SendControllerHttpRequest(
-          target,
-          method,
-          path_and_query,
-          body.is_null() ? "" : body.dump(),
-          headers);
-  const json payload = response.body.empty() ? json::object() : json::parse(response.body);
-  if (response.status_code >= 400) {
-    throw std::runtime_error(
-        payload.contains("error") && payload["error"].is_object()
-            ? payload["error"].value("message", "controller request failed")
-            : "controller request failed with status " + std::to_string(response.status_code));
-  }
-  return payload;
-}
-
-comet::HostAssignment ParseAssignmentPayload(const json& payload) {
-  comet::HostAssignment assignment;
-  assignment.id = payload.value("id", 0);
-  assignment.node_name = payload.value("node_name", std::string{});
-  assignment.plane_name = payload.value("plane_name", std::string{});
-  assignment.desired_generation = payload.value("desired_generation", 0);
-  assignment.attempt_count = payload.value("attempt_count", 0);
-  assignment.max_attempts = payload.value("max_attempts", 3);
-  assignment.assignment_type = payload.value("assignment_type", std::string{});
-  assignment.desired_state_json = payload.value("desired_state_json", std::string{});
-  assignment.artifacts_root = payload.value("artifacts_root", std::string{});
-  assignment.status =
-      comet::ParseHostAssignmentStatus(payload.value("status", std::string("pending")));
-  assignment.status_message = payload.value("status_message", std::string{});
-  if (payload.contains("progress") && !payload.at("progress").is_null()) {
-    assignment.progress_json = payload.at("progress").dump();
-  }
-  return assignment;
-}
-
-json BuildHostObservationPayload(const comet::HostObservation& observation) {
-  return json{
-      {"node_name", observation.node_name},
-      {"plane_name", observation.plane_name},
-      {"applied_generation",
-       observation.applied_generation.has_value() ? json(*observation.applied_generation)
-                                                  : json(nullptr)},
-      {"last_assignment_id",
-       observation.last_assignment_id.has_value() ? json(*observation.last_assignment_id)
-                                                  : json(nullptr)},
-      {"status", comet::ToString(observation.status)},
-      {"status_message", observation.status_message},
-      {"observed_state_json", observation.observed_state_json},
-      {"runtime_status_json", observation.runtime_status_json},
-      {"instance_runtime_json", observation.instance_runtime_json},
-      {"gpu_telemetry_json", observation.gpu_telemetry_json},
-      {"disk_telemetry_json", observation.disk_telemetry_json},
-      {"network_telemetry_json", observation.network_telemetry_json},
-      {"cpu_telemetry_json", observation.cpu_telemetry_json},
-      {"heartbeat_at", observation.heartbeat_at},
-  };
-}
-
-json BuildDiskRuntimeStatePayload(const comet::DiskRuntimeState& state) {
-  return json{
-      {"disk_name", state.disk_name},
-      {"plane_name", state.plane_name},
-      {"node_name", state.node_name},
-      {"image_path", state.image_path},
-      {"filesystem_type", state.filesystem_type},
-      {"loop_device", state.loop_device},
-      {"mount_point", state.mount_point},
-      {"runtime_state", state.runtime_state},
-      {"attached_at", state.attached_at},
-      {"mounted_at", state.mounted_at},
-      {"last_verified_at", state.last_verified_at},
-      {"status_message", state.status_message},
-      {"updated_at", state.updated_at},
-  };
-}
-
-comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
-  comet::DiskRuntimeState state;
-  state.disk_name = payload.value("disk_name", std::string{});
-  state.plane_name = payload.value("plane_name", std::string{});
-  state.node_name = payload.value("node_name", std::string{});
-  state.image_path = payload.value("image_path", std::string{});
-  state.filesystem_type = payload.value("filesystem_type", std::string{});
-  state.loop_device = payload.value("loop_device", std::string{});
-  state.mount_point = payload.value("mount_point", std::string{});
-  state.runtime_state = payload.value("runtime_state", std::string{});
-  state.attached_at = payload.value("attached_at", std::string{});
-  state.mounted_at = payload.value("mounted_at", std::string{});
-  state.last_verified_at = payload.value("last_verified_at", std::string{});
-  state.status_message = payload.value("status_message", std::string{});
-  state.updated_at = payload.value("updated_at", std::string{});
-  return state;
-}
-
-class DefaultHttpHostdBackendSupport final : public comet::hostd::IHttpHostdBackendSupport {
- public:
-  json SendControllerJsonRequest(
-      const std::string& controller_url,
-      const std::string& method,
-      const std::string& path,
-      const json& payload,
-      const std::map<std::string, std::string>& headers = {}) const override {
-    return ::SendControllerJsonRequest(
-        ParseControllerTarget(controller_url),
-        method,
-        path,
-        payload,
-        headers);
-  }
-
-  comet::HostAssignment ParseAssignmentPayload(const json& payload) const override {
-    return ::ParseAssignmentPayload(payload);
-  }
-
-  json BuildHostObservationPayload(const comet::HostObservation& observation) const override {
-    return ::BuildHostObservationPayload(observation);
-  }
-
-  json BuildDiskRuntimeStatePayload(const comet::DiskRuntimeState& state) const override {
-    return ::BuildDiskRuntimeStatePayload(state);
-  }
-
-  comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) const override {
-    return ::ParseDiskRuntimeStatePayload(payload);
-  }
-
-  std::string Trim(const std::string& value) const override {
-    return ::Trim(value);
-  }
-};
 
 void PublishAssignmentProgress(
     HostdBackend* backend,
@@ -2883,868 +1647,24 @@ void AppendHostdEvent(
   });
 }
 
-std::optional<std::string> CurrentMountFilesystemType(const std::string& mount_point) {
-  std::ifstream input("/proc/mounts");
-  if (!input.is_open()) {
-    return std::nullopt;
-  }
-
-  std::string source;
-  std::string target;
-  std::string fs_type;
-  while (input >> source >> target >> fs_type) {
-    std::string rest_of_line;
-    std::getline(input, rest_of_line);
-    if (target == mount_point) {
-      return fs_type;
-    }
-  }
-  return std::nullopt;
-}
-
-struct BlockDeviceIoStats {
-  std::uint64_t read_ios = 0;
-  std::uint64_t read_sectors = 0;
-  std::uint64_t write_ios = 0;
-  std::uint64_t write_sectors = 0;
-  std::uint64_t io_in_progress = 0;
-  std::uint64_t io_time_ms = 0;
-  std::uint64_t weighted_io_time_ms = 0;
-};
-
-std::optional<std::string> BlockDeviceNameFromPath(const std::string& device_path) {
-  if (device_path.empty()) {
-    return std::nullopt;
-  }
-  const auto device_name = std::filesystem::path(device_path).filename().string();
-  if (device_name.empty()) {
-    return std::nullopt;
-  }
-  return device_name;
-}
-
-std::optional<bool> ReadBlockDeviceReadOnly(const std::string& device_path) {
-  const auto device_name = BlockDeviceNameFromPath(device_path);
-  if (!device_name.has_value()) {
-    return std::nullopt;
-  }
-  std::ifstream input("/sys/class/block/" + *device_name + "/ro");
-  if (!input.is_open()) {
-    return std::nullopt;
-  }
-  int value = 0;
-  if (!(input >> value)) {
-    return std::nullopt;
-  }
-  return value != 0;
-}
-
-std::optional<std::uint64_t> ReadBlockDeviceIoErrorCount(const std::string& device_path) {
-  const auto device_name = BlockDeviceNameFromPath(device_path);
-  if (!device_name.has_value()) {
-    return std::nullopt;
-  }
-  const std::array<std::filesystem::path, 2> candidates{
-      std::filesystem::path("/sys/class/block") / *device_name / "ioerr_cnt",
-      std::filesystem::path("/sys/class/block") / *device_name / "device" / "ioerr_cnt",
-  };
-  for (const auto& candidate : candidates) {
-    std::ifstream input(candidate);
-    if (!input.is_open()) {
-      continue;
-    }
-    std::uint64_t value = 0;
-    if (input >> value) {
-      return value;
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<BlockDeviceIoStats> ReadBlockDeviceIoStats(
-    const std::string& device_path) {
-  const auto device_name = BlockDeviceNameFromPath(device_path);
-  if (!device_name.has_value()) {
-    return std::nullopt;
-  }
-  std::ifstream input("/sys/class/block/" + *device_name + "/stat");
-  if (!input.is_open()) {
-    return std::nullopt;
-  }
-
-  BlockDeviceIoStats stats;
-  std::uint64_t reads_merged = 0;
-  std::uint64_t read_time_ms = 0;
-  std::uint64_t writes_merged = 0;
-  std::uint64_t write_time_ms = 0;
-  if (!(input >> stats.read_ios >> reads_merged >> stats.read_sectors >> read_time_ms >>
-        stats.write_ios >> writes_merged >> stats.write_sectors >> write_time_ms >>
-        stats.io_in_progress >> stats.io_time_ms >> stats.weighted_io_time_ms)) {
-    return std::nullopt;
-  }
-  return stats;
-}
-
-comet::DiskTelemetrySnapshot CollectDiskTelemetry(
-    const comet::DesiredState& state,
-    const std::string& node_name) {
-  comet::DiskTelemetrySnapshot snapshot;
-  snapshot.contract_version = 1;
-#if defined(_WIN32)
-  snapshot.source = "filesystem::space";
-#else
-  snapshot.source = "statvfs";
-#endif
-  snapshot.collected_at = CurrentTimestampString();
-
-  for (const auto& disk : state.disks) {
-    if (disk.node_name != node_name) {
-      continue;
-    }
-
-    comet::DiskTelemetryRecord record;
-    record.disk_name = disk.name;
-    record.plane_name = disk.plane_name;
-    record.node_name = disk.node_name;
-    record.mount_point = disk.host_path;
-    record.runtime_state = std::filesystem::exists(disk.host_path) ? "present" : "missing";
-    record.health = std::filesystem::exists(disk.host_path) ? "ok" : "missing";
-    if (record.health == "missing") {
-      record.fault_count += 1;
-      record.fault_reasons.push_back("host-path-missing");
-    }
-
-    if (IsPathMounted(disk.host_path)) {
-      record.mounted = true;
-      record.runtime_state = "mounted";
-      const auto mount_fs = CurrentMountFilesystemType(disk.host_path);
-      if (mount_fs.has_value()) {
-        record.filesystem_type = *mount_fs;
-      }
-      const auto mount_source = CurrentMountSource(disk.host_path);
-      if (mount_source.has_value()) {
-        record.mount_source = *mount_source;
-      } else {
-        record.warning_count += 1;
-        record.fault_reasons.push_back("mount-source-unavailable");
-        if (record.health == "ok") {
-          record.health = "degraded";
-        }
-      }
-      if (mount_source.has_value() && mount_source->rfind("/dev/", 0) == 0) {
-        if (const auto read_only = ReadBlockDeviceReadOnly(*mount_source);
-            read_only.has_value()) {
-          record.read_only = *read_only;
-          if (*read_only) {
-            record.warning_count += 1;
-            record.fault_reasons.push_back("read-only-device");
-            if (record.health == "ok") {
-              record.health = "degraded";
-            }
-          }
-        }
-        if (const auto io_stats = ReadBlockDeviceIoStats(*mount_source);
-            io_stats.has_value()) {
-          record.perf_counters_available = true;
-          record.read_ios = io_stats->read_ios;
-          record.write_ios = io_stats->write_ios;
-          record.read_bytes = io_stats->read_sectors * 512ULL;
-          record.write_bytes = io_stats->write_sectors * 512ULL;
-          record.io_in_progress = static_cast<int>(io_stats->io_in_progress);
-          record.io_time_ms = io_stats->io_time_ms;
-          record.weighted_io_time_ms = io_stats->weighted_io_time_ms;
-        } else {
-          record.status_message =
-              record.status_message.empty()
-                  ? "block io stats unavailable"
-                  : record.status_message + "; block io stats unavailable";
-          record.warning_count += 1;
-          record.fault_reasons.push_back("block-io-stats-unavailable");
-          if (record.health == "ok") {
-            record.health = "degraded";
-          }
-        }
-        if (const auto io_error_count = ReadBlockDeviceIoErrorCount(*mount_source);
-            io_error_count.has_value()) {
-          record.io_error_counters_available = true;
-          record.io_error_count = *io_error_count;
-          if (*io_error_count > 0) {
-            record.fault_count += 1;
-            record.fault_reasons.push_back("io-error-count-nonzero");
-            if (record.health == "ok") {
-              record.health = "degraded";
-            }
-          }
-        }
-      }
-    }
-
-#if defined(_WIN32)
-    std::error_code space_error;
-    const auto space_info = std::filesystem::space(disk.host_path, space_error);
-    if (!space_error) {
-      record.total_bytes = space_info.capacity;
-      record.free_bytes = space_info.available;
-      record.used_bytes =
-          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
-      if (record.health == "missing") {
-        record.health = "ok";
-      }
-      if (record.runtime_state == "missing") {
-        record.runtime_state = "available";
-      }
-    } else {
-      record.status_message =
-          record.status_message.empty()
-              ? "filesystem::space unavailable"
-              : record.status_message + "; filesystem::space unavailable";
-      record.fault_count += 1;
-      record.fault_reasons.push_back("filesystem-space-unavailable");
-      if (record.health == "ok") {
-        record.health = "degraded";
-      }
-    }
-#else
-    struct statvfs stats {};
-    if (statvfs(disk.host_path.c_str(), &stats) == 0) {
-      const std::uint64_t block_size = static_cast<std::uint64_t>(stats.f_frsize);
-      record.total_bytes = static_cast<std::uint64_t>(stats.f_blocks) * block_size;
-      record.free_bytes = static_cast<std::uint64_t>(stats.f_bavail) * block_size;
-      record.used_bytes =
-          record.total_bytes >= record.free_bytes ? (record.total_bytes - record.free_bytes) : 0;
-      if (record.health == "missing") {
-        record.health = "ok";
-      }
-      if (record.runtime_state == "missing") {
-        record.runtime_state = "available";
-      }
-    } else {
-      record.status_message =
-          record.status_message.empty()
-              ? "statvfs unavailable"
-              : record.status_message + "; statvfs unavailable";
-      record.fault_count += 1;
-      record.fault_reasons.push_back("statvfs-unavailable");
-      if (record.health == "ok") {
-        record.health = "degraded";
-      }
-    }
-#endif
-
-    snapshot.items.push_back(std::move(record));
-  }
-
-  return snapshot;
-}
-
-std::optional<std::string> ReadTrimmedFile(const std::filesystem::path& path) {
-  std::ifstream input(path);
-  if (!input.is_open()) {
-    return std::nullopt;
-  }
-  std::string value;
-  std::getline(input, value);
-  while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ')) {
-    value.pop_back();
-  }
-  return value;
-}
-
-std::uint64_t ReadUint64FileOrZero(const std::filesystem::path& path) {
-  std::ifstream input(path);
-  std::uint64_t value = 0;
-  if (!input.is_open()) {
-    return 0;
-  }
-  input >> value;
-  return value;
-}
-
-struct CpuSample {
-  std::uint64_t idle = 0;
-  std::uint64_t total = 0;
-};
-
-std::optional<CpuSample> ReadCpuSample() {
-  std::ifstream input("/proc/stat");
-  if (!input.is_open()) {
-    return std::nullopt;
-  }
-
-  std::string cpu_label;
-  CpuSample sample;
-  std::uint64_t user = 0;
-  std::uint64_t nice = 0;
-  std::uint64_t system = 0;
-  std::uint64_t idle = 0;
-  std::uint64_t iowait = 0;
-  std::uint64_t irq = 0;
-  std::uint64_t softirq = 0;
-  std::uint64_t steal = 0;
-  input >> cpu_label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
-  if (!input.good() || cpu_label != "cpu") {
-    return std::nullopt;
-  }
-  sample.idle = idle + iowait;
-  sample.total = user + nice + system + idle + iowait + irq + softirq + steal;
-  return sample;
-}
-
-std::optional<std::array<double, 3>> ReadLoadAverage() {
-  std::ifstream input("/proc/loadavg");
-  if (!input.is_open()) {
-    return std::nullopt;
-  }
-  std::array<double, 3> load{0.0, 0.0, 0.0};
-  input >> load[0] >> load[1] >> load[2];
-  if (!input.good()) {
-    return std::nullopt;
-  }
-  return load;
-}
-
-comet::CpuTelemetrySnapshot CollectCpuTelemetry() {
-  comet::CpuTelemetrySnapshot snapshot;
-  snapshot.contract_version = 1;
-  snapshot.source = "procfs";
-  snapshot.collected_at = CurrentTimestampString();
-  snapshot.core_count = static_cast<int>(std::thread::hardware_concurrency());
-
-  const auto first = ReadCpuSample();
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
-  const auto second = ReadCpuSample();
-  if (first.has_value() && second.has_value() && second->total > first->total) {
-    const auto total_delta = static_cast<double>(second->total - first->total);
-    const auto idle_delta = static_cast<double>(second->idle - first->idle);
-    snapshot.utilization_pct =
-        total_delta > 0.0 ? std::max(0.0, 100.0 * (1.0 - (idle_delta / total_delta))) : 0.0;
-  } else {
-    snapshot.degraded = true;
-    snapshot.source = "procfs-unavailable";
-  }
-
-  if (const auto load = ReadLoadAverage(); load.has_value()) {
-    snapshot.loadavg_1m = (*load)[0];
-    snapshot.loadavg_5m = (*load)[1];
-    snapshot.loadavg_15m = (*load)[2];
-  } else {
-    snapshot.degraded = true;
-  }
-
-  std::ifstream meminfo("/proc/meminfo");
-  if (meminfo.is_open()) {
-    std::string key;
-    std::uint64_t value = 0;
-    std::string unit;
-    std::uint64_t total_kb = 0;
-    std::uint64_t available_kb = 0;
-    while (meminfo >> key >> value >> unit) {
-      if (key == "MemTotal:") {
-        total_kb = value;
-      } else if (key == "MemAvailable:") {
-        available_kb = value;
-      }
-    }
-    snapshot.total_memory_bytes = total_kb * 1024ULL;
-    snapshot.available_memory_bytes = available_kb * 1024ULL;
-    snapshot.used_memory_bytes =
-        snapshot.total_memory_bytes >= snapshot.available_memory_bytes
-            ? (snapshot.total_memory_bytes - snapshot.available_memory_bytes)
-            : 0;
-  } else {
-    snapshot.degraded = true;
-  }
-
-  return snapshot;
-}
-
-comet::NetworkTelemetrySnapshot CollectNetworkTelemetry() {
-  comet::NetworkTelemetrySnapshot snapshot;
-  snapshot.contract_version = 1;
-  snapshot.source = "sysfs";
-  snapshot.collected_at = CurrentTimestampString();
-
-  const std::filesystem::path net_root("/sys/class/net");
-  if (!std::filesystem::exists(net_root)) {
-    snapshot.degraded = true;
-    snapshot.source = "unavailable";
-    return snapshot;
-  }
-
-  for (const auto& entry : std::filesystem::directory_iterator(net_root)) {
-    if (!entry.is_directory() && !entry.is_symlink()) {
-      continue;
-    }
-    comet::NetworkInterfaceTelemetry interface;
-    interface.interface_name = entry.path().filename().string();
-    interface.oper_state =
-        ReadTrimmedFile(entry.path() / "operstate").value_or(std::string{"unknown"});
-    const auto carrier = ReadTrimmedFile(entry.path() / "carrier");
-    if (carrier.has_value()) {
-      interface.link_state = (*carrier == "1") ? "up" : "down";
-    } else {
-      interface.link_state = interface.oper_state;
-    }
-    interface.rx_bytes = ReadUint64FileOrZero(entry.path() / "statistics" / "rx_bytes");
-    interface.tx_bytes = ReadUint64FileOrZero(entry.path() / "statistics" / "tx_bytes");
-    interface.loopback = interface.interface_name == "lo";
-    snapshot.interfaces.push_back(std::move(interface));
-  }
-
-  std::sort(
-      snapshot.interfaces.begin(),
-      snapshot.interfaces.end(),
-      [](const auto& left, const auto& right) { return left.interface_name < right.interface_name; });
-  return snapshot;
-}
-
-std::optional<std::string> WorkerRuntimeStatusPathForInstance(
-    const comet::DesiredState& state,
-    const comet::InstanceSpec& instance) {
-  if (instance.role != comet::InstanceRole::Worker) {
-    return std::nullopt;
-  }
-  for (const auto& disk : state.disks) {
-    if (disk.kind == comet::DiskKind::WorkerPrivate &&
-        disk.owner_name == instance.name &&
-        disk.node_name == instance.node_name) {
-      return (std::filesystem::path(disk.host_path) / "worker-runtime-status.json").string();
-    }
-  }
-  return std::nullopt;
-}
-
-comet::RuntimeProcessStatus ToProcessStatus(
-    comet::RuntimeStatus status,
-    const comet::InstanceSpec& instance) {
-  if (status.instance_name.empty()) {
-    status.instance_name = instance.name;
-  }
-  if (status.instance_role.empty()) {
-    status.instance_role = comet::ToString(instance.role);
-  }
-  if (status.node_name.empty()) {
-    status.node_name = instance.node_name;
-  }
-  if (status.gpu_device.empty() && instance.gpu_device.has_value()) {
-    status.gpu_device = *instance.gpu_device;
-  }
-  comet::RuntimeProcessStatus process;
-  process.instance_name = status.instance_name;
-  process.instance_role = status.instance_role;
-  process.node_name = status.node_name;
-  process.model_path = status.model_path.empty() ? status.cached_local_model_path : status.model_path;
-  process.gpu_device = status.gpu_device;
-  process.runtime_phase = status.runtime_phase;
-  process.started_at = status.started_at;
-  process.last_activity_at = status.last_activity_at;
-  process.runtime_pid = status.runtime_pid;
-  process.engine_pid = status.engine_pid;
-  process.ready = status.ready || status.launch_ready || status.inference_ready;
-  return process;
-}
-
-std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
+  std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
     const std::string& state_root,
     const std::string& node_name,
     const std::optional<std::string>& plane_name) {
-  std::vector<comet::RuntimeProcessStatus> result;
-  const auto local_states = plane_name.has_value()
-                                ? [&]() {
-                                    std::vector<comet::DesiredState> states;
-                                    const auto state =
-                                        LoadLocalAppliedState(state_root, node_name, plane_name);
-                                    if (state.has_value()) {
-                                      states.push_back(*state);
-                                    }
-                                    return states;
-                                  }()
-                                : LoadAllLocalAppliedStates(state_root, node_name);
-  for (const auto& local_state : local_states) {
-    for (const auto& instance : local_state.instances) {
-      if (instance.node_name != node_name) {
-        continue;
-      }
-      std::optional<std::string> status_path;
-      if (instance.role == comet::InstanceRole::Infer) {
-        status_path = RuntimeStatusPathForNode(local_state, node_name);
-      } else {
-        status_path = WorkerRuntimeStatusPathForInstance(local_state, instance);
-      }
-      if (!status_path.has_value() || !std::filesystem::exists(*status_path)) {
-        continue;
-      }
-      const auto status = comet::LoadRuntimeStatusJson(*status_path);
-      if (!status.has_value()) {
-        continue;
-      }
-      result.push_back(ToProcessStatus(*status, instance));
-    }
-  }
-  return result;
-}
-
-std::optional<std::string> ResolveComposeContainerIdForService(const std::string& service_name) {
-  const std::string output =
-      RunCommandCapture(
-          ResolvedDockerCommand() +
-          " ps --filter label=com.docker.compose.service=" + service_name +
-          " --format '{{.ID}}' 2>/dev/null");
-  std::istringstream input(output);
-  std::string container_id;
-  while (std::getline(input, container_id)) {
-    container_id = Trim(container_id);
-    if (!container_id.empty()) {
-      return container_id;
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<int> ResolveServiceHostPid(const std::string& service_name) {
-  const auto container_id = ResolveComposeContainerIdForService(service_name);
-  if (!container_id.has_value()) {
-    return std::nullopt;
-  }
-  const std::string output =
-      RunCommandCapture(
-          ResolvedDockerCommand() + " top " + *container_id + " -eo pid,comm,args 2>/dev/null");
-  std::istringstream input(output);
-  std::string line;
-  bool first = true;
-  std::optional<int> fallback_pid;
-  while (std::getline(input, line)) {
-    if (first) {
-      first = false;
-      continue;
-    }
-    line = Trim(line);
-    if (line.empty()) {
-      continue;
-    }
-    std::istringstream row(line);
-    int pid = 0;
-    std::string comm;
-    row >> pid >> comm;
-    std::string args;
-    std::getline(row, args);
-    args = Trim(args);
-    if (pid <= 0) {
-      continue;
-    }
-    if (args.find("comet-workerd") != std::string::npos ||
-        args.find("comet-inferctl") != std::string::npos) {
-      return pid;
-    }
-    if (comm != "tini" && comm != "bash" && comm != "sh" && !fallback_pid.has_value()) {
-      fallback_pid = pid;
-    }
-  }
-  return fallback_pid;
-}
-
-void ResolveInstanceHostPids(std::vector<comet::RuntimeProcessStatus>* statuses) {
-  if (statuses == nullptr) {
-    return;
-  }
-  for (auto& status : *statuses) {
-    const auto host_pid = ResolveServiceHostPid(status.instance_name);
-    if (host_pid.has_value()) {
-      status.runtime_pid = *host_pid;
-      status.engine_pid = *host_pid;
-    }
-  }
-}
-
-std::optional<std::string> ParseTaggedValue(
-    const std::string& text,
-    const std::string& key) {
-  const std::string needle = key + "=";
-  const std::size_t begin = text.find(needle);
-  if (begin == std::string::npos) {
-    return std::nullopt;
-  }
-  std::size_t end = text.find(' ', begin + needle.size());
-  if (end == std::string::npos) {
-    end = text.size();
-  }
-  return text.substr(begin + needle.size(), end - (begin + needle.size()));
+  return comet::hostd::telemetry_support::LoadLocalInstanceRuntimeStatuses(
+      state_root,
+      node_name,
+      plane_name);
 }
 
 std::vector<std::string> ParseTaggedCsv(
     const std::string& text,
     const std::string& key) {
-  const auto value = ParseTaggedValue(text, key);
-  if (!value.has_value()) {
-    return {};
-  }
-  std::vector<std::string> items;
-  std::stringstream stream(*value);
-  std::string item;
-  while (std::getline(stream, item, ',')) {
-    item = Trim(item);
-    if (!item.empty()) {
-      items.push_back(item);
-    }
-  }
-  return items;
+  return comet::hostd::telemetry_support::ParseTaggedCsv(text, key);
 }
 
 std::map<std::string, int> CaptureServiceHostPids(const std::vector<std::string>& service_names) {
-  std::map<std::string, int> result;
-  for (const auto& service_name : service_names) {
-    const auto pid = ResolveServiceHostPid(service_name);
-    if (pid.has_value()) {
-      result.emplace(service_name, *pid);
-    }
-  }
-  return result;
-}
-
-struct NvmlMemoryInfo {
-  unsigned long long total = 0;
-  unsigned long long free = 0;
-  unsigned long long used = 0;
-};
-
-struct NvmlUtilizationInfo {
-  unsigned int gpu = 0;
-  unsigned int memory = 0;
-};
-
-std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvml(
-    const comet::DesiredState& state,
-    const std::string& node_name) {
-#if defined(_WIN32)
-  (void)state;
-  (void)node_name;
-  return std::nullopt;
-#else
-  void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
-  if (lib == nullptr) {
-    return std::nullopt;
-  }
-
-  using nvmlReturn_t = int;
-  using nvmlDevice_t = void*;
-  constexpr nvmlReturn_t kNvmlSuccess = 0;
-  using NvmlInitFn = nvmlReturn_t (*)();
-  using NvmlShutdownFn = nvmlReturn_t (*)();
-  using NvmlGetHandleFn = nvmlReturn_t (*)(unsigned int, nvmlDevice_t*);
-  using NvmlMemoryInfoFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlMemoryInfo*);
-  using NvmlUtilizationFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlUtilizationInfo*);
-
-  const auto init = reinterpret_cast<NvmlInitFn>(dlsym(lib, "nvmlInit_v2"));
-  const auto shutdown = reinterpret_cast<NvmlShutdownFn>(dlsym(lib, "nvmlShutdown"));
-  const auto get_handle =
-      reinterpret_cast<NvmlGetHandleFn>(dlsym(lib, "nvmlDeviceGetHandleByIndex_v2"));
-  const auto get_memory =
-      reinterpret_cast<NvmlMemoryInfoFn>(dlsym(lib, "nvmlDeviceGetMemoryInfo"));
-  const auto get_utilization =
-      reinterpret_cast<NvmlUtilizationFn>(dlsym(lib, "nvmlDeviceGetUtilizationRates"));
-  if (init == nullptr || shutdown == nullptr || get_handle == nullptr ||
-      get_memory == nullptr || get_utilization == nullptr) {
-    dlclose(lib);
-    return std::nullopt;
-  }
-
-  if (init() != kNvmlSuccess) {
-    dlclose(lib);
-    return std::nullopt;
-  }
-
-  comet::GpuTelemetrySnapshot snapshot;
-  snapshot.degraded = false;
-  snapshot.source = "nvml";
-  for (const auto& node : state.nodes) {
-    if (node.name != node_name) {
-      continue;
-    }
-    for (const auto& gpu_device : node.gpu_devices) {
-      unsigned int index = 0;
-      try {
-        index = static_cast<unsigned int>(std::stoul(gpu_device));
-      } catch (const std::exception&) {
-        continue;
-      }
-      nvmlDevice_t handle = nullptr;
-      if (get_handle(index, &handle) != kNvmlSuccess || handle == nullptr) {
-        continue;
-      }
-      NvmlMemoryInfo memory{};
-      NvmlUtilizationInfo utilization{};
-      if (get_memory(handle, &memory) != kNvmlSuccess ||
-          get_utilization(handle, &utilization) != kNvmlSuccess) {
-        continue;
-      }
-      comet::GpuDeviceTelemetry device;
-      device.gpu_device = gpu_device;
-      device.total_vram_mb = static_cast<int>(memory.total / (1024 * 1024));
-      device.used_vram_mb = static_cast<int>(memory.used / (1024 * 1024));
-      device.free_vram_mb = static_cast<int>(memory.free / (1024 * 1024));
-      device.gpu_utilization_pct = static_cast<int>(utilization.gpu);
-      snapshot.devices.push_back(std::move(device));
-    }
-  }
-
-  shutdown();
-  dlclose(lib);
-  return snapshot;
-#endif
-}
-
-void PopulateGpuProcessesFromNvidiaSmi(
-    comet::GpuTelemetrySnapshot* snapshot,
-    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
-  if (snapshot == nullptr) {
-    return;
-  }
-  std::map<int, std::string> pid_to_instance_name;
-  for (const auto& status : instance_statuses) {
-    if (status.engine_pid > 0) {
-      pid_to_instance_name[status.engine_pid] = status.instance_name;
-    }
-    if (status.runtime_pid > 0) {
-      pid_to_instance_name[status.runtime_pid] = status.instance_name;
-    }
-  }
-
-  std::map<std::string, std::string> uuid_to_gpu_device;
-  {
-    const std::string output =
-        RunCommandCapture(
-            "nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits 2>/dev/null");
-    std::istringstream input(output);
-    std::string line;
-    while (std::getline(input, line)) {
-      const auto columns = SplitCsvRow(line);
-      if (columns.size() >= 2) {
-        uuid_to_gpu_device[columns[1]] = columns[0];
-      }
-    }
-  }
-
-  const std::string output =
-      RunCommandCapture(
-          "nvidia-smi --query-compute-apps=gpu_uuid,pid,used_gpu_memory "
-          "--format=csv,noheader,nounits 2>/dev/null");
-  std::istringstream input(output);
-  std::string line;
-  while (std::getline(input, line)) {
-    const auto columns = SplitCsvRow(line);
-    if (columns.size() < 3) {
-      continue;
-    }
-    const auto gpu_it = uuid_to_gpu_device.find(columns[0]);
-    if (gpu_it == uuid_to_gpu_device.end()) {
-      continue;
-    }
-    int pid = 0;
-    int used_vram_mb = 0;
-    try {
-      pid = std::stoi(columns[1]);
-      used_vram_mb = std::stoi(columns[2]);
-    } catch (const std::exception&) {
-      continue;
-    }
-    for (auto& device : snapshot->devices) {
-      if (device.gpu_device != gpu_it->second) {
-        continue;
-      }
-      comet::GpuProcessTelemetry process;
-      process.pid = pid;
-      process.used_vram_mb = used_vram_mb;
-      const auto owner_it = pid_to_instance_name.find(pid);
-      if (owner_it != pid_to_instance_name.end()) {
-        process.instance_name = owner_it->second;
-      }
-      device.processes.push_back(std::move(process));
-      break;
-    }
-  }
-}
-
-std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvidiaSmi(
-    const comet::DesiredState& state,
-    const std::string& node_name,
-    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
-  const std::string output =
-      RunCommandCapture(
-          "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu "
-          "--format=csv,noheader,nounits 2>/dev/null");
-  if (output.empty()) {
-    return std::nullopt;
-  }
-
-  std::set<std::string> allowed_devices;
-  for (const auto& node : state.nodes) {
-    if (node.name != node_name) {
-      continue;
-    }
-    allowed_devices.insert(node.gpu_devices.begin(), node.gpu_devices.end());
-  }
-
-  comet::GpuTelemetrySnapshot snapshot;
-  snapshot.degraded = true;
-  snapshot.source = "nvidia-smi";
-  std::istringstream input(output);
-  std::string line;
-  while (std::getline(input, line)) {
-    const auto columns = SplitCsvRow(line);
-    if (columns.size() < 5 || allowed_devices.find(columns[0]) == allowed_devices.end()) {
-      continue;
-    }
-    try {
-      comet::GpuDeviceTelemetry device;
-      device.gpu_device = columns[0];
-      device.total_vram_mb = std::stoi(columns[1]);
-      device.used_vram_mb = std::stoi(columns[2]);
-      device.free_vram_mb = std::stoi(columns[3]);
-      device.gpu_utilization_pct = std::stoi(columns[4]);
-      snapshot.devices.push_back(std::move(device));
-    } catch (const std::exception&) {
-      continue;
-    }
-  }
-  PopulateGpuProcessesFromNvidiaSmi(&snapshot, instance_statuses);
-  return snapshot;
-}
-
-comet::GpuTelemetrySnapshot CollectGpuTelemetry(
-    const comet::DesiredState& state,
-    const std::string& node_name,
-    const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
-  const bool disable_nvml =
-      std::getenv("COMET_DISABLE_NVML") != nullptr &&
-      std::string(std::getenv("COMET_DISABLE_NVML")) != "0";
-  if (!disable_nvml) {
-    if (const auto nvml_snapshot = TryCollectGpuTelemetryWithNvml(state, node_name);
-        nvml_snapshot.has_value()) {
-      comet::GpuTelemetrySnapshot snapshot = *nvml_snapshot;
-      PopulateGpuProcessesFromNvidiaSmi(&snapshot, instance_statuses);
-      snapshot.contract_version = 1;
-      snapshot.collected_at = CurrentTimestampString();
-      return snapshot;
-    }
-  }
-  if (const auto smi_snapshot =
-          TryCollectGpuTelemetryWithNvidiaSmi(state, node_name, instance_statuses);
-      smi_snapshot.has_value()) {
-    comet::GpuTelemetrySnapshot snapshot = *smi_snapshot;
-    snapshot.contract_version = 1;
-    snapshot.collected_at = CurrentTimestampString();
-    return snapshot;
-  }
-  comet::GpuTelemetrySnapshot snapshot;
-  snapshot.contract_version = 1;
-  snapshot.degraded = true;
-  snapshot.source = "unavailable";
-  snapshot.collected_at = CurrentTimestampString();
-  return snapshot;
-}
-
-bool IsContainerAbsentForService(const std::string& service_name) {
-  return !ResolveComposeContainerIdForService(service_name).has_value();
+  return comet::hostd::telemetry_support::CaptureServiceHostPids(service_names);
 }
 
 bool VerifyEvictionAssignment(
@@ -3753,63 +1673,12 @@ bool VerifyEvictionAssignment(
     const std::string& state_root,
     const std::string& status_message,
     const std::map<std::string, int>& victim_host_pids) {
-  const auto victim_names = ParseTaggedCsv(status_message, "victims");
-  const auto target_gpu = ParseTaggedValue(status_message, "target_gpu");
-  const int required_memory_cap_mb =
-      ParseTaggedValue(status_message, "required_memory_cap_mb").has_value()
-          ? std::stoi(*ParseTaggedValue(status_message, "required_memory_cap_mb"))
-          : 0;
-  constexpr int kReserveMemoryMb = 1024;
-  constexpr int kStableSamples = 3;
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-  int stable_samples = 0;
-
-  while (std::chrono::steady_clock::now() < deadline) {
-    bool victims_gone = true;
-    for (const auto& victim_name : victim_names) {
-      if (!IsContainerAbsentForService(victim_name)) {
-        victims_gone = false;
-        break;
-      }
-    }
-
-    auto instance_statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name);
-    ResolveInstanceHostPids(&instance_statuses);
-    const auto telemetry = CollectGpuTelemetry(local_state, node_name, instance_statuses);
-
-    bool victims_released_gpu = true;
-    bool memory_ready = target_gpu.has_value() ? false : true;
-    for (const auto& device : telemetry.devices) {
-      if (target_gpu.has_value() && device.gpu_device == *target_gpu) {
-        memory_ready =
-            device.free_vram_mb >= required_memory_cap_mb + kReserveMemoryMb;
-      }
-      for (const auto& process : device.processes) {
-        if (std::find(victim_names.begin(), victim_names.end(), process.instance_name) !=
-            victim_names.end()) {
-          victims_released_gpu = false;
-        }
-        for (const auto& [victim_name, victim_pid] : victim_host_pids) {
-          (void)victim_name;
-          if (process.pid == victim_pid) {
-            victims_released_gpu = false;
-          }
-        }
-      }
-    }
-
-    if (victims_gone && victims_released_gpu && memory_ready) {
-      ++stable_samples;
-      if (stable_samples >= kStableSamples) {
-        return true;
-      }
-    } else {
-      stable_samples = 0;
-    }
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-  }
-
-  return false;
+  return comet::hostd::telemetry_support::VerifyEvictionAssignment(
+      local_state,
+      node_name,
+      state_root,
+      status_message,
+      victim_host_pids);
 }
 
 comet::HostObservation BuildObservedStateSnapshot(
@@ -3818,41 +1687,12 @@ comet::HostObservation BuildObservedStateSnapshot(
     comet::HostObservationStatus status,
     const std::string& status_message,
     const std::optional<int>& last_assignment_id = std::nullopt) {
-  comet::HostObservation observation;
-  observation.node_name = node_name;
-  observation.status = status;
-  observation.status_message = status_message;
-  observation.last_assignment_id = last_assignment_id;
-  observation.applied_generation = LoadLocalAppliedGeneration(state_root, node_name);
-
-  const auto local_state = LoadLocalAppliedState(state_root, node_name);
-  if (local_state.has_value()) {
-    observation.plane_name = local_state->plane_name;
-    observation.observed_state_json = comet::SerializeDesiredStateJson(*local_state);
-  }
-  const auto runtime_status = LoadLocalRuntimeStatus(state_root, node_name);
-  if (runtime_status.has_value()) {
-    observation.runtime_status_json = comet::SerializeRuntimeStatusJson(*runtime_status);
-  }
-  auto instance_statuses = LoadLocalInstanceRuntimeStatuses(state_root, node_name);
-  ResolveInstanceHostPids(&instance_statuses);
-  if (!instance_statuses.empty()) {
-    observation.instance_runtime_json =
-        comet::SerializeRuntimeStatusListJson(instance_statuses);
-  }
-  if (local_state.has_value()) {
-    observation.gpu_telemetry_json =
-        comet::SerializeGpuTelemetryJson(
-            CollectGpuTelemetry(*local_state, node_name, instance_statuses));
-    observation.disk_telemetry_json =
-        comet::SerializeDiskTelemetryJson(CollectDiskTelemetry(*local_state, node_name));
-  }
-  observation.network_telemetry_json =
-      comet::SerializeNetworkTelemetryJson(CollectNetworkTelemetry());
-  observation.cpu_telemetry_json =
-      comet::SerializeCpuTelemetryJson(CollectCpuTelemetry());
-
-  return observation;
+  return comet::hostd::telemetry_support::BuildObservedStateSnapshot(
+      node_name,
+      state_root,
+      status,
+      status_message,
+      last_assignment_id);
 }
 
 bool IsDesiredNodeStateEmpty(const comet::DesiredState& state) {
@@ -4523,7 +2363,13 @@ void ApplyDesiredNodeState(
   }
 
   EnsureDesiredDisksReady(backend, desired_node_state, storage_root, runtime_root);
-  BootstrapPlaneModelIfNeeded(desired_node_state, node_name, backend, assignment_id);
+  static const comet::hostd::HostdBootstrapModelSupport bootstrap_model_support =
+      MakeHostdBootstrapModelSupport();
+  bootstrap_model_support.BootstrapPlaneModelIfNeeded(
+      desired_node_state,
+      node_name,
+      backend,
+      assignment_id);
 
   ApplyNodePlan(
       execution_plan,
@@ -4596,371 +2442,202 @@ void ApplyDesiredNodeState(
           node_name));
 }
 
-class HostdBackendHttpSupport final : public comet::hostd::IHttpHostdBackendSupport {
- public:
-  nlohmann::json SendControllerJsonRequest(
-      const std::string& controller_url,
-      const std::string& method,
-      const std::string& path,
-      const nlohmann::json& payload,
-      const std::map<std::string, std::string>& headers = {}) const override {
-    return ::SendControllerJsonRequest(
-        ParseControllerTarget(controller_url),
-        method,
-        path,
-        payload,
-        headers);
-  }
-
-  comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const override {
-    return ::ParseAssignmentPayload(payload);
-  }
-
-  nlohmann::json BuildHostObservationPayload(
-      const comet::HostObservation& observation) const override {
-    return ::BuildHostObservationPayload(observation);
-  }
-
-  nlohmann::json BuildDiskRuntimeStatePayload(
-      const comet::DiskRuntimeState& state) const override {
-    return ::BuildDiskRuntimeStatePayload(state);
-  }
-
-  comet::DiskRuntimeState ParseDiskRuntimeStatePayload(
-      const nlohmann::json& payload) const override {
-    return ::ParseDiskRuntimeStatePayload(payload);
-  }
-
-  std::string Trim(const std::string& value) const override {
-    return ::Trim(value);
-  }
-};
-
-class HostdObservationSupport final : public comet::hostd::IHostdObservationSupport {
- public:
-  void ShowLocalState(const std::string& node_name, const std::string& state_root) const override {
-    ::ShowLocalState(node_name, state_root);
-  }
-
-  void ShowRuntimeStatus(const std::string& node_name, const std::string& state_root) const override {
-    ::ShowRuntimeStatus(node_name, state_root);
-  }
-
-  comet::HostObservation BuildObservedStateSnapshot(
-      const std::string& node_name,
-      const std::string& state_root,
-      const comet::HostObservationStatus status,
-      const std::string& status_message,
-      const std::optional<int>& assignment_id = std::nullopt) const override {
-    return ::BuildObservedStateSnapshot(node_name, state_root, status, status_message, assignment_id);
-  }
-
-  void AppendHostdEvent(
-      HostdBackend& backend,
-      const std::string& category,
-      const std::string& event_type,
-      const std::string& message,
-      const nlohmann::json& payload,
-      const std::string& plane_name,
-      const std::string& node_name,
-      const std::string& worker_name,
-      const std::optional<int>& assignment_id,
-      const std::optional<int>& rollout_action_id,
-      const std::string& severity) const override {
-    ::AppendHostdEvent(
-        backend,
-        category,
-        event_type,
-        message,
-        payload,
-        plane_name,
-        node_name,
-        worker_name,
-        assignment_id,
-        rollout_action_id,
-        severity);
-  }
-};
-
-class HostdAssignmentSupport final : public comet::hostd::IHostdAssignmentSupport {
- public:
-  comet::DesiredState RebaseStateForRuntimeRoot(
-      comet::DesiredState state,
-      const std::string& storage_root,
-      const std::optional<std::string>& runtime_root) const override {
-    return ::RebaseStateForRuntimeRoot(std::move(state), storage_root, runtime_root);
-  }
-
-  nlohmann::json BuildAssignmentProgressPayload(
-      const std::string& phase,
-      const std::string& phase_label,
-      const std::string& message,
-      const int progress_percent,
-      const std::string& plane_name,
-      const std::string& node_name) const override {
-    return ::BuildAssignmentProgressPayload(
-        phase,
-        phase_label,
-        message,
-        progress_percent,
-        plane_name,
-        node_name);
-  }
-
-  void PublishAssignmentProgress(
-      HostdBackend* backend,
-      const std::optional<int>& assignment_id,
-      const nlohmann::json& progress) const override {
-    ::PublishAssignmentProgress(backend, assignment_id, progress);
-  }
-
-  std::vector<std::string> ParseTaggedCsv(
-      const std::string& tagged_message,
-      const std::string& tag) const override {
-    return ::ParseTaggedCsv(tagged_message, tag);
-  }
-
-  comet::HostObservation BuildObservedStateSnapshot(
-      const std::string& node_name,
-      const std::string& state_root,
-      const comet::HostObservationStatus status,
-      const std::string& status_message,
-      const std::optional<int>& assignment_id = std::nullopt) const override {
-    return ::BuildObservedStateSnapshot(node_name, state_root, status, status_message, assignment_id);
-  }
-
-  std::map<std::string, int> CaptureServiceHostPids(
-      const std::vector<std::string>& service_names) const override {
-    return ::CaptureServiceHostPids(service_names);
-  }
-
-  bool VerifyEvictionAssignment(
-      const comet::DesiredState& desired_state,
-      const std::string& node_name,
-      const std::string& state_root,
-      const std::string& tagged_message,
-      const std::map<std::string, int>& expected_victim_host_pids) const override {
-    return ::VerifyEvictionAssignment(
-        desired_state,
-        node_name,
-        state_root,
-        tagged_message,
-        expected_victim_host_pids);
-  }
-
-  void ApplyDesiredNodeState(
-      const comet::DesiredState& desired_node_state,
-      const std::string& artifacts_root,
-      const std::string& storage_root,
-      const std::optional<std::string>& runtime_root,
-      const std::string& state_root,
-      const ComposeMode compose_mode,
-      const std::string& source_label,
-      const std::optional<int>& desired_generation,
-      const std::optional<int>& assignment_id,
-      HostdBackend* backend) const override {
-    ::ApplyDesiredNodeState(
-        desired_node_state,
-        artifacts_root,
-        storage_root,
-        runtime_root,
-        state_root,
-        compose_mode,
-        source_label,
-        desired_generation,
-        assignment_id,
-        backend);
-  }
-
-  void ShowDemoOps(
-      const std::string& node_name,
-      const std::string& storage_root,
-      const std::optional<std::string>& runtime_root) const override {
-    ::ShowDemoOps(node_name, storage_root, runtime_root);
-  }
-
-  void ShowStateOps(
-      const std::string& db_path,
-      const std::string& node_name,
-      const std::string& artifacts_root,
-      const std::string& storage_root,
-      const std::optional<std::string>& runtime_root,
-      const std::string& state_root) const override {
-    ::ShowStateOps(db_path, node_name, artifacts_root, storage_root, runtime_root, state_root);
-  }
-
-  void AppendHostdEvent(
-      HostdBackend& backend,
-      const std::string& category,
-      const std::string& event_type,
-      const std::string& message,
-      const nlohmann::json& payload,
-      const std::string& plane_name,
-      const std::string& node_name,
-      const std::string& worker_name,
-      const std::optional<int>& assignment_id,
-      const std::optional<int>& rollout_action_id,
-      const std::string& severity) const override {
-    ::AppendHostdEvent(
-        backend,
-        category,
-        event_type,
-        message,
-        payload,
-        plane_name,
-        node_name,
-        worker_name,
-        assignment_id,
-        rollout_action_id,
-        severity);
-  }
-};
-
-class HostdCliActions final : public comet::hostd::IHostdCliActions {
- public:
-  HostdCliActions(
-      const comet::hostd::HostdAssignmentService& assignment_service,
-      const comet::hostd::HostdObservationService& observation_service)
-      : assignment_service_(assignment_service),
-        observation_service_(observation_service) {}
-
-  void ShowDemoOps(
-      const std::string& node_name,
-      const std::string& storage_root,
-      const std::optional<std::string>& runtime_root) override {
-    assignment_service_.ShowDemoOps(node_name, storage_root, runtime_root);
-  }
-
-  void ShowStateOps(
-      const std::string& db_path,
-      const std::string& node_name,
-      const std::string& artifacts_root,
-      const std::string& storage_root,
-      const std::optional<std::string>& runtime_root,
-      const std::string& state_root) override {
-    assignment_service_.ShowStateOps(
-        db_path,
-        node_name,
-        artifacts_root,
-        storage_root,
-        runtime_root,
-        state_root);
-  }
-
-  void ShowLocalState(const std::string& node_name, const std::string& state_root) override {
-    observation_service_.ShowLocalState(node_name, state_root);
-  }
-
-  void ShowRuntimeStatus(
-      const std::string& node_name,
-      const std::string& state_root) override {
-    observation_service_.ShowRuntimeStatus(node_name, state_root);
-  }
-
-  void ReportLocalObservedState(
-      const std::optional<std::string>& db_path,
-      const std::optional<std::string>& controller_url,
-      const std::optional<std::string>& host_private_key_path,
-      const std::optional<std::string>& controller_fingerprint,
-      const std::string& node_name,
-      const std::string& state_root) override {
-    observation_service_.ReportLocalObservedState(
-        db_path,
-        controller_url,
-        host_private_key_path,
-        controller_fingerprint,
-        node_name,
-        state_root);
-  }
-
-  void ApplyStateOps(
-      const std::string& db_path,
-      const std::string& node_name,
-      const std::string& artifacts_root,
-      const std::string& storage_root,
-      const std::optional<std::string>& runtime_root,
-      const std::string& state_root,
-      const ComposeMode compose_mode) override {
-    assignment_service_.ApplyStateOps(
-        db_path,
-        node_name,
-        artifacts_root,
-        storage_root,
-        runtime_root,
-        state_root,
-        compose_mode);
-  }
-
-  void ApplyNextAssignment(
-      const std::optional<std::string>& db_path,
-      const std::optional<std::string>& controller_url,
-      const std::optional<std::string>& host_private_key_path,
-      const std::optional<std::string>& controller_fingerprint,
-      const std::string& node_name,
-      const std::string& storage_root,
-      const std::optional<std::string>& runtime_root,
-      const std::string& state_root,
-      const ComposeMode compose_mode) override {
-    assignment_service_.ApplyNextAssignment(
-        db_path,
-        controller_url,
-        host_private_key_path,
-        controller_fingerprint,
-        node_name,
-        storage_root,
-        runtime_root,
-        state_root,
-        compose_mode);
-  }
-
- private:
-  const comet::hostd::HostdAssignmentService& assignment_service_;
-  const comet::hostd::HostdObservationService& observation_service_;
-};
-
-class HostdCompositionRoot final {
- public:
-  HostdCompositionRoot()
-      : backend_support_(std::make_unique<HostdBackendHttpSupport>()),
-        backend_factory_(std::make_unique<comet::hostd::HostdBackendFactory>(*backend_support_)),
-        observation_support_(std::make_unique<HostdObservationSupport>()),
-        observation_service_(std::make_unique<comet::hostd::HostdObservationService>(
-            *backend_factory_,
-            *observation_support_)),
-        assignment_support_(std::make_unique<HostdAssignmentSupport>()),
-        assignment_service_(std::make_unique<comet::hostd::HostdAssignmentService>(
-            *backend_factory_,
-            *assignment_support_,
-            *observation_service_)),
-        actions_(std::make_unique<HostdCliActions>(*assignment_service_, *observation_service_)),
-        cli_(std::make_unique<comet::hostd::HostdCli>(*actions_)),
-        config_loader_(std::make_unique<comet::hostd::NodeConfigLoader>()) {}
-
-  int Run(int argc, char** argv) const {
-    const comet::hostd::HostdCommandLine command_line(argc, argv);
-    return cli_->Run(command_line, *config_loader_, argv[0]);
-  }
-
- private:
-  std::unique_ptr<HostdBackendHttpSupport> backend_support_;
-  std::unique_ptr<comet::hostd::HostdBackendFactory> backend_factory_;
-  std::unique_ptr<HostdObservationSupport> observation_support_;
-  std::unique_ptr<comet::hostd::HostdObservationService> observation_service_;
-  std::unique_ptr<HostdAssignmentSupport> assignment_support_;
-  std::unique_ptr<comet::hostd::HostdAssignmentService> assignment_service_;
-  std::unique_ptr<HostdCliActions> actions_;
-  std::unique_ptr<comet::hostd::HostdCli> cli_;
-  std::unique_ptr<comet::hostd::NodeConfigLoader> config_loader_;
-};
-
 }  // namespace
+
+namespace comet::hostd::appsupport {
+
+nlohmann::json SendControllerJsonRequest(
+    const std::string& controller_url,
+    const std::string& method,
+    const std::string& path,
+    const nlohmann::json& payload,
+    const std::map<std::string, std::string>& headers) {
+  return controller_transport_support::SendControllerJsonRequest(
+      controller_url,
+      method,
+      path,
+      payload,
+      headers);
+}
+
+comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) {
+  return controller_transport_support::ParseAssignmentPayload(payload);
+}
+
+nlohmann::json BuildHostObservationPayload(const comet::HostObservation& observation) {
+  return controller_transport_support::BuildHostObservationPayload(observation);
+}
+
+nlohmann::json BuildDiskRuntimeStatePayload(const comet::DiskRuntimeState& state) {
+  return controller_transport_support::BuildDiskRuntimeStatePayload(state);
+}
+
+comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const nlohmann::json& payload) {
+  return controller_transport_support::ParseDiskRuntimeStatePayload(payload);
+}
+
+std::string Trim(const std::string& value) {
+  return controller_transport_support::Trim(value);
+}
+
+void ShowLocalState(const std::string& node_name, const std::string& state_root) {
+  ::ShowLocalState(node_name, state_root);
+}
+
+void ShowRuntimeStatus(const std::string& node_name, const std::string& state_root) {
+  ::ShowRuntimeStatus(node_name, state_root);
+}
+
+comet::HostObservation BuildObservedStateSnapshot(
+    const std::string& node_name,
+    const std::string& state_root,
+    comet::HostObservationStatus status,
+    const std::string& status_message,
+    const std::optional<int>& assignment_id) {
+  return ::BuildObservedStateSnapshot(
+      node_name,
+      state_root,
+      status,
+      status_message,
+      assignment_id);
+}
+
+void AppendHostdEvent(
+    HostdBackend& backend,
+    const std::string& category,
+    const std::string& event_type,
+    const std::string& message,
+    const nlohmann::json& payload,
+    const std::string& plane_name,
+    const std::string& node_name,
+    const std::string& worker_name,
+    const std::optional<int>& assignment_id,
+    const std::optional<int>& rollout_action_id,
+    const std::string& severity) {
+  ::AppendHostdEvent(
+      backend,
+      category,
+      event_type,
+      message,
+      payload,
+      plane_name,
+      node_name,
+      worker_name,
+      assignment_id,
+      rollout_action_id,
+      severity);
+}
+
+comet::DesiredState RebaseStateForRuntimeRoot(
+    comet::DesiredState state,
+    const std::string& storage_root,
+    const std::optional<std::string>& runtime_root) {
+  return ::RebaseStateForRuntimeRoot(std::move(state), storage_root, runtime_root);
+}
+
+nlohmann::json BuildAssignmentProgressPayload(
+    const std::string& phase,
+    const std::string& phase_label,
+    const std::string& message,
+    int progress_percent,
+    const std::string& plane_name,
+    const std::string& node_name) {
+  return ::BuildAssignmentProgressPayload(
+      phase,
+      phase_label,
+      message,
+      progress_percent,
+      plane_name,
+      node_name);
+}
+
+void PublishAssignmentProgress(
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id,
+    const nlohmann::json& progress) {
+  ::PublishAssignmentProgress(backend, assignment_id, progress);
+}
+
+std::vector<std::string> ParseTaggedCsv(
+    const std::string& tagged_message,
+    const std::string& tag) {
+  return ::ParseTaggedCsv(tagged_message, tag);
+}
+
+std::map<std::string, int> CaptureServiceHostPids(
+    const std::vector<std::string>& service_names) {
+  return ::CaptureServiceHostPids(service_names);
+}
+
+bool VerifyEvictionAssignment(
+    const comet::DesiredState& desired_state,
+    const std::string& node_name,
+    const std::string& state_root,
+    const std::string& tagged_message,
+    const std::map<std::string, int>& expected_victim_host_pids) {
+  return ::VerifyEvictionAssignment(
+      desired_state,
+      node_name,
+      state_root,
+      tagged_message,
+      expected_victim_host_pids);
+}
+
+void ApplyDesiredNodeState(
+    const comet::DesiredState& desired_node_state,
+    const std::string& artifacts_root,
+    const std::string& storage_root,
+    const std::optional<std::string>& runtime_root,
+    const std::string& state_root,
+    ComposeMode compose_mode,
+    const std::string& source_label,
+    const std::optional<int>& desired_generation,
+    const std::optional<int>& assignment_id,
+    HostdBackend* backend) {
+  ::ApplyDesiredNodeState(
+      desired_node_state,
+      artifacts_root,
+      storage_root,
+      runtime_root,
+      state_root,
+      compose_mode,
+      source_label,
+      desired_generation,
+      assignment_id,
+      backend);
+}
+
+void ShowDemoOps(
+    const std::string& node_name,
+    const std::string& storage_root,
+    const std::optional<std::string>& runtime_root) {
+  ::ShowDemoOps(node_name, storage_root, runtime_root);
+}
+
+void ShowStateOps(
+    const std::string& db_path,
+    const std::string& node_name,
+    const std::string& artifacts_root,
+    const std::string& storage_root,
+    const std::optional<std::string>& runtime_root,
+    const std::string& state_root) {
+  ::ShowStateOps(
+      db_path,
+      node_name,
+      artifacts_root,
+      storage_root,
+      runtime_root,
+      state_root);
+}
+
+}  // namespace comet::hostd::appsupport
 
 namespace comet::hostd {
 
 HostdApp::HostdApp(int argc, char** argv) : argc_(argc), argv_(argv) {}
 
 int HostdApp::Run() {
-  HostdCompositionRoot composition_root;
+  comet::hostd::HostdCompositionRoot composition_root;
   return composition_root.Run(argc_, argv_);
 }
 

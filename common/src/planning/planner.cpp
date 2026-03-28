@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <stdexcept>
 
+#include "comet/state/worker_group_topology.h"
+
 namespace comet {
 
 namespace {
@@ -106,6 +108,23 @@ const WorkerGroupMemberSpec* FindLeaderWorkerGroupMember(const DesiredState& sta
   return nullptr;
 }
 
+const WorkerGroupMemberSpec* FindReplicaLeaderWorkerGroupMember(
+    const DesiredState& state,
+    const WorkerGroupMemberSpec& member) {
+  const auto it = std::find_if(
+      state.worker_group.members.begin(),
+      state.worker_group.members.end(),
+      [&](const WorkerGroupMemberSpec& candidate) {
+        return candidate.enabled &&
+               candidate.replica_group_id == member.replica_group_id &&
+               candidate.replica_leader;
+      });
+  if (it != state.worker_group.members.end()) {
+    return &*it;
+  }
+  return FindLeaderWorkerGroupMember(state);
+}
+
 ComposeService BuildComposeService(
     const InstanceSpec& instance,
     const std::vector<DiskSpec>& disks,
@@ -139,6 +158,7 @@ ComposeService BuildComposeService(
   if (use_vllm) {
     if (instance.role == InstanceRole::Infer) {
       service.environment["COMET_INFER_RUNTIME_BACKEND"] = "worker-vllm";
+      service.environment["COMET_DATA_PARALLEL_MODE"] = state.inference.data_parallel_mode;
       service.environment["COMET_WORKER_GROUP_ID"] = state.worker_group.group_id;
       service.environment["COMET_WORKER_GROUP_EXPECTED_SIZE"] =
           std::to_string(std::max(0, state.worker_group.expected_workers));
@@ -154,13 +174,20 @@ ComposeService BuildComposeService(
           std::to_string(state.worker_group.rendezvous_port);
     } else if (instance.role == InstanceRole::Worker) {
       const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
-      const auto* leader_worker_group_member = FindLeaderWorkerGroupMember(state);
+      const auto* leader_worker_group_member =
+          worker_group_member != nullptr
+              ? FindReplicaLeaderWorkerGroupMember(state, *worker_group_member)
+              : FindLeaderWorkerGroupMember(state);
       const int published_host_port = WorkerPublishedHostPort(state, instance);
       const int internal_runtime_port = WorkerInternalRuntimePort(state, instance);
       const bool worker_group_leader =
           worker_group_member != nullptr && worker_group_member->leader;
+      const bool data_parallel = DataParallelEnabled(state.inference);
+      const int replica_world_size =
+          worker_group_member != nullptr ? std::max(1, worker_group_member->replica_size)
+                                         : std::max(1, state.worker_group.expected_workers);
       const bool distributed_runtime =
-          std::max(0, state.worker_group.expected_workers) > 1;
+          replica_world_size > 1;
       service.environment["COMET_WORKER_BOOT_MODE"] = "vllm-openai";
       service.environment["COMET_VLLM_PORT"] = std::to_string(state.inference.api_port);
       service.environment["COMET_VLLM_TENSOR_PARALLEL_SIZE"] =
@@ -176,9 +203,10 @@ ComposeService BuildComposeService(
       service.environment["COMET_VLLM_ENFORCE_EAGER"] =
           state.inference.enforce_eager ? "1" : "0";
       service.environment["COMET_VLLM_DOWNLOAD_DIR"] = state.inference.model_cache_dir;
+      service.environment["COMET_DATA_PARALLEL_MODE"] = state.inference.data_parallel_mode;
       service.environment["COMET_WORKER_GROUP_ID"] = state.worker_group.group_id;
       service.environment["COMET_WORKER_GROUP_WORLD_SIZE"] =
-          std::to_string(std::max(0, state.worker_group.expected_workers));
+          std::to_string(replica_world_size);
       service.environment["COMET_DISTRIBUTED_BACKEND"] =
           state.worker_group.distributed_backend;
       service.environment["COMET_WORKER_SELECTION_POLICY"] =
@@ -203,7 +231,7 @@ ComposeService BuildComposeService(
       service.environment["COMET_VLLM_DISTRIBUTED_MASTER_PORT"] =
           std::to_string(state.worker_group.rendezvous_port);
       service.environment["COMET_VLLM_DISTRIBUTED_NNODES"] =
-          std::to_string(std::max(1, state.worker_group.expected_workers));
+          std::to_string(replica_world_size);
       service.environment["COMET_VLLM_DISTRIBUTED_NODE_RANK"] = "0";
       service.environment["COMET_VLLM_HEADLESS"] = "0";
       service.environment["COMET_WORKER_LEADER_API_BASE_URL"] =
@@ -215,11 +243,21 @@ ComposeService BuildComposeService(
             std::to_string(worker_group_member->rank);
         service.environment["COMET_WORKER_GROUP_LEADER"] =
             worker_group_member->leader ? "1" : "0";
+        service.environment["COMET_WORKER_REPLICA_GROUP_ID"] =
+            worker_group_member->replica_group_id;
+        service.environment["COMET_WORKER_REPLICA_INDEX"] =
+            std::to_string(worker_group_member->replica_index);
+        service.environment["COMET_WORKER_REPLICA_SIZE"] =
+            std::to_string(std::max(1, worker_group_member->replica_size));
+        service.environment["COMET_WORKER_REPLICA_LEADER"] =
+            worker_group_member->replica_leader ? "1" : "0";
         service.environment["COMET_VLLM_DISTRIBUTED_NODE_RANK"] =
             std::to_string(std::max(0, worker_group_member->rank));
         service.environment["COMET_VLLM_HEADLESS"] =
             distributed_runtime && !worker_group_member->leader ? "1" : "0";
       }
+      service.environment["COMET_WRITE_LEGACY_WORKER_UPSTREAM"] =
+          (!data_parallel && worker_group_leader) ? "1" : "0";
       if (state.bootstrap_model.has_value() &&
           state.bootstrap_model->served_model_name.has_value() &&
           !state.bootstrap_model->served_model_name->empty()) {

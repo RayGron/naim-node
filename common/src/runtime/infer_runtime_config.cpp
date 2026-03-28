@@ -124,6 +124,10 @@ json BuildWorkerGroupJson(const DesiredState& state) {
         {"node_name", member.node_name},
         {"gpu_device", member.gpu_device},
         {"rank", member.rank},
+        {"replica_group_id", member.replica_group_id},
+        {"replica_index", member.replica_index},
+        {"replica_size", member.replica_size},
+        {"replica_leader", member.replica_leader},
         {"gpu_fraction", member.gpu_fraction},
         {"share_mode", ToString(member.share_mode)},
         {"priority", member.priority},
@@ -173,6 +177,7 @@ std::string RenderInferRuntimeConfigJson(const DesiredState& state) {
        {
            {"primary_infer_node", state.inference.primary_infer_node},
            {"runtime_engine", state.inference.runtime_engine},
+           {"data_parallel_mode", state.inference.data_parallel_mode},
            {"worker_group_id", state.inference.worker_group_id},
            {"distributed_backend", state.inference.distributed_backend},
            {"worker_selection_policy", state.inference.worker_selection_policy},

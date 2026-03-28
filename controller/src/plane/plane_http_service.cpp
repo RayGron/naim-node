@@ -14,7 +14,7 @@ bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
 
 }  // namespace
 
-PlaneHttpService::PlaneHttpService(Deps deps) : deps_(std::move(deps)) {}
+PlaneHttpService::PlaneHttpService(PlaneHttpSupport support) : support_(std::move(support)) {}
 
 std::optional<HttpResponse> PlaneHttpService::HandleRequest(
     const std::string& db_path,
@@ -44,15 +44,15 @@ HttpResponse PlaneHttpService::HandlePlanesCollection(
     const HttpRequest& request) const {
   if (request.method == "GET") {
     try {
-      if (deps_.plane_registry_service == nullptr) {
+      if (support_.plane_registry_service() == nullptr) {
         throw std::runtime_error("plane registry service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.plane_registry_service->BuildPlanesPayload(db_path),
+          support_.plane_registry_service()->BuildPlanesPayload(db_path),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
@@ -60,24 +60,24 @@ HttpResponse PlaneHttpService::HandlePlanesCollection(
   }
   if (request.method == "POST") {
     try {
-      const json body = deps_.parse_json_request_body(request);
+      const json body = support_.parse_json_request_body(request);
       const json desired_state_payload =
           body.contains("desired_state") ? body.at("desired_state") : body;
       if (!desired_state_payload.is_object()) {
-        return deps_.build_json_response(
+        return support_.build_json_response(
             400,
             json{{"status", "bad_request"},
                  {"message", "request body must contain desired_state object"}},
             {});
       }
-      const std::string artifacts_root = deps_.resolve_artifacts_root(
+      const std::string artifacts_root = support_.resolve_artifacts_root(
           body.contains("artifacts_root") && body["artifacts_root"].is_string()
               ? std::optional<std::string>(body["artifacts_root"].get<std::string>())
-              : deps_.find_query_string(request, "artifacts_root"),
+              : support_.find_query_string(request, "artifacts_root"),
           default_artifacts_root);
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.build_controller_action_payload(deps_.upsert_plane_state_action(
+          support_.build_controller_action_payload(support_.upsert_plane_state_action(
               db_path,
               desired_state_payload.dump(2),
               artifacts_root,
@@ -85,18 +85,18 @@ HttpResponse PlaneHttpService::HandlePlanesCollection(
               "api")),
           {});
     } catch (const std::invalid_argument& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           400,
           json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}},
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
     }
   }
-  return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
 }
 
 HttpResponse PlaneHttpService::HandlePlanePath(
@@ -105,29 +105,29 @@ HttpResponse PlaneHttpService::HandlePlanePath(
     const HttpRequest& request) const {
   const std::string remainder = request.path.substr(std::string("/api/v1/planes/").size());
   if (remainder.empty()) {
-    return deps_.build_json_response(404, json{{"status", "not_found"}}, {});
+    return support_.build_json_response(404, json{{"status", "not_found"}}, {});
   }
 
   const auto start_pos = remainder.find("/start");
   if (start_pos != std::string::npos &&
       start_pos + std::string("/start").size() == remainder.size()) {
     if (request.method != "POST") {
-      return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+      return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
     }
     const std::string plane_name = remainder.substr(0, start_pos);
     try {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.build_controller_action_payload(
-              deps_.start_plane_action(db_path, plane_name)),
+          support_.build_controller_action_payload(
+              support_.start_plane_action(db_path, plane_name)),
           {});
     } catch (const std::invalid_argument& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           400,
           json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}},
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
@@ -138,17 +138,17 @@ HttpResponse PlaneHttpService::HandlePlanePath(
   if (stop_pos != std::string::npos &&
       stop_pos + std::string("/stop").size() == remainder.size()) {
     if (request.method != "POST") {
-      return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+      return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
     }
     const std::string plane_name = remainder.substr(0, stop_pos);
     try {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.build_controller_action_payload(
-              deps_.stop_plane_action(db_path, plane_name)),
+          support_.build_controller_action_payload(
+              support_.stop_plane_action(db_path, plane_name)),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
@@ -159,23 +159,23 @@ HttpResponse PlaneHttpService::HandlePlanePath(
   if (dashboard_pos != std::string::npos &&
       dashboard_pos + std::string("/dashboard").size() == remainder.size()) {
     if (request.method != "GET") {
-      return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+      return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
     }
     const std::string plane_name = remainder.substr(0, dashboard_pos);
     try {
-      if (deps_.dashboard_service == nullptr) {
+      if (support_.dashboard_service() == nullptr) {
         throw std::runtime_error("dashboard service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.dashboard_service->BuildPayload(
+          support_.dashboard_service()->BuildPayload(
               db_path,
-              deps_.find_query_int(request, "stale_after")
-                  .value_or(deps_.default_stale_after_seconds()),
+              support_.find_query_int(request, "stale_after")
+                  .value_or(support_.default_stale_after_seconds()),
               plane_name),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
@@ -184,13 +184,13 @@ HttpResponse PlaneHttpService::HandlePlanePath(
 
   if (request.method == "DELETE" && remainder.find('/') == std::string::npos) {
     try {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.build_controller_action_payload(
-              deps_.delete_plane_action(db_path, remainder)),
+          support_.build_controller_action_payload(
+              support_.delete_plane_action(db_path, remainder)),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
@@ -199,24 +199,24 @@ HttpResponse PlaneHttpService::HandlePlanePath(
 
   if (request.method == "PUT" && remainder.find('/') == std::string::npos) {
     try {
-      const json body = deps_.parse_json_request_body(request);
+      const json body = support_.parse_json_request_body(request);
       const json desired_state_payload =
           body.contains("desired_state") ? body.at("desired_state") : body;
       if (!desired_state_payload.is_object()) {
-        return deps_.build_json_response(
+        return support_.build_json_response(
             400,
             json{{"status", "bad_request"},
                  {"message", "request body must contain desired_state object"}},
             {});
       }
-      const std::string artifacts_root = deps_.resolve_artifacts_root(
+      const std::string artifacts_root = support_.resolve_artifacts_root(
           body.contains("artifacts_root") && body["artifacts_root"].is_string()
               ? std::optional<std::string>(body["artifacts_root"].get<std::string>())
-              : deps_.find_query_string(request, "artifacts_root"),
+              : support_.find_query_string(request, "artifacts_root"),
           default_artifacts_root);
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.build_controller_action_payload(deps_.upsert_plane_state_action(
+          support_.build_controller_action_payload(support_.upsert_plane_state_action(
               db_path,
               desired_state_payload.dump(2),
               artifacts_root,
@@ -224,12 +224,12 @@ HttpResponse PlaneHttpService::HandlePlanePath(
               "api")),
           {});
     } catch (const std::invalid_argument& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           400,
           json{{"status", "bad_request"}, {"message", error.what()}, {"path", request.path}},
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
@@ -238,15 +238,15 @@ HttpResponse PlaneHttpService::HandlePlanePath(
 
   if (request.method == "GET" && remainder.find('/') == std::string::npos) {
     try {
-      if (deps_.controller_state_service == nullptr) {
+      if (support_.controller_state_service() == nullptr) {
         throw std::runtime_error("controller state service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.controller_state_service->BuildPayload(db_path, remainder),
+          support_.controller_state_service()->BuildPayload(db_path, remainder),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
@@ -254,27 +254,27 @@ HttpResponse PlaneHttpService::HandlePlanePath(
   }
 
   if (remainder.find('/') != std::string::npos) {
-    return deps_.build_json_response(404, json{{"status", "not_found"}}, {});
+    return support_.build_json_response(404, json{{"status", "not_found"}}, {});
   }
-  return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
 }
 
 HttpResponse PlaneHttpService::HandleControllerState(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "GET") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    if (deps_.controller_state_service == nullptr) {
+    if (support_.controller_state_service() == nullptr) {
       throw std::runtime_error("controller state service is not configured");
     }
-    return deps_.build_json_response(
+    return support_.build_json_response(
         200,
-        deps_.controller_state_service->BuildPayload(db_path, std::nullopt),
+        support_.controller_state_service()->BuildPayload(db_path, std::nullopt),
         {});
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
         {});
@@ -285,22 +285,22 @@ HttpResponse PlaneHttpService::HandleDashboard(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.method != "GET") {
-    return deps_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    if (deps_.dashboard_service == nullptr) {
+    if (support_.dashboard_service() == nullptr) {
       throw std::runtime_error("dashboard service is not configured");
     }
-    return deps_.build_json_response(
+    return support_.build_json_response(
         200,
-        deps_.dashboard_service->BuildPayload(
+        support_.dashboard_service()->BuildPayload(
             db_path,
-            deps_.find_query_int(request, "stale_after")
-                .value_or(deps_.default_stale_after_seconds()),
-            deps_.find_query_string(request, "plane")),
+            support_.find_query_int(request, "stale_after")
+                .value_or(support_.default_stale_after_seconds()),
+            support_.find_query_string(request, "plane")),
         {});
   } catch (const std::exception& error) {
-    return deps_.build_json_response(
+    return support_.build_json_response(
         500,
         json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
         {});

@@ -311,9 +311,13 @@ json ToJson(const RuntimeStatus& status) {
       {"instance_name", status.instance_name},
       {"instance_role", status.instance_role},
       {"node_name", status.node_name},
+      {"data_parallel_mode", status.data_parallel_mode},
       {"runtime_backend", status.runtime_backend},
       {"runtime_phase", status.runtime_phase},
       {"enabled_gpu_nodes", status.enabled_gpu_nodes},
+      {"replica_groups_expected", status.replica_groups_expected},
+      {"replica_groups_ready", status.replica_groups_ready},
+      {"replica_groups_degraded", status.replica_groups_degraded},
       {"registry_entries", status.registry_entries},
       {"supervisor_pid", status.supervisor_pid},
       {"runtime_pid", status.runtime_pid},
@@ -349,9 +353,13 @@ RuntimeStatus RuntimeStatusFromJson(const json& value) {
   status.instance_name = value.value("instance_name", std::string{});
   status.instance_role = value.value("instance_role", std::string{});
   status.node_name = value.value("node_name", std::string{});
+  status.data_parallel_mode = value.value("data_parallel_mode", std::string("off"));
   status.runtime_backend = value.value("runtime_backend", std::string{});
   status.runtime_phase = value.value("runtime_phase", std::string{});
   status.enabled_gpu_nodes = value.value("enabled_gpu_nodes", 0);
+  status.replica_groups_expected = value.value("replica_groups_expected", 0);
+  status.replica_groups_ready = value.value("replica_groups_ready", 0);
+  status.replica_groups_degraded = value.value("replica_groups_degraded", 0);
   status.registry_entries = value.value("registry_entries", 0);
   status.supervisor_pid = value.value("supervisor_pid", 0);
   status.runtime_pid = value.value("runtime_pid", 0);

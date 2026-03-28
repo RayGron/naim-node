@@ -8,7 +8,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "auth/auth_http_service.h"
+#include "auth/auth_pending_flows.h"
 #include "http/controller_http_types.h"
 
 #include "comet/state/models.h"

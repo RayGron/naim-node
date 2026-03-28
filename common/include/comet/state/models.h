@@ -107,6 +107,7 @@ struct RuntimeGpuNode {
 struct InferenceRuntimeSettings {
   std::string primary_infer_node;
   std::string runtime_engine = "llama.cpp";
+  std::string data_parallel_mode = "off";
   std::string worker_group_id;
   std::string distributed_backend = "vllm";
   std::string worker_selection_policy = "prefer-free-then-share";
@@ -137,6 +138,10 @@ struct WorkerGroupMemberSpec {
   std::string node_name;
   std::string gpu_device;
   int rank = 0;
+  std::string replica_group_id;
+  int replica_index = 0;
+  int replica_size = 1;
+  bool replica_leader = false;
   double gpu_fraction = 0.0;
   GpuShareMode share_mode = GpuShareMode::Exclusive;
   int priority = 100;

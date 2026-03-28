@@ -11,6 +11,8 @@
 
 namespace comet::controller {
 
+class ControllerComponentFactory;
+
 class ControllerCompositionRoot final : public IControllerServeService {
  public:
   ControllerCompositionRoot(std::string db_path, std::string artifacts_root);
@@ -24,11 +26,9 @@ class ControllerCompositionRoot final : public IControllerServeService {
       int listen_port,
       const std::optional<std::string>& requested_ui_root) override;
 
-  ControllerCli BuildCli(const ControllerCommandLine& cli);
+ ControllerCli BuildCli(const ControllerCommandLine& cli);
 
  private:
-  class ControllerComponentFactory;
-
   std::unique_ptr<ControllerComponentFactory> factory_;
   std::string db_path_;
   std::string artifacts_root_;

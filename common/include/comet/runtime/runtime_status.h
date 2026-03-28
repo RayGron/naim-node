@@ -122,9 +122,13 @@ struct RuntimeStatus {
   std::string instance_name;
   std::string instance_role;
   std::string node_name;
+  std::string data_parallel_mode = "off";
   std::string runtime_backend;
   std::string runtime_phase;
   int enabled_gpu_nodes = 0;
+  int replica_groups_expected = 0;
+  int replica_groups_ready = 0;
+  int replica_groups_degraded = 0;
   int registry_entries = 0;
   int supervisor_pid = 0;
   int runtime_pid = 0;

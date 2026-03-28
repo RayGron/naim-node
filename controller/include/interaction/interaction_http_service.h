@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -9,84 +8,13 @@
 
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
+#include "interaction/interaction_http_support.h"
 #include "interaction/interaction_service.h"
 #include "comet/core/platform_compat.h"
 
 class InteractionHttpService {
  public:
-  using BuildJsonResponseFn = std::function<HttpResponse(
-      int,
-      const nlohmann::json&,
-      const std::map<std::string, std::string>&)>;
-  using BuildInteractionUpstreamBodyFn = std::function<std::string(
-      const comet::controller::PlaneInteractionResolution&,
-      nlohmann::json,
-      bool,
-      const comet::controller::ResolvedInteractionPolicy&,
-      bool)>;
-  using FindInferInstanceNameFn = std::function<std::optional<std::string>(
-      const comet::DesiredState&)>;
-  using ParseInstanceRuntimeStatusesFn = std::function<
-      std::vector<comet::RuntimeProcessStatus>(const comet::HostObservation&)>;
-  using ObservationMatchesPlaneFn = std::function<bool(
-      const comet::HostObservation&,
-      const std::string&)>;
-  using BuildPlaneScopedRuntimeStatusFn = std::function<
-      std::optional<comet::RuntimeStatus>(
-          const comet::DesiredState&,
-          const comet::HostObservation&)>;
-  using ParseInteractionTargetFn = std::function<
-      std::optional<comet::controller::ControllerEndpointTarget>(
-          const std::string&,
-          int)>;
-  using CountReadyWorkerMembersFn = std::function<int(
-      comet::ControllerStore&,
-      const comet::DesiredState&)>;
-  using ProbeControllerTargetOkFn = std::function<bool(
-      const std::optional<comet::controller::ControllerEndpointTarget>&,
-      const std::string&)>;
-  using DescribeUnsupportedControllerLocalRuntimeFn = std::function<
-      std::optional<std::string>(
-          const comet::DesiredState&,
-          const std::string&)>;
-  using SendControllerHttpRequestFn = std::function<HttpResponse(
-      const comet::controller::ControllerEndpointTarget&,
-      const std::string&,
-      const std::string&,
-      const std::string&,
-      const std::vector<std::pair<std::string, std::string>>&)>;
-  using SendHttpResponseFn = std::function<void(
-      comet::platform::SocketHandle,
-      const HttpResponse&)>;
-  using ShutdownAndCloseSocketFn =
-      std::function<void(comet::platform::SocketHandle)>;
-  using SendSseHeadersFn = std::function<bool(
-      comet::platform::SocketHandle,
-      const std::map<std::string, std::string>&)>;
-  using SendAllFn = std::function<bool(
-      comet::platform::SocketHandle,
-      const std::string&)>;
-
-  struct Deps {
-    BuildJsonResponseFn build_json_response;
-    BuildInteractionUpstreamBodyFn build_interaction_upstream_body;
-    FindInferInstanceNameFn find_infer_instance_name;
-    ParseInstanceRuntimeStatusesFn parse_instance_runtime_statuses;
-    ObservationMatchesPlaneFn observation_matches_plane;
-    BuildPlaneScopedRuntimeStatusFn build_plane_scoped_runtime_status;
-    ParseInteractionTargetFn parse_interaction_target;
-    CountReadyWorkerMembersFn count_ready_worker_members;
-    ProbeControllerTargetOkFn probe_controller_target_ok;
-    DescribeUnsupportedControllerLocalRuntimeFn
-        describe_unsupported_controller_local_runtime;
-    SendControllerHttpRequestFn send_controller_http_request;
-    SendHttpResponseFn send_http_response;
-    ShutdownAndCloseSocketFn shutdown_and_close_socket;
-    SendSseHeadersFn send_sse_headers;
-    SendAllFn send_all;
-  };
-
-  explicit InteractionHttpService(Deps deps);
+  explicit InteractionHttpService(InteractionHttpSupport support);
 
   comet::controller::PlaneInteractionResolution ResolvePlane(
       const std::string& db_path,
@@ -138,5 +66,5 @@ class InteractionHttpService {
   comet::controller::InteractionStreamSessionExecutor
   MakeStreamSessionExecutor() const;
 
-  Deps deps_;
+  InteractionHttpSupport support_;
 };

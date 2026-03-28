@@ -4,8 +4,8 @@
 
 using nlohmann::json;
 
-InteractionHttpService::InteractionHttpService(Deps deps)
-    : deps_(std::move(deps)) {}
+InteractionHttpService::InteractionHttpService(InteractionHttpSupport support)
+    : support_(std::move(support)) {}
 
 comet::controller::PlaneInteractionResolution InteractionHttpService::ResolvePlane(
     const std::string& db_path,
@@ -74,35 +74,64 @@ bool InteractionHttpService::SendInteractionSseEvent(
     frame << "data: " << line << "\n";
   }
   frame << "\n";
-  return deps_.send_all(client_fd, frame.str());
+  return support_.SendAll(client_fd, frame.str());
 }
 
 bool InteractionHttpService::SendInteractionSseDone(
     comet::platform::SocketHandle client_fd) const {
-  return deps_.send_all(client_fd, "data: [DONE]\n\n");
+  return support_.SendAll(client_fd, "data: [DONE]\n\n");
 }
 
 comet::controller::InteractionPlaneResolver
 InteractionHttpService::MakePlaneResolver() const {
   return comet::controller::InteractionPlaneResolver(
-      deps_.find_infer_instance_name,
-      deps_.parse_instance_runtime_statuses,
-      deps_.observation_matches_plane,
-      deps_.build_plane_scoped_runtime_status,
-      deps_.parse_interaction_target,
-      deps_.count_ready_worker_members,
-      deps_.probe_controller_target_ok,
-      deps_.describe_unsupported_controller_local_runtime);
+      [&](const comet::DesiredState& desired_state) {
+        return support_.FindInferInstanceName(desired_state);
+      },
+      [&](const comet::HostObservation& observation) {
+        return support_.ParseInstanceRuntimeStatuses(observation);
+      },
+      [&](const comet::HostObservation& observation, const std::string& plane_name) {
+        return support_.ObservationMatchesPlane(observation, plane_name);
+      },
+      [&](const comet::DesiredState& desired_state,
+          const comet::HostObservation& observation) {
+        return support_.BuildPlaneScopedRuntimeStatus(desired_state, observation);
+      },
+      [&](const std::string& gateway_listen, int fallback_port) {
+        return support_.ParseInteractionTarget(gateway_listen, fallback_port);
+      },
+      [&](comet::ControllerStore& store, const comet::DesiredState& desired_state) {
+        return support_.CountReadyWorkerMembers(store, desired_state);
+      },
+      [&](const std::optional<comet::controller::ControllerEndpointTarget>& target,
+          const std::string& path) {
+        return support_.ProbeControllerTargetOk(target, path);
+      },
+      [&](const comet::DesiredState& desired_state, const std::string& node_name) {
+        return support_.DescribeUnsupportedControllerLocalRuntime(desired_state, node_name);
+      });
 }
 
 comet::controller::InteractionSessionExecutor
 InteractionHttpService::MakeSessionExecutor() const {
   return comet::controller::InteractionSessionExecutor(
-      deps_.build_interaction_upstream_body,
+      [&](const comet::controller::PlaneInteractionResolution& resolution,
+          json payload,
+          bool force_stream,
+          const comet::controller::ResolvedInteractionPolicy& resolved_policy,
+          bool structured_output_json) {
+        return support_.BuildInteractionUpstreamBody(
+            resolution,
+            std::move(payload),
+            force_stream,
+            resolved_policy,
+            structured_output_json);
+      },
       [&](const comet::controller::ControllerEndpointTarget& target,
           const std::string& request_id,
           const std::string& body) {
-        const HttpResponse response = deps_.send_controller_http_request(
+        const HttpResponse response = support_.SendControllerHttpRequest(
             target,
             "POST",
             "/v1/chat/completions",
@@ -156,7 +185,18 @@ InteractionHttpService::MakeSessionExecutor() const {
 comet::controller::InteractionStreamSegmentExecutor
 InteractionHttpService::MakeStreamSegmentExecutor() const {
   return comet::controller::InteractionStreamSegmentExecutor(
-      deps_.build_interaction_upstream_body,
+      [&](const comet::controller::PlaneInteractionResolution& resolution,
+          json payload,
+          bool force_stream,
+          const comet::controller::ResolvedInteractionPolicy& resolved_policy,
+          bool structured_output_json) {
+        return support_.BuildInteractionUpstreamBody(
+            resolution,
+            std::move(payload),
+            force_stream,
+            resolved_policy,
+            structured_output_json);
+      },
       [](const comet::controller::ControllerEndpointTarget& target,
          const std::string& request_id,
          const std::string& body) {
@@ -165,7 +205,7 @@ InteractionHttpService::MakeStreamSegmentExecutor() const {
       [&](const comet::controller::ControllerEndpointTarget& target,
           const std::string& request_id,
           const std::string& body) {
-        const HttpResponse response = deps_.send_controller_http_request(
+        const HttpResponse response = support_.SendControllerHttpRequest(
             target,
             "POST",
             "/v1/chat/completions",
@@ -198,13 +238,24 @@ InteractionHttpService::MakeStreamSegmentExecutor() const {
 comet::controller::InteractionProxyExecutor
 InteractionHttpService::MakeProxyExecutor() const {
   return comet::controller::InteractionProxyExecutor(
-      deps_.build_interaction_upstream_body,
+      [&](const comet::controller::PlaneInteractionResolution& resolution,
+          json payload,
+          bool force_stream,
+          const comet::controller::ResolvedInteractionPolicy& resolved_policy,
+          bool structured_output_json) {
+        return support_.BuildInteractionUpstreamBody(
+            resolution,
+            std::move(payload),
+            force_stream,
+            resolved_policy,
+            structured_output_json);
+      },
       [&](const comet::controller::ControllerEndpointTarget& target,
           const std::string& method,
           const std::string& path,
           const std::string& body,
           const std::string& request_id) {
-        const HttpResponse response = deps_.send_controller_http_request(
+        const HttpResponse response = support_.SendControllerHttpRequest(
             target,
             method,
             path,
@@ -260,7 +311,7 @@ HttpResponse InteractionHttpService::BuildSessionResponse(
   const comet::controller::InteractionSessionPresenter presenter;
   const auto response_spec =
       presenter.BuildResponseSpec(resolution, request_context, result);
-  return deps_.build_json_response(
+  return support_.BuildJsonResponse(
       response_spec.status_code,
       response_spec.payload,
       comet::controller::BuildInteractionResponseHeaders(
@@ -277,7 +328,7 @@ HttpResponse InteractionHttpService::ProxyJson(
   const auto result =
       proxy_executor.Execute(resolution, request_id, method, path, body);
   if (result.json_response.has_value()) {
-    return deps_.build_json_response(
+    return support_.BuildJsonResponse(
         result.json_response->status_code,
         result.json_response->payload,
         comet::controller::BuildInteractionResponseHeaders(request_id));
@@ -298,13 +349,13 @@ void InteractionHttpService::StreamPlaneInteractionSse(
   const auto stream_resolution = MakeStreamRequestResolver().Resolve(
       db_path, request.method, request.path, request.body, request_id);
   if (stream_resolution.error_response.has_value()) {
-    deps_.send_http_response(
+    support_.SendHttpResponse(
         client_fd,
-        deps_.build_json_response(
+        support_.BuildJsonResponse(
             stream_resolution.error_response->status_code,
             stream_resolution.error_response->payload,
             comet::controller::BuildInteractionResponseHeaders(request_id)));
-    deps_.shutdown_and_close_socket(client_fd);
+    support_.ShutdownAndCloseSocket(client_fd);
     return;
   }
 
@@ -312,10 +363,10 @@ void InteractionHttpService::StreamPlaneInteractionSse(
   const std::string stream_session_id =
       comet::controller::GenerateInteractionSessionId();
 
-  if (!deps_.send_sse_headers(
+  if (!support_.SendSseHeaders(
           client_fd,
           comet::controller::BuildInteractionResponseHeaders(request_id))) {
-    deps_.shutdown_and_close_socket(client_fd);
+    support_.ShutdownAndCloseSocket(client_fd);
     return;
   }
 
@@ -355,5 +406,5 @@ void InteractionHttpService::StreamPlaneInteractionSse(
       },
       [&]() { return SendInteractionSseDone(client_fd); });
 
-  deps_.shutdown_and_close_socket(client_fd);
+  support_.ShutdownAndCloseSocket(client_fd);
 }

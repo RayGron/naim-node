@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <filesystem>
-#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -14,28 +13,11 @@
 
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
+#include "model/model_library_support.h"
 
 class ModelLibraryService {
  public:
-  using BuildJsonResponseFn = std::function<HttpResponse(
-      int,
-      const nlohmann::json&,
-      const std::map<std::string, std::string>&)>;
-  using ParseJsonRequestBodyFn =
-      std::function<nlohmann::json(const HttpRequest&)>;
-  using FindQueryStringFn = std::function<std::optional<std::string>(
-      const HttpRequest&,
-      const std::string&)>;
-  using UtcNowSqlTimestampFn = std::function<std::string()>;
-
-  struct Deps {
-    BuildJsonResponseFn build_json_response;
-    ParseJsonRequestBodyFn parse_json_request_body;
-    FindQueryStringFn find_query_string;
-    UtcNowSqlTimestampFn utc_now_sql_timestamp;
-  };
-
-  explicit ModelLibraryService(Deps deps);
+  explicit ModelLibraryService(ModelLibrarySupport support);
 
   nlohmann::json BuildPayload(const std::string& db_path) const;
   HttpResponse DeleteEntryByPath(
@@ -117,6 +99,6 @@ class ModelLibraryService {
       const std::optional<std::uintmax_t>& aggregate_total) const;
   void StartDownloadJob(const std::string& job_id) const;
 
-  Deps deps_;
+  ModelLibrarySupport support_;
   std::shared_ptr<State> state_;
 };

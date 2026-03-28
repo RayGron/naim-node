@@ -8,6 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "comet/state/worker_group_topology.h"
+
 namespace comet {
 
 namespace {
@@ -23,6 +25,9 @@ void NormalizeInferenceSettings(InferenceRuntimeSettings* settings) {
   }
   if (settings->distributed_backend.empty()) {
     settings->distributed_backend = "vllm";
+  }
+  if (settings->data_parallel_mode.empty()) {
+    settings->data_parallel_mode = kDataParallelModeOff;
   }
   if (settings->worker_selection_policy.empty()) {
     settings->worker_selection_policy = "prefer-free-then-share";
@@ -106,6 +111,10 @@ json ToJson(const WorkerGroupMemberSpec& member) {
       {"node_name", member.node_name},
       {"gpu_device", member.gpu_device},
       {"rank", member.rank},
+      {"replica_group_id", member.replica_group_id},
+      {"replica_index", member.replica_index},
+      {"replica_size", member.replica_size},
+      {"replica_leader", member.replica_leader},
       {"gpu_fraction", member.gpu_fraction},
       {"share_mode", ToString(member.share_mode)},
       {"priority", member.priority},
@@ -345,6 +354,10 @@ WorkerGroupMemberSpec WorkerGroupMemberSpecFromJson(const json& value) {
   member.node_name = value.at("node_name").get<std::string>();
   member.gpu_device = value.value("gpu_device", std::string{});
   member.rank = value.value("rank", 0);
+  member.replica_group_id = value.value("replica_group_id", std::string{});
+  member.replica_index = value.value("replica_index", 0);
+  member.replica_size = value.value("replica_size", 1);
+  member.replica_leader = value.value("replica_leader", value.value("leader", false));
   member.gpu_fraction = value.value("gpu_fraction", 0.0);
   member.share_mode =
       ParseGpuShareMode(value.value("share_mode", std::string("exclusive")));
@@ -632,6 +645,7 @@ json DesiredStateToJson(const DesiredState& state) {
        {
            {"primary_infer_node", state.inference.primary_infer_node},
            {"runtime_engine", state.inference.runtime_engine},
+           {"data_parallel_mode", state.inference.data_parallel_mode},
            {"worker_group_id", state.inference.worker_group_id},
            {"distributed_backend", state.inference.distributed_backend},
            {"worker_selection_policy", state.inference.worker_selection_policy},
@@ -725,6 +739,8 @@ DesiredState DesiredStateFromJson(const json& value) {
         inference.value("primary_infer_node", state.inference.primary_infer_node);
     state.inference.runtime_engine =
         inference.value("runtime_engine", state.inference.runtime_engine);
+    state.inference.data_parallel_mode =
+        inference.value("data_parallel_mode", state.inference.data_parallel_mode);
     state.inference.worker_group_id =
         inference.value("worker_group_id", state.inference.worker_group_id);
     state.inference.distributed_backend =
@@ -872,7 +888,9 @@ DesiredState DesiredStateFromJson(const json& value) {
   }
   if (state.worker_group.expected_workers <= 0) {
     state.worker_group.expected_workers =
-        static_cast<int>(state.worker_group.members.size());
+        DefaultWorkersPerReplica(
+            state.inference,
+            EligibleWorkerMemberCount(state.worker_group));
   }
   if (state.worker_group.infer_instance_name.empty()) {
     for (const auto& instance : state.instances) {
@@ -885,6 +903,8 @@ DesiredState DesiredStateFromJson(const json& value) {
   if (state.worker_group.rendezvous_host.empty()) {
     state.worker_group.rendezvous_host = state.worker_group.infer_instance_name;
   }
+  ValidateReplicaPacking(state.inference, state.worker_group);
+  AssignReplicaTopology(state.inference, &state.worker_group);
 
   return state;
 }

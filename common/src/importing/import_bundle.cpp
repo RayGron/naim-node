@@ -16,6 +16,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "comet/state/worker_group_topology.h"
+
 namespace comet {
 
 namespace {
@@ -685,6 +687,8 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         OptionalString(runtime, "primary_infer_node", state.inference.primary_infer_node);
     state.inference.runtime_engine =
         OptionalString(runtime, "runtime_engine", state.inference.runtime_engine);
+    state.inference.data_parallel_mode =
+        OptionalString(runtime, "data_parallel_mode", state.inference.data_parallel_mode);
     state.inference.net_if = OptionalString(runtime, "net_if", state.inference.net_if);
     state.inference.models_root =
         OptionalString(runtime, "models_root", state.inference.models_root);
@@ -1059,16 +1063,19 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     member.name = worker.name;
     member.node_name = worker.node_name;
     member.gpu_device = worker.gpu_device.value_or("");
-    member.rank = state.worker_group.expected_workers++;
+    member.rank = static_cast<int>(state.worker_group.members.size());
     member.gpu_fraction = worker.gpu_fraction;
     member.share_mode = worker.share_mode;
     member.priority = worker.priority;
     member.preemptible = worker.preemptible;
     member.memory_cap_mb = worker.memory_cap_mb;
     member.enabled = true;
-    member.leader = member.rank == 0;
     state.worker_group.members.push_back(std::move(member));
   }
+  state.worker_group.expected_workers =
+      DefaultWorkersPerReplica(state.inference, EligibleWorkerMemberCount(state.worker_group));
+  ValidateReplicaPacking(state.inference, state.worker_group);
+  AssignReplicaTopology(state.inference, &state.worker_group);
 
   ApplyMovableSchedulerDecisions(&state);
   return ResolvePlacementTargetAliases(std::move(state));

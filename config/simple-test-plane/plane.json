@@ -5,6 +5,7 @@
   "runtime": {
     "primary_infer_node": "local-hostd",
     "runtime_engine": "vllm",
+    "data_parallel_mode": "off",
     "worker_group_id": "smoke-workers",
     "distributed_backend": "vllm",
     "worker_selection_policy": "prefer-free-then-share",

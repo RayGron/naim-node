@@ -145,6 +145,21 @@ add_library(
   common/src/planning/planner.cpp
   common/src/planning/reconcile.cpp
   common/src/runtime/runtime_status.cpp
+  common/src/state/auth_repository.cpp
+  common/src/state/assignment_repository.cpp
+  common/src/state/desired_state_repository.cpp
+  common/src/state/desired_state_sqlite_codec.cpp
+  common/src/state/disk_runtime_repository.cpp
+  common/src/state/event_repository.cpp
+  common/src/state/node_availability_repository.cpp
+  common/src/state/observation_repository.cpp
+  common/src/state/plane_repository.cpp
+  common/src/state/registered_host_repository.cpp
+  common/src/state/scheduler_repository.cpp
+  common/src/state/sqlite_statement.cpp
+  common/src/state/sqlite_store_schema.cpp
+  common/src/state/sqlite_store_status_codec.cpp
+  common/src/state/sqlite_store_support.cpp
   common/src/planning/scheduling_policy.cpp
   common/src/state/state_json.cpp
   common/src/state/sqlite_store.cpp
@@ -163,6 +178,7 @@ comet_enable_strict_warnings(comet-common)
 add_executable(
   comet-controller
   controller/src/auth/auth_http_service.cpp
+  controller/src/auth/auth_http_support.cpp
   controller/src/auth/auth_payload_service.cpp
   controller/src/auth/auth_support_service.cpp
   controller/src/scheduler/assignment_orchestration_service.cpp
@@ -171,7 +187,17 @@ add_executable(
   controller/src/app/controller_cli.cpp
   controller/src/infra/controller_action.cpp
   controller/src/app/controller_command_line.cpp
+  controller/src/app/controller_component_factory.cpp
+  controller/src/app/controller_component_factory_support.cpp
+  controller/src/app/controller_composition_support.cpp
+  controller/src/app/controller_http_service_support.cpp
+  controller/src/app/controller_plane_support.cpp
+  controller/src/app/controller_read_model_support.cpp
+  controller/src/app/controller_serve_support.cpp
+  controller/src/app/controller_language_support.cpp
   controller/src/app/controller_request_context.cpp
+  controller/src/app/controller_scheduler_service_factory.cpp
+  controller/src/app/controller_time_support.cpp
   controller/src/infra/controller_event_service.cpp
   controller/src/infra/controller_health_service.cpp
   controller/src/infra/controller_print_service.cpp
@@ -190,17 +216,23 @@ add_executable(
   controller/src/infra/controller_ui_service.cpp
   controller/src/host/host_registry_service.cpp
   controller/src/host/hostd_http_service.cpp
+  controller/src/host/hostd_http_support.cpp
   controller/src/interaction/interaction_http_service.cpp
+  controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_runtime_support_service.cpp
   controller/src/interaction/interaction_service.cpp
   controller/src/model/model_library_http_service.cpp
+  controller/src/model/model_library_http_support.cpp
   controller/src/model/model_library_service.cpp
+  controller/src/model/model_library_support.cpp
   controller/src/plane/plane_http_service.cpp
+  controller/src/plane/plane_http_support.cpp
   controller/src/plane/plane_mutation_service.cpp
   controller/src/plane/plane_realization_service.cpp
   controller/src/plane/plane_registry_service.cpp
   controller/src/read_model/read_model_cli_service.cpp
   controller/src/read_model/read_model_http_service.cpp
+  controller/src/read_model/read_model_http_support.cpp
   controller/src/read_model/read_model_service.cpp
   controller/src/app/remote_controller_cli_service.cpp
   controller/src/scheduler/scheduler_cli_service.cpp
@@ -225,10 +257,19 @@ comet_enable_strict_warnings(comet-controller)
 
 add_executable(
   comet-hostd
+  hostd/src/app/hostd_composition_root.cpp
+  hostd/src/app/hostd_cli_actions.cpp
+  hostd/src/app/hostd_bootstrap_model_support.cpp
+  hostd/src/app/hostd_controller_transport_support.cpp
+  hostd/src/app/hostd_local_state_support.cpp
+  hostd/src/app/hostd_telemetry_support.cpp
+  hostd/src/backend/default_http_hostd_backend_support.cpp
   hostd/src/backend/hostd_backend_factory.cpp
   hostd/src/backend/http_hostd_backend.cpp
   hostd/src/backend/local_db_hostd_backend.cpp
+  hostd/src/observation/default_hostd_observation_support.cpp
   hostd/src/observation/hostd_observation_service.cpp
+  hostd/src/state_apply/default_hostd_assignment_support.cpp
   hostd/src/state_apply/hostd_assignment_service.cpp
   hostd/src/cli/hostd_cli.cpp
   hostd/src/cli/hostd_command_line.cpp
@@ -269,11 +310,21 @@ comet_enable_strict_warnings(comet-node)
 if(NOT WIN32)
   add_executable(
     comet-inferctl
+    runtime/infer/src/app/infer_command_line.cpp
+    runtime/infer/src/app/infer_cli_output_support.cpp
+    runtime/infer/src/app/infer_model_cache_support.cpp
+    runtime/infer/src/app/infer_status_support.cpp
+    runtime/infer/src/http/local_http_server.cpp
+    runtime/infer/src/platform/infer_signal_service.cpp
+    runtime/infer/src/runtime/infer_control_support.cpp
+    runtime/infer/src/runtime/infer_replica_support.cpp
+    runtime/infer/src/runtime/llama_library_engine.cpp
+    runtime/infer/src/runtime/local_runtime.cpp
     runtime/infer/src/infer_app.cpp
     runtime/infer/src/main.cpp
     common/src/runtime/runtime_status.cpp
   )
-  target_include_directories(comet-inferctl PRIVATE common/include)
+  target_include_directories(comet-inferctl PRIVATE common/include runtime/infer/include)
   target_include_directories(
     comet-inferctl
     BEFORE PRIVATE
@@ -290,6 +341,7 @@ if(NOT WIN32)
 
   add_executable(
     comet-workerd
+    runtime/worker/src/worker_app.cpp
     runtime/worker/src/worker_config_loader.cpp
     runtime/worker/src/worker_engine_host.cpp
     runtime/worker/src/worker_model_resolver.cpp

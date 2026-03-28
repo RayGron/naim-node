@@ -5,28 +5,29 @@
 
 using nlohmann::json;
 
-ReadModelHttpService::ReadModelHttpService(Deps deps) : deps_(std::move(deps)) {}
+ReadModelHttpService::ReadModelHttpService(ReadModelHttpSupport support)
+    : support_(std::move(support)) {}
 
 std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
     const std::string& db_path,
     const HttpRequest& request) const {
   if (request.path == "/api/v1/host-assignments") {
     if (request.method != "GET") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      if (deps_.read_model_service == nullptr) {
+      if (support_.read_model_service() == nullptr) {
         throw std::runtime_error("read model service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.read_model_service->BuildHostAssignmentsPayload(
+          support_.read_model_service()->BuildHostAssignmentsPayload(
               db_path,
-              deps_.find_query_string(request, "node")),
+              support_.find_query_string(request, "node")),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -37,24 +38,24 @@ std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
 
   if (request.path == "/api/v1/host-observations") {
     if (request.method != "GET") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      if (deps_.read_model_service == nullptr) {
+      if (support_.read_model_service() == nullptr) {
         throw std::runtime_error("read model service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.read_model_service->BuildHostObservationsPayload(
+          support_.read_model_service()->BuildHostObservationsPayload(
               db_path,
-              deps_.find_query_string(request, "node"),
-              deps_.find_query_string(request, "plane"),
-              deps_.find_query_int(request, "stale_after")
-                  .value_or(deps_.default_stale_after_seconds())),
+              support_.find_query_string(request, "node"),
+              support_.find_query_string(request, "plane"),
+              support_.find_query_int(request, "stale_after")
+                  .value_or(support_.default_stale_after_seconds())),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -65,23 +66,23 @@ std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
 
   if (request.path == "/api/v1/host-health") {
     if (request.method != "GET") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      if (deps_.read_model_service == nullptr) {
+      if (support_.read_model_service() == nullptr) {
         throw std::runtime_error("read model service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.read_model_service->BuildHostHealthPayload(
+          support_.read_model_service()->BuildHostHealthPayload(
               db_path,
-              deps_.find_query_string(request, "node"),
-              deps_.find_query_int(request, "stale_after")
-                  .value_or(deps_.default_stale_after_seconds())),
+              support_.find_query_string(request, "node"),
+              support_.find_query_int(request, "stale_after")
+                  .value_or(support_.default_stale_after_seconds())),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -92,22 +93,22 @@ std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
 
   if (request.path == "/api/v1/disk-state") {
     if (request.method != "GET") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      if (deps_.read_model_service == nullptr) {
+      if (support_.read_model_service() == nullptr) {
         throw std::runtime_error("read model service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.read_model_service->BuildDiskStatePayload(
+          support_.read_model_service()->BuildDiskStatePayload(
               db_path,
-              deps_.find_query_string(request, "node"),
-              deps_.find_query_string(request, "plane")),
+              support_.find_query_string(request, "node"),
+              support_.find_query_string(request, "plane")),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -118,23 +119,23 @@ std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
 
   if (request.path == "/api/v1/rollout-actions") {
     if (request.method != "GET") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      if (deps_.scheduler_view_service == nullptr) {
+      if (support_.scheduler_view_service() == nullptr) {
         throw std::runtime_error("scheduler view service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.scheduler_view_service->BuildRolloutActionsPayload(
-              deps_.load_rollout_actions_view_data(
+          support_.scheduler_view_service()->BuildRolloutActionsPayload(
+              support_.load_rollout_actions_view_data(
                   db_path,
-                  deps_.find_query_string(request, "node"),
-                  deps_.find_query_string(request, "plane"))),
+                  support_.find_query_string(request, "node"),
+                  support_.find_query_string(request, "plane"))),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -145,25 +146,25 @@ std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
 
   if (request.path == "/api/v1/rebalance-plan") {
     if (request.method != "GET") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      if (deps_.scheduler_view_service == nullptr) {
+      if (support_.scheduler_view_service() == nullptr) {
         throw std::runtime_error("scheduler view service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.scheduler_view_service->BuildRebalancePlanPayload(
-              deps_.load_rebalance_plan_view_data(
+          support_.scheduler_view_service()->BuildRebalancePlanPayload(
+              support_.load_rebalance_plan_view_data(
                   db_path,
-                  deps_.find_query_string(request, "node"),
-                  deps_.find_query_int(request, "stale_after")
-                      .value_or(deps_.default_stale_after_seconds()),
-                  deps_.find_query_string(request, "plane"))),
+                  support_.find_query_string(request, "node"),
+                  support_.find_query_int(request, "stale_after")
+                      .value_or(support_.default_stale_after_seconds()),
+                  support_.find_query_string(request, "plane"))),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},
@@ -174,25 +175,25 @@ std::optional<HttpResponse> ReadModelHttpService::HandleRequest(
 
   if (request.path == "/api/v1/events") {
     if (request.method != "GET") {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});
     }
     try {
-      if (deps_.read_model_service == nullptr) {
+      if (support_.read_model_service() == nullptr) {
         throw std::runtime_error("read model service is not configured");
       }
-      return deps_.build_json_response(
+      return support_.build_json_response(
           200,
-          deps_.read_model_service->BuildEventsPayload(
+          support_.read_model_service()->BuildEventsPayload(
               db_path,
-              deps_.find_query_string(request, "plane"),
-              deps_.find_query_string(request, "node"),
-              deps_.find_query_string(request, "worker"),
-              deps_.find_query_string(request, "category"),
-              deps_.find_query_int(request, "limit").value_or(100)),
+              support_.find_query_string(request, "plane"),
+              support_.find_query_string(request, "node"),
+              support_.find_query_string(request, "worker"),
+              support_.find_query_string(request, "category"),
+              support_.find_query_int(request, "limit").value_or(100)),
           {});
     } catch (const std::exception& error) {
-      return deps_.build_json_response(
+      return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
                {"message", error.what()},

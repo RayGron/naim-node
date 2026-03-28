@@ -1,35 +1,18 @@
 #pragma once
 
-#include <functional>
 #include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
+#include "host/hostd_http_support.h"
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 #include "host/host_registry_service.h"
 
 class HostdHttpService {
  public:
-  using BuildJsonResponseFn = std::function<HttpResponse(
-      int,
-      const nlohmann::json&,
-      const std::map<std::string, std::string>&)>;
-  using UtcNowSqlTimestampFn = std::function<std::string()>;
-  using SqlTimestampAfterSecondsFn = std::function<std::string(int)>;
-  using TimestampAgeSecondsFn =
-      std::function<std::optional<long long>(const std::string&)>;
-
-  struct Deps {
-    BuildJsonResponseFn build_json_response;
-    UtcNowSqlTimestampFn utc_now_sql_timestamp;
-    SqlTimestampAfterSecondsFn sql_timestamp_after_seconds;
-    TimestampAgeSecondsFn timestamp_age_seconds;
-    comet::controller::HostRegistryEventSink host_registry_event_sink;
-  };
-
-  explicit HostdHttpService(Deps deps);
+  explicit HostdHttpService(HostdHttpSupport support);
 
   std::optional<HttpResponse> HandleRequest(
       const std::string& db_path,
@@ -70,5 +53,5 @@ class HostdHttpService {
       const std::string& db_path,
       const HttpRequest& request) const;
 
-  Deps deps_;
+  HostdHttpSupport support_;
 };
