@@ -125,16 +125,27 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
     out << "        aliases:\n";
     out << "          - " << service.name << "\n";
 
-    if (service.gpu_device.has_value()) {
+    std::vector<std::string> gpu_devices = service.gpu_devices;
+    if (gpu_devices.empty() && service.gpu_device.has_value()) {
+      gpu_devices.push_back(*service.gpu_device);
+    }
+    if (!gpu_devices.empty()) {
+      std::ostringstream device_ids;
+      for (std::size_t index = 0; index < gpu_devices.size(); ++index) {
+        if (index > 0) {
+          device_ids << ", ";
+        }
+        device_ids << "\"" << gpu_devices[index] << "\"";
+      }
       out << "    gpus:\n";
       out << "      - driver: nvidia\n";
-      out << "        device_ids: [\"" << *service.gpu_device << "\"]\n";
+      out << "        device_ids: [" << device_ids.str() << "]\n";
       out << "    deploy:\n";
       out << "      resources:\n";
       out << "        reservations:\n";
       out << "          devices:\n";
       out << "            - driver: nvidia\n";
-      out << "              device_ids: [\"" << *service.gpu_device << "\"]\n";
+      out << "              device_ids: [" << device_ids.str() << "]\n";
       out << "              capabilities: [gpu]\n";
     }
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <sstream>
 #include <stdexcept>
 
 #include "comet/state/worker_group_topology.h"
@@ -142,6 +143,95 @@ const WorkerGroupMemberSpec* FindHybridApiEndpointWorkerGroupMember(
   return FindReplicaLeaderWorkerGroupMember(state, member);
 }
 
+std::vector<const WorkerGroupMemberSpec*> FindHybridLocalWorkerGroupMembers(
+    const DesiredState& state,
+    const WorkerGroupMemberSpec& member) {
+  std::vector<const WorkerGroupMemberSpec*> matches;
+  if (!HybridDataParallelEnabled(state.inference)) {
+    return matches;
+  }
+  for (const auto& candidate : state.worker_group.members) {
+    if (!candidate.enabled) {
+      continue;
+    }
+    if (candidate.node_name != member.node_name) {
+      continue;
+    }
+    if (candidate.data_parallel_start_rank != member.data_parallel_start_rank) {
+      continue;
+    }
+    matches.push_back(&candidate);
+  }
+  std::sort(
+      matches.begin(),
+      matches.end(),
+      [](const WorkerGroupMemberSpec* lhs, const WorkerGroupMemberSpec* rhs) {
+        if (lhs->data_parallel_rank != rhs->data_parallel_rank) {
+          return lhs->data_parallel_rank < rhs->data_parallel_rank;
+        }
+        return lhs->name < rhs->name;
+      });
+  return matches;
+}
+
+std::vector<std::string> CollectHybridLocalGpuDevices(
+    const DesiredState& state,
+    const WorkerGroupMemberSpec& member) {
+  std::vector<std::string> devices;
+  for (const auto* local_member : FindHybridLocalWorkerGroupMembers(state, member)) {
+    if (!local_member->gpu_device.empty()) {
+      devices.push_back(local_member->gpu_device);
+    }
+  }
+  return devices;
+}
+
+std::vector<std::string> CollectHybridLocalMemberNames(
+    const DesiredState& state,
+    const WorkerGroupMemberSpec& member) {
+  std::vector<std::string> names;
+  for (const auto* local_member : FindHybridLocalWorkerGroupMembers(state, member)) {
+    names.push_back(local_member->name);
+  }
+  return names;
+}
+
+std::string JoinStrings(const std::vector<std::string>& values) {
+  std::ostringstream out;
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    if (index > 0) {
+      out << ",";
+    }
+    out << values[index];
+  }
+  return out.str();
+}
+
+std::string BuildLocalGpuOrdinals(std::size_t count) {
+  std::ostringstream out;
+  for (std::size_t index = 0; index < count; ++index) {
+    if (index > 0) {
+      out << ",";
+    }
+    out << index;
+  }
+  return out.str();
+}
+
+bool ShouldRenderWorkerInstance(
+    const DesiredState& state,
+    const InstanceSpec& instance) {
+  if (!UsesVllmRuntime(state) || instance.role != InstanceRole::Worker ||
+      !HybridDataParallelEnabled(state.inference)) {
+    return true;
+  }
+  const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
+  if (worker_group_member == nullptr) {
+    return true;
+  }
+  return worker_group_member->data_parallel_api_endpoint;
+}
+
 ComposeService BuildComposeService(
     const InstanceSpec& instance,
     const std::vector<DiskSpec>& disks,
@@ -202,6 +292,10 @@ ComposeService BuildComposeService(
           worker_group_member != nullptr && HybridDataParallelEnabled(state.inference)
               ? FindHybridApiEndpointWorkerGroupMember(state, *worker_group_member)
               : leader_worker_group_member;
+      const std::vector<std::string> hybrid_local_gpu_devices =
+          worker_group_member != nullptr && HybridDataParallelEnabled(state.inference)
+              ? CollectHybridLocalGpuDevices(state, *worker_group_member)
+              : std::vector<std::string>{};
       const int published_host_port = WorkerPublishedHostPort(state, instance);
       const int internal_runtime_port = WorkerInternalRuntimePort(state, instance);
       const bool worker_group_leader =
@@ -331,6 +425,13 @@ ComposeService BuildComposeService(
                !worker_group_member->data_parallel_api_endpoint)))
                 ? "1"
                 : "0";
+        if (HybridDataParallelEnabled(state.inference) && data_parallel_api_endpoint &&
+            !hybrid_local_gpu_devices.empty()) {
+          service.environment["COMET_HYBRID_LOCAL_MEMBER_NAMES"] =
+              JoinStrings(CollectHybridLocalMemberNames(state, *worker_group_member));
+          service.environment["COMET_LOCAL_GPU_ORDINALS"] =
+              BuildLocalGpuOrdinals(hybrid_local_gpu_devices.size());
+        }
       }
       if (state.bootstrap_model.has_value() &&
           state.bootstrap_model->served_model_name.has_value() &&
@@ -362,6 +463,16 @@ ComposeService BuildComposeService(
     service.published_ports.push_back(port);
   }
   service.gpu_device = instance.gpu_device;
+  if (use_vllm && instance.role == InstanceRole::Worker &&
+      HybridDataParallelEnabled(state.inference)) {
+    if (const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
+        worker_group_member != nullptr && worker_group_member->data_parallel_api_endpoint) {
+      service.gpu_devices = CollectHybridLocalGpuDevices(state, *worker_group_member);
+      if (!service.gpu_devices.empty()) {
+        service.gpu_device = service.gpu_devices.front();
+      }
+    }
+  }
   if (!service.gpu_device.has_value() && instance.role == InstanceRole::Infer && !use_vllm) {
     const auto local_gpu_worker = std::find_if(
         node_instances.begin(),
@@ -378,10 +489,12 @@ ComposeService BuildComposeService(
     service.use_nvidia_runtime = true;
     service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
     if (use_vllm && instance.role == InstanceRole::Worker) {
-      // Docker device filtering already scopes the container to the selected GPU.
-      // Inside the container, vLLM should address that device as local ordinal 0.
+      // Docker device filtering scopes the container down to the selected GPUs.
+      // Inside the container, vLLM should address those devices via local ordinals.
       service.environment["NVIDIA_VISIBLE_DEVICES"] = "all";
-      service.environment["CUDA_VISIBLE_DEVICES"] = "0";
+      const auto local_gpu_ordinals = service.environment.find("COMET_LOCAL_GPU_ORDINALS");
+      service.environment["CUDA_VISIBLE_DEVICES"] =
+          local_gpu_ordinals != service.environment.end() ? local_gpu_ordinals->second : "0";
     } else {
       service.environment["NVIDIA_VISIBLE_DEVICES"] = *service.gpu_device;
     }
@@ -450,6 +563,9 @@ std::vector<NodeComposePlan> BuildNodeComposePlans(const DesiredState& state) {
     }
 
     for (const auto& instance : node_instances) {
+      if (!ShouldRenderWorkerInstance(state, instance)) {
+        continue;
+      }
       plan.services.push_back(BuildComposeService(instance, state.disks, node_instances, state));
     }
 

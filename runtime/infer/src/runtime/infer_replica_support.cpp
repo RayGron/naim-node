@@ -109,7 +109,7 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
                                     member.value("replica_index", group.replica_index));
     group.expected_size = std::max(
         group.expected_size,
-        hybrid_mode ? member.value("data_parallel_size_local", 1)
+        hybrid_mode ? 1
                     : member.value("replica_size", topology.workers_per_replica));
     topology.data_parallel_size = std::max(
         topology.data_parallel_size,
@@ -147,7 +147,7 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
                                     member.value("replica_index", group.replica_index));
     group.expected_size = std::max(
         group.expected_size,
-        hybrid_mode ? member.value("data_parallel_size_local", 1)
+        hybrid_mode ? 1
                     : member.value("replica_size", topology.workers_per_replica));
     topology.data_parallel_size = std::max(
         topology.data_parallel_size,

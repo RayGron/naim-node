@@ -78,16 +78,34 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
+def remove_file_if_present(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def set_ready(ready: bool) -> None:
     path = ready_path()
     if ready:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("ready\n")
         return
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+    remove_file_if_present(path)
+
+
+def hybrid_local_member_names() -> list[str]:
+    raw = env("COMET_HYBRID_LOCAL_MEMBER_NAMES")
+    if not raw:
+        return []
+    return [item for item in (part.strip() for part in raw.split(",")) if item]
+
+
+def cleanup_hybrid_local_member_contracts(control_root: str, instance_name: str) -> None:
+    for member_name in hybrid_local_member_names():
+        if member_name == instance_name:
+            continue
+        remove_file_if_present(worker_group_member_path(control_root, member_name))
 
 
 def resolve_model_ref(control_root: str) -> tuple[str, dict]:
@@ -456,11 +474,15 @@ def main() -> int:
     gpu_device = env("COMET_GPU_DEVICE", env("COMET_WORKER_GPU_DEVICE"))
     if gpu_device:
         # Docker already filters the container down to the selected physical GPU.
-        # Inside the container that GPU must be addressed as local ordinal 0.
-        child_env["CUDA_VISIBLE_DEVICES"] = env("COMET_LOCAL_GPU_ORDINAL", "0")
+        # Inside the container those GPUs must be addressed via local ordinals.
+        child_env["CUDA_VISIBLE_DEVICES"] = env(
+            "COMET_LOCAL_GPU_ORDINALS",
+            env("COMET_LOCAL_GPU_ORDINAL", "0"),
+        )
         child_env["NVIDIA_VISIBLE_DEVICES"] = "all"
 
     apply_vllm_native_external_lb_hotfix()
+    cleanup_hybrid_local_member_contracts(control_root, instance_name)
     command = build_command(model_ref, served_model_name, port)
     print(
         f"[comet-worker] launching vLLM plane={plane_name} instance={instance_name} "

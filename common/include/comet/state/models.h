@@ -248,6 +248,7 @@ struct ComposeService {
   std::vector<std::string> security_opts;
   bool use_nvidia_runtime = false;
   std::optional<std::string> gpu_device;
+  std::vector<std::string> gpu_devices;
   std::optional<std::string> shm_size;
   std::string healthcheck;
 };

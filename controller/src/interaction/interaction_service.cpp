@@ -2369,7 +2369,10 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
   const bool data_parallel =
       comet::DataParallelEnabled(desired_state->inference);
-  const int expected_worker_members =
+  const bool hybrid_data_parallel =
+      data_parallel &&
+      desired_state->inference.data_parallel_lb_mode == comet::kDataParallelLbModeHybrid;
+  int expected_worker_members =
       std::max(0, desired_state->worker_group.expected_workers);
   int ready_worker_members = count_ready_worker_members_(store, *desired_state);
   int expected_replica_groups =
@@ -2396,6 +2399,13 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   int degraded_replica_groups =
       resolution.runtime_status.has_value() ? resolution.runtime_status->replica_groups_degraded
                                             : std::max(0, expected_replica_groups - ready_replica_groups);
+  if (hybrid_data_parallel && resolution.runtime_status.has_value()) {
+    if (resolution.runtime_status->api_endpoints_expected > 0) {
+      expected_worker_members = resolution.runtime_status->api_endpoints_expected;
+    }
+    ready_worker_members =
+        std::max(ready_worker_members, resolution.runtime_status->api_endpoints_ready);
+  }
 
   if (!resolution.target.has_value()) {
     resolution.target = parse_interaction_target_(
