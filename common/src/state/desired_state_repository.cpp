@@ -602,6 +602,14 @@ std::optional<DesiredState> DesiredStateRepository::LoadDesiredState(
     return state;
   }
 
+  Statement plane_exists_statement(
+      db_,
+      "SELECT 1 FROM planes WHERE name = ?1;");
+  plane_exists_statement.BindText(1, plane_name);
+  if (!plane_exists_statement.StepRow()) {
+    return std::nullopt;
+  }
+
   DesiredState state = LoadPlaneBaseState(db_, plane_name);
   const auto plane_node_names = CollectPlaneNodeNames(db_, plane_name, state);
   LoadPlaneNodes(db_, plane_node_names, &state);
