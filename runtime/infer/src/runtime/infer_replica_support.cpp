@@ -177,9 +177,9 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
                                   : member.value(
                                         "replica_leader", member.value("leader", false));
     if (api_endpoint) {
-      ++topology.api_endpoints_ready;
       group.leader_ready = ready;
       if (ready) {
+        ++topology.api_endpoints_ready;
         group.leader_base_url = member.value("base_url", std::string{});
       }
     }

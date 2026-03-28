@@ -358,7 +358,9 @@ ComposeService BuildComposeService(
               ? "http://" + instance.name + ":" + std::to_string(state.inference.api_port)
               : "";
       service.environment["VLLM_HOST_IP"] = instance.name;
-      service.environment["VLLM_PORT"] = std::to_string(internal_runtime_port);
+      if (!native_data_parallel) {
+        service.environment["VLLM_PORT"] = std::to_string(internal_runtime_port);
+      }
       service.environment["COMET_VLLM_DISTRIBUTED_RUNTIME"] =
           distributed_runtime ? "1" : "0";
       service.environment["COMET_VLLM_DISTRIBUTED_EXECUTOR_BACKEND"] = "mp";
