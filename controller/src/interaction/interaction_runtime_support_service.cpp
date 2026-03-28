@@ -170,6 +170,7 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   runtime.instance_role = infer_status->instance_role;
   runtime.node_name = infer_status->node_name;
   runtime.data_parallel_mode = desired_state.inference.data_parallel_mode;
+  runtime.data_parallel_lb_mode = desired_state.inference.data_parallel_lb_mode;
   runtime.runtime_backend =
       desired_state.inference.runtime_engine == "vllm" ? "worker-vllm"
                                                        : runtime.runtime_backend;
@@ -209,7 +210,7 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   runtime.inference_ready = ProbeControllerTargetOk(target, "/v1/models");
   const bool replica_topology_ready =
       replica_summary.expected_replica_groups == 0 ||
-      replica_summary.ready_replica_groups > 0;
+      replica_summary.ready_replica_groups >= replica_summary.expected_replica_groups;
   runtime.launch_ready =
       runtime.gateway_ready &&
       runtime.inference_ready &&

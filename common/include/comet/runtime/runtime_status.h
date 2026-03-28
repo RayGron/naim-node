@@ -127,9 +127,13 @@ struct RuntimeStatus {
   std::string runtime_backend;
   std::string runtime_phase;
   int enabled_gpu_nodes = 0;
+  int data_parallel_size = 0;
+  int data_parallel_size_local_max = 0;
   int replica_groups_expected = 0;
   int replica_groups_ready = 0;
   int replica_groups_degraded = 0;
+  int api_endpoints_expected = 0;
+  int api_endpoints_ready = 0;
   int registry_entries = 0;
   int supervisor_pid = 0;
   int runtime_pid = 0;

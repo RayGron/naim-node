@@ -2454,11 +2454,14 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     resolution.runtime_status->registry_entries =
         std::max(resolution.runtime_status->registry_entries, ready_worker_members);
     resolution.runtime_status->data_parallel_mode = desired_state->inference.data_parallel_mode;
+    resolution.runtime_status->data_parallel_lb_mode =
+        desired_state->inference.data_parallel_lb_mode;
     resolution.runtime_status->replica_groups_expected = expected_replica_groups;
     resolution.runtime_status->replica_groups_ready = ready_replica_groups;
     resolution.runtime_status->replica_groups_degraded = degraded_replica_groups;
     const bool replica_topology_ready =
-        expected_replica_groups == 0 || ready_replica_groups > 0;
+        expected_replica_groups == 0 ||
+        ready_replica_groups >= expected_replica_groups;
     resolution.runtime_status->launch_ready =
         resolution.runtime_status->active_model_ready &&
         resolution.runtime_status->inference_ready &&
@@ -2545,6 +2548,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
            ? nlohmann::json(nullptr)
            : nlohmann::json(desired_state->worker_group.group_id)},
       {"data_parallel_mode", desired_state->inference.data_parallel_mode},
+      {"data_parallel_lb_mode", desired_state->inference.data_parallel_lb_mode},
       {"worker_group_expected", expected_worker_members},
       {"worker_group_ready", ready_worker_members},
       {"replica_groups_expected", expected_replica_groups},

@@ -691,6 +691,14 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         OptionalString(runtime, "data_parallel_mode", state.inference.data_parallel_mode);
     state.inference.data_parallel_lb_mode = OptionalString(
         runtime, "data_parallel_lb_mode", state.inference.data_parallel_lb_mode);
+    state.inference.api_server_count =
+        OptionalInt(runtime, "api_server_count", state.inference.api_server_count);
+    state.inference.worker_group_id =
+        OptionalString(runtime, "worker_group_id", state.inference.worker_group_id);
+    state.inference.distributed_backend =
+        OptionalString(runtime, "distributed_backend", state.inference.distributed_backend);
+    state.inference.worker_selection_policy = OptionalString(
+        runtime, "worker_selection_policy", state.inference.worker_selection_policy);
     if (state.inference.data_parallel_mode == kDataParallelModeAutoReplicas) {
       state.inference.data_parallel_mode = kDataParallelModeVllmNative;
     }
@@ -756,6 +764,8 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         runtime,
         "inference_healthcheck_interval_sec",
         state.inference.inference_healthcheck_interval_sec);
+    state.inference.rendezvous_port =
+        OptionalInt(runtime, "rendezvous_port", state.inference.rendezvous_port);
     if (state.inference.model_cache_dir.empty()) {
       state.inference.model_cache_dir = state.inference.gguf_cache_dir;
     }

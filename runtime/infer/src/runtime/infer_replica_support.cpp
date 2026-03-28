@@ -89,6 +89,7 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
 
   std::map<std::string, ReplicaAccumulator> expected_groups;
   int configured_position = 0;
+  std::set<std::string> configured_api_endpoint_keys;
   for (const auto& member : configured_members) {
     if (!member.is_object() || !member.value("enabled", true)) {
       continue;
@@ -110,6 +111,21 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
         group.expected_size,
         hybrid_mode ? member.value("data_parallel_size_local", 1)
                     : member.value("replica_size", topology.workers_per_replica));
+    topology.data_parallel_size = std::max(
+        topology.data_parallel_size,
+        member.value("data_parallel_size", group.replica_index + 1));
+    topology.data_parallel_size_local_max = std::max(
+        topology.data_parallel_size_local_max,
+        member.value("data_parallel_size_local", 1));
+    const bool api_endpoint = topology.data_parallel_mode == "vllm_native"
+                                  ? member.value(
+                                        "data_parallel_api_endpoint",
+                                        member.value("replica_leader", member.value("leader", false)))
+                                  : member.value(
+                                        "replica_leader", member.value("leader", false));
+    if (api_endpoint) {
+      configured_api_endpoint_keys.insert(key);
+    }
   }
 
   std::map<std::string, ReplicaAccumulator> observed_groups;
@@ -133,6 +149,12 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
         group.expected_size,
         hybrid_mode ? member.value("data_parallel_size_local", 1)
                     : member.value("replica_size", topology.workers_per_replica));
+    topology.data_parallel_size = std::max(
+        topology.data_parallel_size,
+        member.value("data_parallel_size", group.replica_index + 1));
+    topology.data_parallel_size_local_max = std::max(
+        topology.data_parallel_size_local_max,
+        member.value("data_parallel_size_local", 1));
     ++group.observed_members;
 
     const bool ready = member.value("ready", false);
@@ -155,6 +177,7 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
                                   : member.value(
                                         "replica_leader", member.value("leader", false));
     if (api_endpoint) {
+      ++topology.api_endpoints_ready;
       group.leader_ready = ready;
       if (ready) {
         group.leader_base_url = member.value("base_url", std::string{});
@@ -167,6 +190,13 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
   }
 
   topology.replica_groups_expected = static_cast<int>(expected_groups.size());
+  topology.api_endpoints_expected = static_cast<int>(configured_api_endpoint_keys.size());
+  if (topology.data_parallel_size <= 0) {
+    topology.data_parallel_size = topology.replica_groups_expected;
+  }
+  if (topology.data_parallel_size_local_max <= 0) {
+    topology.data_parallel_size_local_max = topology.data_parallel_size > 0 ? 1 : 0;
+  }
   std::vector<std::pair<std::string, ReplicaAccumulator>> ordered_groups(
       expected_groups.begin(),
       expected_groups.end());

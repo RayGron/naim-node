@@ -186,6 +186,7 @@ std::string RenderInferRuntimeConfigJson(const DesiredState& state) {
            {"runtime_engine", state.inference.runtime_engine},
            {"data_parallel_mode", state.inference.data_parallel_mode},
            {"data_parallel_lb_mode", state.inference.data_parallel_lb_mode},
+           {"api_server_count", state.inference.api_server_count},
            {"worker_group_id", state.inference.worker_group_id},
            {"distributed_backend", state.inference.distributed_backend},
            {"worker_selection_policy", state.inference.worker_selection_policy},

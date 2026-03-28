@@ -109,6 +109,7 @@ struct InferenceRuntimeSettings {
   std::string runtime_engine = "llama.cpp";
   std::string data_parallel_mode = "off";
   std::string data_parallel_lb_mode = "external";
+  int api_server_count = 0;
   std::string worker_group_id;
   std::string distributed_backend = "vllm";
   std::string worker_selection_policy = "prefer-free-then-share";

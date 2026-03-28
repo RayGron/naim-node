@@ -465,6 +465,8 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
       inference.value("data_parallel_mode", config.data_parallel_mode);
   config.data_parallel_lb_mode =
       inference.value("data_parallel_lb_mode", config.data_parallel_lb_mode);
+  config.api_server_count =
+      inference.value("api_server_count", config.api_server_count);
   config.worker_group = root.value("worker_group", json::object());
   config.net_if = Require<std::string>(inference, "net_if", "inference");
   config.models_root =
@@ -563,9 +565,13 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.runtime_phase = phase;
   status.data_parallel_mode = topology.data_parallel_mode;
   status.data_parallel_lb_mode = topology.data_parallel_lb_mode;
+  status.data_parallel_size = topology.data_parallel_size;
+  status.data_parallel_size_local_max = topology.data_parallel_size_local_max;
   status.replica_groups_expected = topology.replica_groups_expected;
   status.replica_groups_ready = topology.replica_groups_ready;
   status.replica_groups_degraded = topology.replica_groups_degraded;
+  status.api_endpoints_expected = topology.api_endpoints_expected;
+  status.api_endpoints_ready = topology.api_endpoints_ready;
   status.enabled_gpu_nodes = EnabledGpuNodeCount(config);
   status.registry_entries = topology.ready_worker_members > 0
                                 ? topology.ready_worker_members

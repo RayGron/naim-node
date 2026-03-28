@@ -121,9 +121,13 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.runtime_phase = phase;
   status.data_parallel_mode = topology.data_parallel_mode;
   status.data_parallel_lb_mode = topology.data_parallel_lb_mode;
+  status.data_parallel_size = topology.data_parallel_size;
+  status.data_parallel_size_local_max = topology.data_parallel_size_local_max;
   status.replica_groups_expected = topology.replica_groups_expected;
   status.replica_groups_ready = topology.replica_groups_ready;
   status.replica_groups_degraded = topology.replica_groups_degraded;
+  status.api_endpoints_expected = topology.api_endpoints_expected;
+  status.api_endpoints_ready = topology.api_endpoints_ready;
   status.enabled_gpu_nodes = EnabledGpuNodeCount(config);
   status.registry_entries = topology.ready_worker_members > 0
                                 ? topology.ready_worker_members
@@ -257,6 +261,8 @@ int PrintStatus(const RuntimeConfig& config, const std::string& backend, bool ap
   std::cout << "runtime_phase=" << status.runtime_phase << "\n";
   std::cout << "data_parallel_mode=" << status.data_parallel_mode << "\n";
   std::cout << "data_parallel_lb_mode=" << status.data_parallel_lb_mode << "\n";
+  std::cout << "data_parallel_size=" << status.data_parallel_size << "\n";
+  std::cout << "data_parallel_size_local_max=" << status.data_parallel_size_local_max << "\n";
   std::cout << "enabled_gpu_nodes=" << status.enabled_gpu_nodes << "\n\n";
   std::cout << "[cache]\n";
   std::cout << "registry_entries=" << status.registry_entries << "\n";
@@ -301,6 +307,8 @@ int PrintStatus(const RuntimeConfig& config, const std::string& backend, bool ap
   std::cout << "replica_groups_expected=" << status.replica_groups_expected << "\n";
   std::cout << "replica_groups_ready=" << status.replica_groups_ready << "\n";
   std::cout << "replica_groups_degraded=" << status.replica_groups_degraded << "\n";
+  std::cout << "api_endpoints_expected=" << status.api_endpoints_expected << "\n";
+  std::cout << "api_endpoints_ready=" << status.api_endpoints_ready << "\n";
   std::cout << "launch_ready=" << (status.launch_ready ? "yes" : "no") << "\n";
   if (apply) {
     comet::SaveRuntimeStatusJson(status, paths.runtime_status_path.string());
@@ -380,10 +388,14 @@ int RunDoctor(const RuntimeConfig& config, const std::string& checks) {
     }
     std::cout << "  data parallel mode: " << topology.data_parallel_mode << "\n";
     std::cout << "  data parallel lb mode: " << topology.data_parallel_lb_mode << "\n";
+    std::cout << "  data parallel size: " << topology.data_parallel_size << "\n";
+    std::cout << "  max local dp size: " << topology.data_parallel_size_local_max << "\n";
     std::cout << "  workers per replica: " << topology.workers_per_replica << "\n";
     std::cout << "  replica groups expected: " << topology.replica_groups_expected << "\n";
     std::cout << "  replica groups ready: " << topology.replica_groups_ready << "\n";
     std::cout << "  replica groups degraded: " << topology.replica_groups_degraded << "\n";
+    std::cout << "  api endpoints expected: " << topology.api_endpoints_expected << "\n";
+    std::cout << "  api endpoints ready: " << topology.api_endpoints_ready << "\n";
     std::cout << "  leader endpoints: "
               << (topology.ready_replica_base_urls.empty()
                       ? std::string("(empty)")

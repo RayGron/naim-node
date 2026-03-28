@@ -20,6 +20,7 @@ std::string DesiredStateSqliteCodec::SerializeInferenceSettings(
       {"runtime_engine", settings.runtime_engine},
       {"data_parallel_mode", settings.data_parallel_mode},
       {"data_parallel_lb_mode", settings.data_parallel_lb_mode},
+      {"api_server_count", settings.api_server_count},
       {"worker_group_id", settings.worker_group_id},
       {"distributed_backend", settings.distributed_backend},
       {"worker_selection_policy", settings.worker_selection_policy},
@@ -257,6 +258,8 @@ InferenceRuntimeSettings DesiredStateSqliteCodec::DeserializeInferenceSettings(
       value.value("data_parallel_mode", settings.data_parallel_mode);
   settings.data_parallel_lb_mode =
       value.value("data_parallel_lb_mode", settings.data_parallel_lb_mode);
+  settings.api_server_count =
+      value.value("api_server_count", settings.api_server_count);
   settings.worker_group_id = value.value("worker_group_id", settings.worker_group_id);
   settings.distributed_backend =
       value.value("distributed_backend", settings.distributed_backend);

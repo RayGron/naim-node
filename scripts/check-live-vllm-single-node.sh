@@ -24,6 +24,8 @@ while [[ $# -gt 0 ]]; do
 done
 controller_url="${COMET_CONTROLLER_URL:-http://127.0.0.1:18080}"
 web_ui_url="${COMET_WEB_UI_URL:-http://127.0.0.1:18081}"
+expected_lb_mode="${COMET_EXPECTED_LB_MODE:-}"
+expected_api_endpoints="${COMET_EXPECTED_API_ENDPOINTS:-}"
 
 docker_cmd=(docker)
 if ! docker info >/dev/null 2>&1; then
@@ -117,6 +119,20 @@ runtime_status = payload.get("runtime_status") or {}
 assert runtime_status.get("runtime_backend") == "worker-vllm", runtime_status
 print("status=ok")
 PY
+if [[ -n "${expected_lb_mode}" ]]; then
+  python3 - <<'PY' "${status_json}" "${expected_lb_mode}"
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+runtime_status = payload.get("runtime_status") or {}
+observed = runtime_status.get("data_parallel_lb_mode")
+expected = sys.argv[2]
+assert observed == expected, (observed, expected, runtime_status)
+print("lb_mode=" + observed)
+PY
+fi
 
 echo "[check-live-vllm] checking model listing"
 curl -fsS "${controller_url}/api/v1/planes/${plane_name}/interaction/models" >"${models_json}"
@@ -179,6 +195,34 @@ assert ready_endpoints, items
 assert all(item.get("base_url", "").startswith("http://") for item in ready_endpoints), ready_endpoints
 print("worker_group=ok")
 PY
+if [[ -n "${expected_api_endpoints}" ]]; then
+  python3 - <<'PY' "${worker_group_json}" "${expected_api_endpoints}"
+import json
+import pathlib
+import sys
+
+payload_text = pathlib.Path(sys.argv[1]).read_text().strip()
+decoder = json.JSONDecoder()
+items = []
+cursor = 0
+while cursor < len(payload_text):
+    while cursor < len(payload_text) and payload_text[cursor].isspace():
+        cursor += 1
+    if cursor >= len(payload_text):
+        break
+    item, end = decoder.raw_decode(payload_text, cursor)
+    items.append(item)
+    cursor = end
+
+ready_endpoints = [
+    item for item in items
+    if item.get("ready") is True and item.get("data_parallel_api_endpoint") is True
+]
+expected = int(sys.argv[2])
+assert len(ready_endpoints) == expected, (len(ready_endpoints), expected, ready_endpoints)
+print("api_endpoints=" + str(len(ready_endpoints)))
+PY
+fi
 
 echo "[check-live-vllm] checking basic chat completion"
 python3 - <<'PY' "${chat_request_json}"

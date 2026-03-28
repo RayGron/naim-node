@@ -139,6 +139,42 @@ def resolve_advertised_base_url(port: int) -> str:
     return f"http://{instance_name}:{port}"
 
 
+def apply_vllm_native_external_lb_hotfix() -> None:
+    if env("COMET_DATA_PARALLEL_MODE", "off") != "vllm_native":
+        return
+    if not env_bool("COMET_VLLM_DATA_PARALLEL_EXTERNAL_LB", False):
+        return
+
+    serve_py = Path(
+        "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/cli/serve.py"
+    )
+    if not serve_py.is_file():
+        return
+
+    source = serve_py.read_text()
+    buggy = (
+        "            stats_update_address=coordinator.get_stats_publish_address()\n"
+        "            if coordinator\n"
+        "            else None,\n"
+    )
+    fixed = (
+        "            stats_update_address=(\n"
+        "                coordinator.get_stats_publish_address()\n"
+        "                if coordinator\n"
+        "                else addresses.frontend_stats_publish_address\n"
+        "            ),\n"
+    )
+    if fixed in source:
+        return
+    if buggy not in source:
+        return
+    serve_py.write_text(source.replace(buggy, fixed, 1))
+    print(
+        "[comet-worker] applied vLLM external-LB stats_update_address hotfix",
+        flush=True,
+    )
+
+
 def build_status(
     *,
     phase: str,
@@ -357,6 +393,9 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
             command.append("--data-parallel-external-lb")
         if hybrid_lb:
             command.append("--data-parallel-hybrid-lb")
+    api_server_count = env_int("COMET_VLLM_API_SERVER_COUNT", 0)
+    if api_server_count > 0:
+        command.extend(["--api-server-count", str(api_server_count)])
     download_dir = env("COMET_VLLM_DOWNLOAD_DIR")
     if download_dir:
         command.extend(["--download-dir", download_dir])
@@ -416,6 +455,7 @@ def main() -> int:
         child_env["CUDA_VISIBLE_DEVICES"] = env("COMET_LOCAL_GPU_ORDINAL", "0")
         child_env["NVIDIA_VISIBLE_DEVICES"] = "all"
 
+    apply_vllm_native_external_lb_hotfix()
     command = build_command(model_ref, served_model_name, port)
     print(
         f"[comet-worker] launching vLLM plane={plane_name} instance={instance_name} "

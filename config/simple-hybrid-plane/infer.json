@@ -1,0 +1,6 @@
+{
+  "name": "infer-hybrid-smoke",
+  "node": "local-hostd",
+  "private_disk_gb": 20,
+  "image": "comet/infer-runtime:dev"
+}

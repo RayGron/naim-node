@@ -316,9 +316,13 @@ json ToJson(const RuntimeStatus& status) {
       {"runtime_backend", status.runtime_backend},
       {"runtime_phase", status.runtime_phase},
       {"enabled_gpu_nodes", status.enabled_gpu_nodes},
+      {"data_parallel_size", status.data_parallel_size},
+      {"data_parallel_size_local_max", status.data_parallel_size_local_max},
       {"replica_groups_expected", status.replica_groups_expected},
       {"replica_groups_ready", status.replica_groups_ready},
       {"replica_groups_degraded", status.replica_groups_degraded},
+      {"api_endpoints_expected", status.api_endpoints_expected},
+      {"api_endpoints_ready", status.api_endpoints_ready},
       {"registry_entries", status.registry_entries},
       {"supervisor_pid", status.supervisor_pid},
       {"runtime_pid", status.runtime_pid},
@@ -360,9 +364,13 @@ RuntimeStatus RuntimeStatusFromJson(const json& value) {
   status.runtime_backend = value.value("runtime_backend", std::string{});
   status.runtime_phase = value.value("runtime_phase", std::string{});
   status.enabled_gpu_nodes = value.value("enabled_gpu_nodes", 0);
+  status.data_parallel_size = value.value("data_parallel_size", 0);
+  status.data_parallel_size_local_max = value.value("data_parallel_size_local_max", 0);
   status.replica_groups_expected = value.value("replica_groups_expected", 0);
   status.replica_groups_ready = value.value("replica_groups_ready", 0);
   status.replica_groups_degraded = value.value("replica_groups_degraded", 0);
+  status.api_endpoints_expected = value.value("api_endpoints_expected", 0);
+  status.api_endpoints_ready = value.value("api_endpoints_ready", 0);
   status.registry_entries = value.value("registry_entries", 0);
   status.supervisor_pid = value.value("supervisor_pid", 0);
   status.runtime_pid = value.value("runtime_pid", 0);

@@ -60,6 +60,9 @@ void PrintConfigSummary(const RuntimeConfig& config) {
   std::cout << "control_root=" << config.control_root << "\n";
   std::cout << "controller_url=" << config.controller_url << "\n";
   std::cout << "runtime_engine=" << config.runtime_engine << "\n";
+  std::cout << "data_parallel_mode=" << config.data_parallel_mode << "\n";
+  std::cout << "data_parallel_lb_mode=" << config.data_parallel_lb_mode << "\n";
+  std::cout << "api_server_count=" << config.api_server_count << "\n";
   std::cout << "gpu_node_count=" << config.gpu_nodes.size() << "\n";
   std::cout << "enabled_gpu_node_count=" << EnabledGpuNodeCount(config) << "\n";
   std::cout << "primary_infer_node=" << config.primary_infer_node << "\n";
@@ -197,6 +200,9 @@ void PrintLaunchPlan(const RuntimeConfig& config) {
   }
   if (config.runtime_engine == "vllm") {
     std::cout << "  vllm=head:" << config.primary_infer_node << " port:" << config.api_port
+              << " data_parallel_mode:" << config.data_parallel_mode
+              << " lb_mode:" << config.data_parallel_lb_mode
+              << " api_server_count:" << config.api_server_count
               << " model_cache_dir:" << config.model_cache_dir
               << " log_dir:" << config.infer_log_dir << "\n";
   } else {

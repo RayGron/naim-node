@@ -1,0 +1,12 @@
+{
+  "name": "worker-a",
+  "node": "local-hostd",
+  "gpu_device": "0",
+  "share_mode": "exclusive",
+  "gpu_fraction": 1.0,
+  "priority": 100,
+  "preemptible": false,
+  "memory_cap_mb": 32768,
+  "private_disk_gb": 10,
+  "image": "comet/worker-vllm-runtime:dev"
+}

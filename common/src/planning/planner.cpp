@@ -207,6 +207,16 @@ ComposeService BuildComposeService(
       const bool worker_group_leader =
           worker_group_member != nullptr && worker_group_member->leader;
       const bool native_data_parallel = NativeDataParallelEnabled(state.inference);
+      const int api_server_count =
+          state.inference.api_server_count > 0
+              ? state.inference.api_server_count
+              : (HybridDataParallelEnabled(state.inference)
+                     ? std::max(
+                           1,
+                           worker_group_member != nullptr
+                               ? worker_group_member->data_parallel_size_local
+                               : 1)
+                     : 0);
       const int replica_world_size =
           worker_group_member != nullptr ? std::max(1, worker_group_member->replica_size)
                                          : std::max(1, state.worker_group.expected_workers);
@@ -234,6 +244,8 @@ ComposeService BuildComposeService(
       service.environment["COMET_DATA_PARALLEL_MODE"] = data_parallel_mode;
       service.environment["COMET_DATA_PARALLEL_LB_MODE"] =
           state.inference.data_parallel_lb_mode;
+      service.environment["COMET_VLLM_API_SERVER_COUNT"] =
+          std::to_string(std::max(0, api_server_count));
       service.environment["COMET_WORKER_GROUP_ID"] = state.worker_group.group_id;
       service.environment["COMET_WORKER_GROUP_WORLD_SIZE"] =
           std::to_string(replica_world_size);
@@ -350,7 +362,7 @@ ComposeService BuildComposeService(
     service.published_ports.push_back(port);
   }
   service.gpu_device = instance.gpu_device;
-  if (!service.gpu_device.has_value() && instance.role == InstanceRole::Infer) {
+  if (!service.gpu_device.has_value() && instance.role == InstanceRole::Infer && !use_vllm) {
     const auto local_gpu_worker = std::find_if(
         node_instances.begin(),
         node_instances.end(),

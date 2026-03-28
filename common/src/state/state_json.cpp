@@ -670,6 +670,7 @@ json DesiredStateToJson(const DesiredState& state) {
            {"runtime_engine", state.inference.runtime_engine},
            {"data_parallel_mode", state.inference.data_parallel_mode},
            {"data_parallel_lb_mode", state.inference.data_parallel_lb_mode},
+           {"api_server_count", state.inference.api_server_count},
            {"worker_group_id", state.inference.worker_group_id},
            {"distributed_backend", state.inference.distributed_backend},
            {"worker_selection_policy", state.inference.worker_selection_policy},
@@ -767,6 +768,8 @@ DesiredState DesiredStateFromJson(const json& value) {
         inference.value("data_parallel_mode", state.inference.data_parallel_mode);
     state.inference.data_parallel_lb_mode =
         inference.value("data_parallel_lb_mode", state.inference.data_parallel_lb_mode);
+    state.inference.api_server_count =
+        inference.value("api_server_count", state.inference.api_server_count);
     state.inference.worker_group_id =
         inference.value("worker_group_id", state.inference.worker_group_id);
     state.inference.distributed_backend =
