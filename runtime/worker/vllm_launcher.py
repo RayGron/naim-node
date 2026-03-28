@@ -329,6 +329,8 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
         if env_bool("COMET_VLLM_HEADLESS", False):
             command.append("--headless")
     if native_data_parallel:
+        external_lb = env_bool("COMET_VLLM_DATA_PARALLEL_EXTERNAL_LB", False)
+        hybrid_lb = env_bool("COMET_VLLM_DATA_PARALLEL_HYBRID_LB", False)
         command.extend(
             [
                 "--data-parallel-size",
@@ -337,17 +339,22 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
                 str(env_int("COMET_VLLM_DATA_PARALLEL_RANK", 0)),
                 "--data-parallel-size-local",
                 str(env_int("COMET_VLLM_DATA_PARALLEL_SIZE_LOCAL", 1)),
-                "--data-parallel-start-rank",
-                str(env_int("COMET_VLLM_DATA_PARALLEL_START_RANK", 0)),
                 "--data-parallel-address",
                 env("COMET_VLLM_DATA_PARALLEL_ADDRESS", env("COMET_RENDEZVOUS_HOST", "host.docker.internal")),
                 "--data-parallel-rpc-port",
                 str(env_int("COMET_VLLM_DATA_PARALLEL_RPC_PORT", env_int("COMET_RENDEZVOUS_PORT", 29500) + 100)),
             ]
         )
-        if env_bool("COMET_VLLM_DATA_PARALLEL_EXTERNAL_LB", False):
+        if hybrid_lb:
+            command.extend(
+                [
+                    "--data-parallel-start-rank",
+                    str(env_int("COMET_VLLM_DATA_PARALLEL_START_RANK", 0)),
+                ]
+            )
+        if external_lb:
             command.append("--data-parallel-external-lb")
-        if env_bool("COMET_VLLM_DATA_PARALLEL_HYBRID_LB", False):
+        if hybrid_lb:
             command.append("--data-parallel-hybrid-lb")
     download_dir = env("COMET_VLLM_DOWNLOAD_DIR")
     if download_dir:
