@@ -372,8 +372,6 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
             [
                 "--data-parallel-size",
                 str(data_parallel_size),
-                "--data-parallel-rank",
-                str(env_int("COMET_VLLM_DATA_PARALLEL_RANK", 0)),
                 "--data-parallel-size-local",
                 str(env_int("COMET_VLLM_DATA_PARALLEL_SIZE_LOCAL", 1)),
                 "--data-parallel-address",
@@ -382,6 +380,13 @@ def build_command(model_ref: str, served_model_name: str, port: int) -> list[str
                 str(env_int("COMET_VLLM_DATA_PARALLEL_RPC_PORT", env_int("COMET_RENDEZVOUS_PORT", 29500) + 100)),
             ]
         )
+        if not hybrid_lb:
+            command.extend(
+                [
+                    "--data-parallel-rank",
+                    str(env_int("COMET_VLLM_DATA_PARALLEL_RANK", 0)),
+                ]
+            )
         if hybrid_lb:
             command.extend(
                 [
