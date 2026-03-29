@@ -3,7 +3,6 @@
   "plane_shared_disk_name": "plane-qwen35-35b-a3b-shared",
   "control_root": "/comet/shared/control/qwen35-35b-a3b",
   "plane_mode": "llm",
-  "placement_target": "local",
   "bootstrap_model": {
     "model_id": "Qwen/Qwen3.5-35B-A3B",
     "local_path": "/mnt/shared-storage/models/vllm/Qwen/Qwen3.5-35B-A3B",

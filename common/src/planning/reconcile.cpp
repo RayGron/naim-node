@@ -28,13 +28,14 @@ std::string OptionalValue(const std::optional<std::string>& value) {
 }
 
 std::string NodeSignature(const NodeInventory& node) {
+  const auto gpu_devices = EffectiveNodeGpuDevices(node);
   std::vector<std::string> gpu_memory_entries;
-  for (const auto& gpu_device : node.gpu_devices) {
+  for (const auto& gpu_device : gpu_devices) {
     const auto it = node.gpu_memory_mb.find(gpu_device);
     gpu_memory_entries.push_back(
         gpu_device + ":" + std::to_string(it == node.gpu_memory_mb.end() ? 0 : it->second));
   }
-  return node.platform + "|" + JoinStrings(node.gpu_devices, ",") + "|" +
+  return node.platform + "|" + JoinStrings(gpu_devices, ",") + "|" +
          JoinStrings(gpu_memory_entries, ",");
 }
 

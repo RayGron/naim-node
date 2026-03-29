@@ -1,7 +1,6 @@
 {
   "name": "smoke",
   "control_root": "/comet/shared/control/smoke",
-  "placement_target": "local",
   "runtime": {
     "primary_infer_node": "local-hostd",
     "runtime_engine": "vllm",

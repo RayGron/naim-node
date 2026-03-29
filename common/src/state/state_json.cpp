@@ -106,7 +106,6 @@ json ToJson(const NodeInventory& node) {
       {"name", node.name},
       {"platform", node.platform},
       {"execution_mode", ToString(node.execution_mode)},
-      {"gpu_devices", node.gpu_devices},
       {"gpu_memory_mb", node.gpu_memory_mb},
   };
 }
@@ -358,6 +357,11 @@ NodeInventory NodeInventoryFromJson(const json& value) {
       ParseHostExecutionMode(value.value("execution_mode", std::string("mixed")));
   node.gpu_devices = value.value("gpu_devices", std::vector<std::string>{});
   node.gpu_memory_mb = value.value("gpu_memory_mb", std::map<std::string, int>{});
+  if (node.gpu_devices.empty()) {
+    for (const auto& [gpu_device, _] : node.gpu_memory_mb) {
+      node.gpu_devices.push_back(gpu_device);
+    }
+  }
   return node;
 }
 
@@ -657,6 +661,39 @@ std::string ResolvePlacementTargetAliasValue(
       "' (expected 'local' or 'node:<name>')");
 }
 
+std::set<std::string> CollectPlacementReferencedNodes(const DesiredState& state) {
+  std::set<std::string> referenced_nodes;
+  if (!state.inference.primary_infer_node.empty()) {
+    referenced_nodes.insert(state.inference.primary_infer_node);
+  }
+  for (const auto& member : state.worker_group.members) {
+    if (!member.node_name.empty()) {
+      referenced_nodes.insert(member.node_name);
+    }
+  }
+  for (const auto& node : state.nodes) {
+    if (!node.name.empty()) {
+      referenced_nodes.insert(node.name);
+    }
+  }
+  for (const auto& disk : state.disks) {
+    if (!disk.node_name.empty()) {
+      referenced_nodes.insert(disk.node_name);
+    }
+  }
+  for (const auto& instance : state.instances) {
+    if (!instance.node_name.empty()) {
+      referenced_nodes.insert(instance.node_name);
+    }
+  }
+  for (const auto& gpu_node : state.runtime_gpu_nodes) {
+    if (!gpu_node.node_name.empty()) {
+      referenced_nodes.insert(gpu_node.node_name);
+    }
+  }
+  return referenced_nodes;
+}
+
 json DesiredStateToJson(const DesiredState& state) {
   json result = {
       {"plane_name", state.plane_name},
@@ -710,9 +747,6 @@ json DesiredStateToJson(const DesiredState& state) {
   };
   if (state.post_deploy_script.has_value()) {
     result["post_deploy_script"] = *state.post_deploy_script;
-  }
-  if (state.placement_target.has_value()) {
-    result["placement_target"] = *state.placement_target;
   }
   if (state.bootstrap_model.has_value()) {
     result["bootstrap_model"] = ToJson(*state.bootstrap_model);
@@ -987,35 +1021,7 @@ DesiredState ResolvePlacementTargetAliases(DesiredState state) {
     return state;
   }
 
-  std::set<std::string> referenced_nodes;
-  if (!state.inference.primary_infer_node.empty()) {
-    referenced_nodes.insert(state.inference.primary_infer_node);
-  }
-  for (const auto& member : state.worker_group.members) {
-    if (!member.node_name.empty()) {
-      referenced_nodes.insert(member.node_name);
-    }
-  }
-  for (const auto& node : state.nodes) {
-    if (!node.name.empty()) {
-      referenced_nodes.insert(node.name);
-    }
-  }
-  for (const auto& disk : state.disks) {
-    if (!disk.node_name.empty()) {
-      referenced_nodes.insert(disk.node_name);
-    }
-  }
-  for (const auto& instance : state.instances) {
-    if (!instance.node_name.empty()) {
-      referenced_nodes.insert(instance.node_name);
-    }
-  }
-  for (const auto& gpu_node : state.runtime_gpu_nodes) {
-    if (!gpu_node.node_name.empty()) {
-      referenced_nodes.insert(gpu_node.node_name);
-    }
-  }
+  const auto referenced_nodes = CollectPlacementReferencedNodes(state);
   if (referenced_nodes.size() > 1) {
     throw std::runtime_error(
         "plane-level placement_target supports only single-node desired states");
@@ -1047,7 +1053,20 @@ std::string SerializeDesiredStateJson(const DesiredState& state) {
 }
 
 DesiredState DeserializeDesiredStateJson(const std::string& json_text) {
-  return ResolvePlacementTargetAliases(DesiredStateFromJson(json::parse(json_text)));
+  DesiredState state = DesiredStateFromJson(json::parse(json_text));
+  try {
+    state = ResolvePlacementTargetAliases(std::move(state));
+  } catch (const std::runtime_error& error) {
+    if (state.placement_target.has_value() &&
+        std::string_view(error.what()) ==
+            "plane-level placement_target supports only single-node desired states") {
+      state.placement_target.reset();
+    } else {
+      throw;
+    }
+  }
+  state.placement_target.reset();
+  return state;
 }
 
 std::optional<DesiredState> LoadDesiredStateJson(const std::string& path) {

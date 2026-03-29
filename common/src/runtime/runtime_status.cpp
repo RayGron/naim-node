@@ -71,6 +71,8 @@ json ToJson(const GpuDeviceTelemetry& device) {
       {"used_vram_mb", device.used_vram_mb},
       {"free_vram_mb", device.free_vram_mb},
       {"gpu_utilization_pct", device.gpu_utilization_pct},
+      {"temperature_c", device.temperature_c},
+      {"temperature_available", device.temperature_available},
       {"processes", std::move(processes)},
   };
 }
@@ -82,6 +84,8 @@ GpuDeviceTelemetry GpuDeviceTelemetryFromJson(const json& value) {
   device.used_vram_mb = value.value("used_vram_mb", 0);
   device.free_vram_mb = value.value("free_vram_mb", 0);
   device.gpu_utilization_pct = value.value("gpu_utilization_pct", 0);
+  device.temperature_c = value.value("temperature_c", 0);
+  device.temperature_available = value.value("temperature_available", false);
   for (const auto& process : value.value("processes", json::array())) {
     if (process.is_object()) {
       device.processes.push_back(GpuProcessTelemetryFromJson(process));
@@ -276,6 +280,9 @@ json ToJson(const CpuTelemetrySnapshot& snapshot) {
       {"loadavg_1m", snapshot.loadavg_1m},
       {"loadavg_5m", snapshot.loadavg_5m},
       {"loadavg_15m", snapshot.loadavg_15m},
+      {"temperature_c", snapshot.temperature_c},
+      {"max_temperature_c", snapshot.max_temperature_c},
+      {"temperature_available", snapshot.temperature_available},
       {"total_memory_bytes", snapshot.total_memory_bytes},
       {"available_memory_bytes", snapshot.available_memory_bytes},
       {"used_memory_bytes", snapshot.used_memory_bytes},
@@ -293,6 +300,9 @@ CpuTelemetrySnapshot CpuTelemetrySnapshotFromJson(const json& value) {
   snapshot.loadavg_1m = value.value("loadavg_1m", 0.0);
   snapshot.loadavg_5m = value.value("loadavg_5m", 0.0);
   snapshot.loadavg_15m = value.value("loadavg_15m", 0.0);
+  snapshot.temperature_c = value.value("temperature_c", 0.0);
+  snapshot.max_temperature_c = value.value("max_temperature_c", 0.0);
+  snapshot.temperature_available = value.value("temperature_available", false);
   snapshot.total_memory_bytes =
       value.value("total_memory_bytes", static_cast<std::uint64_t>(0));
   snapshot.available_memory_bytes =

@@ -1,7 +1,6 @@
 {
   "name": "alpha",
   "control_root": "/comet/shared/control/alpha",
-  "placement_target": "local",
   "runtime": {
     "primary_infer_node": "local-hostd",
     "runtime_engine": "vllm",

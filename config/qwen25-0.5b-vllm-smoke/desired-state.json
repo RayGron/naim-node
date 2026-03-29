@@ -3,7 +3,6 @@
   "plane_shared_disk_name": "plane-qwen25-0.5b-vllm-smoke-shared",
   "control_root": "/comet/shared/control/qwen25-0.5b-vllm-smoke",
   "plane_mode": "llm",
-  "placement_target": "local",
   "bootstrap_model": {
     "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
     "served_model_name": "qwen2.5-0.5b-instruct"

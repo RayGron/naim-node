@@ -3,7 +3,6 @@
   "plane_shared_disk_name": "plane-qwen35-9b-min-shared",
   "control_root": "/comet/shared/control/qwen35-9b-min",
   "plane_mode": "llm",
-  "placement_target": "local",
   "bootstrap_model": {
     "model_id": "Qwen/Qwen3.5-9B",
     "served_model_name": "qwen3.5-9b"

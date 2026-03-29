@@ -331,9 +331,10 @@ SchedulingPolicyReport EvaluateSchedulingPolicy(const DesiredState& state) {
           "' which is not worker-capable");
       continue;
     }
+    const auto node_gpu_devices = EffectiveNodeGpuDevices(node);
     const auto gpu_it = std::find(
-        node.gpu_devices.begin(), node.gpu_devices.end(), *instance.gpu_device);
-    if (gpu_it == node.gpu_devices.end()) {
+        node_gpu_devices.begin(), node_gpu_devices.end(), *instance.gpu_device);
+    if (gpu_it == node_gpu_devices.end()) {
       report.errors.push_back(
           "worker '" + instance.name + "' pins missing gpu '" + *instance.gpu_device +
           "' on node '" + instance.node_name + "'");
@@ -509,7 +510,8 @@ SchedulingPolicyReport EvaluateSchedulingPolicy(const DesiredState& state) {
     if (!NodeSupportsWorkerExecutionMode(node)) {
       continue;
     }
-    for (const auto& gpu_device : node.gpu_devices) {
+    const auto node_gpu_devices = EffectiveNodeGpuDevices(node);
+    for (const auto& gpu_device : node_gpu_devices) {
       GpuCapacitySummary summary;
       summary.node_name = node.name;
       summary.gpu_device = gpu_device;

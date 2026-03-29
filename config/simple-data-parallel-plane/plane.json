@@ -1,7 +1,6 @@
 {
   "name": "dp-smoke",
   "control_root": "/comet/shared/control/dp-smoke",
-  "placement_target": "local",
   "runtime": {
     "primary_infer_node": "local-hostd",
     "runtime_engine": "vllm",

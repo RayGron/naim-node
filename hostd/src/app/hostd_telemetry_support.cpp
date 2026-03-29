@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -454,6 +455,8 @@ std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvml(
   (void)node_name;
   return std::nullopt;
 #else
+  (void)state;
+  (void)node_name;
   void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
   if (lib == nullptr) {
     return std::nullopt;
@@ -464,19 +467,26 @@ std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvml(
   constexpr nvmlReturn_t kNvmlSuccess = 0;
   using NvmlInitFn = nvmlReturn_t (*)();
   using NvmlShutdownFn = nvmlReturn_t (*)();
+  using NvmlGetCountFn = nvmlReturn_t (*)(unsigned int*);
   using NvmlGetHandleFn = nvmlReturn_t (*)(unsigned int, nvmlDevice_t*);
   using NvmlMemoryInfoFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlMemoryInfo*);
   using NvmlUtilizationFn = nvmlReturn_t (*)(nvmlDevice_t, NvmlUtilizationInfo*);
+  using NvmlTemperatureFn = nvmlReturn_t (*)(nvmlDevice_t, unsigned int, unsigned int*);
+  constexpr unsigned int kNvmlTemperatureGpu = 0;
 
   const auto init = reinterpret_cast<NvmlInitFn>(dlsym(lib, "nvmlInit_v2"));
   const auto shutdown = reinterpret_cast<NvmlShutdownFn>(dlsym(lib, "nvmlShutdown"));
+  const auto get_count =
+      reinterpret_cast<NvmlGetCountFn>(dlsym(lib, "nvmlDeviceGetCount_v2"));
   const auto get_handle =
       reinterpret_cast<NvmlGetHandleFn>(dlsym(lib, "nvmlDeviceGetHandleByIndex_v2"));
   const auto get_memory =
       reinterpret_cast<NvmlMemoryInfoFn>(dlsym(lib, "nvmlDeviceGetMemoryInfo"));
   const auto get_utilization =
       reinterpret_cast<NvmlUtilizationFn>(dlsym(lib, "nvmlDeviceGetUtilizationRates"));
-  if (init == nullptr || shutdown == nullptr || get_handle == nullptr ||
+  const auto get_temperature =
+      reinterpret_cast<NvmlTemperatureFn>(dlsym(lib, "nvmlDeviceGetTemperature"));
+  if (init == nullptr || shutdown == nullptr || get_count == nullptr || get_handle == nullptr ||
       get_memory == nullptr || get_utilization == nullptr) {
     dlclose(lib);
     return std::nullopt;
@@ -490,35 +500,36 @@ std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvml(
   comet::GpuTelemetrySnapshot snapshot;
   snapshot.degraded = false;
   snapshot.source = "nvml";
-  for (const auto& node : state.nodes) {
-    if (node.name != node_name) {
+  unsigned int device_count = 0;
+  if (get_count(&device_count) != kNvmlSuccess) {
+    shutdown();
+    dlclose(lib);
+    return std::nullopt;
+  }
+  for (unsigned int index = 0; index < device_count; ++index) {
+    nvmlDevice_t handle = nullptr;
+    if (get_handle(index, &handle) != kNvmlSuccess || handle == nullptr) {
       continue;
     }
-    for (const auto& gpu_device : node.gpu_devices) {
-      unsigned int index = 0;
-      try {
-        index = static_cast<unsigned int>(std::stoul(gpu_device));
-      } catch (const std::exception&) {
-        continue;
-      }
-      nvmlDevice_t handle = nullptr;
-      if (get_handle(index, &handle) != kNvmlSuccess || handle == nullptr) {
-        continue;
-      }
-      NvmlMemoryInfo memory{};
-      NvmlUtilizationInfo utilization{};
-      if (get_memory(handle, &memory) != kNvmlSuccess ||
-          get_utilization(handle, &utilization) != kNvmlSuccess) {
-        continue;
-      }
-      comet::GpuDeviceTelemetry device;
-      device.gpu_device = gpu_device;
-      device.total_vram_mb = static_cast<int>(memory.total / (1024 * 1024));
-      device.used_vram_mb = static_cast<int>(memory.used / (1024 * 1024));
-      device.free_vram_mb = static_cast<int>(memory.free / (1024 * 1024));
-      device.gpu_utilization_pct = static_cast<int>(utilization.gpu);
-      snapshot.devices.push_back(std::move(device));
+    NvmlMemoryInfo memory{};
+    NvmlUtilizationInfo utilization{};
+    if (get_memory(handle, &memory) != kNvmlSuccess ||
+        get_utilization(handle, &utilization) != kNvmlSuccess) {
+      continue;
     }
+    comet::GpuDeviceTelemetry device;
+    device.gpu_device = std::to_string(index);
+    device.total_vram_mb = static_cast<int>(memory.total / (1024 * 1024));
+    device.used_vram_mb = static_cast<int>(memory.used / (1024 * 1024));
+    device.free_vram_mb = static_cast<int>(memory.free / (1024 * 1024));
+    device.gpu_utilization_pct = static_cast<int>(utilization.gpu);
+    unsigned int temperature_c = 0;
+    if (get_temperature != nullptr &&
+        get_temperature(handle, kNvmlTemperatureGpu, &temperature_c) == kNvmlSuccess) {
+      device.temperature_c = static_cast<int>(temperature_c);
+      device.temperature_available = true;
+    }
+    snapshot.devices.push_back(std::move(device));
   }
 
   shutdown();
@@ -602,20 +613,14 @@ std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvidiaSmi(
     const comet::DesiredState& state,
     const std::string& node_name,
     const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
+  (void)state;
+  (void)node_name;
   const std::string output =
       RunCommandCapture(
-          "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu "
+          "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu "
           "--format=csv,noheader,nounits 2>/dev/null");
   if (output.empty()) {
     return std::nullopt;
-  }
-
-  std::set<std::string> allowed_devices;
-  for (const auto& node : state.nodes) {
-    if (node.name != node_name) {
-      continue;
-    }
-    allowed_devices.insert(node.gpu_devices.begin(), node.gpu_devices.end());
   }
 
   comet::GpuTelemetrySnapshot snapshot;
@@ -625,7 +630,7 @@ std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvidiaSmi(
   std::string line;
   while (std::getline(input, line)) {
     const auto columns = SplitCsvRow(line);
-    if (columns.size() < 5 || allowed_devices.find(columns[0]) == allowed_devices.end()) {
+    if (columns.size() < 5) {
       continue;
     }
     try {
@@ -635,6 +640,11 @@ std::optional<comet::GpuTelemetrySnapshot> TryCollectGpuTelemetryWithNvidiaSmi(
       device.used_vram_mb = std::stoi(columns[2]);
       device.free_vram_mb = std::stoi(columns[3]);
       device.gpu_utilization_pct = std::stoi(columns[4]);
+      if (columns.size() >= 6 && columns[5] != "[N/A]" && columns[5] != "N/A" &&
+          !columns[5].empty()) {
+        device.temperature_c = std::stoi(columns[5]);
+        device.temperature_available = true;
+      }
       snapshot.devices.push_back(std::move(device));
     } catch (const std::exception&) {
       continue;
@@ -850,6 +860,106 @@ std::uint64_t ReadUint64FileOrZero(const fs::path& path) {
   return value;
 }
 
+std::string Lowercase(std::string value) {
+  std::transform(
+      value.begin(),
+      value.end(),
+      value.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
+bool ContainsAnyToken(const std::string& text, const std::initializer_list<const char*> tokens) {
+  for (const char* token : tokens) {
+    if (text.find(token) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::optional<double> ReadTemperatureCelsius(const fs::path& path) {
+  std::ifstream input(path);
+  if (!input.is_open()) {
+    return std::nullopt;
+  }
+  double value = 0.0;
+  if (!(input >> value)) {
+    return std::nullopt;
+  }
+  if (value > 1000.0) {
+    value /= 1000.0;
+  }
+  if (value < -50.0 || value > 200.0) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+std::vector<double> CollectCpuTemperatureSamples() {
+  std::vector<double> samples;
+
+  const fs::path hwmon_root("/sys/class/hwmon");
+  if (fs::exists(hwmon_root)) {
+    for (const auto& hwmon_entry : fs::directory_iterator(hwmon_root)) {
+      if (!hwmon_entry.is_directory() && !hwmon_entry.is_symlink()) {
+        continue;
+      }
+      const std::string hwmon_name =
+          Lowercase(ReadTrimmedFile(hwmon_entry.path() / "name").value_or(std::string{}));
+      const bool hwmon_cpu_related = ContainsAnyToken(
+          hwmon_name,
+          {"coretemp", "k10temp", "zenpower", "cpu", "package", "acpitz", "soc"});
+      for (const auto& sensor_entry : fs::directory_iterator(hwmon_entry.path())) {
+        const std::string file_name = sensor_entry.path().filename().string();
+        if (file_name.rfind("temp", 0) != 0 ||
+            file_name.find("_input") == std::string::npos) {
+          continue;
+        }
+        const std::string label_file =
+            file_name.substr(0, file_name.find("_input")) + "_label";
+        const std::string label = Lowercase(
+            ReadTrimmedFile(hwmon_entry.path() / label_file).value_or(std::string{}));
+        const bool label_cpu_related = ContainsAnyToken(
+            label,
+            {"package", "cpu", "core", "tctl", "tdie", "ccd", "soc"});
+        if (!hwmon_cpu_related && !label_cpu_related) {
+          continue;
+        }
+        const auto sample = ReadTemperatureCelsius(sensor_entry.path());
+        if (sample.has_value()) {
+          samples.push_back(*sample);
+        }
+      }
+    }
+  }
+
+  if (!samples.empty()) {
+    return samples;
+  }
+
+  const fs::path thermal_root("/sys/class/thermal");
+  if (fs::exists(thermal_root)) {
+    for (const auto& zone_entry : fs::directory_iterator(thermal_root)) {
+      const std::string zone_name = zone_entry.path().filename().string();
+      if (zone_name.rfind("thermal_zone", 0) != 0) {
+        continue;
+      }
+      const std::string zone_type = Lowercase(
+          ReadTrimmedFile(zone_entry.path() / "type").value_or(std::string{}));
+      if (!ContainsAnyToken(zone_type, {"cpu", "pkg", "x86", "acpitz", "soc"})) {
+        continue;
+      }
+      const auto sample = ReadTemperatureCelsius(zone_entry.path() / "temp");
+      if (sample.has_value()) {
+        samples.push_back(*sample);
+      }
+    }
+  }
+
+  return samples;
+}
+
 struct CpuSample {
   std::uint64_t idle = 0;
   std::uint64_t total = 0;
@@ -919,6 +1029,20 @@ comet::CpuTelemetrySnapshot CollectCpuTelemetry() {
     snapshot.loadavg_15m = (*load)[2];
   } else {
     snapshot.degraded = true;
+  }
+
+  const auto temperature_samples = CollectCpuTemperatureSamples();
+  if (!temperature_samples.empty()) {
+    double total_temperature = 0.0;
+    double max_temperature = temperature_samples.front();
+    for (double sample : temperature_samples) {
+      total_temperature += sample;
+      max_temperature = std::max(max_temperature, sample);
+    }
+    snapshot.temperature_available = true;
+    snapshot.temperature_c =
+        total_temperature / static_cast<double>(temperature_samples.size());
+    snapshot.max_temperature_c = max_temperature;
   }
 
   std::ifstream meminfo("/proc/meminfo");

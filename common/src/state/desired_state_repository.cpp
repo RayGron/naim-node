@@ -480,7 +480,7 @@ void DesiredStateRepository::ReplaceDesiredState(
       clear_gpu_statement.BindText(1, node.name);
       clear_gpu_statement.StepDone();
 
-      for (const auto& gpu_device : node.gpu_devices) {
+      for (const auto& gpu_device : EffectiveNodeGpuDevices(node)) {
         Statement gpu_statement(
             db_,
             "INSERT INTO node_gpus(node_name, gpu_device, memory_mb) VALUES(?1, ?2, ?3);");

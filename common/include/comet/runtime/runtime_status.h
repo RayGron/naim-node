@@ -33,6 +33,8 @@ struct GpuDeviceTelemetry {
   int used_vram_mb = 0;
   int free_vram_mb = 0;
   int gpu_utilization_pct = 0;
+  int temperature_c = 0;
+  bool temperature_available = false;
   std::vector<GpuProcessTelemetry> processes;
 };
 
@@ -109,6 +111,9 @@ struct CpuTelemetrySnapshot {
   double loadavg_1m = 0.0;
   double loadavg_5m = 0.0;
   double loadavg_15m = 0.0;
+  double temperature_c = 0.0;
+  double max_temperature_c = 0.0;
+  bool temperature_available = false;
   std::uint64_t total_memory_bytes = 0;
   std::uint64_t available_memory_bytes = 0;
   std::uint64_t used_memory_bytes = 0;

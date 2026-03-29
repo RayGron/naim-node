@@ -1,7 +1,7 @@
 {
   "name": "hybrid-smoke",
+  "plane_mode": "llm",
   "control_root": "/comet/shared/control/hybrid-smoke",
-  "placement_target": "local",
   "runtime": {
     "primary_infer_node": "local-hostd",
     "runtime_engine": "vllm",

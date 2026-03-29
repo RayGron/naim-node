@@ -156,9 +156,9 @@ void ValidateGpuExists(
   if (!gpu_device.has_value()) {
     return;
   }
-  const auto it =
-      std::find(node.gpu_devices.begin(), node.gpu_devices.end(), *gpu_device);
-  if (it == node.gpu_devices.end()) {
+  const auto devices = EffectiveNodeGpuDevices(node);
+  const auto it = std::find(devices.begin(), devices.end(), *gpu_device);
+  if (it == devices.end()) {
     throw std::runtime_error(
         context + " references missing gpu '" + *gpu_device + "' on node '" + node.name + "'");
   }
@@ -270,8 +270,9 @@ std::optional<AutoPlacementDecision> SelectAutoPlacement(
       continue;
     }
 
-    for (std::size_t gpu_index = 0; gpu_index < node.gpu_devices.size(); ++gpu_index) {
-      const auto& gpu_device = node.gpu_devices[gpu_index];
+    const auto node_gpu_devices = EffectiveNodeGpuDevices(node);
+    for (std::size_t gpu_index = 0; gpu_index < node_gpu_devices.size(); ++gpu_index) {
+      const auto& gpu_device = node_gpu_devices[gpu_index];
       if (strict_gpu_constraint && requested_gpu_device.has_value() &&
           gpu_device != *requested_gpu_device) {
         continue;
@@ -372,7 +373,6 @@ std::vector<NodeInventory> ParseNodes(const json& plane_json) {
     local_hostd.name = "local-hostd";
     local_hostd.platform = "linux";
     local_hostd.execution_mode = HostExecutionMode::Mixed;
-    local_hostd.gpu_devices = {"0", "1"};
     local_hostd.gpu_memory_mb = {{"0", 24576}, {"1", 24576}};
     nodes.push_back(std::move(local_hostd));
 
@@ -380,7 +380,6 @@ std::vector<NodeInventory> ParseNodes(const json& plane_json) {
     node_b.name = "node-b";
     node_b.platform = "linux";
     node_b.execution_mode = HostExecutionMode::Mixed;
-    node_b.gpu_devices = {"0"};
     node_b.gpu_memory_mb = {{"0", 24576}};
     nodes.push_back(std::move(node_b));
     return nodes;
@@ -425,11 +424,9 @@ std::vector<NodeInventory> ParseNodes(const json& plane_json) {
       }
     }
 
-    for (const auto& [gpu_device, _] : node.gpu_memory_mb) {
-      const auto gpu_it = std::find(node.gpu_devices.begin(), node.gpu_devices.end(), gpu_device);
-      if (gpu_it == node.gpu_devices.end()) {
-        throw std::runtime_error(
-            "plane node '" + node.name + "' defines gpu_memory_mb for unknown gpu '" + gpu_device + "'");
+    if (node.gpu_devices.empty()) {
+      for (const auto& [gpu_device, _] : node.gpu_memory_mb) {
+        node.gpu_devices.push_back(gpu_device);
       }
     }
 
@@ -532,8 +529,10 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   if (const auto post_deploy_script = OptionalStringOpt(plane_json, "post_deploy_script")) {
     state.post_deploy_script = *post_deploy_script;
   }
-  if (const auto placement_target = OptionalStringOpt(plane_json, "placement_target")) {
-    state.placement_target = *placement_target;
+  if (plane_json.contains("placement_target") &&
+      !plane_json.at("placement_target").is_null()) {
+    throw std::runtime_error(
+        "plane.json field 'placement_target' is deprecated; use explicit node names");
   }
   if (const auto bootstrap_model = OptionalObject(plane_json, "bootstrap_model")) {
     BootstrapModelSpec spec;

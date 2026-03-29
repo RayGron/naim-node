@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <string>
@@ -90,6 +91,27 @@ struct NodeInventory {
   std::vector<std::string> gpu_devices;
   std::map<std::string, int> gpu_memory_mb;
 };
+
+inline std::vector<std::string> EffectiveNodeGpuDevices(const NodeInventory& node) {
+  std::vector<std::string> devices;
+  devices.reserve(node.gpu_memory_mb.size() + node.gpu_devices.size());
+
+  for (const auto& [gpu_device, _] : node.gpu_memory_mb) {
+    devices.push_back(gpu_device);
+  }
+  for (const auto& gpu_device : node.gpu_devices) {
+    if (std::find(devices.begin(), devices.end(), gpu_device) == devices.end()) {
+      devices.push_back(gpu_device);
+    }
+  }
+
+  std::sort(devices.begin(), devices.end());
+  return devices;
+}
+
+inline bool NodeHasConfiguredGpuDevices(const NodeInventory& node) {
+  return !EffectiveNodeGpuDevices(node).empty();
+}
 
 struct RuntimeGpuNode {
   std::string name;

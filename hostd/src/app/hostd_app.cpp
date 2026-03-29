@@ -776,7 +776,7 @@ bool NodeUsesGpuRuntime(
     }
   }
   if (const auto* node = FindNodeInventory(desired_node_state, node_name);
-      node != nullptr && !node->gpu_devices.empty()) {
+      node != nullptr && NodeHasConfiguredGpuDevices(*node)) {
     return true;
   }
   return false;

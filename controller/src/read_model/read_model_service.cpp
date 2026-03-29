@@ -1,5 +1,6 @@
 #include "read_model/read_model_service.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <stdexcept>
@@ -244,10 +245,22 @@ json ReadModelService::BuildHostObservationsPayload(
       int total_vram_mb = 0;
       int used_vram_mb = 0;
       int free_vram_mb = 0;
+      int temperature_device_count = 0;
+      int hottest_temperature_c = 0;
+      double average_temperature_c = 0.0;
+      int total_temperature_c = 0;
       for (const auto& device : snapshot->devices) {
         total_vram_mb += device.total_vram_mb;
         used_vram_mb += device.used_vram_mb;
         free_vram_mb += device.free_vram_mb;
+        if (device.temperature_available) {
+          hottest_temperature_c =
+              temperature_device_count == 0
+                  ? device.temperature_c
+                  : std::max(hottest_temperature_c, device.temperature_c);
+          total_temperature_c += device.temperature_c;
+          ++temperature_device_count;
+        }
         for (const auto& process : device.processes) {
           if (process.instance_name == "unknown") {
             ++unknown_process_count;
@@ -255,6 +268,11 @@ json ReadModelService::BuildHostObservationsPayload(
             ++owned_process_count;
           }
         }
+      }
+      if (temperature_device_count > 0) {
+        average_temperature_c =
+            static_cast<double>(total_temperature_c) /
+            static_cast<double>(temperature_device_count);
       }
 
       return json{
@@ -274,6 +292,9 @@ json ReadModelService::BuildHostObservationsPayload(
                {"total_vram_mb", total_vram_mb},
                {"used_vram_mb", used_vram_mb},
                {"free_vram_mb", free_vram_mb},
+               {"temperature_device_count", temperature_device_count},
+               {"average_temperature_c", average_temperature_c},
+               {"hottest_temperature_c", hottest_temperature_c},
            }},
           {"devices",
            json::parse(comet::SerializeGpuTelemetryJson(*snapshot)).at("devices")},
@@ -459,6 +480,9 @@ json ReadModelService::BuildHostObservationsPayload(
                  {"loadavg_1m", 0.0},
                  {"loadavg_5m", 0.0},
                  {"loadavg_15m", 0.0},
+                 {"temperature_available", false},
+                 {"temperature_c", 0.0},
+                 {"max_temperature_c", 0.0},
                  {"total_memory_bytes", 0},
                  {"available_memory_bytes", 0},
                  {"used_memory_bytes", 0},
@@ -483,6 +507,9 @@ json ReadModelService::BuildHostObservationsPayload(
                {"loadavg_1m", snapshot->loadavg_1m},
                {"loadavg_5m", snapshot->loadavg_5m},
                {"loadavg_15m", snapshot->loadavg_15m},
+               {"temperature_available", snapshot->temperature_available},
+               {"temperature_c", snapshot->temperature_c},
+               {"max_temperature_c", snapshot->max_temperature_c},
                {"total_memory_bytes", snapshot->total_memory_bytes},
                {"available_memory_bytes", snapshot->available_memory_bytes},
                {"used_memory_bytes", snapshot->used_memory_bytes},

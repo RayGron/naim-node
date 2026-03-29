@@ -228,6 +228,13 @@ function compactBytes(value) {
   return `${amount.toFixed(amount >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+function formatTemperature(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "n/a";
+  }
+  return `${Math.round(Number(value))} C`;
+}
+
 function normalizeChatLanguage(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return CHAT_LANGUAGE_OPTIONS.some((option) => option.value === normalized)
@@ -547,7 +554,6 @@ function buildNewPlaneTemplate() {
       plane_shared_disk_name: "plane-new-plane-shared",
       control_root: "/comet/shared/control/new-plane",
       plane_mode: "compute",
-      placement_target: "local",
       bootstrap_model: {
         model_id: "model-id",
         served_model_name: "model-id",
@@ -1179,11 +1185,7 @@ function App() {
     setPlanes(items);
     const planeExists =
       preferredPlane && items.some((item) => item.name === preferredPlane);
-    const nextPlane = planeExists
-      ? preferredPlane
-      : items.length > 0
-        ? items[0].name
-        : "";
+    const nextPlane = planeExists ? preferredPlane : "";
     if (nextPlane !== selectedPlane) {
       startTransition(() => {
         setSelectedPlane(nextPlane);
@@ -2060,6 +2062,20 @@ function App() {
       summary.totalGpuVramMb += Number(gpu.total_vram_mb || 0);
       summary.usedGpuVramMb += Number(gpu.used_vram_mb || 0);
       summary.gpuDeviceCount += Number(gpu.device_count || 0);
+      if (cpu.temperature_available) {
+        summary.cpuTemperatureHostCount += 1;
+        summary.maxCpuTemperatureC = Math.max(
+          summary.maxCpuTemperatureC,
+          Number(cpu.max_temperature_c || cpu.temperature_c || 0),
+        );
+      }
+      if (Number(gpu.temperature_device_count || 0) > 0) {
+        summary.gpuTemperatureDeviceCount += Number(gpu.temperature_device_count || 0);
+        summary.maxGpuTemperatureC = Math.max(
+          summary.maxGpuTemperatureC,
+          Number(gpu.hottest_temperature_c || 0),
+        );
+      }
       summary.networkRxBytes += Number(network.rx_bytes || 0);
       summary.networkTxBytes += Number(network.tx_bytes || 0);
       summary.diskUsedBytes += Number(disk.used_bytes || 0);
@@ -2074,6 +2090,10 @@ function App() {
       totalGpuVramMb: 0,
       usedGpuVramMb: 0,
       gpuDeviceCount: 0,
+      cpuTemperatureHostCount: 0,
+      maxCpuTemperatureC: 0,
+      gpuTemperatureDeviceCount: 0,
+      maxGpuTemperatureC: 0,
       networkRxBytes: 0,
       networkTxBytes: 0,
       diskUsedBytes: 0,
@@ -2096,6 +2116,10 @@ function App() {
   const currentPlaneDisplayState = planeRecord ? planeDisplayState(planeRecord) : "";
   const currentPlaneDisplayClass = planeRecord ? planeDisplayStateClass(planeRecord) : "is-booting";
   const runningPlanes = planes.filter((plane) => plane?.state === "running");
+  const activePlanes = planes.filter((plane) => {
+    const state = String(plane?.state || "").toLowerCase();
+    return state !== "" && state !== "stopped" && state !== "deleting";
+  });
   const runningPlaneCount = runningPlanes.length;
   const usedModelCount = new Set(
     runningPlanes
@@ -2167,143 +2191,758 @@ function App() {
     return () => observer.disconnect();
   }, [activeModelCount, hasMoreModelItems, visibleModelItems.length]);
 
-  function renderPlanesRegistry() {
+  function openPlaneDashboard(planeName) {
+    setSelectedPlane(planeName);
+    setSelectedPage("dashboard");
+    setSelectedTab("status");
+    refreshAll(planeName);
+  }
+
+  function closePlaneDashboard() {
+    setSelectedPlane("");
+    setSelectedTab("status");
+  }
+
+  function renderPlaneCards(planeItems, deleteTargetPage = "planes") {
+    return (
+      <div className="plane-list">
+        {planeItems.map((plane) => {
+          const selected = plane.name === selectedPlane;
+          const displayState = planeDisplayState(plane);
+          const displayStateClass = planeDisplayStateClass(plane);
+          const planeDeleting = plane.state === "deleting";
+          const planeStartDisabled =
+            actionBusy !== "" ||
+            planeDeleting ||
+            plane.state === "running" ||
+            plane.state === "starting";
+          const planeStopDisabled =
+            actionBusy !== "" ||
+            planeDeleting ||
+            plane.state === "stopped" ||
+            plane.state === "stopping";
+          const planeModeLabel = plane.plane_mode || "compute";
+          return (
+            <article
+              key={plane.name}
+              className={`plane-card ${selected ? "is-selected" : ""}`}
+            >
+              <button
+                className="plane-card-main"
+                type="button"
+                aria-label={`plane ${plane.name} ${displayState} generation ${plane.generation ?? "n/a"}`}
+                onClick={() => openPlaneDashboard(plane.name)}
+              >
+                <div className="plane-card-top">
+                  <div className="plane-name">{plane.name}</div>
+                  <div className={`pill ${displayStateClass}`}>
+                    {statusDot(displayStateClass)}
+                    <span>{displayState}</span>
+                  </div>
+                </div>
+                <div className="plane-card-meta">
+                  <span>{planeModeLabel}</span>
+                  <span>gen {plane.generation ?? "n/a"}</span>
+                  <span>applied {plane.applied_generation ?? 0}</span>
+                  <span>{plane.instance_count ?? 0} instances</span>
+                  <span>{plane.node_count ?? 0} nodes</span>
+                  {plane.failed_assignments ? (
+                    <span>{plane.failed_assignments} failed assignments</span>
+                  ) : null}
+                </div>
+              </button>
+              <div className="plane-card-actions">
+                <button
+                  className="ghost-button compact-button plane-action-button"
+                  type="button"
+                  disabled={planeStartDisabled}
+                  onClick={() => executePlaneAction("start", plane.name)}
+                >
+                  Start
+                </button>
+                <button
+                  className="ghost-button compact-button plane-action-button"
+                  type="button"
+                  disabled={planeStopDisabled}
+                  onClick={() => executePlaneAction("stop", plane.name)}
+                >
+                  Stop
+                </button>
+                <button
+                  className="ghost-button compact-button icon-button"
+                  type="button"
+                  aria-label={`View plane ${plane.name}`}
+                  title={`View plane ${plane.name}`}
+                  onClick={() => openPlaneDashboard(plane.name)}
+                >
+                  <ActionIcon kind="view" />
+                </button>
+                <button
+                  className="ghost-button compact-button icon-button"
+                  type="button"
+                  aria-label={`Edit plane ${plane.name}`}
+                  title={`Edit plane ${plane.name}`}
+                  onClick={() => openPlaneDialog("edit", plane.name)}
+                >
+                  <ActionIcon kind="edit" />
+                </button>
+                <button
+                  className="ghost-button compact-button danger-button icon-button"
+                  type="button"
+                  disabled={actionBusy !== ""}
+                  aria-label={`Delete plane ${plane.name}`}
+                  title={`Delete plane ${plane.name}`}
+                  onClick={async () => {
+                    const confirmed = window.confirm(
+                      `Delete plane ${plane.name}? This will stop it, remove related infer and worker runtime, and then remove it from the controller registry.`,
+                    );
+                    if (!confirmed) {
+                      return;
+                    }
+                    startTransition(() => {
+                      setSelectedPlane(plane.name);
+                      setSelectedPage(deleteTargetPage);
+                    });
+                    await executePlaneAction("delete", plane.name);
+                  }}
+                >
+                  <ActionIcon kind="delete" />
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderPlaneListPanel({
+    sectionLabel,
+    title,
+    copy,
+    planeItems,
+    deleteTargetPage = "planes",
+    showCreateButton = false,
+    emptyContent = null,
+  }) {
     return (
       <section className="panel page-panel">
         <div className="panel-header">
           <div>
-            <div className="section-label">Planes</div>
-            <h2>Plane registry</h2>
+            <div className="section-label">{sectionLabel}</div>
+            <h2>{title}</h2>
           </div>
-          <button
-            className="ghost-button"
-            type="button"
-            onClick={() => openPlaneDialog("new")}
-          >
-            New plane
-          </button>
+          {showCreateButton ? (
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => openPlaneDialog("new")}
+            >
+              New plane
+            </button>
+          ) : null}
         </div>
-        <div className="page-copy">
-          Select a plane to inspect it on Dashboard, or manage its lifecycle directly from the
-          editor and action controls.
-        </div>
-        <div className="plane-list">
-          {planes.length === 0 ? (
-            <OnboardingCard onCreatePlane={() => openPlaneDialog("new")} />
-          ) : (
-            planes.map((plane) => {
-              const selected = plane.name === selectedPlane;
-              const displayState = planeDisplayState(plane);
-              const displayStateClass = planeDisplayStateClass(plane);
-              const planeDeleting = plane.state === "deleting";
-              const planeStartDisabled =
-                actionBusy !== "" ||
-                planeDeleting ||
-                plane.state === "running" ||
-                plane.state === "starting";
-              const planeStopDisabled =
-                actionBusy !== "" ||
-                planeDeleting ||
-                plane.state === "stopped" ||
-                plane.state === "stopping";
-              return (
-                <article
-                  key={plane.name}
-                  className={`plane-card ${selected ? "is-selected" : ""}`}
-                >
-                  <button
-                    className="plane-card-main"
-                    type="button"
-                    aria-label={`plane ${plane.name} ${displayState} generation ${plane.generation ?? "n/a"}`}
-                    onClick={() => {
-                      setSelectedPlane(plane.name);
-                      setSelectedPage("dashboard");
-                      refreshAll(plane.name);
-                    }}
-                  >
-                    <div className="plane-card-top">
-                      <div className="plane-name">{plane.name}</div>
-                      <div className={`pill ${displayStateClass}`}>
-                        {statusDot(displayStateClass)}
-                        <span>{displayState}</span>
-                      </div>
-                    </div>
-                    <div className="plane-card-meta">
-                      <span>gen {plane.generation ?? "n/a"}</span>
-                      <span>applied {plane.applied_generation ?? 0}</span>
-                      <span>{plane.instance_count ?? 0} instances</span>
-                      <span>{plane.node_count ?? 0} nodes</span>
-                    </div>
-                  </button>
-                  <div className="plane-card-actions">
-                    <button
-                      className="ghost-button compact-button plane-action-button"
-                      type="button"
-                      disabled={planeStartDisabled}
-                      onClick={() => executePlaneAction("start", plane.name)}
-                    >
-                      Start
-                    </button>
-                    <button
-                      className="ghost-button compact-button plane-action-button"
-                      type="button"
-                      disabled={planeStopDisabled}
-                      onClick={() => executePlaneAction("stop", plane.name)}
-                    >
-                      Stop
-                    </button>
-                    <button
-                      className="ghost-button compact-button icon-button"
-                      type="button"
-                      aria-label={`View plane ${plane.name}`}
-                      title={`View plane ${plane.name}`}
-                      onClick={() => {
-                        setSelectedPlane(plane.name);
-                        setSelectedPage("dashboard");
-                        refreshAll(plane.name);
-                      }}
-                    >
-                      <ActionIcon kind="view" />
-                    </button>
-                    <button
-                      className="ghost-button compact-button icon-button"
-                      type="button"
-                      aria-label={`Edit plane ${plane.name}`}
-                      title={`Edit plane ${plane.name}`}
-                      onClick={() => openPlaneDialog("edit", plane.name)}
-                    >
-                      <ActionIcon kind="edit" />
-                    </button>
-                    <button
-                      className="ghost-button compact-button danger-button icon-button"
-                      type="button"
-                      disabled={actionBusy !== ""}
-                      aria-label={`Delete plane ${plane.name}`}
-                      title={`Delete plane ${plane.name}`}
-                      onClick={async () => {
-                        const confirmed = window.confirm(
-                          `Delete plane ${plane.name}? This will stop it, remove related infer and worker runtime, and then remove it from the controller registry.`,
-                        );
-                        if (!confirmed) {
-                          return;
-                        }
-                        startTransition(() => {
-                          setSelectedPlane(plane.name);
-                          setSelectedPage("planes");
-                        });
-                        await executePlaneAction("delete", plane.name);
-                      }}
-                    >
-                      <ActionIcon kind="delete" />
-                    </button>
-                  </div>
-                </article>
-              );
-            })
-          )}
-        </div>
+        {copy ? <div className="page-copy">{copy}</div> : null}
+        {planeItems.length === 0
+          ? emptyContent
+          : renderPlaneCards(planeItems, deleteTargetPage)}
       </section>
     );
+  }
+
+  function renderDashboardPlaneDetailModal() {
+    if (!selectedPlane || !planeRecord || !dashboard) {
+      return null;
+    }
+
+    return (
+      <div className="modal-backdrop" role="presentation" onClick={closePlaneDashboard}>
+        <section
+          className={`modal-card plane-detail-modal ${selectedTab === "interaction" ? "is-interaction" : ""}`}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="plane-detail-title"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="panel-header">
+            <div>
+              <div className="section-label">Plane detail</div>
+              <h2 id="plane-detail-title">{selectedPlane}</h2>
+            </div>
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => executePlaneAction("start")}
+                disabled={
+                  actionBusy !== "" ||
+                  planeRecord?.state === "running" ||
+                  selectedPlaneDeleting
+                }
+              >
+                Start plane
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => executePlaneAction("stop")}
+                disabled={
+                  actionBusy !== "" ||
+                  planeRecord?.state === "stopped" ||
+                  selectedPlaneDeleting
+                }
+              >
+                Stop plane
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => openPlaneDialog("edit", selectedPlane)}
+                disabled={actionBusy !== ""}
+              >
+                Edit plane
+              </button>
+              <button className="ghost-button" type="button" onClick={closePlaneDashboard}>
+                Close
+              </button>
+            </div>
+          </div>
+
+          <div className="tab-strip" role="tablist" aria-label="Plane detail tabs">
+            <button
+              className={`tab-button ${selectedTab === "status" ? "is-active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={selectedTab === "status"}
+              onClick={() => setSelectedTab("status")}
+            >
+              <span className="tab-button-title">Status</span>
+              <span className="tab-button-meta">Plane, nodes, rollout, events</span>
+            </button>
+            {llmPlane ? (
+              <button
+                className={`tab-button ${selectedTab === "interaction" ? "is-active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={selectedTab === "interaction"}
+                onClick={() => setSelectedTab("interaction")}
+              >
+                <span className="tab-button-title">Interaction</span>
+                <span className="tab-button-meta">Chat with the running model</span>
+              </button>
+            ) : null}
+          </div>
+
+          {apiError ? <div className="error-banner">{apiError}</div> : null}
+
+          {selectedTab === "status" ? (
+            <div className="dashboard-plane-detail-scroll">
+              <div className="summary-grid">
+                <SummaryCard
+                  label="Nodes"
+                  value={dashboard.plane?.node_count ?? 0}
+                  meta={`${readyNodes} ready / ${notReadyNodes} not ready`}
+                />
+                <SummaryCard
+                  label="Instances"
+                  value={displayedInstanceCount}
+                  meta={instanceRoleSummary}
+                />
+                <SummaryCard
+                  label="Rollout"
+                  value={dashboard.rollout?.total_actions ?? 0}
+                  meta={`${dashboard.rollout?.loop_status ?? "n/a"} / ${dashboard.rollout?.loop_reason ?? "n/a"}`}
+                />
+                <SummaryCard
+                  label="Alerts"
+                  value={alertSummary.total ?? 0}
+                  meta={`${alertSummary.critical ?? 0} critical / ${alertSummary.warning ?? 0} warning / ${alertSummary.booting ?? 0} booting`}
+                />
+              </div>
+
+              {operationProgress ? (
+                <section className="action-progress-card">
+                  <div className="card-row">
+                    <div>
+                      <div className="section-label">Current action</div>
+                      <strong>{operationProgress.label}</strong>
+                    </div>
+                    <span
+                      className={`tag ${operationProgress.failed ? "is-critical" : operationProgress.complete ? "is-healthy" : "is-booting"}`}
+                    >
+                      {statusDot(
+                        operationProgress.failed
+                          ? "is-critical"
+                          : operationProgress.complete
+                            ? "is-healthy"
+                            : "is-booting",
+                      )}
+                      <span>{operationProgress.progress}%</span>
+                    </span>
+                  </div>
+                  <div className="progress-track" aria-hidden="true">
+                    <div
+                      className={`progress-fill ${operationProgress.failed ? "is-failed" : operationProgress.complete ? "is-complete" : ""}`}
+                      style={{ width: `${operationProgress.progress}%` }}
+                    />
+                  </div>
+                  <div className="progress-detail">{operationProgress.detail}</div>
+                </section>
+              ) : null}
+
+              <div className="panel-grid">
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Plane config</h3>
+                    <span className="subpanel-meta">Desired config, applied config, and bootstrap model</span>
+                  </div>
+                  <div className="list-card">
+                    <div className="metric-grid compact-metric-grid">
+                      <div className="metric-row"><span>Lifecycle state</span><strong>{planeRecord.state || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Plane mode</span><strong>{planeMode}</strong></div>
+                      <div className="metric-row"><span>Desired generation</span><strong>{planeRecord.generation ?? "n/a"}</strong></div>
+                      <div className="metric-row"><span>Applied generation</span><strong>{planeRecord.applied_generation ?? 0}</strong></div>
+                      <div className="metric-row"><span>Pending restart</span><strong>{planeRecord.staged_update ? "yes" : "no"}</strong></div>
+                      <div className="metric-row"><span>Shared disk</span><strong>{desiredState?.plane_shared_disk_name || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Control root</span><strong>{desiredState?.control_root || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Bootstrap source</span><strong>{bootstrapModelSourceLabel(desiredState?.bootstrap_model)}</strong></div>
+                      <div className="metric-row"><span>Bootstrap target</span><strong>{bootstrapModelTargetPath(desiredState)}</strong></div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Operational watch</h3>
+                    <span className="subpanel-meta">Live rollout, failure, and readiness signals</span>
+                  </div>
+                  <div className="list-column">
+                    <article className="list-card">
+                      <div className="card-row">
+                        <strong>Runtime state</strong>
+                        <span className={`tag ${notReadyNodes > 0 ? "is-warning" : "is-healthy"}`}>
+                          {statusDot(notReadyNodes > 0 ? "is-warning" : "is-healthy")}
+                          <span>{notReadyNodes > 0 ? "degraded" : "stable"}</span>
+                        </span>
+                      </div>
+                      <div className="metric-grid compact-metric-grid">
+                        <div className="metric-row"><span>Observed nodes</span><strong>{runtimeSummary.observed_nodes ?? observationItems.length}</strong></div>
+                        <div className="metric-row"><span>Ready nodes</span><strong>{readyNodes}</strong></div>
+                        <div className="metric-row"><span>Observed instances</span><strong>{observedInstances.length}</strong></div>
+                        <div className="metric-row"><span>Missing runtime payload</span><strong>{missingRuntimeNodes}</strong></div>
+                      </div>
+                    </article>
+                    {alertItems.length === 0 ? (
+                      <EmptyState
+                        title="No active alerts"
+                        detail="Plane is currently stable from the controller point of view."
+                      />
+                    ) : (
+                      alertItems.map((alert, index) => {
+                        const severityClass = alertSeverityClass(alert.severity);
+                        return (
+                          <article
+                            className={`list-card alert-card ${severityClass}`}
+                            key={`${alert.kind}-${alert.node_name || "global"}-${alert.assignment_id || alert.event_id || index}`}
+                          >
+                            <div className="card-row">
+                              <strong>{alert.title}</strong>
+                              <span className={`tag ${severityClass}`}>
+                                {statusDot(severityClass)}
+                                <span>{alert.severity}</span>
+                              </span>
+                            </div>
+                            <div className="list-detail">
+                              <div>{alert.detail || "n/a"}</div>
+                              {alert.node_name ? <div>node {alert.node_name}</div> : null}
+                              {alert.worker_name ? <div>worker {alert.worker_name}</div> : null}
+                              <div>{alert.kind}</div>
+                            </div>
+                          </article>
+                        );
+                      })
+                    )}
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Instances</h3>
+                    <span className="subpanel-meta">Desired configuration</span>
+                  </div>
+                  <div className="instance-grid">
+                    {instances.length === 0 ? (
+                      <EmptyState title="No instances" />
+                    ) : (
+                      displayedInstances.map((instance) => (
+                        <article className="instance-card" key={instance.name}>
+                          <div className="card-row">
+                            <strong>{instance.name}</strong>
+                            <span className="tag">{instanceRole(instance)}</span>
+                          </div>
+                          <div className="metric-grid">
+                            <div className="metric-row"><span>Node</span><strong>{instance.node_name || "auto"}</strong></div>
+                            <div className="metric-row"><span>GPU</span><strong>{instance.gpu_device || "auto"}</strong></div>
+                            <div className="metric-row"><span>Share</span><strong>{instance.share_mode || "n/a"}</strong></div>
+                            <div className="metric-row"><span>Fraction</span><strong>{instance.gpu_fraction ?? "n/a"}</strong></div>
+                            <div className="metric-row"><span>Placement</span><strong>{instance.placement_mode || "n/a"}</strong></div>
+                            <div className="metric-row"><span>Memory cap</span><strong>{instance.memory_cap_mb ? `${instance.memory_cap_mb} MB` : "n/a"}</strong></div>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Nodes</h3>
+                    <span className="subpanel-meta">Availability and runtime posture</span>
+                  </div>
+                  <div className="node-grid">
+                    {nodeItems.length === 0 ? (
+                      <EmptyState title="No nodes in current plane" />
+                    ) : (
+                      nodeItems.map((node) => {
+                        const derivedRuntime = observedRuntime.nodeRuntime.get(node.node_name);
+                        const effectiveRuntimeLaunchReady =
+                          node.runtime_launch_ready !== null && node.runtime_launch_ready !== undefined
+                            ? node.runtime_launch_ready
+                            : derivedRuntime?.runtimeLaunchReady;
+                        const effectiveRuntimePhase =
+                          node.runtime_phase || derivedRuntime?.runtimePhase || "pending";
+                        const effectiveIndicatorClass = runtimeIndicatorClass(
+                          effectiveRuntimeLaunchReady,
+                          node.health,
+                        );
+                        return (
+                          <article className="node-card" key={node.node_name}>
+                            <div className="card-row">
+                              <strong>{node.node_name}</strong>
+                              <div className={`pill ${effectiveIndicatorClass}`}>
+                                {statusDot(effectiveIndicatorClass)}
+                                <span>{nodeStatusLabel(effectiveRuntimeLaunchReady, effectiveRuntimePhase, node.health)}</span>
+                              </div>
+                            </div>
+                            <div className="metric-grid">
+                              <div className="metric-row"><span>Availability</span><strong>{node.availability || "active"}</strong></div>
+                              <div className="metric-row"><span>Status</span><strong>{node.status || "n/a"}</strong></div>
+                              <div className="metric-row"><span>Runtime</span><strong>{effectiveRuntimePhase}</strong></div>
+                              <div className="metric-row"><span>Launch ready</span><strong>{yesNo(effectiveRuntimeLaunchReady)}</strong></div>
+                              <div className="metric-row"><span>GPU count</span><strong>{node.gpu_count ?? "n/a"}</strong></div>
+                              <div className="metric-row"><span>Telemetry degraded</span><strong>{yesNo(node.telemetry_degraded)}</strong></div>
+                            </div>
+                          </article>
+                        );
+                      })
+                    )}
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Assignments</h3>
+                    <span className="subpanel-meta">Latest per node</span>
+                  </div>
+                  <div className="assignment-grid">
+                    {assignmentItems.length === 0 ? (
+                      <EmptyState title="No assignment activity" />
+                    ) : (
+                      assignmentItems.map((item) => (
+                        <article className="assignment-card" key={item.node_name}>
+                          <div className="card-row">
+                            <strong>{item.node_name}</strong>
+                            <span className="tag">{item.latest_status}</span>
+                          </div>
+                          <div className="metric-grid">
+                            <div className="metric-row"><span>Assignment</span><strong>#{item.latest_assignment_id}</strong></div>
+                            <div className="metric-row"><span>Pending</span><strong>{item.pending}</strong></div>
+                            <div className="metric-row"><span>Claimed</span><strong>{item.claimed}</strong></div>
+                            <div className="metric-row"><span>Failed</span><strong>{item.failed}</strong></div>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Rollout actions</h3>
+                    <span className="subpanel-meta">Deferred scheduler workflow</span>
+                  </div>
+                  <div className="list-column">
+                    {rolloutItems.length === 0 ? (
+                      <EmptyState title="No rollout actions" />
+                    ) : (
+                      rolloutItems.map((action) => (
+                        <article className="list-card" key={action.id}>
+                          <div className="card-row">
+                            <strong>{action.worker_name}</strong>
+                            <span className="tag">{action.status}</span>
+                          </div>
+                          <div className="list-detail">
+                            <div>step {action.step}</div>
+                            <div>{action.action}</div>
+                            <div>
+                              {action.target_node_name || "n/a"}:{action.target_gpu_device || "n/a"}
+                            </div>
+                            <div>{action.reason || "n/a"}</div>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Rebalance plan</h3>
+                    <span className="subpanel-meta">Current scheduler proposals</span>
+                  </div>
+                  <div className="list-column">
+                    {rebalanceItems.length === 0 ? (
+                      <EmptyState title="No rebalance entries" />
+                    ) : (
+                      rebalanceItems.map((item) => (
+                        <article className="list-card" key={item.worker_name}>
+                          <div className="card-row">
+                            <strong>{item.worker_name}</strong>
+                            <span className="tag">{item.decision}</span>
+                          </div>
+                          <div className="list-detail">
+                            <div>{item.state}</div>
+                            <div>{item.action || "n/a"}</div>
+                            <div>
+                              {(item.current_node_name || "n/a")}:{item.current_gpu_device || "n/a"} →{" "}
+                              {(item.target_node_name || "n/a")}:{item.target_gpu_device || "n/a"}
+                            </div>
+                            <div>{item.gate_reason || `score ${item.score}`}</div>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </section>
+
+                <section className="subpanel">
+                  <div className="subpanel-header">
+                    <h3>Disk state</h3>
+                    <span className="subpanel-meta">Desired vs realized storage</span>
+                  </div>
+                  <div className="list-column">
+                    {diskItems.length === 0 ? (
+                      <EmptyState title="No disk state" />
+                    ) : (
+                      diskItems.map((item) => (
+                        <article className="list-card" key={`${item.disk_name}@${item.node_name}`}>
+                          <div className="card-row">
+                            <strong>{item.disk_name}</strong>
+                            <span className="tag">{item.realized_state || "unknown"}</span>
+                          </div>
+                          <div className="list-detail">
+                            <div>{item.node_name}</div>
+                            <div>{item.kind || item.desired_state || "disk"}</div>
+                            <div>
+                              used {compactBytes(item.usage_bytes?.used_bytes)} / total{" "}
+                              {compactBytes(item.usage_bytes?.total_bytes)}
+                            </div>
+                            <div>
+                              io {compactBytes(item.io_bytes?.read_bytes)} read /{" "}
+                              {compactBytes(item.io_bytes?.write_bytes)} write
+                            </div>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </section>
+
+                <section className="subpanel event-panel">
+                  <div className="subpanel-header">
+                    <h3>Recent events</h3>
+                    <span className="subpanel-meta">Plane-scoped persisted event log</span>
+                  </div>
+                  <div className="event-list">
+                    {filteredEvents.length === 0 ? (
+                      <EmptyState
+                        title="No operator-facing events"
+                        detail="Routine host observation noise is hidden from this view."
+                      />
+                    ) : (
+                      filteredEvents.map((event) => (
+                        <article className={`event-card ${eventSeverityClass(event.severity)}`} key={event.id}>
+                          <div className="card-row">
+                            <strong>
+                              {event.category}.{event.event_type}
+                            </strong>
+                            <span className="tag">{event.severity}</span>
+                          </div>
+                          <div className="event-meta">
+                            <span>{formatTimestamp(event.created_at)}</span>
+                            {event.node_name ? <span>{event.node_name}</span> : null}
+                            {event.worker_name ? <span>{event.worker_name}</span> : null}
+                          </div>
+                          <p className="event-message">{event.message || "n/a"}</p>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </section>
+              </div>
+            </div>
+          ) : (
+            <div className="dashboard-plane-detail-scroll">
+              <div
+                className="interaction-layout"
+                ref={interactionSplitRef}
+                style={{ gridTemplateColumns: `${interactionPaneWidth}% 14px minmax(0, 1fr)` }}
+              >
+                <section className="subpanel interaction-panel">
+                  <div className="subpanel-header">
+                    <h3>Interaction</h3>
+                    <span className="subpanel-meta">Controller-proxied chat with the active model</span>
+                  </div>
+                  <div className="list-card interaction-status-card">
+                    <div className="metric-grid compact-metric-grid">
+                      <div className="metric-row"><span>Plane mode</span><strong>{planeMode}</strong></div>
+                      <div className="metric-row"><span>Plane state</span><strong>{interactionStatus?.plane_state || planeRecord.state || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Ready</span><strong>{interactionReady ? "yes" : "no"}</strong></div>
+                      <div className="metric-row"><span>Model</span><strong>{interactionStatus?.served_model_name || interactionStatus?.active_model_id || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Default language</span><strong>{desiredState?.interaction?.default_response_language || interactionStatus?.default_response_language || "n/a"}</strong></div>
+                      <div className="metric-row"><span>Follow user language</span><strong>{yesNo(desiredState?.interaction?.follow_user_language ?? interactionStatus?.follow_user_language)}</strong></div>
+                    </div>
+                    <div className="metric-row"><span>System prompt</span><strong>{desiredState?.interaction?.system_prompt ? "configured" : "not configured"}</strong></div>
+                    {!interactionReady ? (
+                      <EmptyState
+                        title="Interaction unavailable"
+                        detail={interactionReasonMessage(interactionStatus)}
+                      />
+                    ) : null}
+                  </div>
+                </section>
+
+                <div
+                  className={`interaction-divider ${draggingDivider ? "is-dragging" : ""}`}
+                  role="separator"
+                  aria-orientation="vertical"
+                  onMouseDown={() => setDraggingDivider(true)}
+                >
+                  <span className="interaction-divider-handle" />
+                </div>
+
+                <section className="subpanel chat-panel">
+                  <div className="subpanel-header">
+                    <h3>Chat</h3>
+                    <span className="subpanel-meta">Session-only transcript</span>
+                  </div>
+                  <div className="chat-transcript" ref={chatTranscriptRef}>
+                    {chatMessages.length === 0 ? (
+                      <EmptyState
+                        title="No chat turns yet"
+                        detail="Send a prompt to test the running model through the controller proxy."
+                      />
+                    ) : (
+                      chatMessages.map((message) => (
+                        <article
+                          className={`chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}
+                          key={message.id}
+                        >
+                          <div className="card-row">
+                            <strong>{message.role === "assistant" ? "Assistant" : "User"}</strong>
+                            {message.metrics ? (
+                              <span className="tag">
+                                {Math.round(message.metrics.latencyMs)} ms / {message.metrics.completionTokens} tok /{" "}
+                                {message.metrics.tokensPerSecond.toFixed(1)} tok/s
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="chat-message-text">
+                            {message.content || (message.role === "assistant" && chatBusy ? "Streaming..." : "")}
+                          </p>
+                          {message.error ? <div className="chat-error-line">{message.error}</div> : null}
+                          {message.session ? (
+                            <div className="chat-metrics-line">
+                              session {message.session.status || "in_progress"}
+                              {message.session.segmentCount
+                                ? ` / ${message.session.segmentCount} segment${message.session.segmentCount === 1 ? "" : "s"}`
+                                : ""}
+                              {message.session.continuationCount
+                                ? ` / ${message.session.continuationCount} continuation${message.session.continuationCount === 1 ? "" : "s"}`
+                                : ""}
+                              {message.session.stopReason ? ` / ${message.session.stopReason}` : ""}
+                            </div>
+                          ) : null}
+                          {message.metrics ? (
+                            <div className="chat-metrics-line">total {message.metrics.totalTokens} tokens</div>
+                          ) : null}
+                        </article>
+                      ))
+                    )}
+                    <div ref={chatTranscriptEndRef} aria-hidden="true" />
+                  </div>
+                  <div className="chat-composer">
+                    <div className="chat-toolbar">
+                      <label className="field-label chat-language-field">
+                        <span>Language</span>
+                        <select
+                          className="chat-language-select"
+                          value={chatLanguage}
+                          onChange={(event) => setChatLanguage(event.target.value)}
+                          disabled={chatBusy}
+                        >
+                          {chatLanguageOptions.map((option) => (
+                            <option value={option.value} key={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <span className="composer-hint">Enter to send, Shift+Enter for a new line</span>
+                    </div>
+                    <textarea
+                      className="editor-textarea chat-input"
+                      value={chatInput}
+                      onChange={(event) => setChatInput(event.target.value)}
+                      onKeyDown={handleChatInputKeyDown}
+                      placeholder="Ask the running model a question"
+                      disabled={!interactionReady || chatBusy}
+                    />
+                    <div className="toolbar">
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={sendChatPrompt}
+                        disabled={!interactionReady || chatBusy || !chatInput.trim()}
+                      >
+                        Send
+                      </button>
+                      <button className="ghost-button" type="button" onClick={stopChatStream} disabled={!chatBusy}>
+                        Stop
+                      </button>
+                    </div>
+                    {chatError ? <div className="error-banner">{chatError}</div> : null}
+                  </div>
+                </section>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  function renderPlanesRegistry() {
+    return renderPlaneListPanel({
+      sectionLabel: "Planes",
+      title: "Plane registry",
+      copy:
+        "Select a plane to inspect it on Dashboard, or manage its lifecycle directly from the editor and action controls.",
+      planeItems: planes,
+      deleteTargetPage: "planes",
+      showCreateButton: true,
+      emptyContent: <OnboardingCard onCreatePlane={() => openPlaneDialog("new")} />,
+    });
   }
 
   function renderModelsLibrary() {
@@ -2939,7 +3578,10 @@ function App() {
             <button
               className={`side-menu-item ${selectedPage === "dashboard" ? "is-active" : ""}`}
               type="button"
-              onClick={() => setSelectedPage("dashboard")}
+              onClick={() => {
+                setSelectedPage("dashboard");
+                setSelectedTab("status");
+              }}
             >
               <div className="side-menu-copy">
                 <span className="side-menu-title">Dashboard</span>
@@ -3002,77 +3644,30 @@ function App() {
           renderAccessPage()
         ) : (
           <section className="panel plane-overview">
-          <div className="panel-header">
-            <div>
-              <div className="section-label">Plane detail</div>
-              <h2>{selectedPlane || "No plane selected"}</h2>
-            </div>
-            <div className="toolbar">
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => executePlaneAction("start")}
-                disabled={
-                  !selectedPlane ||
-                  actionBusy !== "" ||
-                  planeRecord?.state === "running" ||
-                  selectedPlaneDeleting
-                }
-              >
-                Start plane
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => executePlaneAction("stop")}
-                disabled={
-                  !selectedPlane ||
-                  actionBusy !== "" ||
-                  planeRecord?.state === "stopped" ||
-                  selectedPlaneDeleting
-                }
-              >
-                Stop plane
-              </button>
-            </div>
-          </div>
-
-          {selectedPlane && planeRecord && dashboard ? (
-            <div className="tab-strip" role="tablist" aria-label="Plane detail tabs">
-              <button
-                className={`tab-button ${selectedTab === "status" ? "is-active" : ""}`}
-                type="button"
-                role="tab"
-                aria-selected={selectedTab === "status"}
-                onClick={() => setSelectedTab("status")}
-              >
-                <span className="tab-button-title">Status</span>
-                <span className="tab-button-meta">Plane, nodes, rollout, events</span>
-              </button>
-              {llmPlane ? (
+            <div className="panel-header">
+              <div>
+                <div className="section-label">Dashboard</div>
+                <h2>Fleet overview</h2>
+              </div>
+              <div className="toolbar">
                 <button
-                  className={`tab-button ${selectedTab === "interaction" ? "is-active" : ""}`}
+                  className="ghost-button"
                   type="button"
-                  role="tab"
-                  aria-selected={selectedTab === "interaction"}
-                  onClick={() => setSelectedTab("interaction")}
+                  onClick={() => openPlaneDialog("new")}
                 >
-                  <span className="tab-button-title">Interaction</span>
-                  <span className="tab-button-meta">Chat with the running model</span>
+                  New plane
                 </button>
-              ) : null}
+              </div>
             </div>
-          ) : null}
 
           {apiError ? <div className="error-banner">{apiError}</div> : null}
 
-          {selectedTab === "status" ? (
-            <div className="dashboard-stack">
+          <div className="dashboard-stack">
               <section className="subpanel server-telemetry-panel">
                 <div className="subpanel-header">
                   <h3>Server telemetry</h3>
                   <span className="subpanel-meta">
-                    Host-level CPU, GPU, network, disk, and runtime posture across all observed nodes
+                    Host-level CPU, GPU, temperature, network, disk, and runtime posture across all observed nodes
                   </span>
                 </div>
                 <div className="summary-grid server-summary-grid">
@@ -3082,7 +3677,7 @@ function App() {
                     meta={`${globalObservationSummary.healthyNodes} healthy / ${Math.max(0, globalObservationItems.length - globalObservationSummary.healthyNodes)} degraded`}
                   />
                   <SummaryCard
-                    label="GPU devices"
+                    label="Physical GPUs"
                     value={globalObservationSummary.gpuDeviceCount}
                     meta={
                       globalObservationSummary.totalGpuVramMb > 0
@@ -3091,9 +3686,27 @@ function App() {
                     }
                   />
                   <SummaryCard
-                    label="Memory"
-                    value={compactBytes(globalObservationSummary.usedMemoryBytes)}
-                    meta={compactBytes(globalObservationSummary.totalMemoryBytes)}
+                    label="Memory total"
+                    value={compactBytes(globalObservationSummary.totalMemoryBytes)}
+                    meta={`used ${compactBytes(globalObservationSummary.usedMemoryBytes)}`}
+                  />
+                  <SummaryCard
+                    label="CPU temp"
+                    value={
+                      globalObservationSummary.cpuTemperatureHostCount > 0
+                        ? formatTemperature(globalObservationSummary.maxCpuTemperatureC)
+                        : "n/a"
+                    }
+                    meta={`${globalObservationSummary.cpuTemperatureHostCount} hosts reporting`}
+                  />
+                  <SummaryCard
+                    label="GPU temp"
+                    value={
+                      globalObservationSummary.gpuTemperatureDeviceCount > 0
+                        ? formatTemperature(globalObservationSummary.maxGpuTemperatureC)
+                        : "n/a"
+                    }
+                    meta={`${globalObservationSummary.gpuTemperatureDeviceCount} GPU devices reporting`}
                   />
                   <SummaryCard
                     label="Runtime gaps"
@@ -3101,563 +3714,33 @@ function App() {
                     meta="hosts missing runtime payload"
                   />
                 </div>
-                <div className="list-column">
-                  {globalObservationItems.length === 0 ? (
-                    <EmptyState
-                      title="No server telemetry yet"
-                      detail="Report observed state from hostd to populate global server telemetry."
-                    />
-                  ) : (
-                    globalObservationItems.map((observation) => {
-                      const cpu = observation.cpu_telemetry?.summary || {};
-                      const gpu = observation.gpu_telemetry?.summary || {};
-                      const network = observation.network_telemetry?.summary || {};
-                      const disk = observation.disk_telemetry?.summary || {};
-                      const statusClass = hostObservationStatusClass(observation.status);
-                      return (
-                        <article className="list-card" key={`global-telemetry-${observation.node_name}`}>
-                          <div className="card-row">
-                            <strong>{observation.node_name}</strong>
-                            <span className={`tag ${statusClass}`}>
-                              {statusDot(statusClass)}
-                              <span>{observation.status || "unknown"}</span>
-                            </span>
-                          </div>
-                          <div className="metric-grid">
-                            <div className="metric-row"><span>CPU</span><strong>{cpu.utilization_pct !== undefined ? `${Math.round(cpu.utilization_pct)}%` : "n/a"}</strong></div>
-                            <div className="metric-row"><span>Load avg</span><strong>{cpu.loadavg_1m !== undefined ? Number(cpu.loadavg_1m).toFixed(2) : "n/a"}</strong></div>
-                            <div className="metric-row"><span>Memory</span><strong>{compactBytes(cpu.used_memory_bytes)} / {compactBytes(cpu.total_memory_bytes)}</strong></div>
-                            <div className="metric-row"><span>GPU VRAM</span><strong>{gpu.used_vram_mb !== undefined ? `${gpu.used_vram_mb}/${gpu.total_vram_mb} MB` : "n/a"}</strong></div>
-                            <div className="metric-row"><span>GPU util</span><strong>{gpu.device_count ? `${gpu.device_count} dev / ${gpu.owned_process_count ?? 0} proc` : "n/a"}</strong></div>
-                            <div className="metric-row"><span>Network</span><strong>{compactBytes(network.rx_bytes)} rx / {compactBytes(network.tx_bytes)} tx</strong></div>
-                            <div className="metric-row"><span>Interfaces</span><strong>{network.up_count ?? 0}/{network.interface_count ?? 0} up</strong></div>
-                            <div className="metric-row"><span>Disk used</span><strong>{compactBytes(disk.used_bytes)} / {compactBytes(disk.total_bytes)}</strong></div>
-                          </div>
-                        </article>
-                      );
-                    })
-                  )}
-                </div>
               </section>
 
-              {!selectedPlane || !planeRecord || !dashboard ? (
-                <EmptyState
-                  title={loading ? "Loading plane state" : "No plane selected"}
-                  detail="Select a plane to inspect plane-specific nodes, instances, disks, rollout state, and events."
-                />
-              ) : (
-                <>
-              <div className="summary-grid">
-                <SummaryCard
-                  label="Nodes"
-                  value={dashboard.plane?.node_count ?? 0}
-                  meta={`${readyNodes} ready / ${notReadyNodes} not ready`}
-                />
-                <SummaryCard
-                  label="Instances"
-                  value={displayedInstanceCount}
-                  meta={instanceRoleSummary}
-                />
-                <SummaryCard
-                  label="Rollout"
-                  value={dashboard.rollout?.total_actions ?? 0}
-                  meta={`${dashboard.rollout?.loop_status ?? "n/a"} / ${dashboard.rollout?.loop_reason ?? "n/a"}`}
-                />
-                <SummaryCard
-                  label="Alerts"
-                  value={alertSummary.total ?? 0}
-                  meta={`${alertSummary.critical ?? 0} critical / ${alertSummary.warning ?? 0} warning / ${alertSummary.booting ?? 0} booting`}
-                />
-              </div>
-
-              {operationProgress ? (
-                <section className="action-progress-card">
-                  <div className="card-row">
-                    <div>
-                      <div className="section-label">Current action</div>
-                      <strong>{operationProgress.label}</strong>
-                    </div>
-                    <span
-                      className={`tag ${operationProgress.failed ? "is-critical" : operationProgress.complete ? "is-healthy" : "is-booting"}`}
-                    >
-                      {statusDot(
-                        operationProgress.failed
-                          ? "is-critical"
-                          : operationProgress.complete
-                            ? "is-healthy"
-                            : "is-booting",
-                      )}
-                      <span>{operationProgress.progress}%</span>
-                    </span>
-                  </div>
-                  <div className="progress-track" aria-hidden="true">
-                    <div
-                      className={`progress-fill ${operationProgress.failed ? "is-failed" : operationProgress.complete ? "is-complete" : ""}`}
-                      style={{ width: `${operationProgress.progress}%` }}
-                    />
-                  </div>
-                  <div className="progress-detail">{operationProgress.detail}</div>
-                </section>
-              ) : null}
-
-              <div className="panel-grid">
-                <section className="subpanel">
-                  <div className="subpanel-header">
-                    <h3>Plane config</h3>
-                    <span className="subpanel-meta">Desired config, applied config, and bootstrap model</span>
-                  </div>
-                  <div className="list-card">
-                    <div className="metric-grid compact-metric-grid">
-                      <div className="metric-row"><span>Lifecycle state</span><strong>{planeRecord.state || "n/a"}</strong></div>
-                      <div className="metric-row"><span>Plane mode</span><strong>{planeMode}</strong></div>
-                      <div className="metric-row"><span>Desired generation</span><strong>{planeRecord.generation ?? "n/a"}</strong></div>
-                      <div className="metric-row"><span>Applied generation</span><strong>{planeRecord.applied_generation ?? 0}</strong></div>
-                      <div className="metric-row"><span>Pending restart</span><strong>{planeRecord.staged_update ? "yes" : "no"}</strong></div>
-                      <div className="metric-row"><span>Shared disk</span><strong>{desiredState?.plane_shared_disk_name || "n/a"}</strong></div>
-                      <div className="metric-row"><span>Control root</span><strong>{desiredState?.control_root || "n/a"}</strong></div>
-                      <div className="metric-row"><span>Bootstrap source</span><strong>{bootstrapModelSourceLabel(desiredState?.bootstrap_model)}</strong></div>
-                      <div className="metric-row"><span>Bootstrap target</span><strong>{bootstrapModelTargetPath(desiredState)}</strong></div>
-                    </div>
-                  </div>
-                </section>
-
-                <section className="subpanel">
-                  <div className="subpanel-header">
-                    <h3>Operational watch</h3>
-                    <span className="subpanel-meta">Live rollout, failure, and readiness signals</span>
-                  </div>
-                  <div className="list-column">
-                    <article className="list-card">
-                      <div className="card-row">
-                        <strong>Runtime state</strong>
-                        <span className={`tag ${notReadyNodes > 0 ? "is-warning" : "is-healthy"}`}>
-                          {statusDot(notReadyNodes > 0 ? "is-warning" : "is-healthy")}
-                          <span>{notReadyNodes > 0 ? "degraded" : "stable"}</span>
-                        </span>
-                      </div>
-                      <div className="metric-grid compact-metric-grid">
-                        <div className="metric-row"><span>Observed nodes</span><strong>{runtimeSummary.observed_nodes ?? observationItems.length}</strong></div>
-                        <div className="metric-row"><span>Ready nodes</span><strong>{readyNodes}</strong></div>
-                        <div className="metric-row"><span>Observed instances</span><strong>{observedInstances.length}</strong></div>
-                        <div className="metric-row"><span>Missing runtime payload</span><strong>{missingRuntimeNodes}</strong></div>
-                      </div>
-                    </article>
-                    {alertItems.length === 0 ? (
-                      <EmptyState
-                        title="No active alerts"
-                        detail="Plane is currently stable from the controller point of view."
-                      />
-                    ) : (
-                      alertItems.map((alert, index) => {
-                        const severityClass = alertSeverityClass(alert.severity);
-                        return (
-                          <article
-                            className={`list-card alert-card ${severityClass}`}
-                            key={`${alert.kind}-${alert.node_name || "global"}-${alert.assignment_id || alert.event_id || index}`}
-                          >
-                            <div className="card-row">
-                              <strong>{alert.title}</strong>
-                              <span className={`tag ${severityClass}`}>
-                                {statusDot(severityClass)}
-                                <span>{alert.severity}</span>
-                              </span>
-                            </div>
-                            <div className="list-detail">
-                              <div>{alert.detail || "n/a"}</div>
-                              {alert.node_name ? <div>node {alert.node_name}</div> : null}
-                              {alert.worker_name ? <div>worker {alert.worker_name}</div> : null}
-                              <div>{alert.kind}</div>
-                            </div>
-                          </article>
-                        );
-                      })
-                    )}
-                  </div>
-                </section>
-
-                <section className="subpanel">
-                  <div className="subpanel-header">
-                    <h3>Instances</h3>
-                    <span className="subpanel-meta">Desired configuration</span>
-                  </div>
-                  <div className="instance-grid">
-                    {instances.length === 0 ? (
-                      <EmptyState title="No instances" />
-                    ) : (
-                      displayedInstances.map((instance) => (
-                        <article className="instance-card" key={instance.name}>
-                          <div className="card-row">
-                            <strong>{instance.name}</strong>
-                            <span className="tag">{instanceRole(instance)}</span>
-                          </div>
-                          <div className="metric-grid">
-                            <div className="metric-row"><span>Node</span><strong>{instance.node_name || "auto"}</strong></div>
-                            <div className="metric-row"><span>GPU</span><strong>{instance.gpu_device || "auto"}</strong></div>
-                            <div className="metric-row"><span>Share</span><strong>{instance.share_mode || "n/a"}</strong></div>
-                            <div className="metric-row"><span>Fraction</span><strong>{instance.gpu_fraction ?? "n/a"}</strong></div>
-                            <div className="metric-row"><span>Placement</span><strong>{instance.placement_mode || "n/a"}</strong></div>
-                            <div className="metric-row"><span>Memory cap</span><strong>{instance.memory_cap_mb ? `${instance.memory_cap_mb} MB` : "n/a"}</strong></div>
-                          </div>
-                        </article>
-                      ))
-                    )}
-                  </div>
-                </section>
-
-                <section className="subpanel">
-                  <div className="subpanel-header">
-                    <h3>Nodes</h3>
-                    <span className="subpanel-meta">Availability and runtime posture</span>
-                  </div>
-                  <div className="node-grid">
-                    {nodeItems.length === 0 ? (
-                      <EmptyState title="No nodes in current plane" />
-                    ) : (
-                      nodeItems.map((node) => (
-                        (() => {
-                          const derivedRuntime = observedRuntime.nodeRuntime.get(node.node_name);
-                          const effectiveRuntimeLaunchReady =
-                            node.runtime_launch_ready !== null && node.runtime_launch_ready !== undefined
-                              ? node.runtime_launch_ready
-                              : derivedRuntime?.runtimeLaunchReady;
-                          const effectiveRuntimePhase =
-                            node.runtime_phase || derivedRuntime?.runtimePhase || "pending";
-                          const effectiveIndicatorClass = runtimeIndicatorClass(
-                            effectiveRuntimeLaunchReady,
-                            node.health,
-                          );
-                          return (
-                            <article className="node-card" key={node.node_name}>
-                              <div className="card-row">
-                                <strong>{node.node_name}</strong>
-                                <div className={`pill ${effectiveIndicatorClass}`}>
-                                  {statusDot(effectiveIndicatorClass)}
-                                  <span>{nodeStatusLabel(effectiveRuntimeLaunchReady, effectiveRuntimePhase, node.health)}</span>
-                                </div>
-                              </div>
-                              <div className="metric-grid">
-                                <div className="metric-row"><span>Availability</span><strong>{node.availability || "active"}</strong></div>
-                                <div className="metric-row"><span>Status</span><strong>{node.status || "n/a"}</strong></div>
-                                <div className="metric-row"><span>Runtime</span><strong>{effectiveRuntimePhase}</strong></div>
-                                <div className="metric-row"><span>Launch ready</span><strong>{yesNo(effectiveRuntimeLaunchReady)}</strong></div>
-                                <div className="metric-row"><span>GPU count</span><strong>{node.gpu_count ?? "n/a"}</strong></div>
-                                <div className="metric-row"><span>Telemetry degraded</span><strong>{yesNo(node.telemetry_degraded)}</strong></div>
-                              </div>
-                            </article>
-                          );
-                        })()
-                      ))
-                    )}
-                  </div>
-                </section>
-
-                <section className="subpanel">
-                  <div className="subpanel-header">
-                    <h3>Assignments</h3>
-                    <span className="subpanel-meta">Latest per node</span>
-                  </div>
-                  <div className="assignment-grid">
-                    {assignmentItems.length === 0 ? (
-                      <EmptyState title="No assignment activity" />
-                    ) : (
-                      assignmentItems.map((item) => (
-                        <article className="assignment-card" key={item.node_name}>
-                          <div className="card-row">
-                            <strong>{item.node_name}</strong>
-                            <span className="tag">{item.latest_status}</span>
-                          </div>
-                          <div className="metric-grid">
-                            <div className="metric-row"><span>Assignment</span><strong>#{item.latest_assignment_id}</strong></div>
-                            <div className="metric-row"><span>Pending</span><strong>{item.pending}</strong></div>
-                            <div className="metric-row"><span>Claimed</span><strong>{item.claimed}</strong></div>
-                            <div className="metric-row"><span>Failed</span><strong>{item.failed}</strong></div>
-                          </div>
-                        </article>
-                      ))
-                    )}
-                  </div>
-                </section>
-
-                <section className="subpanel">
-                  <div className="subpanel-header">
-                    <h3>Rollout actions</h3>
-                    <span className="subpanel-meta">Deferred scheduler workflow</span>
-                  </div>
-                  <div className="list-column">
-                    {rolloutItems.length === 0 ? (
-                      <EmptyState title="No rollout actions" />
-                    ) : (
-                      rolloutItems.map((action) => (
-                        <article className="list-card" key={action.id}>
-                          <div className="card-row">
-                            <strong>{action.worker_name}</strong>
-                            <span className="tag">{action.status}</span>
-                          </div>
-                          <div className="list-detail">
-                            <div>step {action.step}</div>
-                            <div>{action.action}</div>
-                            <div>
-                              {action.target_node_name || "n/a"}:{action.target_gpu_device || "n/a"}
-                            </div>
-                            <div>{action.reason || "n/a"}</div>
-                          </div>
-                        </article>
-                      ))
-                    )}
-                  </div>
-                </section>
-
-                <section className="subpanel">
-                  <div className="subpanel-header">
-                    <h3>Rebalance plan</h3>
-                    <span className="subpanel-meta">Current scheduler proposals</span>
-                  </div>
-                  <div className="list-column">
-                    {rebalanceItems.length === 0 ? (
-                      <EmptyState title="No rebalance entries" />
-                    ) : (
-                      rebalanceItems.map((item) => (
-                        <article className="list-card" key={item.worker_name}>
-                          <div className="card-row">
-                            <strong>{item.worker_name}</strong>
-                            <span className="tag">{item.decision}</span>
-                          </div>
-                          <div className="list-detail">
-                            <div>{item.state}</div>
-                            <div>{item.action || "n/a"}</div>
-                            <div>
-                              {(item.current_node_name || "n/a")}:{item.current_gpu_device || "n/a"} →{" "}
-                              {(item.target_node_name || "n/a")}:{item.target_gpu_device || "n/a"}
-                            </div>
-                            <div>{item.gate_reason || `score ${item.score}`}</div>
-                          </div>
-                        </article>
-                      ))
-                    )}
-                  </div>
-                </section>
-
-                <section className="subpanel">
-                  <div className="subpanel-header">
-                    <h3>Disk state</h3>
-                    <span className="subpanel-meta">Desired vs realized storage</span>
-                  </div>
-                  <div className="list-column">
-                    {diskItems.length === 0 ? (
-                      <EmptyState title="No disk state" />
-                    ) : (
-                      diskItems.map((item) => (
-                        <article className="list-card" key={`${item.disk_name}@${item.node_name}`}>
-                          <div className="card-row">
-                            <strong>{item.disk_name}</strong>
-                            <span className="tag">{item.realized_state || "unknown"}</span>
-                          </div>
-                          <div className="list-detail">
-                            <div>{item.node_name}</div>
-                            <div>{item.kind || item.desired_state || "disk"}</div>
-                            <div>
-                              used {compactBytes(item.usage_bytes?.used_bytes)} / total{" "}
-                              {compactBytes(item.usage_bytes?.total_bytes)}
-                            </div>
-                            <div>
-                              io {compactBytes(item.io_bytes?.read_bytes)} read /{" "}
-                              {compactBytes(item.io_bytes?.write_bytes)} write
-                            </div>
-                          </div>
-                        </article>
-                      ))
-                    )}
-                  </div>
-                </section>
-
-                <section className="subpanel event-panel">
-                  <div className="subpanel-header">
-                    <h3>Recent events</h3>
-                    <span className="subpanel-meta">Plane-scoped persisted event log</span>
-                  </div>
-                  <div className="event-list">
-                    {filteredEvents.length === 0 ? (
-                      <EmptyState title="No operator-facing events" detail="Routine host observation noise is hidden from this view." />
-                    ) : (
-                      filteredEvents.map((event) => (
-                        <article className={`event-card ${eventSeverityClass(event.severity)}`} key={event.id}>
-                          <div className="card-row">
-                            <strong>
-                              {event.category}.{event.event_type}
-                            </strong>
-                            <span className="tag">{event.severity}</span>
-                          </div>
-                          <div className="event-meta">
-                            <span>{formatTimestamp(event.created_at)}</span>
-                            {event.node_name ? <span>{event.node_name}</span> : null}
-                            {event.worker_name ? <span>{event.worker_name}</span> : null}
-                          </div>
-                          <p className="event-message">{event.message || "n/a"}</p>
-                        </article>
-                      ))
-                    )}
-                  </div>
-                </section>
-              </div>
-                </>
-              )}
-            </div>
-          ) : !selectedPlane || !planeRecord || !dashboard ? (
-            <EmptyState
-              title={loading ? "Loading plane state" : "No plane selected"}
-              detail="Select a plane to inspect nodes, instances, disks, rollout state, and events."
-            />
-          ) : (
-                <div
-                  className="interaction-layout"
-                  ref={interactionSplitRef}
-                  style={{ gridTemplateColumns: `${interactionPaneWidth}% 14px minmax(0, 1fr)` }}
-                >
-                  <section className="subpanel interaction-panel">
-                    <div className="subpanel-header">
-                      <h3>Interaction</h3>
-                      <span className="subpanel-meta">Controller-proxied chat with the active model</span>
-                    </div>
-                    <div className="list-card interaction-status-card">
-                      <div className="metric-grid compact-metric-grid">
-                        <div className="metric-row"><span>Plane mode</span><strong>{planeMode}</strong></div>
-                        <div className="metric-row"><span>Plane state</span><strong>{interactionStatus?.plane_state || planeRecord.state || "n/a"}</strong></div>
-                        <div className="metric-row"><span>Ready</span><strong>{interactionReady ? "yes" : "no"}</strong></div>
-                        <div className="metric-row"><span>Model</span><strong>{interactionStatus?.served_model_name || interactionStatus?.active_model_id || "n/a"}</strong></div>
-                        <div className="metric-row"><span>Default language</span><strong>{desiredState?.interaction?.default_response_language || interactionStatus?.default_response_language || "n/a"}</strong></div>
-                        <div className="metric-row"><span>Follow user language</span><strong>{yesNo(desiredState?.interaction?.follow_user_language ?? interactionStatus?.follow_user_language)}</strong></div>
-                      </div>
-                      <div className="metric-row"><span>System prompt</span><strong>{desiredState?.interaction?.system_prompt ? "configured" : "not configured"}</strong></div>
-                      {!interactionReady ? (
-                        <EmptyState
-                          title="Interaction unavailable"
-                          detail={interactionReasonMessage(interactionStatus)}
-                        />
-                      ) : null}
-                    </div>
-                  </section>
-
-                  <div
-                    className={`interaction-divider ${draggingDivider ? "is-dragging" : ""}`}
-                    role="separator"
-                    aria-orientation="vertical"
-                    onMouseDown={() => setDraggingDivider(true)}
-                  >
-                    <span className="interaction-divider-handle" />
-                  </div>
-
-                  <section className="subpanel chat-panel">
-                    <div className="subpanel-header">
-                      <h3>Chat</h3>
-                      <span className="subpanel-meta">Session-only transcript</span>
-                    </div>
-                    <div className="chat-transcript" ref={chatTranscriptRef}>
-                      {chatMessages.length === 0 ? (
-                        <EmptyState
-                          title="No chat turns yet"
-                          detail="Send a prompt to test the running model through the controller proxy."
-                        />
-                      ) : (
-                        chatMessages.map((message) => (
-                          <article
-                            className={`chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}
-                            key={message.id}
-                          >
-                            <div className="card-row">
-                              <strong>{message.role === "assistant" ? "Assistant" : "User"}</strong>
-                              {message.metrics ? (
-                                <span className="tag">
-                                  {Math.round(message.metrics.latencyMs)} ms /{" "}
-                                  {message.metrics.completionTokens} tok /{" "}
-                                  {message.metrics.tokensPerSecond.toFixed(1)} tok/s
-                                </span>
-                              ) : null}
-                            </div>
-                            <p className="chat-message-text">{message.content || (message.role === "assistant" && chatBusy ? "Streaming..." : "")}</p>
-                            {message.error ? (
-                              <div className="chat-error-line">{message.error}</div>
-                            ) : null}
-                            {message.session ? (
-                              <div className="chat-metrics-line">
-                                session {message.session.status || "in_progress"}
-                                {message.session.segmentCount
-                                  ? ` / ${message.session.segmentCount} segment${
-                                      message.session.segmentCount === 1 ? "" : "s"
-                                    }`
-                                  : ""}
-                                {message.session.continuationCount
-                                  ? ` / ${message.session.continuationCount} continuation${
-                                      message.session.continuationCount === 1 ? "" : "s"
-                                    }`
-                                  : ""}
-                                {message.session.stopReason
-                                  ? ` / ${message.session.stopReason}`
-                                  : ""}
-                              </div>
-                            ) : null}
-                            {message.metrics ? (
-                              <div className="chat-metrics-line">
-                                total {message.metrics.totalTokens} tokens
-                              </div>
-                            ) : null}
-                          </article>
-                        ))
-                      )}
-                      <div ref={chatTranscriptEndRef} aria-hidden="true" />
-                    </div>
-                    <div className="chat-composer">
-                      <div className="chat-toolbar">
-                        <label className="field-label chat-language-field">
-                          <span>Language</span>
-                          <select
-                            className="chat-language-select"
-                            value={chatLanguage}
-                            onChange={(event) => setChatLanguage(event.target.value)}
-                            disabled={chatBusy}
-                          >
-                            {chatLanguageOptions.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <span className="composer-hint">Enter to send, Shift+Enter for a new line</span>
-                      </div>
-                      <textarea
-                        className="editor-textarea chat-input"
-                        value={chatInput}
-                        onChange={(event) => setChatInput(event.target.value)}
-                        onKeyDown={handleChatInputKeyDown}
-                        placeholder="Ask the running model a question"
-                        disabled={!interactionReady || chatBusy}
-                      />
-                      <div className="toolbar">
-                        <button
-                          className="ghost-button"
-                          type="button"
-                          onClick={sendChatPrompt}
-                          disabled={!interactionReady || chatBusy || !chatInput.trim()}
-                        >
-                          Send
-                        </button>
-                        <button
-                          className="ghost-button"
-                          type="button"
-                          onClick={stopChatStream}
-                          disabled={!chatBusy}
-                        >
-                          Stop
-                        </button>
-                      </div>
-                      {chatError ? <div className="error-banner">{chatError}</div> : null}
-                    </div>
-                  </section>
+              <section className="subpanel dashboard-planes-panel">
+                <div className="subpanel-header">
+                  <h3>Active planes</h3>
+                  <span className="subpanel-meta">
+                    Running and transitional planes with quick controls. Click a plane to open its detailed dashboard.
+                  </span>
                 </div>
-              )}
+                {activePlanes.length === 0 ? (
+                  planes.length === 0 ? (
+                    <OnboardingCard onCreatePlane={() => openPlaneDialog("new")} />
+                  ) : (
+                    <EmptyState
+                      title="No active planes"
+                      detail="Stopped planes remain available on the Planes page. Start one to bring it back into the active fleet view."
+                    />
+                  )
+                ) : (
+                  renderPlaneCards(activePlanes, "dashboard")
+                )}
+              </section>
+            </div>
           </section>
         )}
       </main>
+      {renderDashboardPlaneDetailModal()}
       <PlaneEditorDialog
         dialog={planeDialog}
         setDialog={setPlaneDialog}

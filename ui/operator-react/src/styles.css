@@ -308,6 +308,12 @@ body {
   gap: 18px;
 }
 
+.dashboard-planes-panel,
+.dashboard-plane-detail-panel {
+  display: grid;
+  gap: 16px;
+}
+
 .server-telemetry-panel {
   display: grid;
   gap: 16px;
@@ -505,6 +511,17 @@ body {
   color: var(--text);
   display: grid;
   gap: 12px;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.plane-card:hover,
+.plane-card:focus-within {
+  border-color: rgba(120, 190, 255, 0.34);
+  box-shadow: 0 0 0 1px rgba(120, 190, 255, 0.14), var(--panel-glow);
+  transform: translateY(-1px);
 }
 
 .plane-card.is-selected {
@@ -1063,6 +1080,18 @@ body {
   gap: 14px;
 }
 
+.plane-detail-modal {
+  width: min(1320px, calc(100vw - 48px));
+  display: grid;
+  gap: 18px;
+}
+
+.dashboard-plane-detail-scroll {
+  max-height: calc(100vh - 210px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
 @media (max-width: 1200px) {
   .main-grid {
     grid-template-columns: 1fr;
@@ -1100,6 +1129,14 @@ body {
   .interaction-layout {
     grid-template-columns: 1fr !important;
     gap: 14px;
+  }
+
+  .plane-detail-modal {
+    width: min(100%, calc(100vw - 24px));
+  }
+
+  .dashboard-plane-detail-scroll {
+    max-height: calc(100vh - 170px);
   }
 
   .interaction-divider {

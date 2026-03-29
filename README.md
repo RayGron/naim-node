@@ -710,14 +710,12 @@ External agent/client integrations should target the controller-owned plane inte
 documented in [docs/external-inference-contract.md](./docs/external-inference-contract.md).
 The raw plane `/v1/*` gateway is a runtime implementation detail, not the supported external API.
 
-Single-node planes should now prefer plane-level placement aliases instead of hardcoding a host
-name into every config:
+Single-node planes should use explicit node names in desired state and bundle configs:
 
 - default local host name is `local-hostd` when `--node` is not provided
-- single-node example planes should use `placement_target: "local"`
-- explicit pinning is still available through `placement_target: "node:<name>"`
-- existing `node_name` fields inside rendered instances, disks, and runtime GPU nodes are
-  normalized from that placement target
+- set `inference.primary_infer_node`, `nodes[].name`, `disks[].node_name`,
+  `instances[].node_name`, and `runtime_gpu_nodes[].node_name` explicitly
+- `placement_target` is deprecated and no longer used by example configs
 
 Large local models can now be referenced directly instead of copied into plane-owned storage.
 For example, a plane can point at a preloaded shared-storage model directory with:
@@ -755,8 +753,8 @@ For CPU-only validation on a host where the worker runtime should not offload la
 ```
 
 For single-node local demo work, you no longer need to force a bundle-specific node name like
-`node-a`. The default local install path uses `local-hostd`, and example planes should use
-`placement_target: "local"` unless they intentionally need `placement_target: "node:<name>"`.
+`node-a`. The default local install path uses `local-hostd`, and example planes should keep
+their node references explicit in the desired state instead of using deprecated placement aliases.
 
 Primary remote hostd flow:
 
