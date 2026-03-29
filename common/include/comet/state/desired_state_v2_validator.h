@@ -18,6 +18,7 @@ class DesiredStateV2Validator final {
   void ValidateTopology() const;
   void ValidateInfer() const;
   void ValidateWorker() const;
+  void ValidateWorkerResources() const;
   void ValidateApp() const;
   void ValidateHooks() const;
 

@@ -232,6 +232,24 @@ int main() {
         },
         "native-dp-non-vllm");
 
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-exclusive-fraction"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen"},
+             }},
+            {"runtime", {{"engine", "vllm"}, {"workers", 1}}},
+            {"resources",
+             {{"worker",
+               {{"share_mode", "exclusive"}, {"gpu_fraction", 0.5}, {"memory_cap_mb", 24576}}}}},
+        },
+        "exclusive-share-mode-requires-full-gpu");
+
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "desired_state_v2_validator_tests failed: " << ex.what() << '\n';

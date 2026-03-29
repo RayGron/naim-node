@@ -104,6 +104,14 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function normalizeShareModeGpuFraction(shareMode, gpuFraction) {
+  if (shareMode === "exclusive") {
+    return 1;
+  }
+  const parsed = Number(gpuFraction);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
 function parseGpuMemoryText(value) {
   return value
     .split(",")
@@ -326,7 +334,10 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     appVolumeAccess: appVolume.access || defaults.appVolumeAccess,
     placementMode: workerResources.placement_mode || defaults.placementMode,
     shareMode: workerResources.share_mode || defaults.shareMode,
-    gpuFraction: Number(workerResources.gpu_fraction ?? defaults.gpuFraction),
+    gpuFraction: normalizeShareModeGpuFraction(
+      workerResources.share_mode || defaults.shareMode,
+      workerResources.gpu_fraction ?? defaults.gpuFraction,
+    ),
     memoryCapMb: Number(workerResources.memory_cap_mb ?? defaults.memoryCapMb),
     sharedDiskGb: Number(value?.resources?.shared_disk_gb ?? defaults.sharedDiskGb),
     postDeployScript: value?.hooks?.post_deploy_script || defaults.postDeployScript,
@@ -385,7 +396,7 @@ export function buildDesiredStateV2FromForm(form) {
       worker: {
         placement_mode: form.placementMode,
         share_mode: form.shareMode,
-        gpu_fraction: Number(form.gpuFraction) || 1,
+        gpu_fraction: normalizeShareModeGpuFraction(form.shareMode, form.gpuFraction),
         memory_cap_mb: parseNumber(form.memoryCapMb, 24576),
       },
       shared_disk_gb: parseNumber(form.sharedDiskGb, 40),
@@ -629,6 +640,9 @@ export function validatePlaneV2Form(form) {
   }
   if (form?.dataParallelMode !== "off" && form?.runtimeEngine !== "vllm") {
     errors.push("Data-parallel modes are currently supported only with the vllm runtime.");
+  }
+  if (form?.shareMode === "exclusive" && Number(form?.gpuFraction) !== 1) {
+    errors.push("Exclusive share mode requires GPU fraction equal to 1.0.");
   }
   if (form?.appEnabled && !String(form?.appImage || "").trim()) {
     errors.push("App image is required when app is enabled.");
@@ -941,6 +955,18 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
         ...current,
         [key]: event.target.value,
       }));
+  }
+
+  function bindShareMode() {
+    return (event) =>
+      updatePlaneDialogForm(setDialog, (current) => {
+        const nextShareMode = event.target.value;
+        return {
+          ...current,
+          shareMode: nextShareMode,
+          gpuFraction: normalizeShareModeGpuFraction(nextShareMode, current.gpuFraction),
+        };
+      });
   }
 
   function bindCheck(key) {
@@ -1448,24 +1474,36 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
         </label>
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.shareMode}>Share mode</InfoLabel>
-          <select className="text-input" value={form.shareMode} onChange={bindText("shareMode")}>
+          <select className="text-input" value={form.shareMode} onChange={bindShareMode()}>
             <option value="exclusive">exclusive</option>
             <option value="shared">shared</option>
             <option value="best-effort">best-effort</option>
           </select>
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.gpuFraction}>GPU fraction</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            step="0.05"
-            min="0"
-            max="1"
-            value={form.gpuFraction}
-            onChange={bindNumber("gpuFraction")}
+          <FieldHint
+            message={
+              form.shareMode === "exclusive"
+                ? "Exclusive workers always reserve the whole GPU, so GPU fraction is fixed at 1.0."
+                : fieldError("Exclusive share mode requires GPU fraction equal to 1.0")
+            }
+            severity={form.shareMode === "exclusive" ? "warning" : "error"}
           />
         </label>
+        {form.shareMode !== "exclusive" ? (
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.gpuFraction}>GPU fraction</InfoLabel>
+            <input
+              className={inputClassName(
+                Boolean(fieldError("Exclusive share mode requires GPU fraction equal to 1.0")),
+              )}
+              type="number"
+              step="0.05"
+              min="0"
+              max="1"
+              value={form.gpuFraction}
+              onChange={bindNumber("gpuFraction")}
+            />
+          </label>
+        ) : null}
       </div>
 
       <div className="plane-form-grid">

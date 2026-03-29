@@ -164,6 +164,7 @@ void DesiredStateV2Validator::ValidateInfer() const {
 
 void DesiredStateV2Validator::ValidateWorker() const {
   if (!value_.contains("worker")) {
+    ValidateWorkerResources();
     return;
   }
   RequireObject("worker");
@@ -206,6 +207,26 @@ void DesiredStateV2Validator::ValidateWorker() const {
     ValidateNodeRoleCompatibility(worker.at("node").get<std::string>(), "worker", "worker");
   }
   ValidateStartBlock(value_.at("worker"), "worker");
+  ValidateWorkerResources();
+}
+
+void DesiredStateV2Validator::ValidateWorkerResources() const {
+  if (!value_.contains("resources") || !value_.at("resources").is_object()) {
+    return;
+  }
+  const auto& resources = value_.at("resources");
+  if (!resources.contains("worker") || !resources.at("worker").is_object()) {
+    return;
+  }
+  const auto& worker_resources = resources.at("worker");
+  const std::string share_mode = worker_resources.value("share_mode", std::string{});
+  if (share_mode == "exclusive" && worker_resources.contains("gpu_fraction")) {
+    const double gpu_fraction = worker_resources.at("gpu_fraction").get<double>();
+    if (std::abs(gpu_fraction - 1.0) > 1e-9) {
+      throw std::runtime_error(
+          "desired-state v2 resources.worker.gpu_fraction must be 1.0 when share_mode=exclusive");
+    }
+  }
 }
 
 void DesiredStateV2Validator::ValidateApp() const {
