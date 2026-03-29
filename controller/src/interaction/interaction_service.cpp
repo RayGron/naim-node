@@ -2400,6 +2400,10 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
           : comet::ExpectedReplicaGroupCount(
                 desired_state->inference,
                 desired_state->worker_group);
+  if (ready_worker_members == 0 && resolution.runtime_status.has_value() &&
+      resolution.runtime_status->inference_ready) {
+    ready_worker_members = expected_worker_members;
+  }
   if (hybrid_data_parallel) {
     expected_replica_groups =
         resolution.runtime_status.has_value() && resolution.runtime_status->api_endpoints_expected > 0
@@ -2480,11 +2484,6 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     runtime.inference_ready =
         probe_controller_target_ok_(resolution.target, "/v1/models");
     resolution.runtime_status = std::move(runtime);
-  }
-
-  if (ready_worker_members == 0 && resolution.runtime_status.has_value() &&
-      resolution.runtime_status->inference_ready) {
-    ready_worker_members = expected_worker_members;
   }
 
   if (resolution.runtime_status.has_value()) {
