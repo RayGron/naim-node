@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "plane/plane_deletion_support.h"
+
 namespace comet::controller {
 
 PlaneService::PlaneService(
@@ -53,6 +55,11 @@ int PlaneService::ListPlanes() const {
 int PlaneService::ShowPlane(const std::string& plane_name) const {
   comet::ControllerStore store(db_path_);
   store.Initialize();
+  plane_deletion_support::FinalizeDeletedPlaneIfReady(
+      store,
+      plane_name,
+      can_finalize_deleted_plane_,
+      event_appender_);
   const auto state = store.LoadDesiredState(plane_name);
   const auto plane = store.LoadPlane(plane_name);
   if (!state.has_value() || !plane.has_value()) {

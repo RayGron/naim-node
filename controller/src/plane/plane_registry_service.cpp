@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "plane/plane_deletion_support.h"
+
 using nlohmann::json;
 
 namespace comet::controller {
@@ -21,25 +23,10 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
   comet::ControllerStore store(db_path);
   store.Initialize();
 
-  for (const auto& plane : store.LoadPlanes()) {
-    if (plane.state != "deleting") {
-      continue;
-    }
-    if (!deps_.can_finalize_deleted_plane(store, plane.name)) {
-      continue;
-    }
-    store.DeletePlane(plane.name);
-    deps_.event_appender(
-        store,
-        "plane",
-        "deleted",
-        "plane deleted from controller registry after cleanup convergence",
-        json{
-            {"plane_name", plane.name},
-            {"deleted_generation", plane.generation},
-        },
-        "");
-  }
+  plane_deletion_support::FinalizeDeletedPlanesIfReady(
+      store,
+      deps_.can_finalize_deleted_plane,
+      deps_.event_appender);
 
   json items = json::array();
   for (const auto& plane : store.LoadPlanes()) {

@@ -291,7 +291,26 @@ PlaneHttpService MakePlaneHttpService() {
             return latest_by_node;
           },
       });
-  static const comet::controller::ControllerStateService controller_state_service;
+  static const comet::controller::ControllerStateService controller_state_service(
+      comet::controller::ControllerStateService::Deps{
+          [](comet::ControllerStore& store, const std::string& plane_name) {
+            return CanFinalizeDeletedPlane(store, plane_name);
+          },
+          [](comet::ControllerStore& store,
+              const std::string& category,
+              const std::string& event_type,
+              const std::string& message,
+              const json& payload,
+              const std::string& plane_name) {
+            AppendControllerEvent(
+                store,
+                category,
+                event_type,
+                message,
+                payload,
+                plane_name);
+          },
+      });
   static const SchedulerViewService scheduler_view_service;
   static const comet::controller::SchedulerDomainService scheduler_domain_service =
       MakeSchedulerDomainService();

@@ -12,6 +12,8 @@ using nlohmann::json;
 
 namespace comet::controller {
 
+ControllerStateService::ControllerStateService(Deps deps) : deps_(std::move(deps)) {}
+
 json ControllerStateService::BuildPayload(
     const std::string& db_path,
     const std::optional<std::string>& plane_name) const {
@@ -31,6 +33,19 @@ json ControllerStateService::BuildPayload(
 
   comet::ControllerStore store(db_path);
   store.Initialize();
+
+  if (plane_name.has_value()) {
+    plane_deletion_support::FinalizeDeletedPlaneIfReady(
+        store,
+        *plane_name,
+        deps_.can_finalize_deleted_plane,
+        deps_.event_appender);
+  } else {
+    plane_deletion_support::FinalizeDeletedPlanesIfReady(
+        store,
+        deps_.can_finalize_deleted_plane,
+        deps_.event_appender);
+  }
 
   const auto planes = store.LoadPlanes();
   const auto generation =

@@ -204,6 +204,18 @@ target_link_libraries(comet-plane-request-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-plane-request-tests)
 
 add_executable(
+  comet-controller-plane-deletion-tests
+  controller/src/plane/controller_state_service.cpp
+  controller/src/plane/plane_deletion_support.cpp
+  controller/src/plane/plane_service.cpp
+  controller/src/plane/plane_deletion_support_tests.cpp
+)
+target_include_directories(
+  comet-controller-plane-deletion-tests PRIVATE common/include controller/include)
+target_link_libraries(comet-controller-plane-deletion-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-controller-plane-deletion-tests)
+
+add_executable(
   comet-hostd-local-state-tests
   hostd/src/app/hostd_local_state_support.cpp
   hostd/src/app/hostd_local_state_support_tests.cpp
@@ -250,6 +262,7 @@ add_executable(
   controller/src/infra/controller_request_support.cpp
   controller/src/infra/controller_runtime_support_service.cpp
   controller/src/plane/controller_state_service.cpp
+  controller/src/plane/plane_deletion_support.cpp
   controller/src/http/controller_http_server.cpp
   controller/src/http/controller_http_route_handlers.cpp
   controller/src/http/controller_http_router.cpp
