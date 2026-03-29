@@ -229,6 +229,53 @@ def apply_vllm_native_external_lb_hotfix() -> None:
             core_client_py.write_text(source.replace(buggy, fixed, 1))
             patched = True
 
+    output_processor_py = Path(
+        "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/output_processor.py"
+    )
+    if output_processor_py.is_file():
+        source = output_processor_py.read_text()
+        queue_put = (
+            "                if req_state.queue is not None:\n"
+            "                    # AsyncLLM: put into queue for handling by generate().\n"
+            "                    req_state.queue.put(request_output)\n"
+        )
+        queue_put_debug = (
+            "                if req_state.queue is not None:\n"
+            "                    # AsyncLLM: put into queue for handling by generate().\n"
+            "                    print(\n"
+            "                        f\"[comet-worker-debug] queue-put req={req_id} \"\n"
+            "                        f\"finished={request_output.finished} \"\n"
+            "                        f\"finish_reason={finish_reason} \"\n"
+            "                        f\"tokens={len(new_token_ids)}\",\n"
+            "                        flush=True,\n"
+            "                    )\n"
+            "                    req_state.queue.put(request_output)\n"
+        )
+        if queue_put_debug not in source and queue_put in source:
+            output_processor_py.write_text(source.replace(queue_put, queue_put_debug, 1))
+            patched = True
+
+    async_llm_py = Path(
+        "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/async_llm.py"
+    )
+    if async_llm_py.is_file():
+        source = async_llm_py.read_text()
+        read_output = (
+            "                out = q.get_nowait() or await q.get()\n"
+        )
+        read_output_debug = (
+            "                out = q.get_nowait() or await q.get()\n"
+            "                print(\n"
+            "                    f\"[comet-worker-debug] generate-got-output req={request_id} \"\n"
+            "                    f\"type={type(out).__name__} \"\n"
+            "                    f\"finished={getattr(out, 'finished', None)}\",\n"
+            "                    flush=True,\n"
+            "                )\n"
+        )
+        if read_output_debug not in source and read_output in source:
+            async_llm_py.write_text(source.replace(read_output, read_output_debug, 1))
+            patched = True
+
     if patched:
         print(
             "[comet-worker] applied vLLM external-LB stats_update_address hotfix",
