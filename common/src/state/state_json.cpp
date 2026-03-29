@@ -8,6 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "comet/state/desired_state_v2_renderer.h"
+#include "comet/state/desired_state_v2_projector.h"
 #include "comet/state/worker_group_topology.h"
 
 namespace comet {
@@ -15,6 +17,13 @@ namespace comet {
 namespace {
 
 using nlohmann::json;
+
+void NormalizeInferenceSettings(InferenceRuntimeSettings* settings);
+
+bool IsDesiredStateV2(const json& value) {
+  return value.is_object() && value.value("version", 0) == 2;
+}
+
 
 void NormalizeInferenceSettings(InferenceRuntimeSettings* settings) {
   if (settings == nullptr) {
@@ -772,6 +781,9 @@ json DesiredStateToJson(const DesiredState& state) {
 }
 
 DesiredState DesiredStateFromJson(const json& value) {
+  if (IsDesiredStateV2(value)) {
+    return DesiredStateV2Renderer::Render(value);
+  }
   DesiredState state;
   state.plane_name = value.at("plane_name").get<std::string>();
   state.plane_shared_disk_name = value.at("plane_shared_disk_name").get<std::string>();
@@ -1052,6 +1064,10 @@ std::string SerializeDesiredStateJson(const DesiredState& state) {
   return DesiredStateToJson(state).dump(2);
 }
 
+std::string SerializeDesiredStateV2Json(const DesiredState& state) {
+  return DesiredStateV2Projector::Project(state).dump(2);
+}
+
 DesiredState DeserializeDesiredStateJson(const std::string& json_text) {
   DesiredState state = DesiredStateFromJson(json::parse(json_text));
   try {
@@ -1081,7 +1097,20 @@ std::optional<DesiredState> LoadDesiredStateJson(const std::string& path) {
 
   json value;
   input >> value;
-  return DesiredStateFromJson(value);
+  DesiredState state = DesiredStateFromJson(value);
+  try {
+    state = ResolvePlacementTargetAliases(std::move(state));
+  } catch (const std::runtime_error& error) {
+    if (state.placement_target.has_value() &&
+        std::string_view(error.what()) ==
+            "plane-level placement_target supports only single-node desired states") {
+      state.placement_target.reset();
+    } else {
+      throw;
+    }
+  }
+  state.placement_target.reset();
+  return state;
 }
 
 void SaveDesiredStateJson(const DesiredState& state, const std::string& path) {

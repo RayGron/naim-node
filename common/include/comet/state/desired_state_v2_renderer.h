@@ -1,0 +1,78 @@
+#pragma once
+
+#include <nlohmann/json.hpp>
+
+#include "comet/state/models.h"
+
+namespace comet {
+
+class DesiredStateV2Renderer final {
+ public:
+  static DesiredState Render(const nlohmann::json& value);
+
+ private:
+  explicit DesiredStateV2Renderer(const nlohmann::json& value);
+
+  DesiredState RenderState();
+
+  void RenderIdentity();
+  void RenderHooks();
+  void RenderModel();
+  void RenderInteraction();
+  void RenderRuntime();
+  void RenderNodeTopology();
+  void RenderWorkerGroup();
+  void RenderSharedDisk();
+  void RenderInferInstance();
+  void RenderWorkerInstances();
+  void RenderAppInstance();
+
+  bool InferEnabled() const;
+  int WorkerCount() const;
+  int ExpectedWorkers() const;
+  std::string ResolveInferNodeName() const;
+  std::string ResolveAppNodeName() const;
+  std::string ResolveWorkerNodeName(int worker_index) const;
+  std::optional<std::string> ResolveWorkerGpuDevice(int worker_index) const;
+  std::string DefaultNodeName() const;
+  const NodeInventory& RequireNode(const std::string& node_name, const char* context) const;
+  std::string SharedDiskNodeName() const;
+
+  std::string StripBundleRefPrefix(const std::string& value) const;
+  std::string BuildWorkerName(int index, int total_workers) const;
+  std::string BuildPlaneSharedDiskName() const;
+  std::string BuildInferInstanceName() const;
+  std::string BuildAppInstanceName() const;
+  std::string BuildPlaneSharedHostPath() const;
+  std::string BuildInstancePrivateHostPath(const std::string& instance_name) const;
+  std::string BuildAppCommandFromScriptRef(const std::string& script_ref) const;
+  std::string BuildCommandFromStartSpec(
+      const nlohmann::json& start,
+      const std::string& default_command) const;
+  std::string DefaultInferRuntimeBackend() const;
+  std::string DefaultWorkerBootMode() const;
+  void NormalizeInferenceSettings();
+
+  int ExtractPrivateDiskSizeGb(
+      const nlohmann::json& service_json,
+      int default_size_gb,
+      const std::string& legacy_volume_key = "volumes") const;
+  std::string ExtractPrivateMountPath(
+      const nlohmann::json& service_json,
+      const std::string& default_mount_path,
+      const std::string& legacy_volume_key = "volumes") const;
+
+  InteractionSettings::CompletionPolicy DefaultCompletionPolicy() const;
+  InteractionSettings::CompletionPolicy DefaultLongCompletionPolicy() const;
+
+  const nlohmann::json& value_;
+  DesiredState state_;
+  nlohmann::json infer_json_;
+  nlohmann::json worker_json_;
+  nlohmann::json resources_json_;
+  nlohmann::json worker_resources_json_;
+  nlohmann::json app_json_;
+  std::optional<std::string> infer_name_;
+};
+
+}  // namespace comet

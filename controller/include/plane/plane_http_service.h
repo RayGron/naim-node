@@ -10,6 +10,7 @@
 #include "http/controller_http_types.h"
 #include "plane/controller_state_service.h"
 #include "plane/dashboard_service.h"
+#include "plane/plane_desired_state_request_parser.h"
 #include "plane/plane_http_support.h"
 #include "plane/plane_registry_service.h"
 
@@ -39,4 +40,5 @@ class PlaneHttpService {
       const HttpRequest& request) const;
 
   PlaneHttpSupport support_;
+  PlaneDesiredStateRequestParser request_parser_;
 };

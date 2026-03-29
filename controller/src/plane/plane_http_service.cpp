@@ -61,15 +61,7 @@ HttpResponse PlaneHttpService::HandlePlanesCollection(
   if (request.method == "POST") {
     try {
       const json body = support_.parse_json_request_body(request);
-      const json desired_state_payload =
-          body.contains("desired_state") ? body.at("desired_state") : body;
-      if (!desired_state_payload.is_object()) {
-        return support_.build_json_response(
-            400,
-            json{{"status", "bad_request"},
-                 {"message", "request body must contain desired_state object"}},
-            {});
-      }
+      const auto parsed_request = request_parser_.ParseUpsertRequestBody(body);
       const std::string artifacts_root = support_.resolve_artifacts_root(
           body.contains("artifacts_root") && body["artifacts_root"].is_string()
               ? std::optional<std::string>(body["artifacts_root"].get<std::string>())
@@ -79,10 +71,10 @@ HttpResponse PlaneHttpService::HandlePlanesCollection(
           200,
           support_.build_controller_action_payload(support_.upsert_plane_state_action(
               db_path,
-              desired_state_payload.dump(2),
+              parsed_request.desired_state_payload.dump(2),
               artifacts_root,
               std::nullopt,
-              "api")),
+              parsed_request.source_label)),
           {});
     } catch (const std::invalid_argument& error) {
       return support_.build_json_response(
@@ -200,15 +192,7 @@ HttpResponse PlaneHttpService::HandlePlanePath(
   if (request.method == "PUT" && remainder.find('/') == std::string::npos) {
     try {
       const json body = support_.parse_json_request_body(request);
-      const json desired_state_payload =
-          body.contains("desired_state") ? body.at("desired_state") : body;
-      if (!desired_state_payload.is_object()) {
-        return support_.build_json_response(
-            400,
-            json{{"status", "bad_request"},
-                 {"message", "request body must contain desired_state object"}},
-            {});
-      }
+      const auto parsed_request = request_parser_.ParseUpsertRequestBody(body);
       const std::string artifacts_root = support_.resolve_artifacts_root(
           body.contains("artifacts_root") && body["artifacts_root"].is_string()
               ? std::optional<std::string>(body["artifacts_root"].get<std::string>())
@@ -218,10 +202,10 @@ HttpResponse PlaneHttpService::HandlePlanePath(
           200,
           support_.build_controller_action_payload(support_.upsert_plane_state_action(
               db_path,
-              desired_state_payload.dump(2),
+              parsed_request.desired_state_payload.dump(2),
               artifacts_root,
               remainder,
-              "api")),
+              parsed_request.source_label)),
           {});
     } catch (const std::invalid_argument& error) {
       return support_.build_json_response(

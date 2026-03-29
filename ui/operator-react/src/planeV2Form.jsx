@@ -1,0 +1,1682 @@
+const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
+
+function parseEnvText(value) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reduce((env, line) => {
+      const delimiter = line.indexOf("=");
+      if (delimiter === -1) {
+        return env;
+      }
+      const key = line.slice(0, delimiter).trim();
+      const itemValue = line.slice(delimiter + 1).trim();
+      if (!key) {
+        return env;
+      }
+      env[key] = itemValue;
+      return env;
+    }, {});
+}
+
+function renderEnvText(env) {
+  if (!env || typeof env !== "object") {
+    return "";
+  }
+  return Object.entries(env)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
+function parseNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseGpuMemoryText(value) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .reduce((acc, item) => {
+      const delimiter = item.indexOf("=");
+      if (delimiter === -1) {
+        return acc;
+      }
+      const gpu = item.slice(0, delimiter).trim();
+      const memory = Number(item.slice(delimiter + 1).trim());
+      if (!gpu || !Number.isFinite(memory) || memory <= 0) {
+        return acc;
+      }
+      acc[gpu] = memory;
+      return acc;
+    }, {});
+}
+
+function renderGpuMemoryText(gpuMemoryMb) {
+  if (!gpuMemoryMb || typeof gpuMemoryMb !== "object") {
+    return "";
+  }
+  return Object.entries(gpuMemoryMb)
+    .map(([gpu, memory]) => `${gpu}=${memory}`)
+    .join(",");
+}
+
+function normalizeTopologyNodes(nodes) {
+  if (!Array.isArray(nodes)) {
+    return [];
+  }
+  return nodes.map((node) => ({
+    name: node?.name || "",
+    executionMode: node?.executionMode || node?.execution_mode || "mixed",
+    gpuMemoryText: node?.gpuMemoryText || renderGpuMemoryText(node?.gpu_memory_mb),
+  }));
+}
+
+function normalizeWorkerAssignments(assignments) {
+  if (!Array.isArray(assignments)) {
+    return [];
+  }
+  return assignments.map((assignment) => ({
+    node: assignment?.node || "",
+    gpuDevice: assignment?.gpuDevice || assignment?.gpu_device || "",
+  }));
+}
+
+export function isDesiredStateV2(value) {
+  return Boolean(value && typeof value === "object" && value.version === 2);
+}
+
+export function buildNewPlaneFormState() {
+  return {
+    planeName: "new-plane",
+    planeMode: "llm",
+    protectedPlane: false,
+    modelSourceType: "huggingface",
+    modelRef: "Qwen/Qwen2.5-0.5B-Instruct",
+    modelPath: "",
+    modelUrl: "",
+    modelUrls: "",
+    materializationMode: "download",
+    materializationLocalPath: "",
+    servedModelName: "new-plane-model",
+    modelTargetFilename: "",
+    modelSha256: "",
+    systemPrompt:
+      "You are Cypher AI. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
+    defaultResponseLanguage: "ru",
+    followUserLanguage: true,
+    runtimeEngine: "vllm",
+    workers: 1,
+    dataParallelMode: "off",
+    dataParallelLbMode: "external",
+    maxModelLen: 8192,
+    maxNumSeqs: 8,
+    gpuMemoryUtilization: 0.85,
+    gatewayPort: 18084,
+    inferencePort: 18094,
+    serverName: "new-plane.local",
+    topologyEnabled: false,
+    topologyNodes: [],
+    inferImage: "",
+    inferStartType: "command",
+    inferStartValue: "",
+    inferEnvText: "",
+    inferNode: "",
+    inferStorageEnabled: false,
+    inferStorageSizeGb: 8,
+    inferStorageMountPath: "/comet/private",
+    workerImage: "",
+    workerStartType: "command",
+    workerStartValue: "",
+    workerEnvText: "",
+    workerNode: "",
+    workerGpuDevice: "",
+    workerAssignmentsEnabled: false,
+    workerAssignments: [],
+    workerStorageEnabled: false,
+    workerStorageSizeGb: 24,
+    workerStorageMountPath: "/comet/private",
+    appEnabled: false,
+    appImage: "",
+    appStartType: "script",
+    appStartValue: "",
+    appEnvText: "",
+    appHostPort: 18010,
+    appContainerPort: 8080,
+    appNode: "",
+    appVolumeEnabled: false,
+    appVolumeName: "private-data",
+    appVolumeType: "persistent",
+    appVolumeSizeGb: 8,
+    appVolumeMountPath: "/comet/private",
+    appVolumeAccess: "rw",
+    placementMode: "auto",
+    shareMode: "exclusive",
+    gpuFraction: 1.0,
+    memoryCapMb: 24576,
+    sharedDiskGb: 40,
+    postDeployScript: "bundle://deploy/scripts/post-deploy.sh",
+  };
+}
+
+export function buildPlaneFormStateFromDesiredStateV2(value) {
+  const defaults = buildNewPlaneFormState();
+  const source = value?.model?.source || {};
+  const materialization = value?.model?.materialization || {};
+  const runtime = value?.runtime || {};
+  const network = value?.network || {};
+  const infer = value?.infer || {};
+  const worker = value?.worker || {};
+  const app = value?.app || {};
+  const workerResources = value?.resources?.worker || {};
+  const appStart = app?.start || {};
+  const inferStart = infer?.start || {};
+  const workerStart = worker?.start || {};
+  const appPublish = Array.isArray(app?.publish) && app.publish.length > 0 ? app.publish[0] : {};
+  const appVolume =
+    Array.isArray(app?.volumes) && app.volumes.length > 0 ? app.volumes[0] : {};
+  const inferStorage = infer?.storage || {};
+  const workerStorage = worker?.storage || {};
+  return {
+    ...defaults,
+    planeName: value?.plane_name || defaults.planeName,
+    planeMode: value?.plane_mode || defaults.planeMode,
+    protectedPlane: Boolean(value?.protected),
+    modelSourceType: source.type || defaults.modelSourceType,
+    modelRef: source.ref || defaults.modelRef,
+    modelPath: source.path || "",
+    modelUrl: source.url || "",
+    modelUrls: Array.isArray(source.urls) ? source.urls.join("\n") : "",
+    materializationMode: materialization.mode || defaults.materializationMode,
+    materializationLocalPath: materialization.local_path || "",
+    servedModelName: value?.model?.served_model_name || defaults.servedModelName,
+    modelTargetFilename: value?.model?.target_filename || "",
+    modelSha256: value?.model?.sha256 || "",
+    systemPrompt: value?.interaction?.system_prompt || defaults.systemPrompt,
+    defaultResponseLanguage:
+      value?.interaction?.default_response_language || defaults.defaultResponseLanguage,
+    followUserLanguage:
+      value?.interaction?.follow_user_language ?? defaults.followUserLanguage,
+    runtimeEngine: runtime.engine || defaults.runtimeEngine,
+    workers: Number(runtime.workers ?? defaults.workers),
+    dataParallelMode: runtime.data_parallel_mode || defaults.dataParallelMode,
+    dataParallelLbMode: runtime.data_parallel_lb_mode || defaults.dataParallelLbMode,
+    maxModelLen: Number(runtime.max_model_len ?? defaults.maxModelLen),
+    maxNumSeqs: Number(runtime.max_num_seqs ?? defaults.maxNumSeqs),
+    gpuMemoryUtilization: Number(
+      runtime.gpu_memory_utilization ?? defaults.gpuMemoryUtilization,
+    ),
+    gatewayPort: Number(network.gateway_port ?? defaults.gatewayPort),
+    inferencePort: Number(network.inference_port ?? defaults.inferencePort),
+    serverName: network.server_name || defaults.serverName,
+    topologyEnabled: Boolean(value?.topology?.nodes?.length),
+    topologyNodes: normalizeTopologyNodes(value?.topology?.nodes),
+    inferImage: infer.image || "",
+    inferStartType: inferStart.type || defaults.inferStartType,
+    inferStartValue: inferStart.script_ref || inferStart.command || "",
+    inferEnvText: renderEnvText(infer.env),
+    inferNode: infer.node || "",
+    inferStorageEnabled: Boolean(infer.storage),
+    inferStorageSizeGb: Number(inferStorage.size_gb ?? defaults.inferStorageSizeGb),
+    inferStorageMountPath: inferStorage.mount_path || defaults.inferStorageMountPath,
+    workerImage: worker.image || "",
+    workerStartType: workerStart.type || defaults.workerStartType,
+    workerStartValue: workerStart.script_ref || workerStart.command || "",
+    workerEnvText: renderEnvText(worker.env),
+    workerNode: worker.node || "",
+    workerGpuDevice: worker.gpu_device || "",
+    workerAssignmentsEnabled: Array.isArray(worker.assignments) && worker.assignments.length > 0,
+    workerAssignments: normalizeWorkerAssignments(worker.assignments),
+    workerStorageEnabled: Boolean(worker.storage),
+    workerStorageSizeGb: Number(workerStorage.size_gb ?? defaults.workerStorageSizeGb),
+    workerStorageMountPath: workerStorage.mount_path || defaults.workerStorageMountPath,
+    appEnabled: app.enabled ?? defaults.appEnabled,
+    appImage: app.image || "",
+    appStartType: appStart.type || defaults.appStartType,
+    appStartValue: appStart.script_ref || appStart.command || "",
+    appEnvText: renderEnvText(app.env),
+    appHostPort: Number(appPublish.host_port ?? defaults.appHostPort),
+    appContainerPort: Number(appPublish.container_port ?? defaults.appContainerPort),
+    appNode: app.node || "",
+    appVolumeEnabled: Boolean(appVolume?.name),
+    appVolumeName: appVolume.name || defaults.appVolumeName,
+    appVolumeType: appVolume.type || defaults.appVolumeType,
+    appVolumeSizeGb: Number(appVolume.size_gb ?? defaults.appVolumeSizeGb),
+    appVolumeMountPath: appVolume.mount_path || defaults.appVolumeMountPath,
+    appVolumeAccess: appVolume.access || defaults.appVolumeAccess,
+    placementMode: workerResources.placement_mode || defaults.placementMode,
+    shareMode: workerResources.share_mode || defaults.shareMode,
+    gpuFraction: Number(workerResources.gpu_fraction ?? defaults.gpuFraction),
+    memoryCapMb: Number(workerResources.memory_cap_mb ?? defaults.memoryCapMb),
+    sharedDiskGb: Number(value?.resources?.shared_disk_gb ?? defaults.sharedDiskGb),
+    postDeployScript: value?.hooks?.post_deploy_script || defaults.postDeployScript,
+  };
+}
+
+export function buildDesiredStateV2FromForm(form) {
+  const source = { type: form.modelSourceType };
+  if (form.modelSourceType === "local") {
+    if (form.modelPath.trim()) {
+      source.path = form.modelPath.trim();
+    }
+    if (form.modelRef.trim()) {
+      source.ref = form.modelRef.trim();
+    }
+  } else if (form.modelSourceType === "url") {
+    if (form.modelUrl.trim()) {
+      source.url = form.modelUrl.trim();
+    }
+    const urls = form.modelUrls
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (urls.length > 0) {
+      source.urls = urls;
+    }
+    if (form.modelRef.trim()) {
+      source.ref = form.modelRef.trim();
+    }
+  } else if (form.modelRef.trim()) {
+    source.ref = form.modelRef.trim();
+  }
+
+  const desiredState = {
+    version: 2,
+    plane_name: form.planeName.trim(),
+    plane_mode: form.planeMode,
+    protected: Boolean(form.protectedPlane),
+    runtime: {
+      engine: form.runtimeEngine,
+      workers: parseNumber(form.workers, 1),
+      data_parallel_mode: form.dataParallelMode,
+      max_model_len: parseNumber(form.maxModelLen, 8192),
+      max_num_seqs: parseNumber(form.maxNumSeqs, 8),
+      gpu_memory_utilization: Number(form.gpuMemoryUtilization) || 0.85,
+    },
+    network: {
+      gateway_port: parseNumber(form.gatewayPort, 18084),
+      inference_port: parseNumber(form.inferencePort, 18094),
+      server_name: form.serverName.trim() || "new-plane.local",
+    },
+    app: {
+      enabled: Boolean(form.appEnabled),
+    },
+    resources: {
+      worker: {
+        placement_mode: form.placementMode,
+        share_mode: form.shareMode,
+        gpu_fraction: Number(form.gpuFraction) || 1,
+        memory_cap_mb: parseNumber(form.memoryCapMb, 24576),
+      },
+      shared_disk_gb: parseNumber(form.sharedDiskGb, 40),
+    },
+  };
+
+  if (form.topologyEnabled) {
+    const nodes = (Array.isArray(form.topologyNodes) ? form.topologyNodes : [])
+      .map((node) => {
+        const gpuMemoryMb = parseGpuMemoryText(node.gpuMemoryText || "");
+        const rendered = {
+          name: String(node.name || "").trim(),
+        };
+        if (node.executionMode) {
+          rendered.execution_mode = node.executionMode;
+        }
+        if (Object.keys(gpuMemoryMb).length > 0) {
+          rendered.gpu_memory_mb = gpuMemoryMb;
+        }
+        return rendered;
+      })
+      .filter((node) => node.name);
+    if (nodes.length > 0) {
+      desiredState.topology = {
+        nodes,
+      };
+    }
+  }
+
+  if (form.dataParallelMode !== "off") {
+    desiredState.runtime.data_parallel_lb_mode = form.dataParallelLbMode;
+  }
+
+  if (form.planeMode === "llm") {
+    desiredState.model = {
+      source,
+      materialization: {
+        mode: form.materializationMode,
+      },
+      served_model_name: form.servedModelName.trim() || form.planeName.trim(),
+    };
+    if (form.materializationLocalPath.trim()) {
+      desiredState.model.materialization.local_path = form.materializationLocalPath.trim();
+    }
+    if (form.modelTargetFilename.trim()) {
+      desiredState.model.target_filename = form.modelTargetFilename.trim();
+    }
+    if (form.modelSha256.trim()) {
+      desiredState.model.sha256 = form.modelSha256.trim();
+    }
+    desiredState.interaction = {
+      system_prompt: form.systemPrompt,
+      default_response_language: form.defaultResponseLanguage,
+      supported_response_languages: DEFAULT_SUPPORTED_RESPONSE_LANGUAGES,
+      follow_user_language: Boolean(form.followUserLanguage),
+    };
+  }
+
+  if (form.inferImage.trim() || form.inferStartValue.trim() || form.inferEnvText.trim() || form.inferNode.trim() || form.inferStorageEnabled) {
+    desiredState.infer = {};
+    if (form.inferImage.trim()) {
+      desiredState.infer.image = form.inferImage.trim();
+    }
+    if (form.inferStartValue.trim()) {
+      desiredState.infer.start =
+        form.inferStartType === "script"
+          ? { type: "script", script_ref: form.inferStartValue.trim() }
+          : { type: "command", command: form.inferStartValue.trim() };
+    }
+    const inferEnv = parseEnvText(form.inferEnvText);
+    if (Object.keys(inferEnv).length > 0) {
+      desiredState.infer.env = inferEnv;
+    }
+    if (form.inferNode.trim()) {
+      desiredState.infer.node = form.inferNode.trim();
+    }
+    if (form.inferStorageEnabled) {
+      desiredState.infer.storage = {
+        size_gb: parseNumber(form.inferStorageSizeGb, 8),
+        mount_path: form.inferStorageMountPath.trim() || "/comet/private",
+      };
+    }
+  }
+
+  if (
+    form.workerImage.trim() ||
+    form.workerStartValue.trim() ||
+    form.workerEnvText.trim() ||
+    form.workerNode.trim() ||
+    form.workerGpuDevice.trim() ||
+    form.workerStorageEnabled
+  ) {
+    desiredState.worker = {};
+    if (form.workerImage.trim()) {
+      desiredState.worker.image = form.workerImage.trim();
+    }
+    if (form.workerStartValue.trim()) {
+      desiredState.worker.start =
+        form.workerStartType === "script"
+          ? { type: "script", script_ref: form.workerStartValue.trim() }
+          : { type: "command", command: form.workerStartValue.trim() };
+    }
+    const workerEnv = parseEnvText(form.workerEnvText);
+    if (Object.keys(workerEnv).length > 0) {
+      desiredState.worker.env = workerEnv;
+    }
+    if (form.workerNode.trim()) {
+      desiredState.worker.node = form.workerNode.trim();
+    }
+    if (form.workerGpuDevice.trim()) {
+      desiredState.worker.gpu_device = form.workerGpuDevice.trim();
+    }
+    if (form.workerAssignmentsEnabled) {
+      const assignments = (Array.isArray(form.workerAssignments) ? form.workerAssignments : [])
+        .map((assignment) => {
+          const rendered = {
+            node: String(assignment.node || "").trim(),
+          };
+          if (String(assignment.gpuDevice || "").trim()) {
+            rendered.gpu_device = String(assignment.gpuDevice || "").trim();
+          }
+          return rendered;
+        })
+        .filter((assignment) => assignment.node);
+      if (assignments.length > 0) {
+        desiredState.worker.assignments = assignments;
+      }
+    }
+    if (form.workerStorageEnabled) {
+      desiredState.worker.storage = {
+        size_gb: parseNumber(form.workerStorageSizeGb, 24),
+        mount_path: form.workerStorageMountPath.trim() || "/comet/private",
+      };
+    }
+  }
+
+  if (form.appEnabled) {
+    desiredState.app.image = form.appImage.trim();
+    if (form.appStartValue.trim()) {
+      desiredState.app.start =
+        form.appStartType === "script"
+          ? { type: "script", script_ref: form.appStartValue.trim() }
+          : { type: "command", command: form.appStartValue.trim() };
+    }
+    const appEnv = parseEnvText(form.appEnvText);
+    if (Object.keys(appEnv).length > 0) {
+      desiredState.app.env = appEnv;
+    }
+    if (form.appNode.trim()) {
+      desiredState.app.node = form.appNode.trim();
+    }
+    desiredState.app.publish = [
+      {
+        host_ip: "127.0.0.1",
+        host_port: parseNumber(form.appHostPort, 18010),
+        container_port: parseNumber(form.appContainerPort, 8080),
+      },
+    ];
+    if (form.appVolumeEnabled) {
+      desiredState.app.volumes = [
+        {
+          name: form.appVolumeName.trim() || "private-data",
+          type: form.appVolumeType,
+          size_gb: parseNumber(form.appVolumeSizeGb, 8),
+          mount_path: form.appVolumeMountPath.trim() || "/comet/private",
+          access: form.appVolumeAccess,
+        },
+      ];
+    }
+  }
+
+  if (form.postDeployScript.trim()) {
+    desiredState.hooks = {
+      post_deploy_script: form.postDeployScript.trim(),
+    };
+  }
+
+  return desiredState;
+}
+
+export function validatePlaneV2Form(form) {
+  const errors = [];
+  const warnings = [];
+  const planeName = String(form?.planeName || "").trim();
+  const topologyNodes = Array.isArray(form?.topologyNodes) ? form.topologyNodes : [];
+  const enabledTopologyNodes = form?.topologyEnabled
+    ? topologyNodes.filter(
+        (node) =>
+          String(node?.name || "").trim() ||
+          String(node?.gpuMemoryText || "").trim() ||
+          String(node?.executionMode || "").trim(),
+      )
+    : [];
+  const topologyNodeNames = enabledTopologyNodes
+    .map((node) => String(node.name || "").trim())
+    .filter(Boolean);
+  const duplicateTopologyNodeNames = topologyNodeNames.filter(
+    (name, index) => topologyNodeNames.indexOf(name) !== index,
+  );
+  const workerAssignments = Array.isArray(form?.workerAssignments) ? form.workerAssignments : [];
+  const enabledAssignments = form?.workerAssignmentsEnabled
+    ? workerAssignments.filter(
+        (assignment) =>
+          String(assignment?.node || "").trim() || String(assignment?.gpuDevice || "").trim(),
+      )
+    : [];
+
+  if (!planeName) {
+    errors.push("Plane name is required.");
+  }
+  if (form?.planeMode === "llm") {
+    if (!String(form?.servedModelName || "").trim()) {
+      errors.push("Served model name is required for llm planes.");
+    }
+    if (form?.modelSourceType === "local" && !String(form?.modelPath || "").trim()) {
+      errors.push("Local model path is required when model source type is local.");
+    }
+    if (
+      (form?.modelSourceType === "huggingface" || form?.modelSourceType === "catalog") &&
+      !String(form?.modelRef || "").trim()
+    ) {
+      errors.push("Model ref is required for catalog or huggingface sources.");
+    }
+    if (form?.modelSourceType === "url") {
+      const hasPrimaryUrl = String(form?.modelUrl || "").trim();
+      const additionalUrls = String(form?.modelUrls || "")
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (!hasPrimaryUrl && additionalUrls.length === 0) {
+        errors.push("At least one model URL is required for url sources.");
+      }
+    }
+  }
+  if (form?.dataParallelMode !== "off" && form?.runtimeEngine !== "vllm") {
+    errors.push("Data-parallel modes are currently supported only with the vllm runtime.");
+  }
+  if (form?.appEnabled && !String(form?.appImage || "").trim()) {
+    errors.push("App image is required when app is enabled.");
+  }
+  if (form?.topologyEnabled) {
+    if (enabledTopologyNodes.length === 0) {
+      errors.push("At least one topology node is required when custom topology is enabled.");
+    }
+    if (enabledTopologyNodes.some((node) => !String(node?.name || "").trim())) {
+      errors.push("Each topology node row must have a node name.");
+    }
+    if (duplicateTopologyNodeNames.length > 0) {
+      errors.push("Topology node names must be unique.");
+    }
+  }
+  if (form?.workerAssignmentsEnabled) {
+    if (enabledAssignments.length !== Number(form?.workers || 0)) {
+      errors.push("Worker assignments count must match the number of workers.");
+    }
+    if (enabledAssignments.some((assignment) => !String(assignment?.node || "").trim())) {
+      errors.push("Each worker assignment must include a node name.");
+    }
+  }
+
+  const referencedNodes = [
+    String(form?.inferNode || "").trim(),
+    String(form?.workerNode || "").trim(),
+    String(form?.appNode || "").trim(),
+    ...enabledAssignments.map((assignment) => String(assignment.node || "").trim()),
+  ].filter(Boolean);
+  if (form?.topologyEnabled && topologyNodeNames.length > 0) {
+    const unknownNodes = referencedNodes.filter((name) => !topologyNodeNames.includes(name));
+    if (unknownNodes.length > 0) {
+      errors.push(`Referenced nodes are missing from topology: ${[...new Set(unknownNodes)].join(", ")}`);
+    }
+  }
+
+  if (form?.workerAssignmentsEnabled && !form?.topologyEnabled) {
+    warnings.push("Per-worker assignments are easier to reason about when custom topology is enabled.");
+  }
+  if (form?.planeMode === "compute" && form?.runtimeEngine === "vllm") {
+    warnings.push("Compute planes usually use a custom worker image or non-vllm runtime.");
+  }
+  if (form?.appEnabled && !String(form?.appStartValue || "").trim()) {
+    warnings.push("App start is empty. The app container will rely on its image default command.");
+  }
+
+  return { errors, warnings };
+}
+
+export function updatePlaneDialogForm(setDialog, update) {
+  setDialog((current) => {
+    const nextForm =
+      typeof update === "function" ? update(current.form || buildNewPlaneFormState()) : update;
+    return {
+      ...current,
+      form: nextForm,
+      text: JSON.stringify(buildDesiredStateV2FromForm(nextForm), null, 2),
+    };
+  });
+}
+
+function SectionHeader({ title, description }) {
+  return (
+    <div className="plane-form-section-header">
+      <div className="section-label">{title}</div>
+      {description ? <p className="plane-form-section-copy">{description}</p> : null}
+    </div>
+  );
+}
+
+function FieldHint({ message, severity = "error" }) {
+  if (!message) {
+    return null;
+  }
+  return <div className={`field-hint is-${severity}`}>{message}</div>;
+}
+
+function SectionMeta({ children }) {
+  if (!children) {
+    return null;
+  }
+  return <div className="plane-form-section-meta">{children}</div>;
+}
+
+function SectionActions({ children }) {
+  return <div className="plane-form-section-actions">{children}</div>;
+}
+
+function TopologyNodeRows({ nodes, disabled, onChange }) {
+  const items = Array.isArray(nodes) ? nodes : [];
+
+  function updateNode(index, key, value) {
+    onChange((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [key]: value } : item,
+      ),
+    );
+  }
+
+  function addNode() {
+    onChange((current) => [
+      ...current,
+      { name: "", executionMode: "mixed", gpuMemoryText: "" },
+    ]);
+  }
+
+  function removeNode(index) {
+    onChange((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  return (
+    <div className="plane-form-rows">
+      {items.map((node, index) => (
+        <div className="plane-form-row" key={`topology-node-${index}`}>
+          <input
+            className="text-input"
+            placeholder="Node name"
+            value={node.name}
+            onChange={(event) => updateNode(index, "name", event.target.value)}
+            disabled={disabled}
+          />
+          <select
+            className="text-input"
+            value={node.executionMode}
+            onChange={(event) => updateNode(index, "executionMode", event.target.value)}
+            disabled={disabled}
+          >
+            <option value="mixed">mixed</option>
+            <option value="infer-only">infer-only</option>
+            <option value="worker-only">worker-only</option>
+          </select>
+          <input
+            className="text-input"
+            placeholder="gpu0=24576,gpu1=24576"
+            value={node.gpuMemoryText}
+            onChange={(event) => updateNode(index, "gpuMemoryText", event.target.value)}
+            disabled={disabled}
+          />
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => removeNode(index)}
+            disabled={disabled}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button className="ghost-button" type="button" onClick={addNode} disabled={disabled}>
+        Add node
+      </button>
+    </div>
+  );
+}
+
+function WorkerAssignmentRows({ assignments, disabled, onChange }) {
+  const items = Array.isArray(assignments) ? assignments : [];
+
+  function updateAssignment(index, key, value) {
+    onChange((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [key]: value } : item,
+      ),
+    );
+  }
+
+  function addAssignment() {
+    onChange((current) => [...current, { node: "", gpuDevice: "" }]);
+  }
+
+  function removeAssignment(index) {
+    onChange((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  return (
+    <div className="plane-form-rows">
+      {items.map((assignment, index) => (
+        <div className="plane-form-row" key={`worker-assignment-${index}`}>
+          <input
+            className="text-input"
+            placeholder="Node name"
+            value={assignment.node}
+            onChange={(event) => updateAssignment(index, "node", event.target.value)}
+            disabled={disabled}
+          />
+          <input
+            className="text-input"
+            placeholder="GPU device"
+            value={assignment.gpuDevice}
+            onChange={(event) => updateAssignment(index, "gpuDevice", event.target.value)}
+            disabled={disabled}
+          />
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => removeAssignment(index)}
+            disabled={disabled}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button className="ghost-button" type="button" onClick={addAssignment} disabled={disabled}>
+        Add assignment
+      </button>
+    </div>
+  );
+}
+
+export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
+  const form = dialog.form || buildNewPlaneFormState();
+  const validation = validatePlaneV2Form(form);
+  const topologyNodes = Array.isArray(form.topologyNodes) ? form.topologyNodes : [];
+  const activeTopologyNodes = topologyNodes.filter((node) => String(node?.name || "").trim());
+  const workerAssignments = Array.isArray(form.workerAssignments) ? form.workerAssignments : [];
+  const activeAssignments = workerAssignments.filter(
+    (assignment) => String(assignment?.node || "").trim() || String(assignment?.gpuDevice || "").trim(),
+  );
+  const topologySummary =
+    activeTopologyNodes.length > 0
+      ? `${activeTopologyNodes.length} node(s), ${activeTopologyNodes.filter((node) => node.executionMode === "worker-only").length} worker-only, ${activeTopologyNodes.filter((node) => node.executionMode === "infer-only").length} infer-only`
+      : "No topology nodes configured.";
+  const assignmentSummary = `${activeAssignments.length} assignment row(s) for ${Number(form.workers || 0)} worker(s).`;
+
+  function firstMatching(items, fragments) {
+    return items.find((item) => fragments.some((fragment) => item.includes(fragment))) || "";
+  }
+
+  function fieldError(...fragments) {
+    return firstMatching(validation.errors, fragments);
+  }
+
+  function fieldWarning(...fragments) {
+    return firstMatching(validation.warnings, fragments);
+  }
+
+  function inputClassName(invalid) {
+    return invalid ? "text-input is-invalid" : "text-input";
+  }
+
+  function bindText(key) {
+    return (event) =>
+      updatePlaneDialogForm(setDialog, (current) => ({
+        ...current,
+        [key]: event.target.value,
+      }));
+  }
+
+  function bindNumber(key) {
+    return (event) =>
+      updatePlaneDialogForm(setDialog, (current) => ({
+        ...current,
+        [key]: event.target.value,
+      }));
+  }
+
+  function bindCheck(key) {
+    return (event) =>
+      updatePlaneDialogForm(setDialog, (current) => ({
+        ...current,
+        [key]: event.target.checked,
+      }));
+  }
+
+  function updateTopologyNodes(update) {
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      topologyNodes:
+        typeof update === "function" ? update(current.topologyNodes || []) : update,
+    }));
+  }
+
+  function updateWorkerAssignments(update) {
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      workerAssignments:
+        typeof update === "function" ? update(current.workerAssignments || []) : update,
+    }));
+  }
+
+  function enableSingleHostLayout() {
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      topologyEnabled: true,
+      topologyNodes: [{ name: "local-hostd", executionMode: "mixed", gpuMemoryText: "" }],
+      inferNode: "local-hostd",
+      workerNode: "local-hostd",
+      appNode: current.appEnabled ? "local-hostd" : current.appNode,
+      workerAssignmentsEnabled: false,
+      workerAssignments: [],
+    }));
+  }
+
+  function generateSplitHostLayout() {
+    updatePlaneDialogForm(setDialog, (current) => {
+      const workerCount = Math.max(1, Number(current.workers || 1));
+      const topologyNodesValue = [
+        { name: "infer-hostd", executionMode: "infer-only", gpuMemoryText: "" },
+        ...Array.from({ length: workerCount }, (_, index) => ({
+          name: `worker-hostd-${String.fromCharCode(97 + index)}`,
+          executionMode: "worker-only",
+          gpuMemoryText: "0=24576",
+        })),
+      ];
+      const assignmentsValue = Array.from({ length: workerCount }, (_, index) => ({
+        node: `worker-hostd-${String.fromCharCode(97 + index)}`,
+        gpuDevice: "0",
+      }));
+      return {
+        ...current,
+        topologyEnabled: true,
+        topologyNodes: topologyNodesValue,
+        inferNode: "infer-hostd",
+        workerNode: "",
+        appNode: current.appEnabled ? "infer-hostd" : current.appNode,
+        workerAssignmentsEnabled: true,
+        workerAssignments: assignmentsValue,
+      };
+    });
+  }
+
+  function matchAssignmentsToWorkers() {
+    updateWorkerAssignments((currentAssignments) => {
+      const workerCount = Math.max(1, Number(form.workers || 1));
+      const items = Array.isArray(currentAssignments) ? currentAssignments : [];
+      if (items.length === workerCount) {
+        return items;
+      }
+      if (items.length > workerCount) {
+        return items.slice(0, workerCount);
+      }
+      return [
+        ...items,
+        ...Array.from({ length: workerCount - items.length }, () => ({
+          node: form.workerNode || "",
+          gpuDevice: form.workerGpuDevice || "",
+        })),
+      ];
+    });
+  }
+
+  return (
+    <div className="plane-form-builder">
+      <SectionHeader
+        title="Plane"
+        description="Identity and mode for the plane you are about to create."
+      />
+      <div className="plane-form-grid">
+        <label className="field-label">
+          Plane name
+          <input
+            className={inputClassName(Boolean(fieldError("Plane name is required")))}
+            value={form.planeName}
+            onChange={bindText("planeName")}
+          />
+          <FieldHint message={fieldError("Plane name is required")} />
+        </label>
+        <label className="field-label">
+          Plane mode
+          <select className="text-input" value={form.planeMode} onChange={bindText("planeMode")}>
+            <option value="llm">llm</option>
+            <option value="compute">compute</option>
+          </select>
+        </label>
+        <label className="field-label plane-checkbox">
+          <input
+            type="checkbox"
+            checked={form.protectedPlane}
+            onChange={bindCheck("protectedPlane")}
+          />
+          Protected plane
+        </label>
+      </div>
+
+      <SectionHeader
+        title="Runtime"
+        description="Execution engine, worker count, and data-parallel behavior."
+      />
+      <div className="plane-form-grid">
+        <label className="field-label">
+          Runtime engine
+          <select
+            className={inputClassName(
+              Boolean(fieldError("Data-parallel modes are currently supported only")),
+            )}
+            value={form.runtimeEngine}
+            onChange={bindText("runtimeEngine")}
+          >
+            <option value="vllm">vllm</option>
+            <option value="llama.cpp">llama.cpp</option>
+            <option value="custom">custom</option>
+          </select>
+        </label>
+        <label className="field-label">
+          Workers
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.workers}
+            onChange={bindNumber("workers")}
+          />
+        </label>
+        <label className="field-label">
+          Data-parallel mode
+          <select
+            className={inputClassName(
+              Boolean(fieldError("Data-parallel modes are currently supported only")),
+            )}
+            value={form.dataParallelMode}
+            onChange={bindText("dataParallelMode")}
+          >
+            <option value="off">off</option>
+            <option value="vllm_native">vllm_native</option>
+            <option value="auto_replicas">auto_replicas</option>
+          </select>
+          <FieldHint
+            message={fieldError("Data-parallel modes are currently supported only")}
+          />
+          <FieldHint
+            message={fieldWarning("Compute planes usually use a custom worker image")}
+            severity="warning"
+          />
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          Data-parallel LB mode
+          <select
+            className="text-input"
+            value={form.dataParallelLbMode}
+            onChange={bindText("dataParallelLbMode")}
+            disabled={form.dataParallelMode === "off"}
+          >
+            <option value="external">external</option>
+            <option value="hybrid">hybrid</option>
+          </select>
+        </label>
+        <label className="field-label">
+          Max model len
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.maxModelLen}
+            onChange={bindNumber("maxModelLen")}
+          />
+        </label>
+        <label className="field-label">
+          Max num seqs
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.maxNumSeqs}
+            onChange={bindNumber("maxNumSeqs")}
+          />
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          GPU memory utilization
+          <input
+            className="text-input"
+            type="number"
+            step="0.05"
+            min="0.05"
+            max="1"
+            value={form.gpuMemoryUtilization}
+            onChange={bindNumber("gpuMemoryUtilization")}
+          />
+        </label>
+      </div>
+
+      {form.planeMode === "llm" ? (
+        <>
+          <SectionHeader
+            title="Model"
+            description="Choose a known model, a local path, or a download source."
+          />
+          <div className="plane-form-grid">
+            <label className="field-label">
+              Model source type
+              <select
+                className="text-input"
+                value={form.modelSourceType}
+                onChange={bindText("modelSourceType")}
+              >
+                <option value="huggingface">huggingface</option>
+                <option value="catalog">catalog</option>
+                <option value="local">local</option>
+                <option value="url">url</option>
+              </select>
+            </label>
+            <label className="field-label">
+              Model ref
+              <input
+                className={inputClassName(
+                  Boolean(
+                    fieldError("Model ref is required for catalog or huggingface sources"),
+                  ),
+                )}
+                value={form.modelRef}
+                onChange={bindText("modelRef")}
+              />
+              <FieldHint
+                message={fieldError("Model ref is required for catalog or huggingface sources")}
+              />
+            </label>
+            <label className="field-label">
+              Served model name
+              <input
+                className={inputClassName(
+                  Boolean(fieldError("Served model name is required for llm planes")),
+                )}
+                value={form.servedModelName}
+                onChange={bindText("servedModelName")}
+              />
+              <FieldHint message={fieldError("Served model name is required for llm planes")} />
+            </label>
+          </div>
+
+          {form.modelSourceType === "local" ? (
+            <label className="field-label">
+              Local model path
+              <input
+                className={inputClassName(
+                  Boolean(fieldError("Local model path is required when model source type is local")),
+                )}
+                value={form.modelPath}
+                onChange={bindText("modelPath")}
+              />
+              <FieldHint
+                message={fieldError("Local model path is required when model source type is local")}
+              />
+            </label>
+          ) : null}
+
+          {form.modelSourceType === "url" ? (
+            <div className="plane-form-grid plane-form-grid-wide">
+              <label className="field-label">
+                Primary model URL
+                <input
+                  className={inputClassName(
+                    Boolean(fieldError("At least one model URL is required for url sources")),
+                  )}
+                  value={form.modelUrl}
+                  onChange={bindText("modelUrl")}
+                />
+                <FieldHint
+                  message={fieldError("At least one model URL is required for url sources")}
+                />
+              </label>
+              <label className="field-label">
+                Additional model URLs
+                <textarea
+                  className="editor-textarea plane-form-textarea"
+                  value={form.modelUrls}
+                  onChange={bindText("modelUrls")}
+                />
+              </label>
+            </div>
+          ) : null}
+
+          <div className="plane-form-grid">
+            <label className="field-label">
+              Materialization mode
+              <select
+                className="text-input"
+                value={form.materializationMode}
+                onChange={bindText("materializationMode")}
+              >
+                <option value="download">download</option>
+                <option value="reference">reference</option>
+                <option value="copy">copy</option>
+              </select>
+            </label>
+            <label className="field-label">
+              Materialization local path
+              <input
+                className="text-input"
+                value={form.materializationLocalPath}
+                onChange={bindText("materializationLocalPath")}
+              />
+            </label>
+            <label className="field-label">
+              Default response language
+              <select
+                className="text-input"
+                value={form.defaultResponseLanguage}
+                onChange={bindText("defaultResponseLanguage")}
+              >
+                {languageOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="plane-form-grid">
+            <label className="field-label">
+              Target filename
+              <input
+                className="text-input"
+                value={form.modelTargetFilename}
+                onChange={bindText("modelTargetFilename")}
+              />
+            </label>
+            <label className="field-label">
+              SHA256
+              <input
+                className="text-input"
+                value={form.modelSha256}
+                onChange={bindText("modelSha256")}
+              />
+            </label>
+            <label className="field-label plane-checkbox">
+              <input
+                type="checkbox"
+                checked={form.followUserLanguage}
+                onChange={bindCheck("followUserLanguage")}
+              />
+              Follow user language
+            </label>
+          </div>
+
+          <label className="field-label">
+            System prompt
+            <textarea
+              className="editor-textarea plane-form-textarea"
+              value={form.systemPrompt}
+              onChange={bindText("systemPrompt")}
+            />
+          </label>
+        </>
+      ) : null}
+
+      <SectionHeader
+        title="Network"
+        description="Ports and server name exposed by the plane."
+      />
+      <div className="plane-form-grid">
+        <label className="field-label">
+          Gateway port
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.gatewayPort}
+            onChange={bindNumber("gatewayPort")}
+          />
+        </label>
+        <label className="field-label">
+          Inference port
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.inferencePort}
+            onChange={bindNumber("inferencePort")}
+          />
+        </label>
+        <label className="field-label">
+          Server name
+          <input className="text-input" value={form.serverName} onChange={bindText("serverName")} />
+        </label>
+      </div>
+
+      <SectionHeader
+        title="Topology"
+        description="Optional advanced node layout for single-host or split-host placement."
+      />
+      <SectionMeta>{topologySummary}</SectionMeta>
+      <SectionActions>
+        <button className="ghost-button" type="button" onClick={enableSingleHostLayout}>
+          Use single-host layout
+        </button>
+        <button className="ghost-button" type="button" onClick={generateSplitHostLayout}>
+          Generate split-host layout
+        </button>
+      </SectionActions>
+      <div className="plane-form-grid">
+        <label className="field-label plane-checkbox">
+          <input
+            type="checkbox"
+            checked={form.topologyEnabled}
+            onChange={bindCheck("topologyEnabled")}
+          />
+          Custom topology
+        </label>
+      </div>
+
+      <label className="field-label">
+        Topology nodes
+        <TopologyNodeRows
+          nodes={form.topologyNodes}
+          disabled={!form.topologyEnabled}
+          onChange={updateTopologyNodes}
+        />
+        <FieldHint
+          message={firstMatching(validation.errors, [
+            "At least one topology node is required",
+            "Each topology node row must have a node name",
+            "Topology node names must be unique",
+            "Referenced nodes are missing from topology",
+          ])}
+        />
+      </label>
+
+      <SectionHeader
+        title="Worker"
+        description="Resource policy plus optional custom worker container for compute or advanced runtimes."
+      />
+      <SectionMeta>{assignmentSummary}</SectionMeta>
+      <div className="plane-form-grid">
+        <label className="field-label">
+          Placement mode
+          <select className="text-input" value={form.placementMode} onChange={bindText("placementMode")}>
+            <option value="auto">auto</option>
+            <option value="manual">manual</option>
+            <option value="movable">movable</option>
+          </select>
+        </label>
+        <label className="field-label">
+          Share mode
+          <select className="text-input" value={form.shareMode} onChange={bindText("shareMode")}>
+            <option value="exclusive">exclusive</option>
+            <option value="shared">shared</option>
+            <option value="best-effort">best-effort</option>
+          </select>
+        </label>
+        <label className="field-label">
+          GPU fraction
+          <input
+            className="text-input"
+            type="number"
+            step="0.05"
+            min="0"
+            max="1"
+            value={form.gpuFraction}
+            onChange={bindNumber("gpuFraction")}
+          />
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          Worker memory cap MB
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.memoryCapMb}
+            onChange={bindNumber("memoryCapMb")}
+          />
+        </label>
+        <label className="field-label">
+          Worker image
+          <input className="text-input" value={form.workerImage} onChange={bindText("workerImage")} />
+        </label>
+        <label className="field-label">
+          Worker start type
+          <select
+            className="text-input"
+            value={form.workerStartType}
+            onChange={bindText("workerStartType")}
+          >
+            <option value="script">script</option>
+            <option value="command">command</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          {form.workerStartType === "script" ? "Worker script ref" : "Worker command"}
+          <input
+            className="text-input"
+            value={form.workerStartValue}
+            onChange={bindText("workerStartValue")}
+          />
+        </label>
+        <label className="field-label">
+          Worker node
+          <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
+        </label>
+        <label className="field-label">
+          Worker GPU device
+          <input
+            className="text-input"
+            value={form.workerGpuDevice}
+            onChange={bindText("workerGpuDevice")}
+          />
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label plane-checkbox">
+          <input
+            type="checkbox"
+            checked={form.workerAssignmentsEnabled}
+            onChange={bindCheck("workerAssignmentsEnabled")}
+          />
+          Per-worker assignments
+        </label>
+      </div>
+
+      <SectionActions>
+        <button className="ghost-button" type="button" onClick={matchAssignmentsToWorkers}>
+          Match assignments to worker count
+        </button>
+      </SectionActions>
+
+      <label className="field-label">
+        Worker assignments
+        <WorkerAssignmentRows
+          assignments={form.workerAssignments}
+          disabled={!form.workerAssignmentsEnabled}
+          onChange={updateWorkerAssignments}
+        />
+        <FieldHint
+          message={firstMatching(validation.errors, [
+            "Worker assignments count must match the number of workers",
+            "Each worker assignment must include a node name",
+          ])}
+        />
+        <FieldHint
+          message={fieldWarning("Per-worker assignments are easier to reason about")}
+          severity="warning"
+        />
+      </label>
+
+      <label className="field-label">
+        Worker env
+        <textarea
+          className="editor-textarea plane-form-textarea"
+          value={form.workerEnvText}
+          onChange={bindText("workerEnvText")}
+        />
+      </label>
+
+      <div className="plane-form-grid">
+        <label className="field-label plane-checkbox">
+          <input
+            type="checkbox"
+            checked={form.workerStorageEnabled}
+            onChange={bindCheck("workerStorageEnabled")}
+          />
+          Worker storage
+        </label>
+        <label className="field-label">
+          Worker storage GB
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.workerStorageSizeGb}
+            onChange={bindNumber("workerStorageSizeGb")}
+            disabled={!form.workerStorageEnabled}
+          />
+        </label>
+        <label className="field-label">
+          Worker storage mount path
+          <input
+            className="text-input"
+            value={form.workerStorageMountPath}
+            onChange={bindText("workerStorageMountPath")}
+            disabled={!form.workerStorageEnabled}
+          />
+        </label>
+      </div>
+
+      <SectionHeader
+        title="Infer Overrides"
+        description="Optional container overrides for the infer service."
+      />
+      <div className="plane-form-grid">
+        <label className="field-label">
+          Infer image
+          <input className="text-input" value={form.inferImage} onChange={bindText("inferImage")} />
+        </label>
+        <label className="field-label">
+          Infer start type
+          <select
+            className="text-input"
+            value={form.inferStartType}
+            onChange={bindText("inferStartType")}
+          >
+            <option value="script">script</option>
+            <option value="command">command</option>
+          </select>
+        </label>
+        <label className="field-label">
+          {form.inferStartType === "script" ? "Infer script ref" : "Infer command"}
+          <input
+            className="text-input"
+            value={form.inferStartValue}
+            onChange={bindText("inferStartValue")}
+          />
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          Infer node
+          <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+        </label>
+        <label className="field-label plane-checkbox">
+          <input
+            type="checkbox"
+            checked={form.inferStorageEnabled}
+            onChange={bindCheck("inferStorageEnabled")}
+          />
+          Infer storage
+        </label>
+        <label className="field-label">
+          Infer storage GB
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.inferStorageSizeGb}
+            onChange={bindNumber("inferStorageSizeGb")}
+            disabled={!form.inferStorageEnabled}
+          />
+        </label>
+      </div>
+
+      <div className="plane-form-grid plane-form-grid-wide">
+        <label className="field-label">
+          Infer storage mount path
+          <input
+            className="text-input"
+            value={form.inferStorageMountPath}
+            onChange={bindText("inferStorageMountPath")}
+            disabled={!form.inferStorageEnabled}
+          />
+        </label>
+        <label className="field-label">
+          Infer env
+          <textarea
+            className="editor-textarea plane-form-textarea"
+            value={form.inferEnvText}
+            onChange={bindText("inferEnvText")}
+          />
+        </label>
+      </div>
+
+      <SectionHeader
+        title="App"
+        description="Optional app container and its exposed port and writable volume."
+      />
+      <div className="plane-form-grid">
+        <label className="field-label plane-checkbox">
+          <input type="checkbox" checked={form.appEnabled} onChange={bindCheck("appEnabled")} />
+          App enabled
+        </label>
+        <label className="field-label">
+          App image
+          <input
+            className={inputClassName(Boolean(fieldError("App image is required when app is enabled")))}
+            value={form.appImage}
+            onChange={bindText("appImage")}
+            disabled={!form.appEnabled}
+          />
+          <FieldHint message={fieldError("App image is required when app is enabled")} />
+        </label>
+        <label className="field-label">
+          App start type
+          <select
+            className="text-input"
+            value={form.appStartType}
+            onChange={bindText("appStartType")}
+            disabled={!form.appEnabled}
+          >
+            <option value="script">script</option>
+            <option value="command">command</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          {form.appStartType === "script" ? "App script ref" : "App command"}
+          <input
+            className="text-input"
+            value={form.appStartValue}
+            onChange={bindText("appStartValue")}
+            disabled={!form.appEnabled}
+          />
+          <FieldHint
+            message={fieldWarning("App start is empty. The app container will rely on its image default command.")}
+            severity="warning"
+          />
+        </label>
+        <label className="field-label">
+          App host port
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.appHostPort}
+            onChange={bindNumber("appHostPort")}
+            disabled={!form.appEnabled}
+          />
+        </label>
+        <label className="field-label">
+          App container port
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.appContainerPort}
+            onChange={bindNumber("appContainerPort")}
+            disabled={!form.appEnabled}
+          />
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          App node
+          <input
+            className="text-input"
+            value={form.appNode}
+            onChange={bindText("appNode")}
+            disabled={!form.appEnabled}
+          />
+        </label>
+        <label className="field-label plane-checkbox">
+          <input
+            type="checkbox"
+            checked={form.appVolumeEnabled}
+            onChange={bindCheck("appVolumeEnabled")}
+            disabled={!form.appEnabled}
+          />
+          App volume
+        </label>
+        <label className="field-label">
+          Shared disk GB
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.sharedDiskGb}
+            onChange={bindNumber("sharedDiskGb")}
+          />
+        </label>
+      </div>
+
+      <label className="field-label">
+        App env
+        <textarea
+          className="editor-textarea plane-form-textarea"
+          value={form.appEnvText}
+          onChange={bindText("appEnvText")}
+          disabled={!form.appEnabled}
+        />
+      </label>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          App volume name
+          <input
+            className="text-input"
+            value={form.appVolumeName}
+            onChange={bindText("appVolumeName")}
+            disabled={!form.appEnabled || !form.appVolumeEnabled}
+          />
+        </label>
+        <label className="field-label">
+          App volume type
+          <select
+            className="text-input"
+            value={form.appVolumeType}
+            onChange={bindText("appVolumeType")}
+            disabled={!form.appEnabled || !form.appVolumeEnabled}
+          >
+            <option value="persistent">persistent</option>
+            <option value="ephemeral">ephemeral</option>
+          </select>
+        </label>
+        <label className="field-label">
+          App volume size GB
+          <input
+            className="text-input"
+            type="number"
+            min="1"
+            value={form.appVolumeSizeGb}
+            onChange={bindNumber("appVolumeSizeGb")}
+            disabled={!form.appEnabled || !form.appVolumeEnabled}
+          />
+        </label>
+      </div>
+
+      <div className="plane-form-grid">
+        <label className="field-label">
+          App volume mount path
+          <input
+            className="text-input"
+            value={form.appVolumeMountPath}
+            onChange={bindText("appVolumeMountPath")}
+            disabled={!form.appEnabled || !form.appVolumeEnabled}
+          />
+        </label>
+        <label className="field-label">
+          App volume access
+          <select
+            className="text-input"
+            value={form.appVolumeAccess}
+            onChange={bindText("appVolumeAccess")}
+            disabled={!form.appEnabled || !form.appVolumeEnabled}
+          >
+            <option value="rw">rw</option>
+            <option value="ro">ro</option>
+          </select>
+        </label>
+      </div>
+
+      <SectionHeader
+        title="Hooks"
+        description="Optional post-deploy script run after the plane is materialized."
+      />
+      <label className="field-label">
+        Post-deploy script
+        <input className="text-input" value={form.postDeployScript} onChange={bindText("postDeployScript")} />
+      </label>
+    </div>
+  );
+}

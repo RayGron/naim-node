@@ -466,6 +466,12 @@ body {
   border-color: rgba(255, 213, 94, 0.42);
 }
 
+.text-input.is-invalid,
+.editor-textarea.is-invalid {
+  border-color: rgba(255, 99, 99, 0.45);
+  outline: 1px solid rgba(255, 99, 99, 0.22);
+}
+
 .editor-textarea {
   width: 100%;
   min-height: 460px;
@@ -487,6 +493,101 @@ body {
   margin: 0 0 4px;
   color: var(--text-dim);
   line-height: 1.6;
+}
+
+.plane-form-builder {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(120, 190, 255, 0.16);
+  background: rgba(5, 18, 38, 0.66);
+}
+
+.plane-form-section-header {
+  display: grid;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.plane-form-section-copy {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.plane-form-section-meta {
+  margin-top: -6px;
+  color: var(--text-dim);
+  font-size: 0.86rem;
+}
+
+.plane-form-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.plane-form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.plane-form-grid-wide {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.plane-form-builder .field-label {
+  display: grid;
+  gap: 8px;
+}
+
+.field-hint {
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.field-hint.is-error {
+  color: rgba(255, 180, 180, 0.96);
+}
+
+.field-hint.is-warning {
+  color: rgba(255, 228, 158, 0.96);
+}
+
+.plane-form-textarea {
+  min-height: 132px;
+}
+
+.plane-form-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.plane-form-row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  align-items: center;
+}
+
+.plane-form-row .ghost-button {
+  justify-self: start;
+}
+
+.plane-checkbox {
+  align-self: end;
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+}
+
+.plane-checkbox input {
+  margin: 0;
 }
 
 .bundle-output {
@@ -1038,6 +1139,22 @@ body {
   border: 1px solid rgba(255, 99, 99, 0.24);
   background: rgba(43, 10, 19, 0.58);
   padding: 14px;
+}
+
+.warning-banner {
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 213, 94, 0.26);
+  background: rgba(58, 41, 10, 0.64);
+  padding: 14px;
+}
+
+.banner-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.banner-list li + li {
+  margin-top: 4px;
 }
 
 .empty-state {

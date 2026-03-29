@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "plane_name": "gpu-worker-job",
+  "plane_mode": "compute",
+  "runtime": {
+    "engine": "custom",
+    "workers": 2
+  },
+  "worker": {
+    "image": "nvidia/cuda:12.9.1-runtime-ubuntu24.04",
+    "start": {
+      "type": "command",
+      "command": "bash /app/run-gpu-task.sh"
+    },
+    "env": {
+      "JOB_KIND": "embedding-batch",
+      "OUTPUT_DIR": "/comet/private/output"
+    },
+    "storage": {
+      "size_gb": 24,
+      "mount_path": "/comet/private"
+    }
+  },
+  "resources": {
+    "worker": {
+      "placement_mode": "auto",
+      "share_mode": "exclusive",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 32768
+    },
+    "shared_disk_gb": 32
+  },
+  "app": {
+    "enabled": false
+  }
+}

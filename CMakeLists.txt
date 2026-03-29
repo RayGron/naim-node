@@ -149,6 +149,9 @@ add_library(
   common/src/state/assignment_repository.cpp
   common/src/state/desired_state_repository.cpp
   common/src/state/desired_state_sqlite_codec.cpp
+  common/src/state/desired_state_v2_projector.cpp
+  common/src/state/desired_state_v2_renderer.cpp
+  common/src/state/desired_state_v2_validator.cpp
   common/src/state/disk_runtime_repository.cpp
   common/src/state/event_repository.cpp
   common/src/state/node_availability_repository.cpp
@@ -174,6 +177,31 @@ target_link_libraries(
     unofficial::sqlite3::sqlite3
 )
 comet_enable_strict_warnings(comet-common)
+
+add_executable(
+  comet-state-v2-tests
+  common/src/state/desired_state_v2_validator_tests.cpp
+)
+target_include_directories(comet-state-v2-tests PRIVATE common/include)
+target_link_libraries(comet-state-v2-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-state-v2-tests)
+
+add_executable(
+  comet-state-v2-projector-tests
+  common/src/state/desired_state_v2_projector_tests.cpp
+)
+target_include_directories(comet-state-v2-projector-tests PRIVATE common/include)
+target_link_libraries(comet-state-v2-projector-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-state-v2-projector-tests)
+
+add_executable(
+  comet-plane-request-tests
+  controller/src/plane/plane_desired_state_request_parser.cpp
+  controller/src/plane/plane_desired_state_request_parser_tests.cpp
+)
+target_include_directories(comet-plane-request-tests PRIVATE common/include controller/include)
+target_link_libraries(comet-plane-request-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-plane-request-tests)
 
 add_executable(
   comet-controller
@@ -213,6 +241,7 @@ add_executable(
   controller/src/infra/controller_remote_client.cpp
   controller/src/plane/desired_state_policy_service.cpp
   controller/src/plane/dashboard_service.cpp
+  controller/src/plane/plane_desired_state_request_parser.cpp
   controller/src/infra/controller_ui_service.cpp
   controller/src/host/host_registry_service.cpp
   controller/src/host/hostd_http_service.cpp

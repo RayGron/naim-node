@@ -20,6 +20,12 @@ json ControllerStateService::BuildPayload(
       {"db_path", db_path},
       {"db_exists", std::filesystem::exists(db_path)},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
+      {"desired_state_contract",
+       {
+           {"preferred_create_contract_version", 2},
+           {"accepted_create_contract_versions", json::array({1, 2})},
+           {"returned_state_format", "expanded-rendered"},
+       }},
   };
 
   comet::ControllerStore store(db_path);
@@ -58,16 +64,27 @@ json ControllerStateService::BuildPayload(
     payload["desired_states"] = json::array();
   } else {
     json desired_state_items = json::array();
+    json desired_state_v2_items = json::array();
     for (const auto& state : desired_states) {
       desired_state_items.push_back(
           json::parse(comet::SerializeDesiredStateJson(state)));
+      desired_state_v2_items.push_back(
+          json::parse(comet::SerializeDesiredStateV2Json(state)));
     }
     payload["desired_states"] = std::move(desired_state_items);
+    payload["desired_states_v2"] = std::move(desired_state_v2_items);
+  }
+  if (plane_name.has_value()) {
+    payload["desired_states_v2"] = json::array();
   }
 
   payload["desired_state"] =
       desired_state.has_value()
           ? json::parse(comet::SerializeDesiredStateJson(*desired_state))
+          : json(nullptr);
+  payload["desired_state_v2"] =
+      desired_state.has_value()
+          ? json::parse(comet::SerializeDesiredStateV2Json(*desired_state))
           : json(nullptr);
   return payload;
 }

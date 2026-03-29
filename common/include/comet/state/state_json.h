@@ -14,6 +14,7 @@ DesiredState SliceDesiredStateForNode(
 DesiredState ResolvePlacementTargetAliases(DesiredState state);
 
 std::string SerializeDesiredStateJson(const DesiredState& state);
+std::string SerializeDesiredStateV2Json(const DesiredState& state);
 DesiredState DeserializeDesiredStateJson(const std::string& json_text);
 
 std::optional<DesiredState> LoadDesiredStateJson(const std::string& path);

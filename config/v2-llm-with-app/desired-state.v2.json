@@ -1,0 +1,75 @@
+{
+  "version": 2,
+  "plane_name": "llm-with-app",
+  "plane_mode": "llm",
+  "model": {
+    "source": {
+      "type": "huggingface",
+      "ref": "Qwen/Qwen2.5-0.5B-Instruct"
+    },
+    "materialization": {
+      "mode": "download"
+    },
+    "served_model_name": "qwen2.5-0.5b-app"
+  },
+  "interaction": {
+    "default_response_language": "en",
+    "follow_user_language": true,
+    "supported_response_languages": [
+      "en",
+      "de",
+      "uk",
+      "ru"
+    ]
+  },
+  "runtime": {
+    "engine": "vllm",
+    "workers": 1,
+    "data_parallel_mode": "off",
+    "max_model_len": 4096,
+    "max_num_seqs": 4,
+    "gpu_memory_utilization": 0.75
+  },
+  "network": {
+    "gateway_port": 18084,
+    "inference_port": 18094,
+    "server_name": "llm-with-app.internal"
+  },
+  "app": {
+    "enabled": true,
+    "image": "example/app:dev",
+    "start": {
+      "type": "script",
+      "script_ref": "bundle://deploy/container/run.sh"
+    },
+    "publish": [
+      {
+        "host_ip": "127.0.0.1",
+        "host_port": 18010,
+        "container_port": 8080
+      }
+    ],
+    "env": {
+      "HOST": "0.0.0.0",
+      "PORT": "8080"
+    },
+    "volumes": [
+      {
+        "name": "private-data",
+        "type": "persistent",
+        "size_gb": 8,
+        "mount_path": "/comet/private",
+        "access": "rw"
+      }
+    ]
+  },
+  "resources": {
+    "worker": {
+      "placement_mode": "auto",
+      "share_mode": "exclusive",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 16384
+    },
+    "shared_disk_gb": 40
+  }
+}

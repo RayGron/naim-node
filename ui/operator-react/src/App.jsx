@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, startTransition } from "react";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import {
+  buildDesiredStateV2FromForm,
+  buildNewPlaneFormState,
+  buildPlaneFormStateFromDesiredStateV2,
+  isDesiredStateV2,
+  PlaneV2FormBuilder,
+  validatePlaneV2Form,
+} from "./planeV2Form.jsx";
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
@@ -526,12 +534,12 @@ function OnboardingCard({ onCreatePlane }) {
       <div className="section-label">First plane</div>
       <h3>Create a plane from the Web UI</h3>
       <p className="onboarding-copy">
-        The platform is running. Create your first plane, paste a desired-state template, then
-        stage and start it from the operator workflow.
+        The platform is running. Create your first plane, paste a compact desired-state v2
+        template, then stage and start it from the operator workflow.
       </p>
       <div className="onboarding-steps">
         <div>1. Open the plane editor.</div>
-        <div>2. Paste or adjust the desired-state JSON.</div>
+        <div>2. Paste or adjust the desired-state v2 JSON.</div>
         <div>3. Save the plane, then start it from Dashboard.</div>
       </div>
       <div className="toolbar">
@@ -547,158 +555,24 @@ function OnboardingCard({ onCreatePlane }) {
   );
 }
 
-function buildNewPlaneTemplate() {
-  return JSON.stringify(
-    {
-      plane_name: "new-plane",
-      plane_shared_disk_name: "plane-new-plane-shared",
-      control_root: "/comet/shared/control/new-plane",
-      plane_mode: "compute",
-      bootstrap_model: {
-        model_id: "model-id",
-        served_model_name: "model-id",
-        materialization_mode: "copy",
-        local_path: "/abs/path/to/model.gguf",
-        source_url: null,
-        target_filename: "model.gguf",
-        sha256: null,
-      },
-      interaction: {
-        system_prompt:
-          "You are Cypher AI. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
-        default_response_language: "ru",
-        supported_response_languages: ["en", "de", "uk", "ru"],
-        follow_user_language: true,
-        completion_policy: {
-          response_mode: "normal",
-          max_tokens: 512,
-          max_continuations: 0,
-          max_total_completion_tokens: 512,
-          max_elapsed_time_ms: 30000,
-        },
-        long_completion_policy: {
-          response_mode: "very_long",
-          max_tokens: 1024,
-          max_continuations: 6,
-          max_total_completion_tokens: 6144,
-          max_elapsed_time_ms: 120000,
-          semantic_goal:
-            "complete the requested artifact fully before emitting [[TASK_COMPLETE]]",
-        },
-      },
-      inference: {
-        primary_infer_node: "local-hostd",
-        net_if: "eth0",
-        models_root: "/comet/shared/models",
-        gguf_cache_dir: "/comet/shared/models/gguf",
-        infer_log_dir: "/comet/shared/logs/infer",
-        llama_port: 8000,
-        llama_ctx_size: 4096,
-        llama_threads: 4,
-        llama_gpu_layers: 50,
-        inference_healthcheck_retries: 120,
-        inference_healthcheck_interval_sec: 5,
-      },
-      gateway: {
-        listen_host: "0.0.0.0",
-        listen_port: 8080,
-        server_name: "new-plane.local",
-      },
-      nodes: [
-        {
-          name: "local-hostd",
-          platform: "linux",
-          execution_mode: "mixed",
-        },
-      ],
-      disks: [
-        {
-          name: "plane-new-plane-shared",
-          kind: "plane-shared",
-          plane_name: "new-plane",
-          owner_name: "",
-          node_name: "local-hostd",
-          host_path: "/comet/disks/new-plane/shared",
-          container_path: "/comet/shared",
-          size_gb: 40,
-        },
-        {
-          name: "infer-new-plane-private",
-          kind: "infer-private",
-          plane_name: "new-plane",
-          owner_name: "infer-new-plane",
-          node_name: "local-hostd",
-          host_path: "/comet/disks/new-plane/infer-private",
-          container_path: "/comet/infer-private",
-          size_gb: 20,
-        },
-        {
-          name: "worker-new-plane-private",
-          kind: "worker-private",
-          plane_name: "new-plane",
-          owner_name: "worker-a",
-          node_name: "local-hostd",
-          host_path: "/comet/disks/new-plane/worker-private",
-          container_path: "/comet/worker-private",
-          size_gb: 10,
-        },
-      ],
-      instances: [
-        {
-          name: "infer-new-plane",
-          role: "infer",
-          plane_name: "new-plane",
-          node_name: "local-hostd",
-          image: "comet/infer-runtime:dev",
-          command: "",
-          private_disk_name: "infer-new-plane-private",
-          shared_disk_name: "plane-new-plane-shared",
-          depends_on: [],
-          environment: {},
-          labels: {},
-          gpu_device: null,
-          placement_mode: "auto",
-          share_mode: "exclusive",
-          gpu_fraction: 1,
-          priority: 100,
-          preemptible: false,
-          memory_cap_mb: null,
-          private_disk_size_gb: 20,
-        },
-        {
-          name: "worker-a",
-          role: "worker",
-          plane_name: "new-plane",
-          node_name: "local-hostd",
-          image: "comet/worker-runtime:dev",
-          command: "",
-          private_disk_name: "worker-new-plane-private",
-          shared_disk_name: "plane-new-plane-shared",
-          depends_on: ["infer-new-plane"],
-          environment: {},
-          labels: {},
-          gpu_device: null,
-          placement_mode: "auto",
-          share_mode: "exclusive",
-          gpu_fraction: 1,
-          priority: 100,
-          preemptible: false,
-          memory_cap_mb: null,
-          private_disk_size_gb: 10,
-        },
-      ],
-    },
-    null,
-    2,
-  );
-}
-
 function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
   if (!dialog.open) {
     return null;
   }
 
   const readOnly = dialog.mode === "view";
+  const showFormBuilder = !readOnly && Boolean(dialog.form);
+  const formValidation = showFormBuilder
+    ? validatePlaneV2Form(dialog.form || buildNewPlaneFormState())
+    : { errors: [], warnings: [] };
+  const desiredStateLabel = showFormBuilder
+    ? "Generated desired state v2 JSON"
+    : "Desired state JSON";
+  const editorCopy = readOnly
+    ? "Read-only desired state JSON for the selected plane."
+    : showFormBuilder
+      ? "Build or adjust a compact desired-state v2 plane in the form below. The generated JSON preview is staged in the controller when you save."
+      : "Edit desired state JSON and stage it in the controller. Runtime changes are applied only after Start plane.";
   const title =
     dialog.mode === "new"
       ? "New plane"
@@ -724,14 +598,37 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
             Close
           </button>
         </div>
-        <p className="editor-copy">
-          {readOnly
-            ? "Read-only desired state JSON for the selected plane."
-            : "Edit desired state JSON and stage it in the controller. Runtime changes are applied only after Start plane."}
-        </p>
+        <p className="editor-copy">{editorCopy}</p>
         {dialog.error ? <div className="error-banner">{dialog.error}</div> : null}
+        {formValidation.errors.length > 0 ? (
+          <div className="error-banner">
+            <strong>Form validation</strong>
+            <ul className="banner-list">
+              {formValidation.errors.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {formValidation.warnings.length > 0 ? (
+          <div className="warning-banner">
+            <strong>Warnings</strong>
+            <ul className="banner-list">
+              {formValidation.warnings.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {showFormBuilder ? (
+          <PlaneV2FormBuilder
+            dialog={dialog}
+            setDialog={setDialog}
+            languageOptions={CHAT_LANGUAGE_OPTIONS}
+          />
+        ) : null}
         <label className="field-label" htmlFor="plane-editor-json">
-          Desired state JSON
+          {desiredStateLabel}
         </label>
         <textarea
           id="plane-editor-json"
@@ -743,7 +640,7 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
               text: event.target.value,
             }))
           }
-          readOnly={readOnly}
+          readOnly={readOnly || showFormBuilder}
           spellCheck="false"
         />
         <div className="toolbar">
@@ -766,7 +663,7 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
               className="ghost-button"
               type="button"
               onClick={onSave}
-              disabled={dialog.busy}
+              disabled={dialog.busy || formValidation.errors.length > 0}
             >
               {dialog.mode === "new" ? "Create plane" : "Save staged changes"}
             </button>
@@ -1090,6 +987,7 @@ function App() {
     mode: "new",
     planeName: "",
     text: "",
+    form: null,
     busy: false,
     error: "",
   });
@@ -1546,11 +1444,13 @@ function App() {
     setApiError("");
     try {
       if (mode === "new") {
+        const form = buildNewPlaneFormState();
         setPlaneDialog({
           open: true,
           mode,
           planeName: "",
-          text: buildNewPlaneTemplate(),
+          text: JSON.stringify(buildDesiredStateV2FromForm(form), null, 2),
+          form,
           busy: false,
           error: "",
         });
@@ -1564,7 +1464,10 @@ function App() {
         open: true,
         mode,
         planeName,
-        text: JSON.stringify(payload.desired_state || {}, null, 2),
+        text: JSON.stringify(payload.desired_state_v2 || payload.desired_state || {}, null, 2),
+        form: payload.desired_state_v2
+          ? buildPlaneFormStateFromDesiredStateV2(payload.desired_state_v2)
+          : null,
         busy: false,
         error: "",
       });
@@ -1576,13 +1479,22 @@ function App() {
   async function savePlaneDialog() {
     setPlaneDialog((current) => ({ ...current, busy: true, error: "" }));
     try {
+      if (planeDialog.form) {
+        const validation = validatePlaneV2Form(planeDialog.form);
+        if (validation.errors.length > 0) {
+          throw new Error(validation.errors[0]);
+        }
+      }
       const desiredState = JSON.parse(planeDialog.text);
       if (!desiredState?.plane_name) {
-        throw new Error("desired_state.plane_name is required.");
+        throw new Error("plane_name is required.");
       }
       if (planeDialog.mode === "edit" && desiredState.plane_name !== planeDialog.planeName) {
         throw new Error("Plane rename is not supported in edit mode.");
       }
+      const requestBody = isDesiredStateV2(desiredState)
+        ? { desired_state_v2: desiredState }
+        : { desired_state: desiredState };
       const method = planeDialog.mode === "edit" ? "PUT" : "POST";
       const path =
         planeDialog.mode === "edit"
@@ -1593,15 +1505,14 @@ function App() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-            desired_state: desiredState,
-        }),
+        body: JSON.stringify(requestBody),
       });
       setPlaneDialog({
         open: false,
         mode: "new",
         planeName: "",
         text: "",
+        form: null,
         busy: false,
         error: "",
       });
