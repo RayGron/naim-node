@@ -234,6 +234,47 @@ def apply_vllm_native_external_lb_hotfix() -> None:
     )
     if output_processor_py.is_file():
         source = output_processor_py.read_text()
+        collector_buggy = (
+            "    def __init__(self, output_kind: RequestOutputKind, request_id: str):\n"
+            "        self.aggregate = output_kind == RequestOutputKind.DELTA\n"
+            "        self.request_id = request_id\n"
+            "        self.output: RequestOutput | PoolingRequestOutput | Exception | None = None\n"
+            "        self.ready = asyncio.Event()\n"
+            "\n"
+            "        self._input_stream_task: asyncio.Task | None = None\n"
+            "\n"
+            "    def put(self, output: RequestOutput | PoolingRequestOutput | Exception) -> None:\n"
+            "        \"\"\"Non-blocking put operation.\"\"\"\n"
+            "        if self.output is None or isinstance(output, Exception):\n"
+            "            self.output = output\n"
+            "            self.ready.set()\n"
+        )
+        collector_fixed = (
+            "    def __init__(self, output_kind: RequestOutputKind, request_id: str):\n"
+            "        self.aggregate = output_kind == RequestOutputKind.DELTA\n"
+            "        self.request_id = request_id\n"
+            "        self.output: RequestOutput | PoolingRequestOutput | Exception | None = None\n"
+            "        self.ready = asyncio.Event()\n"
+            "        self._loop = asyncio.get_running_loop()\n"
+            "\n"
+            "        self._input_stream_task: asyncio.Task | None = None\n"
+            "\n"
+            "    def put(self, output: RequestOutput | PoolingRequestOutput | Exception) -> None:\n"
+            "        \"\"\"Non-blocking put operation.\"\"\"\n"
+            "        if self.output is None or isinstance(output, Exception):\n"
+            "            self.output = output\n"
+            "            try:\n"
+            "                self._loop.call_soon_threadsafe(self.ready.set)\n"
+            "            except RuntimeError:\n"
+            "                self.ready.set()\n"
+        )
+        if collector_fixed not in source and collector_buggy in source:
+            output_processor_py.write_text(
+                source.replace(collector_buggy, collector_fixed, 1)
+            )
+            source = output_processor_py.read_text()
+            patched = True
+
         queue_put = (
             "                if req_state.queue is not None:\n"
             "                    # AsyncLLM: put into queue for handling by generate().\n"
