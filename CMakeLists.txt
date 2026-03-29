@@ -203,6 +203,14 @@ target_link_libraries(comet-compose-renderer-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-compose-renderer-tests)
 
 add_executable(
+  comet-worker-group-topology-tests
+  common/src/state/worker_group_topology_tests.cpp
+)
+target_include_directories(comet-worker-group-topology-tests PRIVATE common/include)
+target_link_libraries(comet-worker-group-topology-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-worker-group-topology-tests)
+
+add_executable(
   comet-plane-request-tests
   controller/src/plane/plane_desired_state_request_parser.cpp
   controller/src/plane/plane_desired_state_request_parser_tests.cpp

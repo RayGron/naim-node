@@ -250,6 +250,32 @@ int main() {
         },
         "exclusive-share-mode-requires-full-gpu");
 
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-hybrid-shared-gpu"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen"},
+             }},
+            {"runtime",
+             {{"engine", "vllm"},
+              {"workers", 4},
+              {"data_parallel_mode", "vllm_native"},
+              {"data_parallel_lb_mode", "hybrid"}}},
+            {"worker",
+             {{"assignments",
+               json::array(
+                   {{{"node", "local-hostd"}, {"gpu_device", "0"}},
+                    {{"node", "local-hostd"}, {"gpu_device", "2"}},
+                    {{"node", "local-hostd"}, {"gpu_device", "3"}},
+                    {{"node", "local-hostd"}, {"gpu_device", "0"}}})}}},
+        },
+        "hybrid-worker-assignments-require-unique-gpus");
+
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "desired_state_v2_validator_tests failed: " << ex.what() << '\n';

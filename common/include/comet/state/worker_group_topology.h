@@ -101,6 +101,7 @@ inline void ValidateReplicaPacking(
   if (HybridDataParallelEnabled(inference)) {
     int eligible_index = 0;
     std::string replica_node_name;
+    std::map<std::string, std::map<std::string, std::string>> node_gpu_workers;
     for (const auto& member : worker_group.members) {
       if (!member.enabled) {
         continue;
@@ -118,6 +119,18 @@ inline void ValidateReplicaPacking(
             "worker '" +
             member.name + "' is assigned to node '" + member.node_name +
             "' but replica started on node '" + replica_node_name + "'");
+      }
+      if (!member.gpu_device.empty()) {
+        auto& workers_by_gpu = node_gpu_workers[member.node_name];
+        const auto existing_it = workers_by_gpu.find(member.gpu_device);
+        if (existing_it != workers_by_gpu.end()) {
+          throw std::runtime_error(
+              "data_parallel_lb_mode=hybrid requires unique gpu_device per node-local "
+              "data-parallel rank; worker '" +
+              member.name + "' reuses gpu '" + member.gpu_device + "' on node '" +
+              member.node_name + "' already assigned to worker '" + existing_it->second + "'");
+        }
+        workers_by_gpu.emplace(member.gpu_device, member.name);
       }
       ++eligible_index;
     }

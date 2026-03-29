@@ -196,6 +196,33 @@ int DesiredStatePolicyService::ScoreAutoPlacementCandidate(
   return score;
 }
 
+namespace {
+
+bool HybridGpuAlreadyAssigned(
+    const comet::DesiredState& desired_state,
+    const comet::InstanceSpec& current_worker,
+    const std::string& node_name,
+    const std::string& gpu_device) {
+  if (!comet::HybridDataParallelEnabled(desired_state.inference)) {
+    return false;
+  }
+  for (const auto& instance : desired_state.instances) {
+    if (instance.role != comet::InstanceRole::Worker) {
+      continue;
+    }
+    if (instance.name == current_worker.name || instance.node_name != node_name ||
+        !instance.gpu_device.has_value() || instance.gpu_device->empty()) {
+      continue;
+    }
+    if (*instance.gpu_device == gpu_device) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 void DesiredStatePolicyService::ReservePlacement(
     std::map<std::pair<std::string, std::string>, PlacementUsage>* placement_usage,
     const comet::InstanceSpec& worker) const {
@@ -342,6 +369,9 @@ DesiredStatePolicyService::SelectAutoPlacement(
     for (std::size_t gpu_index = 0; gpu_index < node.gpu_devices.size(); ++gpu_index) {
       const auto& gpu_device = node.gpu_devices[gpu_index];
       if (requested_gpu_device.has_value() && gpu_device != *requested_gpu_device) {
+        continue;
+      }
+      if (HybridGpuAlreadyAssigned(desired_state, worker, node.name, gpu_device)) {
         continue;
       }
 

@@ -1,5 +1,6 @@
 #include "comet/state/desired_state_v2_validator.h"
 
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -180,6 +181,11 @@ void DesiredStateV2Validator::ValidateWorker() const {
       throw std::runtime_error("desired-state v2 worker.assignments must be an array");
     }
     const int expected_workers = value_.at("runtime").at("workers").get<int>();
+    const bool hybrid_native_dp =
+        value_.at("runtime").value("data_parallel_mode", std::string("off")) ==
+            "vllm_native" &&
+        value_.at("runtime").value("data_parallel_lb_mode", std::string{}) == "hybrid";
+    std::map<std::string, std::set<std::string>> node_gpu_devices;
     if (static_cast<int>(worker.at("assignments").size()) != expected_workers) {
       throw std::runtime_error(
           "desired-state v2 worker.assignments size must match runtime.workers");
@@ -200,6 +206,19 @@ void DesiredStateV2Validator::ValidateWorker() const {
       if (assignment.contains("gpu_device") && !assignment.at("gpu_device").is_string()) {
         throw std::runtime_error(
             "desired-state v2 worker.assignments gpu_device must be a string");
+      }
+      if (hybrid_native_dp && assignment.contains("gpu_device") &&
+          assignment.at("gpu_device").is_string()) {
+        const std::string node_name = assignment.at("node").get<std::string>();
+        const std::string gpu_device = assignment.at("gpu_device").get<std::string>();
+        if (!gpu_device.empty()) {
+          auto& gpu_devices = node_gpu_devices[node_name];
+          if (!gpu_devices.insert(gpu_device).second) {
+            throw std::runtime_error(
+                "desired-state v2 hybrid worker.assignments require unique gpu_device values "
+                "per node");
+          }
+        }
       }
     }
   }
