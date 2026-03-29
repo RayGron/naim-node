@@ -120,6 +120,20 @@ async function consumeEventStream(response, onFrame) {
 }
 
 function ActionIcon({ kind }) {
+  if (kind === "close") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path
+          d="M6 6l12 12M18 6 6 18"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
   if (kind === "view") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -594,8 +608,14 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
             <div className="section-label">Plane registry</div>
             <h2 id="plane-editor-title">{title}</h2>
           </div>
-          <button className="ghost-button" type="button" onClick={onClose}>
-            Close
+          <button
+            className="ghost-button compact-button icon-button"
+            type="button"
+            aria-label="Close dialog"
+            title="Close dialog"
+            onClick={onClose}
+          >
+            <ActionIcon kind="close" />
           </button>
         </div>
         <p className="editor-copy">{editorCopy}</p>
@@ -625,6 +645,7 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
             dialog={dialog}
             setDialog={setDialog}
             languageOptions={CHAT_LANGUAGE_OPTIONS}
+            modelLibraryItems={modelLibrary.items || []}
           />
         ) : null}
         <label className="field-label" htmlFor="plane-editor-json">
@@ -668,6 +689,11 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave }) {
               {dialog.mode === "new" ? "Create plane" : "Save staged changes"}
             </button>
           )}
+          {!readOnly ? (
+            <button className="ghost-button" type="button" onClick={onClose} disabled={dialog.busy}>
+              Cancel
+            </button>
+          ) : null}
         </div>
       </section>
     </div>
@@ -2313,8 +2339,14 @@ function App() {
               >
                 Edit plane
               </button>
-              <button className="ghost-button" type="button" onClick={closePlaneDashboard}>
-                Close
+              <button
+                className="ghost-button compact-button icon-button"
+                type="button"
+                aria-label="Close plane details"
+                title="Close plane details"
+                onClick={closePlaneDashboard}
+              >
+                <ActionIcon kind="close" />
               </button>
             </div>
           </div>
@@ -2862,7 +2894,7 @@ function App() {
         <div className="panel-header">
           <div>
             <div className="section-label">Models</div>
-            <h2>Model library</h2>
+            <h2>Model Library</h2>
           </div>
           <div className="toolbar">
             <button

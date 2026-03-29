@@ -1,5 +1,74 @@
 const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 
+const FIELD_INFO = {
+  planeName: "Unique plane identifier used by the controller, runtime artifacts, and API paths.",
+  planeMode: "Choose llm for model serving planes or compute for custom GPU workloads without chat interaction.",
+  protectedPlane: "Protected planes require an explicit confirmation before destructive actions such as delete.",
+  runtimeEngine: "Runtime implementation used by infer and worker services.",
+  workers: "How many worker instances should be created for this plane.",
+  dataParallelMode: "How the runtime scales one model across multiple workers.",
+  dataParallelLbMode: "How data-parallel traffic is balanced between endpoints when data parallelism is enabled.",
+  maxModelLen: "Maximum context window exposed by the serving runtime.",
+  maxNumSeqs: "Maximum number of sequences the runtime will batch concurrently.",
+  gpuMemoryUtilization: "Target fraction of GPU memory reserved by the runtime for model weights and KV cache.",
+  servedModelName: "Public model name returned by OpenAI-compatible endpoints for this plane.",
+  modelSourceType: "Where the model definition comes from: local storage, Hugging Face, catalog, or direct URL.",
+  modelRef: "Logical model reference, usually a Hugging Face id or catalog key.",
+  modelUrl: "Primary remote URL used to download the model artifact.",
+  modelUrls: "Additional URLs for multipart or sharded model downloads.",
+  materializationMode: "Whether the model should be referenced in place, copied, or downloaded before serving.",
+  materializationLocalPath: "Optional local path used when materializing a referenced model artifact.",
+  defaultResponseLanguage: "Language the assistant should prefer when no explicit user language is given.",
+  targetFilename: "Optional target filename used when downloading model artifacts.",
+  sha256: "Optional checksum used to validate downloaded model artifacts.",
+  followUserLanguage: "If enabled, the assistant follows the language of the latest user message.",
+  systemPrompt: "Default system prompt injected into LLM interactions for this plane.",
+  gatewayPort: "HTTP port exposed by the plane gateway.",
+  inferencePort: "Internal inference API port used by infer and worker services.",
+  serverName: "Logical host name advertised by the gateway and status surfaces.",
+  topologyEnabled: "Enable custom node topology for split-host or multi-role layouts.",
+  topologyNodes: "Define logical nodes and their execution mode for advanced placement scenarios.",
+  placementMode: "Scheduler placement strategy for workers.",
+  shareMode: "Whether workers expect exclusive or shared GPU access.",
+  gpuFraction: "Fraction of one GPU reserved per worker when shared placement is used.",
+  memoryCapMb: "Requested host memory cap per worker instance.",
+  workerImage: "Custom worker container image for compute or non-default runtimes.",
+  workerStartType: "How the worker process is started inside the container.",
+  workerStartValue: "Script reference or command executed when the worker container starts.",
+  workerNode: "Default node for worker placement when per-worker assignments are not used.",
+  workerGpuDevice: "Default GPU device hint for workers when manual placement is needed.",
+  workerAssignmentsEnabled: "Enable explicit worker-to-node and worker-to-GPU assignments.",
+  workerAssignments: "Per-worker placement table used for split-host and manual GPU layouts.",
+  workerEnv: "Extra environment variables injected into worker containers.",
+  workerStorageEnabled: "Add a writable private volume for worker runtime files.",
+  workerStorageSizeGb: "Size of the worker private volume in gigabytes.",
+  workerStorageMountPath: "Mount path for the worker private volume inside the container.",
+  inferImage: "Custom infer container image that replaces the default infer runtime image.",
+  inferStartType: "How the infer process is started inside the container.",
+  inferStartValue: "Script reference or command executed when the infer container starts.",
+  inferNode: "Logical node where the infer service should run.",
+  inferStorageEnabled: "Add a writable private volume for infer runtime files.",
+  inferStorageSizeGb: "Size of the infer private volume in gigabytes.",
+  inferStorageMountPath: "Mount path for the infer private volume inside the container.",
+  inferEnv: "Extra environment variables injected into the infer container.",
+  appEnabled: "Enable an application container that uses this plane as a backend.",
+  appImage: "Docker image used for the app container.",
+  appStartType: "How the app process is started inside the container.",
+  appStartValue: "Script reference or command executed when the app container starts.",
+  appHostPort: "Host port published for the app container.",
+  appContainerPort: "Port exposed by the app process inside the container.",
+  appNode: "Logical node where the app service should run.",
+  sharedDiskGb: "Size of the shared plane disk mounted into services that need common state.",
+  appEnv: "Extra environment variables injected into the app container.",
+  appVolumeEnabled: "Add a user-managed writable volume for the app container.",
+  appVolumeName: "Logical name for the app volume.",
+  appVolumeType: "Whether the app volume is persistent or ephemeral.",
+  appVolumeSizeGb: "Size of the app volume in gigabytes.",
+  appVolumeMountPath: "Mount path for the app volume inside the container.",
+  appVolumeAccess: "Access mode used when mounting the app volume.",
+  postDeployScript: "Optional script run after the plane has been materialized and runtime services are up.",
+};
+
 function parseEnvText(value) {
   return value
     .split("\n")
@@ -94,18 +163,18 @@ export function buildNewPlaneFormState() {
     planeName: "new-plane",
     planeMode: "llm",
     protectedPlane: false,
-    modelSourceType: "huggingface",
-    modelRef: "Qwen/Qwen2.5-0.5B-Instruct",
+    modelSourceType: "local",
+    modelRef: "",
     modelPath: "",
     modelUrl: "",
     modelUrls: "",
-    materializationMode: "download",
+    materializationMode: "reference",
     materializationLocalPath: "",
     servedModelName: "new-plane-model",
     modelTargetFilename: "",
     modelSha256: "",
     systemPrompt:
-      "You are Cypher AI. Reply concisely and directly. If preferred_language is provided, always reply in that language. If preferred_language is absent, reply in the same language as the user's last message. Never default to Chinese unless the user explicitly requests Chinese.",
+      "You are a helpful AI assistant. Reply clearly, concisely, and follow the user's instructions.",
     defaultResponseLanguage: "ru",
     followUserLanguage: true,
     runtimeEngine: "vllm",
@@ -623,6 +692,63 @@ function FieldHint({ message, severity = "error" }) {
   return <div className={`field-hint is-${severity}`}>{message}</div>;
 }
 
+function InfoLabel({ children, info, htmlFor, className = "field-label-title" }) {
+  return (
+    <span className={className}>
+      {htmlFor ? <span>{children}</span> : children}
+      {info ? (
+        <span className="field-info" tabIndex={0} aria-label={info}>
+          i
+          <span className="field-info-tooltip" role="tooltip">
+            {info}
+          </span>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function FieldTitle({ title, info, htmlFor }) {
+  return (
+    <label className="field-label" htmlFor={htmlFor}>
+      <InfoLabel info={info}>{title}</InfoLabel>
+    </label>
+  );
+}
+
+function ModelLibraryPicker({ items, selectedPath, onSelect }) {
+  const rows = Array.isArray(items) ? items : [];
+  if (rows.length === 0) {
+    return <FieldHint message="Model Library is empty. Discover or download a model first." severity="warning" />;
+  }
+  return (
+    <div className="model-library-picker">
+      <div className="model-library-picker-head">
+        <div>Name</div>
+        <div>Path</div>
+        <div>Summary</div>
+      </div>
+      <div className="model-library-picker-body">
+        {rows.map((item) => {
+          const isSelected = selectedPath === item.path;
+          return (
+            <button
+              key={item.path}
+              className={`model-library-picker-row${isSelected ? " is-selected" : ""}`}
+              type="button"
+              onClick={() => onSelect(item)}
+            >
+              <strong>{item.name || item.path?.split("/").pop() || "model"}</strong>
+              <span>{item.path}</span>
+              <span>{item.kind || "artifact"}{item.size_bytes ? ` / ${Math.round(item.size_bytes / (1024 * 1024))} MiB` : ""}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function SectionMeta({ children }) {
   if (!children) {
     return null;
@@ -755,7 +881,7 @@ function WorkerAssignmentRows({ assignments, disabled, onChange }) {
   );
 }
 
-export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
+export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLibraryItems = [] }) {
   const form = dialog.form || buildNewPlaneFormState();
   const validation = validatePlaneV2Form(form);
   const topologyNodes = Array.isArray(form.topologyNodes) ? form.topologyNodes : [];
@@ -808,6 +934,24 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
         ...current,
         [key]: event.target.checked,
       }));
+  }
+
+  function selectLocalModel(item) {
+    updatePlaneDialogForm(setDialog, (current) => {
+      const planeName = String(current.planeName || "").trim();
+      const fallbackName = item?.name || item?.path?.split("/").pop() || planeName || "model";
+      return {
+        ...current,
+        modelPath: item?.path || "",
+        modelRef: item?.model_id || item?.name || item?.path || "",
+        materializationMode: "reference",
+        materializationLocalPath: item?.path || "",
+        servedModelName:
+          String(current.servedModelName || "").trim() && current.servedModelName !== "new-plane-model"
+            ? current.servedModelName
+            : fallbackName.replace(/\s+/g, "-").toLowerCase(),
+      };
+    });
   }
 
   function updateTopologyNodes(update) {
@@ -895,7 +1039,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       />
       <div className="plane-form-grid">
         <label className="field-label">
-          Plane name
+          <InfoLabel info={FIELD_INFO.planeName}>Plane name</InfoLabel>
           <input
             className={inputClassName(Boolean(fieldError("Plane name is required")))}
             value={form.planeName}
@@ -904,7 +1048,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           <FieldHint message={fieldError("Plane name is required")} />
         </label>
         <label className="field-label">
-          Plane mode
+          <InfoLabel info={FIELD_INFO.planeMode}>Plane mode</InfoLabel>
           <select className="text-input" value={form.planeMode} onChange={bindText("planeMode")}>
             <option value="llm">llm</option>
             <option value="compute">compute</option>
@@ -916,7 +1060,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
             checked={form.protectedPlane}
             onChange={bindCheck("protectedPlane")}
           />
-          Protected plane
+          <InfoLabel info={FIELD_INFO.protectedPlane} className="field-label-inline">Protected plane</InfoLabel>
         </label>
       </div>
 
@@ -926,7 +1070,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       />
       <div className="plane-form-grid">
         <label className="field-label">
-          Runtime engine
+          <InfoLabel info={FIELD_INFO.runtimeEngine}>Runtime engine</InfoLabel>
           <select
             className={inputClassName(
               Boolean(fieldError("Data-parallel modes are currently supported only")),
@@ -940,7 +1084,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           </select>
         </label>
         <label className="field-label">
-          Workers
+          <InfoLabel info={FIELD_INFO.workers}>Workers</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -950,7 +1094,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          Data-parallel mode
+          <InfoLabel info={FIELD_INFO.dataParallelMode}>Data-parallel mode</InfoLabel>
           <select
             className={inputClassName(
               Boolean(fieldError("Data-parallel modes are currently supported only")),
@@ -974,7 +1118,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          Data-parallel LB mode
+          <InfoLabel info={FIELD_INFO.dataParallelLbMode}>Data-parallel LB mode</InfoLabel>
           <select
             className="text-input"
             value={form.dataParallelLbMode}
@@ -986,7 +1130,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           </select>
         </label>
         <label className="field-label">
-          Max model len
+          <InfoLabel info={FIELD_INFO.maxModelLen}>Max model len</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -996,7 +1140,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          Max num seqs
+          <InfoLabel info={FIELD_INFO.maxNumSeqs}>Max num seqs</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1009,7 +1153,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          GPU memory utilization
+          <InfoLabel info={FIELD_INFO.gpuMemoryUtilization}>GPU memory utilization</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1023,6 +1167,44 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       </div>
 
       {form.planeMode === "llm" ? (
+        <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.servedModelName}>Served model name</InfoLabel>
+            <input
+              className={inputClassName(
+                Boolean(fieldError("Served model name is required for llm planes")),
+              )}
+              value={form.servedModelName}
+              onChange={bindText("servedModelName")}
+            />
+            <FieldHint message={fieldError("Served model name is required for llm planes")} />
+          </label>
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.defaultResponseLanguage}>Default response language</InfoLabel>
+            <select
+              className="text-input"
+              value={form.defaultResponseLanguage}
+              onChange={bindText("defaultResponseLanguage")}
+            >
+              {languageOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-label plane-checkbox">
+            <input
+              type="checkbox"
+              checked={form.followUserLanguage}
+              onChange={bindCheck("followUserLanguage")}
+            />
+            <InfoLabel info={FIELD_INFO.followUserLanguage} className="field-label-inline">Follow user language</InfoLabel>
+          </label>
+        </div>
+      ) : null}
+
+      {form.planeMode === "llm" ? (
         <>
           <SectionHeader
             title="Model"
@@ -1030,66 +1212,60 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
           <div className="plane-form-grid">
             <label className="field-label">
-              Model source type
+              <InfoLabel info={FIELD_INFO.modelSourceType}>Model source type</InfoLabel>
               <select
                 className="text-input"
                 value={form.modelSourceType}
                 onChange={bindText("modelSourceType")}
               >
+                <option value="local">local</option>
                 <option value="huggingface">huggingface</option>
                 <option value="catalog">catalog</option>
-                <option value="local">local</option>
                 <option value="url">url</option>
               </select>
-            </label>
-            <label className="field-label">
-              Model ref
-              <input
-                className={inputClassName(
-                  Boolean(
-                    fieldError("Model ref is required for catalog or huggingface sources"),
-                  ),
-                )}
-                value={form.modelRef}
-                onChange={bindText("modelRef")}
-              />
-              <FieldHint
-                message={fieldError("Model ref is required for catalog or huggingface sources")}
-              />
-            </label>
-            <label className="field-label">
-              Served model name
-              <input
-                className={inputClassName(
-                  Boolean(fieldError("Served model name is required for llm planes")),
-                )}
-                value={form.servedModelName}
-                onChange={bindText("servedModelName")}
-              />
-              <FieldHint message={fieldError("Served model name is required for llm planes")} />
             </label>
           </div>
 
           {form.modelSourceType === "local" ? (
-            <label className="field-label">
-              Local model path
-              <input
-                className={inputClassName(
-                  Boolean(fieldError("Local model path is required when model source type is local")),
-                )}
-                value={form.modelPath}
-                onChange={bindText("modelPath")}
+            <div className="field-label">
+              <InfoLabel info="Choose one locally available model from Model Library. The selected row becomes the plane model source." className="field-label-title">
+                Model Library
+              </InfoLabel>
+              <ModelLibraryPicker
+                items={modelLibraryItems}
+                selectedPath={form.modelPath}
+                onSelect={selectLocalModel}
               />
               <FieldHint
                 message={fieldError("Local model path is required when model source type is local")}
               />
-            </label>
+            </div>
+          ) : null}
+
+          {form.modelSourceType !== "local" ? (
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.modelRef}>Model ref</InfoLabel>
+                <input
+                  className={inputClassName(
+                    Boolean(
+                      fieldError("Model ref is required for catalog or huggingface sources"),
+                    ),
+                  )}
+                  value={form.modelRef}
+                  onChange={bindText("modelRef")}
+                />
+                <FieldHint
+                  message={fieldError("Model ref is required for catalog or huggingface sources")}
+                />
+              </label>
+            </div>
           ) : null}
 
           {form.modelSourceType === "url" ? (
             <div className="plane-form-grid plane-form-grid-wide">
               <label className="field-label">
-                Primary model URL
+                <InfoLabel info={FIELD_INFO.modelUrl}>Primary model URL</InfoLabel>
                 <input
                   className={inputClassName(
                     Boolean(fieldError("At least one model URL is required for url sources")),
@@ -1102,7 +1278,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
                 />
               </label>
               <label className="field-label">
-                Additional model URLs
+                <InfoLabel info={FIELD_INFO.modelUrls}>Additional model URLs</InfoLabel>
                 <textarea
                   className="editor-textarea plane-form-textarea"
                   value={form.modelUrls}
@@ -1112,46 +1288,35 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
             </div>
           ) : null}
 
-          <div className="plane-form-grid">
-            <label className="field-label">
-              Materialization mode
-              <select
-                className="text-input"
-                value={form.materializationMode}
-                onChange={bindText("materializationMode")}
-              >
-                <option value="download">download</option>
-                <option value="reference">reference</option>
-                <option value="copy">copy</option>
-              </select>
-            </label>
-            <label className="field-label">
-              Materialization local path
-              <input
-                className="text-input"
-                value={form.materializationLocalPath}
-                onChange={bindText("materializationLocalPath")}
-              />
-            </label>
-            <label className="field-label">
-              Default response language
-              <select
-                className="text-input"
-                value={form.defaultResponseLanguage}
-                onChange={bindText("defaultResponseLanguage")}
-              >
-                {languageOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.value}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          {form.modelSourceType !== "local" ? (
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.materializationMode}>Materialization mode</InfoLabel>
+                <select
+                  className="text-input"
+                  value={form.materializationMode}
+                  onChange={bindText("materializationMode")}
+                >
+                  <option value="download">download</option>
+                  <option value="reference">reference</option>
+                  <option value="copy">copy</option>
+                </select>
+              </label>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.materializationLocalPath}>Materialization local path</InfoLabel>
+                <input
+                  className="text-input"
+                  value={form.materializationLocalPath}
+                  onChange={bindText("materializationLocalPath")}
+                />
+              </label>
+            </div>
+          ) : null}
 
+          {form.modelSourceType !== "local" ? (
           <div className="plane-form-grid">
             <label className="field-label">
-              Target filename
+              <InfoLabel info={FIELD_INFO.targetFilename}>Target filename</InfoLabel>
               <input
                 className="text-input"
                 value={form.modelTargetFilename}
@@ -1159,25 +1324,18 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
               />
             </label>
             <label className="field-label">
-              SHA256
+              <InfoLabel info={FIELD_INFO.sha256}>SHA256</InfoLabel>
               <input
                 className="text-input"
                 value={form.modelSha256}
                 onChange={bindText("modelSha256")}
               />
             </label>
-            <label className="field-label plane-checkbox">
-              <input
-                type="checkbox"
-                checked={form.followUserLanguage}
-                onChange={bindCheck("followUserLanguage")}
-              />
-              Follow user language
-            </label>
           </div>
+          ) : null}
 
           <label className="field-label">
-            System prompt
+            <InfoLabel info={FIELD_INFO.systemPrompt}>System prompt</InfoLabel>
             <textarea
               className="editor-textarea plane-form-textarea"
               value={form.systemPrompt}
@@ -1193,7 +1351,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       />
       <div className="plane-form-grid">
         <label className="field-label">
-          Gateway port
+          <InfoLabel info={FIELD_INFO.gatewayPort}>Gateway port</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1203,7 +1361,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          Inference port
+          <InfoLabel info={FIELD_INFO.inferencePort}>Inference port</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1213,7 +1371,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          Server name
+          <InfoLabel info={FIELD_INFO.serverName}>Server name</InfoLabel>
           <input className="text-input" value={form.serverName} onChange={bindText("serverName")} />
         </label>
       </div>
@@ -1238,12 +1396,12 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
             checked={form.topologyEnabled}
             onChange={bindCheck("topologyEnabled")}
           />
-          Custom topology
+          <InfoLabel info={FIELD_INFO.topologyEnabled} className="field-label-inline">Custom topology</InfoLabel>
         </label>
       </div>
 
       <label className="field-label">
-        Topology nodes
+        <InfoLabel info={FIELD_INFO.topologyNodes}>Topology nodes</InfoLabel>
         <TopologyNodeRows
           nodes={form.topologyNodes}
           disabled={!form.topologyEnabled}
@@ -1266,7 +1424,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       <SectionMeta>{assignmentSummary}</SectionMeta>
       <div className="plane-form-grid">
         <label className="field-label">
-          Placement mode
+          <InfoLabel info={FIELD_INFO.placementMode}>Placement mode</InfoLabel>
           <select className="text-input" value={form.placementMode} onChange={bindText("placementMode")}>
             <option value="auto">auto</option>
             <option value="manual">manual</option>
@@ -1274,7 +1432,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           </select>
         </label>
         <label className="field-label">
-          Share mode
+          <InfoLabel info={FIELD_INFO.shareMode}>Share mode</InfoLabel>
           <select className="text-input" value={form.shareMode} onChange={bindText("shareMode")}>
             <option value="exclusive">exclusive</option>
             <option value="shared">shared</option>
@@ -1282,7 +1440,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           </select>
         </label>
         <label className="field-label">
-          GPU fraction
+          <InfoLabel info={FIELD_INFO.gpuFraction}>GPU fraction</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1297,7 +1455,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          Worker memory cap MB
+          <InfoLabel info={FIELD_INFO.memoryCapMb}>Worker memory cap MB</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1307,11 +1465,11 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          Worker image
+          <InfoLabel info={FIELD_INFO.workerImage}>Worker image</InfoLabel>
           <input className="text-input" value={form.workerImage} onChange={bindText("workerImage")} />
         </label>
         <label className="field-label">
-          Worker start type
+          <InfoLabel info={FIELD_INFO.workerStartType}>Worker start type</InfoLabel>
           <select
             className="text-input"
             value={form.workerStartType}
@@ -1325,7 +1483,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          {form.workerStartType === "script" ? "Worker script ref" : "Worker command"}
+          <InfoLabel info={FIELD_INFO.workerStartValue}>{form.workerStartType === "script" ? "Worker script ref" : "Worker command"}</InfoLabel>
           <input
             className="text-input"
             value={form.workerStartValue}
@@ -1333,11 +1491,11 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          Worker node
+          <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
           <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
         </label>
         <label className="field-label">
-          Worker GPU device
+          <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
           <input
             className="text-input"
             value={form.workerGpuDevice}
@@ -1353,7 +1511,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
             checked={form.workerAssignmentsEnabled}
             onChange={bindCheck("workerAssignmentsEnabled")}
           />
-          Per-worker assignments
+          <InfoLabel info={FIELD_INFO.workerAssignmentsEnabled} className="field-label-inline">Per-worker assignments</InfoLabel>
         </label>
       </div>
 
@@ -1364,7 +1522,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       </SectionActions>
 
       <label className="field-label">
-        Worker assignments
+        <InfoLabel info={FIELD_INFO.workerAssignments}>Worker assignments</InfoLabel>
         <WorkerAssignmentRows
           assignments={form.workerAssignments}
           disabled={!form.workerAssignmentsEnabled}
@@ -1383,7 +1541,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       </label>
 
       <label className="field-label">
-        Worker env
+        <InfoLabel info={FIELD_INFO.workerEnv}>Worker env</InfoLabel>
         <textarea
           className="editor-textarea plane-form-textarea"
           value={form.workerEnvText}
@@ -1398,10 +1556,10 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
             checked={form.workerStorageEnabled}
             onChange={bindCheck("workerStorageEnabled")}
           />
-          Worker storage
+          <InfoLabel info={FIELD_INFO.workerStorageEnabled} className="field-label-inline">Worker storage</InfoLabel>
         </label>
         <label className="field-label">
-          Worker storage GB
+          <InfoLabel info={FIELD_INFO.workerStorageSizeGb}>Worker storage GB</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1412,7 +1570,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          Worker storage mount path
+          <InfoLabel info={FIELD_INFO.workerStorageMountPath}>Worker storage mount path</InfoLabel>
           <input
             className="text-input"
             value={form.workerStorageMountPath}
@@ -1428,11 +1586,11 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       />
       <div className="plane-form-grid">
         <label className="field-label">
-          Infer image
+          <InfoLabel info={FIELD_INFO.inferImage}>Infer image</InfoLabel>
           <input className="text-input" value={form.inferImage} onChange={bindText("inferImage")} />
         </label>
         <label className="field-label">
-          Infer start type
+          <InfoLabel info={FIELD_INFO.inferStartType}>Infer start type</InfoLabel>
           <select
             className="text-input"
             value={form.inferStartType}
@@ -1443,7 +1601,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           </select>
         </label>
         <label className="field-label">
-          {form.inferStartType === "script" ? "Infer script ref" : "Infer command"}
+          <InfoLabel info={FIELD_INFO.inferStartValue}>{form.inferStartType === "script" ? "Infer script ref" : "Infer command"}</InfoLabel>
           <input
             className="text-input"
             value={form.inferStartValue}
@@ -1454,7 +1612,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          Infer node
+          <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
           <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
         </label>
         <label className="field-label plane-checkbox">
@@ -1463,10 +1621,10 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
             checked={form.inferStorageEnabled}
             onChange={bindCheck("inferStorageEnabled")}
           />
-          Infer storage
+          <InfoLabel info={FIELD_INFO.inferStorageEnabled} className="field-label-inline">Infer storage</InfoLabel>
         </label>
         <label className="field-label">
-          Infer storage GB
+          <InfoLabel info={FIELD_INFO.inferStorageSizeGb}>Infer storage GB</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1480,7 +1638,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid plane-form-grid-wide">
         <label className="field-label">
-          Infer storage mount path
+          <InfoLabel info={FIELD_INFO.inferStorageMountPath}>Infer storage mount path</InfoLabel>
           <input
             className="text-input"
             value={form.inferStorageMountPath}
@@ -1489,7 +1647,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          Infer env
+          <InfoLabel info={FIELD_INFO.inferEnv}>Infer env</InfoLabel>
           <textarea
             className="editor-textarea plane-form-textarea"
             value={form.inferEnvText}
@@ -1505,10 +1663,10 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       <div className="plane-form-grid">
         <label className="field-label plane-checkbox">
           <input type="checkbox" checked={form.appEnabled} onChange={bindCheck("appEnabled")} />
-          App enabled
+          <InfoLabel info={FIELD_INFO.appEnabled} className="field-label-inline">App enabled</InfoLabel>
         </label>
         <label className="field-label">
-          App image
+          <InfoLabel info={FIELD_INFO.appImage}>App image</InfoLabel>
           <input
             className={inputClassName(Boolean(fieldError("App image is required when app is enabled")))}
             value={form.appImage}
@@ -1518,7 +1676,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           <FieldHint message={fieldError("App image is required when app is enabled")} />
         </label>
         <label className="field-label">
-          App start type
+          <InfoLabel info={FIELD_INFO.appStartType}>App start type</InfoLabel>
           <select
             className="text-input"
             value={form.appStartType}
@@ -1533,7 +1691,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          {form.appStartType === "script" ? "App script ref" : "App command"}
+          <InfoLabel info={FIELD_INFO.appStartValue}>{form.appStartType === "script" ? "App script ref" : "App command"}</InfoLabel>
           <input
             className="text-input"
             value={form.appStartValue}
@@ -1546,7 +1704,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          App host port
+          <InfoLabel info={FIELD_INFO.appHostPort}>App host port</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1557,7 +1715,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          App container port
+          <InfoLabel info={FIELD_INFO.appContainerPort}>App container port</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1571,7 +1729,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          App node
+          <InfoLabel info={FIELD_INFO.appNode}>App node</InfoLabel>
           <input
             className="text-input"
             value={form.appNode}
@@ -1586,10 +1744,10 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
             onChange={bindCheck("appVolumeEnabled")}
             disabled={!form.appEnabled}
           />
-          App volume
+          <InfoLabel info={FIELD_INFO.appVolumeEnabled} className="field-label-inline">App volume</InfoLabel>
         </label>
         <label className="field-label">
-          Shared disk GB
+          <InfoLabel info={FIELD_INFO.sharedDiskGb}>Shared disk GB</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1601,7 +1759,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
       </div>
 
       <label className="field-label">
-        App env
+        <InfoLabel info={FIELD_INFO.appEnv}>App env</InfoLabel>
         <textarea
           className="editor-textarea plane-form-textarea"
           value={form.appEnvText}
@@ -1612,7 +1770,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          App volume name
+          <InfoLabel info={FIELD_INFO.appVolumeName}>App volume name</InfoLabel>
           <input
             className="text-input"
             value={form.appVolumeName}
@@ -1621,7 +1779,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          App volume type
+          <InfoLabel info={FIELD_INFO.appVolumeType}>App volume type</InfoLabel>
           <select
             className="text-input"
             value={form.appVolumeType}
@@ -1633,7 +1791,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           </select>
         </label>
         <label className="field-label">
-          App volume size GB
+          <InfoLabel info={FIELD_INFO.appVolumeSizeGb}>App volume size GB</InfoLabel>
           <input
             className="text-input"
             type="number"
@@ -1647,7 +1805,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
 
       <div className="plane-form-grid">
         <label className="field-label">
-          App volume mount path
+          <InfoLabel info={FIELD_INFO.appVolumeMountPath}>App volume mount path</InfoLabel>
           <input
             className="text-input"
             value={form.appVolumeMountPath}
@@ -1656,7 +1814,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
           />
         </label>
         <label className="field-label">
-          App volume access
+          <InfoLabel info={FIELD_INFO.appVolumeAccess}>App volume access</InfoLabel>
           <select
             className="text-input"
             value={form.appVolumeAccess}
@@ -1674,7 +1832,7 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions }) {
         description="Optional post-deploy script run after the plane is materialized."
       />
       <label className="field-label">
-        Post-deploy script
+        <InfoLabel info={FIELD_INFO.postDeployScript}>Post-deploy script</InfoLabel>
         <input className="text-input" value={form.postDeployScript} onChange={bindText("postDeployScript")} />
       </label>
     </div>

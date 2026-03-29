@@ -568,6 +568,59 @@ body {
   gap: 8px;
 }
 
+.field-label-title,
+.field-label-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-label-inline {
+  color: var(--text-dim);
+}
+
+.field-info {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 190, 255, 0.28);
+  color: var(--blue);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: help;
+  background: rgba(8, 24, 48, 0.92);
+}
+
+.field-info-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  width: min(18rem, calc(100vw - 48px));
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 213, 94, 0.24);
+  background: rgba(5, 16, 31, 0.98);
+  color: var(--text);
+  line-height: 1.45;
+  font-size: 0.82rem;
+  box-shadow: var(--panel-glow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+  z-index: 10;
+}
+
+.field-info:hover .field-info-tooltip,
+.field-info:focus .field-info-tooltip,
+.field-info:focus-visible .field-info-tooltip {
+  opacity: 1;
+}
+
 .field-hint {
   font-size: 0.82rem;
   line-height: 1.45;
@@ -583,6 +636,75 @@ body {
 
 .plane-form-textarea {
   min-height: 132px;
+}
+
+.model-library-picker {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(120, 190, 255, 0.16);
+  border-radius: 14px;
+  background: rgba(4, 15, 31, 0.58);
+  overflow: hidden;
+}
+
+.model-library-picker-head,
+.model-library-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr) minmax(0, 0.8fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.model-library-picker-head {
+  padding: 12px 14px;
+  background: rgba(9, 25, 49, 0.92);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08rem;
+}
+
+.model-library-picker-body {
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.model-library-picker-row {
+  width: 100%;
+  padding: 14px;
+  border: 0;
+  border-top: 1px solid rgba(120, 190, 255, 0.08);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: background 160ms ease, box-shadow 160ms ease, color 160ms ease;
+}
+
+.model-library-picker-row:hover {
+  background: rgba(12, 31, 61, 0.72);
+}
+
+.model-library-picker-row strong,
+.model-library-picker-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-library-picker-row span {
+  color: var(--text-dim);
+}
+
+.model-library-picker-row.is-selected {
+  background: linear-gradient(180deg, rgba(58, 45, 8, 0.96), rgba(32, 25, 7, 0.92));
+  box-shadow: inset 0 0 0 1px rgba(255, 213, 94, 0.36);
+}
+
+.model-library-picker-row.is-selected strong,
+.model-library-picker-row.is-selected span {
+  color: #ffeaa0;
 }
 
 .plane-form-rows {
