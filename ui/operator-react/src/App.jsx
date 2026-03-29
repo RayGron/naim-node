@@ -680,20 +680,20 @@ function PlaneEditorDialog({ dialog, setDialog, onClose, onSave, modelLibraryIte
               Edit plane
             </button>
           ) : (
-            <button
-              className="ghost-button"
-              type="button"
-              onClick={onSave}
-              disabled={dialog.busy || formValidation.errors.length > 0}
-            >
-              {dialog.mode === "new" ? "Create plane" : "Save staged changes"}
-            </button>
+            <>
+              <button className="ghost-button" type="button" onClick={onClose} disabled={dialog.busy}>
+                Cancel
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={onSave}
+                disabled={dialog.busy || formValidation.errors.length > 0}
+              >
+                {dialog.mode === "new" ? "Create plane" : "Save staged changes"}
+              </button>
+            </>
           )}
-          {!readOnly ? (
-            <button className="ghost-button" type="button" onClick={onClose} disabled={dialog.busy}>
-              Cancel
-            </button>
-          ) : null}
         </div>
       </section>
     </div>

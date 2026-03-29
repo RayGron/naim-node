@@ -190,6 +190,7 @@ export function buildNewPlaneFormState() {
     topologyEnabled: false,
     topologyNodes: [],
     inferImage: "",
+    inferOverridesEnabled: false,
     inferStartType: "command",
     inferStartValue: "",
     inferEnvText: "",
@@ -284,6 +285,13 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     topologyEnabled: Boolean(value?.topology?.nodes?.length),
     topologyNodes: normalizeTopologyNodes(value?.topology?.nodes),
     inferImage: infer.image || "",
+    inferOverridesEnabled: Boolean(
+      infer.image ||
+      infer.start ||
+      infer.env ||
+      infer.node ||
+      infer.storage
+    ),
     inferStartType: inferStart.type || defaults.inferStartType,
     inferStartValue: inferStart.script_ref || inferStart.command || "",
     inferEnvText: renderEnvText(infer.env),
@@ -436,7 +444,14 @@ export function buildDesiredStateV2FromForm(form) {
     };
   }
 
-  if (form.inferImage.trim() || form.inferStartValue.trim() || form.inferEnvText.trim() || form.inferNode.trim() || form.inferStorageEnabled) {
+  if (
+    form.inferOverridesEnabled &&
+    (form.inferImage.trim() ||
+      form.inferStartValue.trim() ||
+      form.inferEnvText.trim() ||
+      form.inferNode.trim() ||
+      form.inferStorageEnabled)
+  ) {
     desiredState.infer = {};
     if (form.inferImage.trim()) {
       desiredState.infer.image = form.inferImage.trim();
@@ -1556,34 +1571,48 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
             checked={form.workerStorageEnabled}
             onChange={bindCheck("workerStorageEnabled")}
           />
-          <InfoLabel info={FIELD_INFO.workerStorageEnabled} className="field-label-inline">Worker storage</InfoLabel>
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerStorageSizeGb}>Worker storage GB</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.workerStorageSizeGb}
-            onChange={bindNumber("workerStorageSizeGb")}
-            disabled={!form.workerStorageEnabled}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerStorageMountPath}>Worker storage mount path</InfoLabel>
-          <input
-            className="text-input"
-            value={form.workerStorageMountPath}
-            onChange={bindText("workerStorageMountPath")}
-            disabled={!form.workerStorageEnabled}
-          />
+          <InfoLabel info={FIELD_INFO.workerStorageEnabled} className="field-label-inline">Set worker storage size and location</InfoLabel>
         </label>
       </div>
+      {form.workerStorageEnabled ? (
+        <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.workerStorageSizeGb}>Worker storage GB</InfoLabel>
+            <input
+              className="text-input"
+              type="number"
+              min="1"
+              value={form.workerStorageSizeGb}
+              onChange={bindNumber("workerStorageSizeGb")}
+            />
+          </label>
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.workerStorageMountPath}>Worker storage mount path</InfoLabel>
+            <input
+              className="text-input"
+              value={form.workerStorageMountPath}
+              onChange={bindText("workerStorageMountPath")}
+            />
+          </label>
+        </div>
+      ) : null}
 
       <SectionHeader
         title="Infer Overrides"
         description="Optional container overrides for the infer service."
       />
+      <div className="plane-form-grid">
+        <label className="field-label plane-checkbox">
+          <input
+            type="checkbox"
+            checked={form.inferOverridesEnabled}
+            onChange={bindCheck("inferOverridesEnabled")}
+          />
+          <InfoLabel info="Enable this only if you want to override the default infer container wiring." className="field-label-inline">Enable Infer Overrides</InfoLabel>
+        </label>
+      </div>
+      {form.inferOverridesEnabled ? (
+        <>
       <div className="plane-form-grid">
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.inferImage}>Infer image</InfoLabel>
@@ -1655,6 +1684,8 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
           />
         </label>
       </div>
+        </>
+      ) : null}
 
       <SectionHeader
         title="App"
@@ -1665,13 +1696,16 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
           <input type="checkbox" checked={form.appEnabled} onChange={bindCheck("appEnabled")} />
           <InfoLabel info={FIELD_INFO.appEnabled} className="field-label-inline">App enabled</InfoLabel>
         </label>
+      </div>
+      {form.appEnabled ? (
+        <>
+      <div className="plane-form-grid">
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.appImage}>App image</InfoLabel>
           <input
             className={inputClassName(Boolean(fieldError("App image is required when app is enabled")))}
             value={form.appImage}
             onChange={bindText("appImage")}
-            disabled={!form.appEnabled}
           />
           <FieldHint message={fieldError("App image is required when app is enabled")} />
         </label>
@@ -1681,7 +1715,6 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
             className="text-input"
             value={form.appStartType}
             onChange={bindText("appStartType")}
-            disabled={!form.appEnabled}
           >
             <option value="script">script</option>
             <option value="command">command</option>
@@ -1696,7 +1729,6 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
             className="text-input"
             value={form.appStartValue}
             onChange={bindText("appStartValue")}
-            disabled={!form.appEnabled}
           />
           <FieldHint
             message={fieldWarning("App start is empty. The app container will rely on its image default command.")}
@@ -1711,7 +1743,6 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
             min="1"
             value={form.appHostPort}
             onChange={bindNumber("appHostPort")}
-            disabled={!form.appEnabled}
           />
         </label>
         <label className="field-label">
@@ -1722,7 +1753,6 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
             min="1"
             value={form.appContainerPort}
             onChange={bindNumber("appContainerPort")}
-            disabled={!form.appEnabled}
           />
         </label>
       </div>
@@ -1734,7 +1764,6 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
             className="text-input"
             value={form.appNode}
             onChange={bindText("appNode")}
-            disabled={!form.appEnabled}
           />
         </label>
         <label className="field-label plane-checkbox">
@@ -1742,7 +1771,6 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
             type="checkbox"
             checked={form.appVolumeEnabled}
             onChange={bindCheck("appVolumeEnabled")}
-            disabled={!form.appEnabled}
           />
           <InfoLabel info={FIELD_INFO.appVolumeEnabled} className="field-label-inline">App volume</InfoLabel>
         </label>
@@ -1764,68 +1792,68 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
           className="editor-textarea plane-form-textarea"
           value={form.appEnvText}
           onChange={bindText("appEnvText")}
-          disabled={!form.appEnabled}
         />
       </label>
 
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appVolumeName}>App volume name</InfoLabel>
-          <input
-            className="text-input"
-            value={form.appVolumeName}
-            onChange={bindText("appVolumeName")}
-            disabled={!form.appEnabled || !form.appVolumeEnabled}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appVolumeType}>App volume type</InfoLabel>
-          <select
-            className="text-input"
-            value={form.appVolumeType}
-            onChange={bindText("appVolumeType")}
-            disabled={!form.appEnabled || !form.appVolumeEnabled}
-          >
-            <option value="persistent">persistent</option>
-            <option value="ephemeral">ephemeral</option>
-          </select>
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appVolumeSizeGb}>App volume size GB</InfoLabel>
-          <input
-            className="text-input"
-            type="number"
-            min="1"
-            value={form.appVolumeSizeGb}
-            onChange={bindNumber("appVolumeSizeGb")}
-            disabled={!form.appEnabled || !form.appVolumeEnabled}
-          />
-        </label>
-      </div>
+      {form.appVolumeEnabled ? (
+        <>
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appVolumeName}>App volume name</InfoLabel>
+              <input
+                className="text-input"
+                value={form.appVolumeName}
+                onChange={bindText("appVolumeName")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appVolumeType}>App volume type</InfoLabel>
+              <select
+                className="text-input"
+                value={form.appVolumeType}
+                onChange={bindText("appVolumeType")}
+              >
+                <option value="persistent">persistent</option>
+                <option value="ephemeral">ephemeral</option>
+              </select>
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appVolumeSizeGb}>App volume size GB</InfoLabel>
+              <input
+                className="text-input"
+                type="number"
+                min="1"
+                value={form.appVolumeSizeGb}
+                onChange={bindNumber("appVolumeSizeGb")}
+              />
+            </label>
+          </div>
 
-      <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appVolumeMountPath}>App volume mount path</InfoLabel>
-          <input
-            className="text-input"
-            value={form.appVolumeMountPath}
-            onChange={bindText("appVolumeMountPath")}
-            disabled={!form.appEnabled || !form.appVolumeEnabled}
-          />
-        </label>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.appVolumeAccess}>App volume access</InfoLabel>
-          <select
-            className="text-input"
-            value={form.appVolumeAccess}
-            onChange={bindText("appVolumeAccess")}
-            disabled={!form.appEnabled || !form.appVolumeEnabled}
-          >
-            <option value="rw">rw</option>
-            <option value="ro">ro</option>
-          </select>
-        </label>
-      </div>
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appVolumeMountPath}>App volume mount path</InfoLabel>
+              <input
+                className="text-input"
+                value={form.appVolumeMountPath}
+                onChange={bindText("appVolumeMountPath")}
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.appVolumeAccess}>App volume access</InfoLabel>
+              <select
+                className="text-input"
+                value={form.appVolumeAccess}
+                onChange={bindText("appVolumeAccess")}
+              >
+                <option value="rw">rw</option>
+                <option value="ro">ro</option>
+              </select>
+            </label>
+          </div>
+        </>
+      ) : null}
+        </>
+      ) : null}
 
       <SectionHeader
         title="Hooks"
