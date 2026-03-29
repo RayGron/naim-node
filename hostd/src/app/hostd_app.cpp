@@ -661,14 +661,6 @@ void WaitForLocalRuntimeStatus(
       timeout);
 }
 
-std::size_t ExpectedRuntimeStatusCountForNode(
-    const comet::DesiredState& desired_node_state,
-    const std::string& node_name) {
-  return comet::hostd::local_state_support::ExpectedRuntimeStatusCountForNode(
-      desired_node_state,
-      node_name);
-}
-
 void WaitForLocalInstanceRuntimeStatuses(
     const std::string& state_root,
     const std::string& node_name,
@@ -1949,6 +1941,21 @@ void ApplyNodePlan(
   }
 }
 
+std::size_t ExpectedRuntimeStatusCountForComposePlan(
+    const comet::NodeComposePlan& compose_plan) {
+  std::size_t count = 0;
+  for (const auto& service : compose_plan.services) {
+    const auto role_it = service.environment.find("COMET_INSTANCE_ROLE");
+    if (role_it == service.environment.end()) {
+      continue;
+    }
+    if (role_it->second == "infer" || role_it->second == "worker") {
+      ++count;
+    }
+  }
+  return count;
+}
+
 void ShowDemoOps(
     const std::string& node_name,
     const std::string& storage_root,
@@ -2446,7 +2453,7 @@ void ApplyDesiredNodeState(
         state_root,
         node_name,
         plane_name,
-        ExpectedRuntimeStatusCountForNode(desired_node_state, node_name),
+        ExpectedRuntimeStatusCountForComposePlan(compose_plan),
         std::chrono::seconds(300));
     RunPostDeployScriptIfNeeded(
         desired_node_state,
