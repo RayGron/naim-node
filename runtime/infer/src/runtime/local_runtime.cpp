@@ -10,6 +10,14 @@
 
 namespace comet::infer {
 
+namespace {
+
+bool UsesRemoteUpstream(bool dynamic_upstream, const std::optional<UpstreamTarget>& upstream) {
+  return dynamic_upstream || upstream.has_value();
+}
+
+}  // namespace
+
 LocalRuntime::LocalRuntime(
     const RuntimeConfig& config,
     std::string backend,
@@ -48,14 +56,19 @@ int LocalRuntime::Run() {
   signal_service_.RegisterHandlers();
   prewarm_support::ResetPrewarmState(config_);
   WriteCurrentRuntimeStatus("starting");
-  inference_server_.Start();
+  const bool remote_upstream = UsesRemoteUpstream(dynamic_upstream_, upstream_);
+  if (!remote_upstream) {
+    inference_server_.Start();
+  }
   while (!signal_service_.StopRequested() && !EnsureReplicaLeadersPrewarmed()) {
     std::this_thread::sleep_for(std::chrono::seconds(2));
     WriteCurrentRuntimeStatus("starting");
   }
   if (signal_service_.StopRequested()) {
     WriteCurrentRuntimeStatus("stopping");
-    inference_server_.Stop();
+    if (!remote_upstream) {
+      inference_server_.Stop();
+    }
     WriteCurrentRuntimeStatus("stopped");
     return 0;
   }
@@ -69,7 +82,9 @@ int LocalRuntime::Run() {
   }
   WriteCurrentRuntimeStatus("stopping");
   gateway_server_.Stop();
-  inference_server_.Stop();
+  if (!remote_upstream) {
+    inference_server_.Stop();
+  }
   WriteCurrentRuntimeStatus("stopped");
   return 0;
 }
