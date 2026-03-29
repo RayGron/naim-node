@@ -298,6 +298,103 @@ def apply_vllm_native_external_lb_hotfix() -> None:
             async_llm_py.write_text(source.replace(read_output, read_output_debug, 1))
             patched = True
 
+    chat_serving_py = Path(
+        "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/chat_completion/serving.py"
+    )
+    if chat_serving_py.is_file():
+        source = chat_serving_py.read_text()
+        render_chat = (
+            "        result = await self.render_chat_request(request)\n"
+        )
+        render_chat_debug = (
+            "        print(\n"
+            "            f\"[comet-worker-debug] chat-create-enter stream={request.stream} \"\n"
+            "            f\"messages={len(request.messages)} model={request.model}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "        result = await self.render_chat_request(request)\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] chat-render-done type={type(result).__name__}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+        )
+        if render_chat_debug not in source and render_chat in source:
+            chat_serving_py.write_text(
+                source.replace(render_chat, render_chat_debug, 1)
+            )
+            source = chat_serving_py.read_text()
+            patched = True
+
+        request_id_line = (
+            "        request_id = (\n"
+            "            f\"chatcmpl-{self._base_request_id(raw_request, request.request_id)}\"\n"
+            "        )\n"
+        )
+        request_id_debug = (
+            "        request_id = (\n"
+            "            f\"chatcmpl-{self._base_request_id(raw_request, request.request_id)}\"\n"
+            "        )\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] chat-request-id req={request_id}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+        )
+        if request_id_debug not in source and request_id_line in source:
+            chat_serving_py.write_text(
+                source.replace(request_id_line, request_id_debug, 1)
+            )
+            source = chat_serving_py.read_text()
+            patched = True
+
+        result_generator_line = (
+            "        assert len(generators) == 1\n"
+            "        (result_generator,) = generators\n"
+        )
+        result_generator_debug = (
+            "        assert len(generators) == 1\n"
+            "        (result_generator,) = generators\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] chat-generator-ready req={request_id} \"\n"
+            "            f\"stream={request.stream}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+        )
+        if result_generator_debug not in source and result_generator_line in source:
+            chat_serving_py.write_text(
+                source.replace(result_generator_line, result_generator_debug, 1)
+            )
+            source = chat_serving_py.read_text()
+            patched = True
+
+        final_res_line = (
+            "        final_res: RequestOutput | None = None\n"
+            "\n"
+            "        try:\n"
+            "            async for res in result_generator:\n"
+            "                final_res = res\n"
+        )
+        final_res_debug = (
+            "        final_res: RequestOutput | None = None\n"
+            "\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] chat-full-generator-enter req={request_id}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "        try:\n"
+            "            async for res in result_generator:\n"
+            "                print(\n"
+            "                    f\"[comet-worker-debug] chat-full-generator-res req={request_id} \"\n"
+            "                    f\"finished={getattr(res, 'finished', None)}\",\n"
+            "                    flush=True,\n"
+            "                )\n"
+            "                final_res = res\n"
+        )
+        if final_res_debug not in source and final_res_line in source:
+            chat_serving_py.write_text(
+                source.replace(final_res_line, final_res_debug, 1)
+            )
+            patched = True
+
     if patched:
         print(
             "[comet-worker] applied vLLM external-LB stats_update_address hotfix",
