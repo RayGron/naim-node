@@ -276,6 +276,112 @@ def apply_vllm_native_external_lb_hotfix() -> None:
     )
     if async_llm_py.is_file():
         source = async_llm_py.read_text()
+        add_request_line = (
+            "        is_pooling = isinstance(params, PoolingParams)\n"
+        )
+        add_request_debug = (
+            "        print(\n"
+            "            f\"[comet-worker-debug] add-request-enter req={request_id} \"\n"
+            "            f\"data_parallel_rank={data_parallel_rank}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "        is_pooling = isinstance(params, PoolingParams)\n"
+        )
+        if add_request_debug not in source and add_request_line in source:
+            async_llm_py.write_text(
+                source.replace(add_request_line, add_request_debug, 1)
+            )
+            source = async_llm_py.read_text()
+            patched = True
+
+        process_inputs_line = (
+            "            request = self.input_processor.process_inputs(\n"
+        )
+        process_inputs_debug = (
+            "            print(\n"
+            "                f\"[comet-worker-debug] add-request-process-inputs req={request_id}\",\n"
+            "                flush=True,\n"
+            "            )\n"
+            "            request = self.input_processor.process_inputs(\n"
+        )
+        if process_inputs_debug not in source and process_inputs_line in source:
+            async_llm_py.write_text(
+                source.replace(process_inputs_line, process_inputs_debug, 1)
+            )
+            source = async_llm_py.read_text()
+            patched = True
+
+        assign_request_line = (
+            "        self.input_processor.assign_request_id(request)\n"
+        )
+        assign_request_debug = (
+            "        self.input_processor.assign_request_id(request)\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] add-request-assigned req={request.request_id}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+        )
+        if assign_request_debug not in source and assign_request_line in source:
+            async_llm_py.write_text(
+                source.replace(assign_request_line, assign_request_debug, 1)
+            )
+            source = async_llm_py.read_text()
+            patched = True
+
+        add_request_call_line = (
+            "            await self._add_request(request, prompt_text, None, 0, queue)\n"
+            "            return queue\n"
+        )
+        add_request_call_debug = (
+            "            print(\n"
+            "                f\"[comet-worker-debug] add-request-dispatch req={request.request_id}\",\n"
+            "                flush=True,\n"
+            "            )\n"
+            "            await self._add_request(request, prompt_text, None, 0, queue)\n"
+            "            print(\n"
+            "                f\"[comet-worker-debug] add-request-dispatch-done req={request.request_id}\",\n"
+            "                flush=True,\n"
+            "            )\n"
+            "            return queue\n"
+        )
+        if add_request_call_debug not in source and add_request_call_line in source:
+            async_llm_py.write_text(
+                source.replace(add_request_call_line, add_request_call_debug, 1)
+            )
+            source = async_llm_py.read_text()
+            patched = True
+
+        low_add_line = (
+            "        self.output_processor.add_request(request, prompt, parent_req, index, queue)\n"
+            "\n"
+            "        # Add the EngineCoreRequest to EngineCore (separate process).\n"
+            "        await self.engine_core.add_request_async(request)\n"
+        )
+        low_add_debug = (
+            "        print(\n"
+            "            f\"[comet-worker-debug] core-add-enter req={request.request_id}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "        self.output_processor.add_request(request, prompt, parent_req, index, queue)\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] core-add-queued req={request.request_id}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "\n"
+            "        # Add the EngineCoreRequest to EngineCore (separate process).\n"
+            "        await self.engine_core.add_request_async(request)\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] core-add-done req={request.request_id}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+        )
+        if low_add_debug not in source and low_add_line in source:
+            async_llm_py.write_text(
+                source.replace(low_add_line, low_add_debug, 1)
+            )
+            source = async_llm_py.read_text()
+            patched = True
+
         read_output = (
             "                out = q.get_nowait() or await q.get()\n"
         )
