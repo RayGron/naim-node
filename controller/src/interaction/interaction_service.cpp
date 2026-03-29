@@ -2483,10 +2483,46 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     runtime.gateway_ready = probe_controller_target_ok_(resolution.target, "/health");
     runtime.inference_ready =
         probe_controller_target_ok_(resolution.target, "/v1/models");
+    if (hybrid_data_parallel) {
+      const int expected_api_endpoints = ExpectedHybridApiEndpoints(*desired_state);
+      runtime.api_endpoints_expected = expected_api_endpoints;
+      runtime.api_endpoints_ready =
+          runtime.inference_ready ? expected_api_endpoints : 0;
+      runtime.replica_groups_expected = expected_api_endpoints;
+      runtime.replica_groups_ready =
+          runtime.inference_ready ? expected_api_endpoints : 0;
+      runtime.replica_groups_degraded =
+          std::max(0, expected_api_endpoints - runtime.replica_groups_ready);
+    }
     resolution.runtime_status = std::move(runtime);
   }
 
   if (resolution.runtime_status.has_value()) {
+    if (ready_worker_members == 0 && resolution.runtime_status->inference_ready) {
+      ready_worker_members = std::max(expected_worker_members, 1);
+    }
+    if (hybrid_data_parallel) {
+      if (resolution.runtime_status->api_endpoints_expected > 0) {
+        expected_worker_members = resolution.runtime_status->api_endpoints_expected;
+        expected_replica_groups = resolution.runtime_status->api_endpoints_expected;
+      } else {
+        expected_worker_members = ExpectedHybridApiEndpoints(*desired_state);
+        expected_replica_groups = expected_worker_members;
+      }
+      if (resolution.runtime_status->api_endpoints_ready > 0) {
+        ready_worker_members =
+            std::max(ready_worker_members, resolution.runtime_status->api_endpoints_ready);
+        ready_replica_groups =
+            std::max(ready_replica_groups, resolution.runtime_status->api_endpoints_ready);
+      } else if (resolution.runtime_status->inference_ready) {
+        ready_worker_members = std::max(ready_worker_members, expected_worker_members);
+        ready_replica_groups = std::max(ready_replica_groups, expected_replica_groups);
+      }
+      degraded_replica_groups =
+          std::max(0, expected_replica_groups - ready_replica_groups);
+      resolution.runtime_status->api_endpoints_expected = expected_replica_groups;
+      resolution.runtime_status->api_endpoints_ready = ready_replica_groups;
+    }
     resolution.runtime_status->registry_entries =
         std::max(resolution.runtime_status->registry_entries, ready_worker_members);
     resolution.runtime_status->data_parallel_mode = desired_state->inference.data_parallel_mode;
