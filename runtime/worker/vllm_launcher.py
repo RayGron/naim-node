@@ -185,6 +185,32 @@ def apply_vllm_native_external_lb_hotfix() -> None:
             serve_py.write_text(source.replace(buggy, fixed, 1))
             patched = True
 
+        single_server_branch = (
+            "        if args.api_server_count < 1:\n"
+            "            run_headless(args)\n"
+            "        elif args.api_server_count > 1:\n"
+            "            run_multi_api_server(args)\n"
+            "        else:\n"
+            "            # Single API server (this process).\n"
+            "            args.api_server_count = None\n"
+            "            uvloop.run(run_server(args))\n"
+        )
+        multi_server_fix = (
+            "        if args.api_server_count < 1:\n"
+            "            run_headless(args)\n"
+            "        elif args.api_server_count > 1 or is_external_lb or is_hybrid_lb:\n"
+            "            run_multi_api_server(args)\n"
+            "        else:\n"
+            "            # Single API server (this process).\n"
+            "            args.api_server_count = None\n"
+            "            uvloop.run(run_server(args))\n"
+        )
+        if multi_server_fix not in source and single_server_branch in source:
+            serve_py.write_text(
+                serve_py.read_text().replace(single_server_branch, multi_server_fix, 1)
+            )
+            patched = True
+
     core_client_py = Path(
         "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core_client.py"
     )
