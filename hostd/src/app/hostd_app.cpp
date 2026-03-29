@@ -464,6 +464,7 @@ void SaveLocalAppliedGeneration(
 }
 
 std::string RunCommandCapture(const std::string& command);
+std::string Trim(const std::string& value);
 
 bool ComposeProjectHasContainers(const std::string& compose_file_path) {
   const std::string command =
@@ -493,6 +494,30 @@ void EnsureComposeMeshNetworkAvailable(
   if (!RunCommandOk(create_command)) {
     throw std::runtime_error("failed to create compose mesh network: " + network_name);
   }
+}
+
+void RemoveComposeMeshNetworkIfUnused(
+    const std::string& plane_name,
+    ComposeMode compose_mode) {
+  if (compose_mode != ComposeMode::Exec) {
+    return;
+  }
+  const std::string network_name = PlaneMeshNetworkName(plane_name);
+  const std::string inspect_command =
+      ResolvedDockerCommand() + " network inspect " + ShellQuote(network_name) + " >/dev/null 2>&1";
+  if (!RunCommandOk(inspect_command)) {
+    return;
+  }
+  const std::string attached_count_command =
+      ResolvedDockerCommand() + " network inspect " + ShellQuote(network_name) +
+      " --format '{{len .Containers}}' 2>/dev/null";
+  const std::string attached_count = Trim(RunCommandCapture(attached_count_command));
+  if (!attached_count.empty() && attached_count != "0") {
+    return;
+  }
+  const std::string remove_command =
+      ResolvedDockerCommand() + " network rm " + ShellQuote(network_name) + " >/dev/null 2>&1";
+  RunCommandOk(remove_command);
 }
 
 bool IsSharedManagedDiskImagePath(const std::string& image_path) {
@@ -1917,6 +1942,10 @@ void ApplyNodePlan(
     if (operation.kind == comet::HostOperationKind::ComposeUp) {
       apply_operation(operation);
     }
+  }
+
+  if (IsDesiredNodeStateEmpty(desired_node_state)) {
+    RemoveComposeMeshNetworkIfUnused(plan.plane_name, compose_mode);
   }
 }
 
