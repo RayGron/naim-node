@@ -163,34 +163,51 @@ def apply_vllm_native_external_lb_hotfix() -> None:
     if not env_bool("COMET_VLLM_DATA_PARALLEL_EXTERNAL_LB", False):
         return
 
+    patched = False
     serve_py = Path(
         "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/cli/serve.py"
     )
-    if not serve_py.is_file():
-        return
+    if serve_py.is_file():
+        source = serve_py.read_text()
+        buggy = (
+            "            stats_update_address=coordinator.get_stats_publish_address()\n"
+            "            if coordinator\n"
+            "            else None,\n"
+        )
+        fixed = (
+            "            stats_update_address=(\n"
+            "                coordinator.get_stats_publish_address()\n"
+            "                if coordinator\n"
+            "                else addresses.frontend_stats_publish_address\n"
+            "            ),\n"
+        )
+        if fixed not in source and buggy in source:
+            serve_py.write_text(source.replace(buggy, fixed, 1))
+            patched = True
 
-    source = serve_py.read_text()
-    buggy = (
-        "            stats_update_address=coordinator.get_stats_publish_address()\n"
-        "            if coordinator\n"
-        "            else None,\n"
+    core_client_py = Path(
+        "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core_client.py"
     )
-    fixed = (
-        "            stats_update_address=(\n"
-        "                coordinator.get_stats_publish_address()\n"
-        "                if coordinator\n"
-        "                else addresses.frontend_stats_publish_address\n"
-        "            ),\n"
-    )
-    if fixed in source:
-        return
-    if buggy not in source:
-        return
-    serve_py.write_text(source.replace(buggy, fixed, 1))
-    print(
-        "[comet-worker] applied vLLM external-LB stats_update_address hotfix",
-        flush=True,
-    )
+    if core_client_py.is_file():
+        source = core_client_py.read_text()
+        buggy = (
+            "        assert self.stats_update_address is not None\n"
+            "        stats_addr: str = self.stats_update_address\n"
+        )
+        fixed = (
+            "        if self.stats_update_address is None:\n"
+            "            return\n"
+            "        stats_addr: str = self.stats_update_address\n"
+        )
+        if fixed not in source and buggy in source:
+            core_client_py.write_text(source.replace(buggy, fixed, 1))
+            patched = True
+
+    if patched:
+        print(
+            "[comet-worker] applied vLLM external-LB stats_update_address hotfix",
+            flush=True,
+        )
 
 
 def build_status(
