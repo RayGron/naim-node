@@ -296,12 +296,12 @@ void RemoveLocalAppliedPlaneState(
     const std::string& state_root,
     const std::string& node_name,
     const std::string& plane_name) {
-  RemoveStateFileIfExists(LocalPlaneStatePath(state_root, node_name, plane_name));
-  RemoveStateFileIfExists(LocalPlaneGenerationPath(state_root, node_name, plane_name));
+  const std::filesystem::path plane_root(LocalPlaneRoot(state_root, node_name, plane_name));
+  if (!std::filesystem::exists(plane_root)) {
+    return;
+  }
   std::error_code error;
-  std::filesystem::remove(
-      std::filesystem::path(LocalPlaneRoot(state_root, node_name, plane_name)),
-      error);
+  std::filesystem::remove_all(plane_root, error);
   if (error) {
     throw std::runtime_error(
         "failed to remove plane state root for plane '" + plane_name + "': " + error.message());

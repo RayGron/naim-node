@@ -204,6 +204,15 @@ target_link_libraries(comet-plane-request-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-plane-request-tests)
 
 add_executable(
+  comet-hostd-local-state-tests
+  hostd/src/app/hostd_local_state_support.cpp
+  hostd/src/app/hostd_local_state_support_tests.cpp
+)
+target_include_directories(comet-hostd-local-state-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-local-state-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-local-state-tests)
+
+add_executable(
   comet-controller
   controller/src/auth/auth_http_service.cpp
   controller/src/auth/auth_http_support.cpp
