@@ -2299,9 +2299,6 @@ function App() {
   const modelsNavMeta = activeModelJobs > 0
     ? `${activeModelJobs} download job${activeModelJobs === 1 ? "" : "s"}`
     : `${activeModelCount} discovered model${activeModelCount === 1 ? "" : "s"}`;
-  const dashboardNavLabel = selectedPlane ? "focused" : "idle";
-  const dashboardNavClass = selectedPlane ? currentPlaneDisplayClass : "is-booting";
-
   function handleModelLibraryScroll(event) {
     const node = event.currentTarget;
     if (!hasMoreModelItems) {
@@ -3830,10 +3827,6 @@ function App() {
                 <span className="side-menu-title">Dashboard</span>
                 <span className="side-menu-meta">{selectedPlane || "Plane detail and live status"}</span>
               </div>
-              <span className={`tag ${dashboardNavClass}`}>
-                {statusDot(dashboardNavClass)}
-                <span>{dashboardNavLabel}</span>
-              </span>
             </button>
             <button
               className={`side-menu-item ${selectedPage === "planes" ? "is-active" : ""}`}
