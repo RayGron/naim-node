@@ -38,6 +38,18 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
           payload);
 
   std::vector<std::string> system_instruction_parts;
+  bool thinking_enabled =
+      resolution.desired_state.interaction.has_value() &&
+      resolution.desired_state.interaction->thinking_enabled;
+  if (!payload.contains("chat_template_kwargs") ||
+      !payload.at("chat_template_kwargs").is_object()) {
+    payload["chat_template_kwargs"] = json::object();
+  }
+  if (payload.at("chat_template_kwargs").contains("enable_thinking") &&
+      payload.at("chat_template_kwargs").at("enable_thinking").is_boolean()) {
+    thinking_enabled =
+        payload.at("chat_template_kwargs").at("enable_thinking").get<bool>();
+  }
   if (resolution.desired_state.interaction.has_value() &&
       resolution.desired_state.interaction->system_prompt.has_value() &&
       !resolution.desired_state.interaction->system_prompt->empty()) {
@@ -101,9 +113,6 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
     combined_system_instruction += system_content;
   }
 
-  bool thinking_enabled =
-      resolution.desired_state.interaction.has_value() &&
-      resolution.desired_state.interaction->thinking_enabled;
   if (thinking_enabled) {
     if (!combined_system_instruction.empty()) {
       combined_system_instruction += "\n\n";
@@ -135,15 +144,6 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
   payload.erase("max_elapsed_time_ms");
   payload.erase("semantic_goal");
   payload.erase("response_format");
-  if (!payload.contains("chat_template_kwargs") ||
-      !payload.at("chat_template_kwargs").is_object()) {
-    payload["chat_template_kwargs"] = json::object();
-  }
-  if (payload.at("chat_template_kwargs").contains("enable_thinking") &&
-      payload.at("chat_template_kwargs").at("enable_thinking").is_boolean()) {
-    thinking_enabled =
-        payload.at("chat_template_kwargs").at("enable_thinking").get<bool>();
-  }
   payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   if (force_stream) {
     payload["stream"] = true;

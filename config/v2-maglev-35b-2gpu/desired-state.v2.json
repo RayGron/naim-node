@@ -67,7 +67,7 @@
       "en",
       "ru"
     ],
-    "thinking_enabled": true
+    "thinking_enabled": false
   },
   "app": {
     "enabled": false
