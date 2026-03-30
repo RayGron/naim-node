@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -231,6 +232,73 @@ int main() {
     Expect(
         recovered_payload.at("jobs").size() == 2,
         "metadata-backed job should be visible in jobs payload after recovery");
+
+    const fs::path resumable_source_path = src_root / "resumable.gguf";
+    const fs::path resumed_target_path = dst_root / "resumable.gguf";
+    const fs::path resumed_part_path = dst_root / "resumable.gguf.part";
+    {
+      std::ofstream out(resumable_source_path, std::ios::binary);
+      const std::string chunk = "resume-download-payload-";
+      for (int index = 0; index < 40000; ++index) {
+        out.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+      }
+    }
+    {
+      const auto full = fs::file_size(resumable_source_path);
+      const std::size_t prefix_size =
+          static_cast<std::size_t>(std::min<std::uintmax_t>(full / 3, 200000));
+      std::ifstream input(resumable_source_path, std::ios::binary);
+      std::ofstream out(resumed_part_path, std::ios::binary);
+      std::string prefix(prefix_size, '\0');
+      input.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
+      out.write(prefix.data(), static_cast<std::streamsize>(input.gcount()));
+    }
+    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+        "job-5",
+        "stopped",
+        "model-5",
+        dst_root.string(),
+        "",
+        {FileUrlForPath(resumable_source_path)},
+        {resumed_target_path.string()},
+        resumed_target_path.filename().string(),
+        fs::file_size(resumable_source_path),
+        fs::file_size(resumed_part_path),
+        1,
+        "",
+        false,
+        now,
+        now,
+    });
+    const auto resumable_resume_response = service.ResumeDownloadJob(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/jobs/resume",
+            nlohmann::json{{"job_id", "job-5"}}));
+    Expect(
+        resumable_resume_response.status_code == 202,
+        "resume on partial download should be accepted");
+    bool resumable_completed = false;
+    for (int attempt = 0; attempt < 50; ++attempt) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      auto job = store.LoadModelLibraryDownloadJob("job-5");
+      Expect(job.has_value(), "resumed partial job should remain persisted");
+      if (job->status == "completed") {
+        resumable_completed = true;
+        break;
+      }
+    }
+    Expect(
+        resumable_completed,
+        "partial download should complete after resume without restarting from zero");
+    Expect(fs::exists(resumed_target_path), "resumed target should exist");
+    Expect(
+        !fs::exists(resumed_part_path),
+        "resumed partial file should be renamed into final target after completion");
+    Expect(
+        fs::file_size(resumed_target_path) == fs::file_size(resumable_source_path),
+        "resumed target should match source file size");
 
     const fs::path multipart_dir = dst_root / "multipart";
     fs::create_directories(multipart_dir);

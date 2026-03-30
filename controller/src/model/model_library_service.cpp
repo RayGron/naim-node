@@ -89,6 +89,29 @@ bool IsDownloadJobComplete(
   return true;
 }
 
+std::uintmax_t ExistingDownloadBytesForTarget(
+    const std::filesystem::path& target_path) {
+  std::error_code error;
+  if (std::filesystem::exists(target_path, error) && !error) {
+    return std::filesystem::file_size(target_path, error);
+  }
+  error.clear();
+  const std::filesystem::path part_path = target_path.string() + ".part";
+  if (std::filesystem::exists(part_path, error) && !error) {
+    return std::filesystem::file_size(part_path, error);
+  }
+  return 0;
+}
+
+std::uintmax_t ExistingDownloadBytesForJob(
+    const comet::ModelLibraryDownloadJobRecord& job) {
+  std::uintmax_t total = 0;
+  for (const auto& target_path_text : job.target_paths) {
+    total += ExistingDownloadBytesForTarget(std::filesystem::path(target_path_text));
+  }
+  return total;
+}
+
 }  // namespace
 
 ModelLibraryService::ModelLibraryService(ModelLibrarySupport support)
@@ -374,14 +397,6 @@ HttpResponse ModelLibraryService::ResumeDownloadJob(
         {});
   }
 
-  for (const auto& target_path_text : job->target_paths) {
-    std::error_code error;
-    const std::filesystem::path target_path(target_path_text);
-    std::filesystem::remove(target_path, error);
-    error.clear();
-    std::filesystem::remove(target_path.string() + ".part", error);
-  }
-
   ClearStopRequest(*job_id);
   UpdateJob(
       db_path,
@@ -390,8 +405,7 @@ HttpResponse ModelLibraryService::ResumeDownloadJob(
         current.status = "queued";
         current.current_item.clear();
         current.error_message.clear();
-        current.bytes_done = 0;
-        current.bytes_total = std::nullopt;
+        current.bytes_done = ExistingDownloadBytesForJob(current);
       });
   StartDownloadJob(db_path, *job_id);
   const auto resumed = LoadDownloadJob(db_path, *job_id);
@@ -1359,14 +1373,27 @@ void ModelLibraryService::DownloadFile(
   std::filesystem::create_directories(target_path.parent_path());
   const std::filesystem::path temp_path = target_path.string() + ".part";
   std::error_code cleanup_error;
-  std::filesystem::remove(temp_path);
-  std::filesystem::remove(target_path, cleanup_error);
+  if (std::filesystem::exists(target_path, cleanup_error) && !cleanup_error &&
+      !std::filesystem::exists(temp_path, cleanup_error)) {
+    const auto final_size = FileSizeIfExists(target_path).value_or(0);
+    UpdateJob(
+        db_path,
+        job_id,
+        [&](ModelLibraryDownloadJob& job) {
+          job.bytes_done = aggregate_prefix + final_size;
+          job.bytes_total = aggregate_total;
+          job.current_item = target_path.filename().string();
+          job.status = "running";
+        });
+    return;
+  }
+  cleanup_error.clear();
 #if defined(_WIN32)
   auto future = std::async(
       std::launch::async,
       [temp_path_text = temp_path.string(), source_url]() {
         const std::string command =
-            "/usr/bin/curl -fL --silent --show-error --output '" +
+            "/usr/bin/curl -fL -C - --silent --show-error --output '" +
             temp_path_text + "' '" + source_url + "'";
         return std::system(command.c_str());
       });
@@ -1405,11 +1432,15 @@ void ModelLibraryService::DownloadFile(
     std::vector<char*> argv;
     const std::string curl_path = "/usr/bin/curl";
     const std::string flag_fail = "-fL";
+    const std::string flag_continue = "-C";
+    const std::string flag_continue_value = "-";
     const std::string flag_silent = "--silent";
     const std::string flag_show_error = "--show-error";
     const std::string flag_output = "--output";
     argv.push_back(const_cast<char*>(curl_path.c_str()));
     argv.push_back(const_cast<char*>(flag_fail.c_str()));
+    argv.push_back(const_cast<char*>(flag_continue.c_str()));
+    argv.push_back(const_cast<char*>(flag_continue_value.c_str()));
     argv.push_back(const_cast<char*>(flag_silent.c_str()));
     argv.push_back(const_cast<char*>(flag_show_error.c_str()));
     argv.push_back(const_cast<char*>(flag_output.c_str()));
@@ -1429,7 +1460,6 @@ void ModelLibraryService::DownloadFile(
     }
     if (wait_result < 0) {
       ClearActiveDownloadProcess(job_id);
-      std::filesystem::remove(temp_path, cleanup_error);
       throw std::runtime_error("waitpid failed while downloading model artifact");
     }
     const auto bytes_done = FileSizeIfExists(temp_path).value_or(0);
@@ -1449,11 +1479,9 @@ void ModelLibraryService::DownloadFile(
   }
   ClearActiveDownloadProcess(job_id);
   if (IsStopRequested(job_id)) {
-    std::filesystem::remove(temp_path, cleanup_error);
     throw DownloadStoppedError();
   }
   if (!WIFEXITED(wait_status) || WEXITSTATUS(wait_status) != 0) {
-    std::filesystem::remove(temp_path, cleanup_error);
     throw std::runtime_error(
         "failed to download model artifact from " + source_url);
   }
@@ -1506,7 +1534,7 @@ void ModelLibraryService::StartDownloadJob(
           [&](ModelLibraryDownloadJob& job) {
             job.status = "running";
             job.current_item = "probing";
-            job.bytes_total = std::nullopt;
+            job.bytes_done = ExistingDownloadBytesForJob(job);
           });
       std::optional<std::uintmax_t> aggregate_total = std::uintmax_t{0};
       for (const auto& source_url : snapshot->source_urls) {
