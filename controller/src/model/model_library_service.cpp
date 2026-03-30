@@ -52,6 +52,16 @@ bool LooksLikeJobMetadataFilename(const std::string& filename) {
              kJobMetadataSuffix.data()) == 0;
 }
 
+bool ShouldScanDefaultModelRoots(const std::string& db_path) {
+  std::error_code error;
+  const auto normalized = std::filesystem::weakly_canonical(db_path, error);
+  if (error) {
+    return false;
+  }
+  return normalized == "/var/lib/comet-node/hostd-state/controller.sqlite" ||
+         normalized == "/var/lib/comet-node/controller.sqlite";
+}
+
 }  // namespace
 
 ModelLibraryService::ModelLibraryService(ModelLibrarySupport support)
@@ -698,13 +708,15 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
   const auto desired_states = store.LoadDesiredStates();
   const auto jobs = store.LoadModelLibraryDownloadJobs();
   std::set<std::string> roots;
-  for (const std::string candidate : {
-           std::string("/mnt/shared-storage/models"),
-           std::string("/mnt/shared-storage/models/gguf"),
-           std::string("/mnt/shared-storage/models/vllm"),
-       }) {
-    if (IsUsableAbsoluteHostPath(candidate)) {
-      roots.insert(NormalizePathString(candidate));
+  if (ShouldScanDefaultModelRoots(db_path)) {
+    for (const std::string& candidate : {
+             std::string("/mnt/shared-storage/models"),
+             std::string("/mnt/shared-storage/models/gguf"),
+             std::string("/mnt/shared-storage/models/vllm"),
+         }) {
+      if (IsUsableAbsoluteHostPath(candidate)) {
+        roots.insert(NormalizePathString(candidate));
+      }
     }
   }
   if (const char* env_value = std::getenv("COMET_NODE_MODEL_LIBRARY_ROOTS");
