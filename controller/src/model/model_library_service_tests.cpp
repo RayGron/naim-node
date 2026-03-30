@@ -231,6 +231,80 @@ int main() {
     Expect(
         recovered_payload.at("jobs").size() == 2,
         "metadata-backed job should be visible in jobs payload after recovery");
+
+    const fs::path multipart_dir = dst_root / "multipart";
+    fs::create_directories(multipart_dir);
+    const fs::path part1 = multipart_dir / "Qwen3.5-122B-00001-of-00002.gguf";
+    const fs::path part2 = multipart_dir / "Qwen3.5-122B-00002-of-00002.gguf";
+    {
+      std::ofstream out(part1);
+      out << "multipart-part-1";
+    }
+    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+        "job-4",
+        "running",
+        "model-4",
+        dst_root.string(),
+        "multipart",
+        {FileUrlForPath(source_path), FileUrlForPath(source_path)},
+        {part1.string(), part2.string()},
+        part1.filename().string(),
+        2048,
+        512,
+        2,
+        "",
+        false,
+        now,
+        now,
+    });
+
+    const auto payload_with_running_multipart = service.BuildPayload(db_path.string());
+    bool found_running_multipart_entry = false;
+    for (const auto& item : payload_with_running_multipart.at("items")) {
+      if (item.value("name", std::string{}) == "Qwen3.5-122B" &&
+          item.value("kind", std::string{}) == "multipart-gguf") {
+        found_running_multipart_entry = true;
+        break;
+      }
+    }
+    Expect(
+        !found_running_multipart_entry,
+        "multipart model with unfinished download job must not appear in catalog");
+
+    {
+      std::ofstream out(part2);
+      out << "multipart-part-2";
+    }
+    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+        "job-4",
+        "completed",
+        "model-4",
+        dst_root.string(),
+        "multipart",
+        {FileUrlForPath(source_path), FileUrlForPath(source_path)},
+        {part1.string(), part2.string()},
+        "",
+        2048,
+        2048,
+        2,
+        "",
+        false,
+        now,
+        now,
+    });
+    const auto payload_with_completed_multipart = service.BuildPayload(db_path.string());
+    bool found_completed_multipart_entry = false;
+    for (const auto& item : payload_with_completed_multipart.at("items")) {
+      if (item.value("name", std::string{}) == "Qwen3.5-122B" &&
+          item.value("kind", std::string{}) == "multipart-gguf" &&
+          item.value("part_count", 0) == 2) {
+        found_completed_multipart_entry = true;
+        break;
+      }
+    }
+    Expect(
+        found_completed_multipart_entry,
+        "completed multipart model should appear in catalog after all parts finish");
 #endif
 
     fs::remove_all(temp_root, error);

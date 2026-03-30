@@ -36,6 +36,11 @@ struct MultipartGroup {
   int part_total = 0;
 };
 
+struct PendingDownloadState {
+  std::set<std::string> target_paths;
+  std::set<std::string> multipart_group_keys;
+};
+
 class DownloadStoppedError : public std::runtime_error {
  public:
   DownloadStoppedError() : std::runtime_error("download stopped") {}
@@ -60,6 +65,28 @@ bool ShouldScanDefaultModelRoots(const std::string& db_path) {
   }
   return normalized == "/var/lib/comet-node/hostd-state/controller.sqlite" ||
          normalized == "/var/lib/comet-node/controller.sqlite";
+}
+
+bool IsDownloadJobComplete(
+    const comet::ModelLibraryDownloadJobRecord& job) {
+  if (job.status != "completed") {
+    return false;
+  }
+  if (job.target_paths.empty()) {
+    return false;
+  }
+  for (const auto& target_path_text : job.target_paths) {
+    const std::filesystem::path target_path(target_path_text);
+    std::error_code error;
+    if (!std::filesystem::exists(target_path, error) || error) {
+      return false;
+    }
+    error.clear();
+    if (std::filesystem::exists(target_path.string() + ".part", error) && !error) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -1116,6 +1143,33 @@ std::vector<ModelLibraryService::ModelLibraryEntry>
 ModelLibraryService::ScanEntries(const std::string& db_path) const {
   const auto roots = DiscoverRoots(db_path);
   const auto reference_map = BuildReferenceMap(db_path);
+  comet::ControllerStore store(db_path);
+  store.Initialize();
+  PendingDownloadState pending_downloads;
+  for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (IsDownloadJobComplete(job)) {
+      continue;
+    }
+    for (const auto& target_path_text : job.target_paths) {
+      if (!IsUsableAbsoluteHostPath(target_path_text)) {
+        continue;
+      }
+      const std::filesystem::path target_path(target_path_text);
+      const auto normalized_target = NormalizePathString(target_path);
+      pending_downloads.target_paths.insert(normalized_target);
+      std::string multipart_prefix;
+      int part_index = 0;
+      int part_total = 0;
+      if (ParseMultipartGgufFilename(
+              target_path.filename().string(),
+              &multipart_prefix,
+              &part_index,
+              &part_total)) {
+        pending_downloads.multipart_group_keys.insert(
+            NormalizePathString(target_path.parent_path() / multipart_prefix));
+      }
+    }
+  }
   std::map<std::string, ModelLibraryEntry> entries_by_path;
   std::map<std::string, MultipartGroup> multipart_groups;
 
@@ -1179,6 +1233,10 @@ ModelLibraryService::ScanEntries(const std::string& db_path) const {
       if (!EndsWithIgnoreCase(current_name, ".gguf")) {
         continue;
       }
+      const auto normalized_file_path = NormalizePathString(current_path);
+      if (pending_downloads.target_paths.count(normalized_file_path) != 0) {
+        continue;
+      }
       std::string multipart_prefix;
       int part_index = 0;
       int part_total = 0;
@@ -1217,6 +1275,13 @@ ModelLibraryService::ScanEntries(const std::string& db_path) const {
         std::unique(group.paths.begin(), group.paths.end()),
         group.paths.end());
     if (group.paths.empty()) {
+      continue;
+    }
+    if (pending_downloads.multipart_group_keys.count(group_key) != 0) {
+      continue;
+    }
+    if (group.part_total > 0 &&
+        static_cast<int>(group.paths.size()) < group.part_total) {
       continue;
     }
     ModelLibraryEntry entry;
