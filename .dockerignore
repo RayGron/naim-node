@@ -7,6 +7,10 @@ build
 !build/linux/x64/comet-inferctl
 !build/linux/x64/comet-workerd
 dist
+!ui/
+!ui/operator-react/
+!ui/operator-react/dist/
+!ui/operator-react/dist/**
 var
 vcpkg_installed
 .tools
