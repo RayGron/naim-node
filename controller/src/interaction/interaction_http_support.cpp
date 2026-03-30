@@ -101,7 +101,7 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
     combined_system_instruction += system_content;
   }
 
-  const bool thinking_enabled =
+  bool thinking_enabled =
       resolution.desired_state.interaction.has_value() &&
       resolution.desired_state.interaction->thinking_enabled;
   if (thinking_enabled) {
@@ -138,6 +138,11 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
   if (!payload.contains("chat_template_kwargs") ||
       !payload.at("chat_template_kwargs").is_object()) {
     payload["chat_template_kwargs"] = json::object();
+  }
+  if (payload.at("chat_template_kwargs").contains("enable_thinking") &&
+      payload.at("chat_template_kwargs").at("enable_thinking").is_boolean()) {
+    thinking_enabled =
+        payload.at("chat_template_kwargs").at("enable_thinking").get<bool>();
   }
   payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   if (force_stream) {

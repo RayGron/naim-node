@@ -42,6 +42,13 @@ json InteractionHttpService::BuildContinuationPayload(
           : comet::controller::Utf8SafeSuffix(accumulated_text, 256);
   const int remaining_completion_tokens =
       std::max(0, policy.max_total_completion_tokens - total_completion_tokens);
+  if (policy.thinking_enabled) {
+    if (!payload.contains("chat_template_kwargs") ||
+        !payload.at("chat_template_kwargs").is_object()) {
+      payload["chat_template_kwargs"] = json::object();
+    }
+    payload["chat_template_kwargs"]["enable_thinking"] = false;
+  }
   if (!recent_assistant_context.empty()) {
     messages.push_back(
         json{{"role", "assistant"}, {"content", recent_assistant_context}});
