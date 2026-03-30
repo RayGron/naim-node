@@ -4,13 +4,15 @@
   "plane_mode": "llm",
   "model": {
     "source": {
-      "type": "huggingface",
-      "ref": "Qwen/Qwen2.5-0.5B-Instruct"
+      "type": "local",
+      "path": "/mnt/shared-storage/models/gguf/Qwen/Qwen3.5-9B-Q4_K_M.gguf",
+      "ref": "Qwen/Qwen3.5-9B"
     },
     "materialization": {
-      "mode": "download"
+      "mode": "reference",
+      "local_path": "/mnt/shared-storage/models/gguf/Qwen/Qwen3.5-9B-Q4_K_M.gguf"
     },
-    "served_model_name": "qwen2.5-0.5b-app"
+    "served_model_name": "qwen3.5-9b-app"
   },
   "interaction": {
     "default_response_language": "en",
@@ -23,12 +25,15 @@
     ]
   },
   "runtime": {
-    "engine": "vllm",
+    "engine": "llama.cpp",
+    "distributed_backend": "llama_rpc",
     "workers": 1,
-    "data_parallel_mode": "off",
     "max_model_len": 4096,
     "max_num_seqs": 4,
     "gpu_memory_utilization": 0.75
+  },
+  "infer": {
+    "replicas": 1
   },
   "network": {
     "gateway_port": 18084,

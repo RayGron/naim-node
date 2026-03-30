@@ -180,6 +180,23 @@ std::string RequestScheme(const HttpRequest& request) {
   return "http";
 }
 
+std::optional<std::filesystem::path> ReadProcessArgv0Path() {
+#if defined(__linux__)
+  std::ifstream input("/proc/self/cmdline", std::ios::binary);
+  if (!input) {
+    return std::nullopt;
+  }
+  std::string argv0;
+  std::getline(input, argv0, '\0');
+  if (argv0.empty()) {
+    return std::nullopt;
+  }
+  return std::filesystem::path(argv0);
+#else
+  return std::nullopt;
+#endif
+}
+
 std::filesystem::path ResolveWebAuthnHelperPath() {
   if (const auto env = GetEnvString("COMET_WEBAUTHN_HELPER"); env.has_value()) {
     return std::filesystem::path(*env);
@@ -203,7 +220,14 @@ std::filesystem::path ResolveWebAuthnHelperPath() {
       path = parent;
     }
   };
+  if (const auto repo_root = GetEnvString("COMET_REPO_ROOT"); repo_root.has_value()) {
+    append_ancestors(std::filesystem::path(*repo_root));
+  }
   append_ancestors(std::filesystem::current_path());
+  if (const auto argv0 = ReadProcessArgv0Path(); argv0.has_value()) {
+    append_ancestors(argv0->is_absolute() ? argv0->parent_path()
+                                          : std::filesystem::current_path() / argv0->parent_path());
+  }
   std::error_code error;
   const std::filesystem::path proc_exe =
       std::filesystem::read_symlink("/proc/self/exe", error);

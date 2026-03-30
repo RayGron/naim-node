@@ -133,7 +133,7 @@ struct InferenceRuntimeSettings {
   std::string data_parallel_lb_mode = "external";
   int api_server_count = 0;
   std::string worker_group_id;
-  std::string distributed_backend = "vllm";
+  std::string distributed_backend = "llama_rpc";
   std::string worker_selection_policy = "prefer-free-then-share";
   std::string net_if = "eth0";
   std::string models_root = "/comet/shared/models";
@@ -187,7 +187,7 @@ struct WorkerGroupMemberSpec {
 struct WorkerGroupSpec {
   std::string group_id;
   std::string infer_instance_name;
-  std::string distributed_backend = "vllm";
+  std::string distributed_backend = "llama_rpc";
   std::string rendezvous_host;
   int rendezvous_port = 29500;
   int expected_workers = 0;

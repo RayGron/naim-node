@@ -34,7 +34,7 @@ void NormalizeInferenceSettings(InferenceRuntimeSettings* settings) {
   }
   if (settings->distributed_backend.empty()) {
     settings->distributed_backend =
-        settings->runtime_engine == "vllm" ? "vllm" : "local";
+        settings->runtime_engine == "llama.cpp" ? "llama_rpc" : "local";
   }
   if (settings->data_parallel_mode.empty()) {
     settings->data_parallel_mode = kDataParallelModeOff;
@@ -416,7 +416,7 @@ WorkerGroupSpec WorkerGroupSpecFromJson(const json& value) {
   WorkerGroupSpec group;
   group.group_id = value.value("group_id", std::string{});
   group.infer_instance_name = value.value("infer_instance_name", std::string{});
-  group.distributed_backend = value.value("distributed_backend", std::string("vllm"));
+  group.distributed_backend = value.value("distributed_backend", std::string("llama_rpc"));
   group.rendezvous_host = value.value("rendezvous_host", std::string{});
   group.rendezvous_port = value.value("rendezvous_port", 29500);
   group.expected_workers = value.value("expected_workers", 0);

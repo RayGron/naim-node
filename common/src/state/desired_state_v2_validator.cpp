@@ -100,6 +100,7 @@ void DesiredStateV2Validator::ValidateModel() const {
 
 void DesiredStateV2Validator::ValidateRuntime() const {
   const auto& runtime = value_.at("runtime");
+  const std::string plane_mode = value_.value("plane_mode", std::string("llm"));
   if (runtime.value("engine", std::string{}).empty()) {
     throw std::runtime_error("desired-state v2 runtime requires engine");
   }
@@ -110,22 +111,30 @@ void DesiredStateV2Validator::ValidateRuntime() const {
   const std::string engine = runtime.value("engine", std::string{});
   const std::string data_parallel_mode = runtime.value("data_parallel_mode", std::string("off"));
   const std::string distributed_backend =
-      runtime.value("distributed_backend", engine == "vllm" ? std::string("vllm")
-                                                             : std::string("local"));
-  if ((data_parallel_mode == "vllm_native" || data_parallel_mode == "auto_replicas") &&
-      engine != "vllm") {
+      runtime.value("distributed_backend", engine == "llama.cpp" ? std::string("llama_rpc")
+                                                                  : std::string("local"));
+  if (engine == "vllm") {
     throw std::runtime_error(
-        "desired-state v2 native data parallel mode requires runtime.engine=vllm");
+        "desired-state v2 runtime.engine=vllm is no longer supported; use "
+        "runtime.engine=llama.cpp with runtime.distributed_backend=llama_rpc");
   }
-  if (runtime.contains("data_parallel_lb_mode") &&
-      data_parallel_mode != "vllm_native" && data_parallel_mode != "auto_replicas") {
+  if (plane_mode == "llm" && engine != "llama.cpp") {
     throw std::runtime_error(
-        "desired-state v2 data_parallel_lb_mode requires native data parallel mode");
+        "desired-state v2 llm planes require runtime.engine=llama.cpp");
   }
-  if (engine == "llama.cpp" &&
-      (data_parallel_mode == "vllm_native" || data_parallel_mode == "auto_replicas")) {
+  if (plane_mode == "llm" && distributed_backend != "llama_rpc") {
     throw std::runtime_error(
-        "desired-state v2 llama.cpp runtime does not support vllm native data parallel modes");
+        "desired-state v2 llm planes require runtime.distributed_backend=llama_rpc");
+  }
+  if (data_parallel_mode != "off") {
+    throw std::runtime_error(
+        "desired-state v2 no longer supports data_parallel_mode; use infer.replicas with "
+        "llama.cpp runtime.distributed_backend=llama_rpc");
+  }
+  if (runtime.contains("data_parallel_lb_mode")) {
+    throw std::runtime_error(
+        "desired-state v2 no longer supports data_parallel_lb_mode; use infer.replicas with "
+        "llama.cpp runtime.distributed_backend=llama_rpc");
   }
   if (engine == "llama.cpp" && distributed_backend == "llama_rpc" &&
       runtime.at("workers").get<int>() <= 0) {
@@ -167,12 +176,27 @@ void DesiredStateV2Validator::ValidateTopology() const {
 }
 
 void DesiredStateV2Validator::ValidateInfer() const {
+  const std::string plane_mode = value_.value("plane_mode", std::string("llm"));
+  const auto& runtime = value_.at("runtime");
+  const std::string engine = runtime.value("engine", std::string{});
+  const std::string distributed_backend =
+      runtime.value("distributed_backend", engine == "llama.cpp" ? std::string("llama_rpc")
+                                                                  : std::string("local"));
+  if (plane_mode == "llm") {
+    if (!value_.contains("infer") || !value_.at("infer").is_object()) {
+      throw std::runtime_error(
+          "desired-state v2 llm planes require infer object with replicas");
+    }
+    if (!value_.at("infer").contains("replicas")) {
+      throw std::runtime_error(
+          "desired-state v2 llm planes require infer.replicas for llama replica-parallel layout");
+    }
+  }
   if (!value_.contains("infer")) {
     return;
   }
   RequireObject("infer");
   const auto& infer = value_.at("infer");
-  const auto& runtime = value_.at("runtime");
   if (infer.contains("node") && !infer.at("node").is_string()) {
     throw std::runtime_error("desired-state v2 infer.node must be a string");
   }
@@ -183,10 +207,6 @@ void DesiredStateV2Validator::ValidateInfer() const {
     if (!infer.at("replicas").is_number_integer() || infer.at("replicas").get<int>() <= 0) {
       throw std::runtime_error("desired-state v2 infer.replicas must be a positive integer");
     }
-    const std::string engine = runtime.value("engine", std::string{});
-    const std::string distributed_backend =
-        runtime.value("distributed_backend", engine == "vllm" ? std::string("vllm")
-                                                               : std::string("local"));
     if (!(engine == "llama.cpp" && distributed_backend == "llama_rpc")) {
       throw std::runtime_error(
           "desired-state v2 infer.replicas is currently supported only for llama.cpp "
@@ -220,11 +240,6 @@ void DesiredStateV2Validator::ValidateWorker() const {
       throw std::runtime_error("desired-state v2 worker.assignments must be an array");
     }
     const int expected_workers = value_.at("runtime").at("workers").get<int>();
-    const bool hybrid_native_dp =
-        value_.at("runtime").value("data_parallel_mode", std::string("off")) ==
-            "vllm_native" &&
-        value_.at("runtime").value("data_parallel_lb_mode", std::string{}) == "hybrid";
-    std::map<std::string, std::set<std::string>> node_gpu_devices;
     if (static_cast<int>(worker.at("assignments").size()) != expected_workers) {
       throw std::runtime_error(
           "desired-state v2 worker.assignments size must match runtime.workers");
@@ -245,19 +260,6 @@ void DesiredStateV2Validator::ValidateWorker() const {
       if (assignment.contains("gpu_device") && !assignment.at("gpu_device").is_string()) {
         throw std::runtime_error(
             "desired-state v2 worker.assignments gpu_device must be a string");
-      }
-      if (hybrid_native_dp && assignment.contains("gpu_device") &&
-          assignment.at("gpu_device").is_string()) {
-        const std::string node_name = assignment.at("node").get<std::string>();
-        const std::string gpu_device = assignment.at("gpu_device").get<std::string>();
-        if (!gpu_device.empty()) {
-          auto& gpu_devices = node_gpu_devices[node_name];
-          if (!gpu_devices.insert(gpu_device).second) {
-            throw std::runtime_error(
-                "desired-state v2 hybrid worker.assignments require unique gpu_device values "
-                "per node");
-          }
-        }
       }
     }
   }

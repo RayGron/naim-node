@@ -17,7 +17,6 @@ constexpr int kDefaultInferPrivateDiskSizeGb = 12;
 constexpr int kDefaultWorkerPrivateDiskSizeGb = 12;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
 constexpr std::string_view kDefaultInferImage = "comet/infer-runtime:dev";
-constexpr std::string_view kDefaultVllmWorkerImage = "comet/worker-vllm-runtime:dev";
 constexpr std::string_view kDefaultWorkerImage = "comet/worker-runtime:dev";
 constexpr std::string_view kDefaultInferCommand = "/runtime/infer/entrypoint.sh";
 constexpr std::string_view kDefaultWorkerCommand = "/runtime/worker/entrypoint.sh";
@@ -147,16 +146,11 @@ void DesiredStateV2Projector::ProjectRuntime() {
   nlohmann::json runtime = {
       {"engine", state_.inference.runtime_engine},
       {"workers", std::max(1, static_cast<int>(worker_instances_.size()))},
-      {"data_parallel_mode", state_.inference.data_parallel_mode},
       {"distributed_backend", state_.inference.distributed_backend},
       {"max_model_len", state_.inference.max_model_len},
       {"max_num_seqs", state_.inference.max_num_seqs},
       {"gpu_memory_utilization", state_.inference.gpu_memory_utilization},
   };
-  if (state_.inference.data_parallel_lb_mode != kDataParallelLbModeExternal ||
-      state_.inference.data_parallel_mode != kDataParallelModeOff) {
-    runtime["data_parallel_lb_mode"] = state_.inference.data_parallel_lb_mode;
-  }
   if (state_.inference.pipeline_parallel_size != 1) {
     runtime["pipeline_parallel_size"] = state_.inference.pipeline_parallel_size;
   }
@@ -209,8 +203,9 @@ void DesiredStateV2Projector::ProjectInfer() {
     infer["node"] = infer_instance_->node_name;
   }
   const int replicas = InferReplicaCount();
-  if (replicas > 1) {
-    infer["replicas"] = replicas;
+  if (state_.plane_mode == PlaneMode::Llm && state_.inference.runtime_engine == "llama.cpp" &&
+      state_.inference.distributed_backend == "llama_rpc") {
+    infer["replicas"] = std::max(1, replicas);
   }
   const auto storage = ProjectServiceStorage(FindDiskByName(infer_instance_->private_disk_name));
   if (!storage.is_null()) {
@@ -508,8 +503,7 @@ std::map<std::string, std::string> DesiredStateV2Projector::ProjectCustomEnv(
 }
 
 bool DesiredStateV2Projector::IsDefaultWorkerImage(const std::string& image) const {
-  return state_.inference.runtime_engine == "vllm" ? image == kDefaultVllmWorkerImage
-                                                   : image == kDefaultWorkerImage;
+  return image == kDefaultWorkerImage;
 }
 
 std::string DesiredStateV2Projector::PreferredModelSourceType() const {

@@ -1,6 +1,7 @@
 # Desired State v2 Examples
 
-These compact `desired-state.v2.json` examples exercise the current renderer breadth:
+These compact `desired-state.v2.json` examples exercise the current renderer breadth.
+All shipped LLM examples now use the `llama.cpp + llama_rpc` replica-parallel contract:
 
 - `v2-llm-backend-only`:
   pure LLM backend with no application container, suitable for external clients such as Maglev
@@ -9,7 +10,7 @@ These compact `desired-state.v2.json` examples exercise the current renderer bre
 - `v2-llm-with-app`:
   conventional LLM plane with an attached application container
 - `v2-llama-rpc-backend`:
-  `llama.cpp` head/runtime with RPC compute workers for local or remote GPU nodes
+  single-replica `llama.cpp` head/runtime with RPC compute workers for local or remote GPU nodes
 - `v2-llama-rpc-replicas`:
   replica-parallel `llama.cpp` RPC layout with one aggregator head and multiple leaf infer replicas
 

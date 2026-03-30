@@ -6,8 +6,7 @@ const FIELD_INFO = {
   protectedPlane: "Protected planes require an explicit confirmation before destructive actions such as delete.",
   runtimeEngine: "Runtime implementation used by infer and worker services.",
   workers: "How many worker instances should be created for this plane.",
-  dataParallelMode: "How the runtime scales one model across multiple workers.",
-  dataParallelLbMode: "How data-parallel traffic is balanced between endpoints when data parallelism is enabled.",
+  inferReplicas: "How many leaf infer replicas should be created behind the aggregator head.",
   maxModelLen: "Maximum context window exposed by the serving runtime.",
   maxNumSeqs: "Maximum number of sequences the runtime will batch concurrently.",
   gpuMemoryUtilization: "Target fraction of GPU memory reserved by the runtime for model weights and KV cache.",
@@ -185,10 +184,9 @@ export function buildNewPlaneFormState() {
       "You are a helpful AI assistant. Reply clearly, concisely, and follow the user's instructions.",
     defaultResponseLanguage: "ru",
     followUserLanguage: true,
-    runtimeEngine: "vllm",
+    runtimeEngine: "llama.cpp",
     workers: 1,
-    dataParallelMode: "off",
-    dataParallelLbMode: "external",
+    inferReplicas: 1,
     maxModelLen: 8192,
     maxNumSeqs: 8,
     gpuMemoryUtilization: 0.85,
@@ -280,8 +278,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
       value?.interaction?.follow_user_language ?? defaults.followUserLanguage,
     runtimeEngine: runtime.engine || defaults.runtimeEngine,
     workers: Number(runtime.workers ?? defaults.workers),
-    dataParallelMode: runtime.data_parallel_mode || defaults.dataParallelMode,
-    dataParallelLbMode: runtime.data_parallel_lb_mode || defaults.dataParallelLbMode,
+    inferReplicas: Number(infer.replicas ?? defaults.inferReplicas),
     maxModelLen: Number(runtime.max_model_len ?? defaults.maxModelLen),
     maxNumSeqs: Number(runtime.max_num_seqs ?? defaults.maxNumSeqs),
     gpuMemoryUtilization: Number(
@@ -377,9 +374,9 @@ export function buildDesiredStateV2FromForm(form) {
     plane_mode: form.planeMode,
     protected: Boolean(form.protectedPlane),
     runtime: {
-      engine: form.runtimeEngine,
+      engine: form.planeMode === "compute" ? "custom" : "llama.cpp",
       workers: parseNumber(form.workers, 1),
-      data_parallel_mode: form.dataParallelMode,
+      ...(form.planeMode === "llm" ? { distributed_backend: "llama_rpc" } : {}),
       max_model_len: parseNumber(form.maxModelLen, 8192),
       max_num_seqs: parseNumber(form.maxNumSeqs, 8),
       gpu_memory_utilization: Number(form.gpuMemoryUtilization) || 0.85,
@@ -426,10 +423,6 @@ export function buildDesiredStateV2FromForm(form) {
     }
   }
 
-  if (form.dataParallelMode !== "off") {
-    desiredState.runtime.data_parallel_lb_mode = form.dataParallelLbMode;
-  }
-
   if (form.planeMode === "llm") {
     desiredState.model = {
       source,
@@ -453,6 +446,9 @@ export function buildDesiredStateV2FromForm(form) {
       supported_response_languages: DEFAULT_SUPPORTED_RESPONSE_LANGUAGES,
       follow_user_language: Boolean(form.followUserLanguage),
     };
+    desiredState.infer = {
+      replicas: parseNumber(form.inferReplicas, 1),
+    };
   }
 
   if (
@@ -463,7 +459,7 @@ export function buildDesiredStateV2FromForm(form) {
       form.inferNode.trim() ||
       form.inferStorageEnabled)
   ) {
-    desiredState.infer = {};
+    desiredState.infer = desiredState.infer || {};
     if (form.inferImage.trim()) {
       desiredState.infer.image = form.inferImage.trim();
     }
@@ -638,8 +634,13 @@ export function validatePlaneV2Form(form) {
       }
     }
   }
-  if (form?.dataParallelMode !== "off" && form?.runtimeEngine !== "vllm") {
-    errors.push("Data-parallel modes are currently supported only with the vllm runtime.");
+  if (form?.planeMode === "llm") {
+    if (Number(form?.inferReplicas || 0) <= 0) {
+      errors.push("Infer replicas must be a positive integer for llm planes.");
+    }
+    if (Number(form?.workers || 0) % Number(form?.inferReplicas || 1) !== 0) {
+      errors.push("Workers must be divisible by infer replicas.");
+    }
   }
   if (form?.shareMode === "exclusive" && Number(form?.gpuFraction) !== 1) {
     errors.push("Exclusive share mode requires GPU fraction equal to 1.0.");
@@ -682,9 +683,6 @@ export function validatePlaneV2Form(form) {
 
   if (form?.workerAssignmentsEnabled && !form?.topologyEnabled) {
     warnings.push("Per-worker assignments are easier to reason about when custom topology is enabled.");
-  }
-  if (form?.planeMode === "compute" && form?.runtimeEngine === "vllm") {
-    warnings.push("Compute planes usually use a custom worker image or non-vllm runtime.");
   }
   if (form?.appEnabled && !String(form?.appStartValue || "").trim()) {
     warnings.push("App start is empty. The app container will rely on its image default command.");
@@ -1041,6 +1039,8 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
       }));
       return {
         ...current,
+        runtimeEngine: "llama.cpp",
+        inferReplicas: workerCount,
         topologyEnabled: true,
         topologyNodes: topologyNodesValue,
         inferNode: "infer-hostd",
@@ -1107,22 +1107,17 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
 
       <SectionHeader
         title="Runtime"
-        description="Execution engine, worker count, and data-parallel behavior."
+        description="Replica-parallel llama.cpp layout with one aggregator head and leaf infer replicas."
       />
       <div className="plane-form-grid">
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.runtimeEngine}>Runtime engine</InfoLabel>
-          <select
-            className={inputClassName(
-              Boolean(fieldError("Data-parallel modes are currently supported only")),
-            )}
-            value={form.runtimeEngine}
-            onChange={bindText("runtimeEngine")}
-          >
-            <option value="vllm">vllm</option>
-            <option value="llama.cpp">llama.cpp</option>
-            <option value="custom">custom</option>
-          </select>
+          <input
+            className="text-input"
+            value={form.planeMode === "compute" ? "custom worker runtime" : "llama.cpp + llama_rpc"}
+            disabled
+            readOnly
+          />
         </label>
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.workers}>Workers</InfoLabel>
@@ -1135,41 +1130,26 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
           />
         </label>
         <label className="field-label">
-          <InfoLabel info={FIELD_INFO.dataParallelMode}>Data-parallel mode</InfoLabel>
-          <select
+          <InfoLabel info={FIELD_INFO.inferReplicas}>Infer replicas</InfoLabel>
+          <input
             className={inputClassName(
-              Boolean(fieldError("Data-parallel modes are currently supported only")),
+              Boolean(
+                fieldError("Infer replicas must be a positive integer") ||
+                  fieldError("Workers must be divisible by infer replicas"),
+              ),
             )}
-            value={form.dataParallelMode}
-            onChange={bindText("dataParallelMode")}
-          >
-            <option value="off">off</option>
-            <option value="vllm_native">vllm_native</option>
-            <option value="auto_replicas">auto_replicas</option>
-          </select>
-          <FieldHint
-            message={fieldError("Data-parallel modes are currently supported only")}
+            type="number"
+            min="1"
+            value={form.inferReplicas}
+            onChange={bindNumber("inferReplicas")}
+            disabled={form.planeMode === "compute"}
           />
-          <FieldHint
-            message={fieldWarning("Compute planes usually use a custom worker image")}
-            severity="warning"
-          />
+          <FieldHint message={fieldError("Infer replicas must be a positive integer")} />
+          <FieldHint message={fieldError("Workers must be divisible by infer replicas")} />
         </label>
       </div>
 
       <div className="plane-form-grid">
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.dataParallelLbMode}>Data-parallel LB mode</InfoLabel>
-          <select
-            className="text-input"
-            value={form.dataParallelLbMode}
-            onChange={bindText("dataParallelLbMode")}
-            disabled={form.dataParallelMode === "off"}
-          >
-            <option value="external">external</option>
-            <option value="hybrid">hybrid</option>
-          </select>
-        </label>
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.maxModelLen}>Max model len</InfoLabel>
           <input

@@ -21,6 +21,9 @@
     "workers": 2,
     "max_model_len": 8192
   },
+  "infer": {
+    "replicas": 1
+  },
   "topology": {
     "nodes": [
       {

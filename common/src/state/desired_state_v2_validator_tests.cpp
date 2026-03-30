@@ -72,7 +72,9 @@ int main() {
                {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
                {"served_model_name", "qwen-maglev"},
            }},
-          {"runtime", {{"engine", "vllm"}, {"workers", 1}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
           {"network",
            {{"gateway_port", 18184}, {"inference_port", 18194}, {"server_name", "maglev"}}},
           {"app", {{"enabled", false}}},
@@ -104,7 +106,8 @@ int main() {
                {"served_model_name", "split-backend"},
                {"target_filename", "model.gguf"},
            }},
-          {"runtime", {{"engine", "vllm"}, {"workers", 2}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 2}}},
           {"topology",
            {{"nodes",
              json::array(
@@ -115,7 +118,7 @@ int main() {
                   {{"name", "worker-hostd-b"},
                    {"execution_mode", "worker-only"},
                    {"gpu_memory_mb", {{"0", 24576}}}}})}}},
-          {"infer", {{"node", "infer-hostd"}}},
+          {"infer", {{"node", "infer-hostd"}, {"replicas", 2}}},
           {"worker",
            {{"assignments",
              json::array(
@@ -130,9 +133,14 @@ int main() {
              "split-topology: source_urls should contain 2 items");
       Expect(state.bootstrap_model->target_filename == std::optional<std::string>("model.gguf"),
              "split-topology: target_filename mismatch");
-      Expect(state.instances.size() == 3, "split-topology: expected infer + 2 workers");
+      Expect(state.instances.size() == 5,
+             "split-topology: expected aggregator + 2 leaf infers + 2 workers");
       Expect(FindInstance(state, "infer-split-backend").node_name == "infer-hostd",
              "split-topology: infer node mismatch");
+      Expect(FindInstance(state, "infer-split-backend-a").node_name == "worker-hostd-a",
+             "split-topology: leaf a infer node mismatch");
+      Expect(FindInstance(state, "infer-split-backend-b").node_name == "worker-hostd-b",
+             "split-topology: leaf b infer node mismatch");
       Expect(FindInstance(state, "worker-split-backend-a").node_name == "worker-hostd-a",
              "split-topology: worker 0 node mismatch");
       Expect(FindInstance(state, "worker-split-backend-b").node_name == "worker-hostd-b",
@@ -162,6 +170,7 @@ int main() {
                {"distributed_backend", "llama_rpc"},
                {"workers", 2},
            }},
+          {"infer", {{"replicas", 1}}},
           {"topology",
            {{"nodes",
              json::array(
@@ -225,6 +234,7 @@ int main() {
                   {{"name", "local-head"},
                    {"execution_mode", "mixed"},
                    {"gpu_memory_mb", {{"0", 24576}}}}})}}},
+          {"infer", {{"replicas", 1}}},
           {"worker",
            {{"assignments",
              json::array(
@@ -257,7 +267,8 @@ int main() {
                {"workers", 1},
            }},
           {"infer",
-           {{"env",
+           {{"replicas", 1},
+            {"env",
              {
                  {"COMET_INFERENCE_PORT", "19180"},
                  {"COMET_GATEWAY_PORT", "19181"},
@@ -296,7 +307,8 @@ int main() {
                {"workers", 1},
            }},
           {"infer",
-           {{"env",
+           {{"replicas", 1},
+            {"env",
              {
                  {"COMET_REPLICA_UPSTREAMS",
                   "http://127.0.0.1:19190,http://127.0.0.1:19191"},
@@ -551,11 +563,18 @@ int main() {
           {"plane_mode", "llm"},
           {"model",
            {
-               {"source", {{"type", "huggingface"}, {"ref", "Qwen/Qwen2.5-0.5B-Instruct"}}},
-               {"materialization", {{"mode", "download"}}},
+               {"source",
+                {{"type", "local"},
+                 {"path", "/models/qwen/Qwen3.5-9B-Q4_K_M.gguf"},
+                 {"ref", "Qwen/Qwen3.5-9B"}}},
+               {"materialization",
+                {{"mode", "reference"},
+                 {"local_path", "/models/qwen/Qwen3.5-9B-Q4_K_M.gguf"}}},
                {"served_model_name", "qwen-app"},
            }},
-          {"runtime", {{"engine", "vllm"}, {"workers", 1}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
           {"network",
            {{"gateway_port", 18084}, {"inference_port", 18094}, {"server_name", "llm-app"}}},
           {"app",
@@ -577,9 +596,27 @@ int main() {
             {"version", 2},
             {"plane_name", "missing-model"},
             {"plane_mode", "llm"},
-            {"runtime", {{"engine", "vllm"}, {"workers", 1}}},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
         },
         "llm-without-model");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "missing-replicas"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+        },
+        "llm-without-infer-replicas");
 
     ExpectInvalid(
         json{
@@ -612,7 +649,7 @@ int main() {
                  {"data_parallel_mode", "vllm_native"},
              }},
         },
-        "llama-rpc-with-vllm-native");
+        "llama-rpc-with-data-parallel-mode");
 
     ExpectInvalid(
         json{
@@ -653,10 +690,10 @@ int main() {
             {"runtime",
              {{"engine", "custom"},
               {"workers", 1},
-              {"data_parallel_mode", "vllm_native"},
+              {"data_parallel_mode", "auto_replicas"},
               {"data_parallel_lb_mode", "hybrid"}}},
         },
-        "native-dp-non-vllm");
+        "data-parallel-mode-removed");
 
     ExpectInvalid(
         json{
@@ -669,38 +706,14 @@ int main() {
                  {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
                  {"served_model_name", "qwen"},
              }},
-            {"runtime", {{"engine", "vllm"}, {"workers", 1}}},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
             {"resources",
              {{"worker",
                {{"share_mode", "exclusive"}, {"gpu_fraction", 0.5}, {"memory_cap_mb", 24576}}}}},
         },
         "exclusive-share-mode-requires-full-gpu");
-
-    ExpectInvalid(
-        json{
-            {"version", 2},
-            {"plane_name", "bad-hybrid-shared-gpu"},
-            {"plane_mode", "llm"},
-            {"model",
-             {
-                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
-                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
-                 {"served_model_name", "qwen"},
-             }},
-            {"runtime",
-             {{"engine", "vllm"},
-              {"workers", 4},
-              {"data_parallel_mode", "vllm_native"},
-              {"data_parallel_lb_mode", "hybrid"}}},
-            {"worker",
-             {{"assignments",
-               json::array(
-                   {{{"node", "local-hostd"}, {"gpu_device", "0"}},
-                    {{"node", "local-hostd"}, {"gpu_device", "2"}},
-                    {{"node", "local-hostd"}, {"gpu_device", "3"}},
-                    {{"node", "local-hostd"}, {"gpu_device", "0"}}})}}},
-        },
-        "hybrid-worker-assignments-require-unique-gpus");
 
     return 0;
   } catch (const std::exception& ex) {

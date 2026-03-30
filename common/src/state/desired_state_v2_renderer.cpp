@@ -157,14 +157,15 @@ void DesiredStateV2Renderer::RenderInteraction() {
 
 void DesiredStateV2Renderer::RenderRuntime() {
   const auto& runtime_json = value_.at("runtime");
-  state_.inference.runtime_engine = runtime_json.value("engine", std::string("vllm"));
+  state_.inference.runtime_engine = runtime_json.value("engine", std::string("llama.cpp"));
   state_.inference.data_parallel_mode =
       runtime_json.value("data_parallel_mode", state_.inference.data_parallel_mode);
   state_.inference.data_parallel_lb_mode =
       runtime_json.value("data_parallel_lb_mode", state_.inference.data_parallel_lb_mode);
   state_.inference.distributed_backend = runtime_json.value(
       "distributed_backend",
-      state_.inference.runtime_engine == "vllm" ? std::string("vllm") : std::string("local"));
+      state_.inference.runtime_engine == "llama.cpp" ? std::string("llama_rpc")
+                                                     : std::string("local"));
   state_.inference.worker_selection_policy = "prefer-free-then-share";
   state_.inference.net_if = "eth0";
   state_.inference.models_root = "/comet/shared/models";
@@ -341,7 +342,6 @@ void DesiredStateV2Renderer::RenderInferInstance() {
 
 void DesiredStateV2Renderer::RenderWorkerInstances() {
   const int total_workers = WorkerCount();
-  const bool default_vllm_worker = state_.inference.runtime_engine == "vllm";
 
   for (int worker_index = 0; worker_index < total_workers; ++worker_index) {
     InstanceSpec worker;
@@ -350,10 +350,7 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
     worker.plane_name = state_.plane_name;
     worker.node_name = ResolveWorkerNodeName(worker_index);
     worker.gpu_device = ResolveWorkerGpuDevice(worker_index);
-    worker.image = worker_json_.value(
-        "image",
-        std::string(default_vllm_worker ? "comet/worker-vllm-runtime:dev"
-                                        : "comet/worker-runtime:dev"));
+    worker.image = worker_json_.value("image", std::string("comet/worker-runtime:dev"));
     worker.command =
         BuildCommandFromStartSpec(worker_json_.value("start", nlohmann::json::object()),
                                   "/runtime/worker/entrypoint.sh");
@@ -524,8 +521,7 @@ void DesiredStateV2Renderer::RenderAppInstance() {
 bool DesiredStateV2Renderer::InferEnabled() const {
   return infer_json_.value(
       "enabled",
-      state_.plane_mode == PlaneMode::Llm || state_.inference.runtime_engine == "vllm" ||
-          state_.inference.runtime_engine == "llama.cpp");
+      state_.plane_mode == PlaneMode::Llm || state_.inference.runtime_engine == "llama.cpp");
 }
 
 int DesiredStateV2Renderer::InferReplicaCount() const {
@@ -541,13 +537,6 @@ int DesiredStateV2Renderer::WorkerCount() const {
 }
 
 int DesiredStateV2Renderer::ExpectedWorkers() const {
-  const bool native_vllm_dp =
-      DataParallelEnabled(state_.inference) && state_.inference.runtime_engine == "vllm";
-  if (native_vllm_dp) {
-    return std::max(
-        1,
-        state_.inference.tensor_parallel_size * state_.inference.pipeline_parallel_size);
-  }
   return std::max(1, WorkerCount());
 }
 
@@ -556,7 +545,7 @@ std::string DesiredStateV2Renderer::ResolveInferNodeName() const {
 }
 
 std::string DesiredStateV2Renderer::ResolveInferNodeName(int infer_index) const {
-  if (infer_json_.contains("node") && infer_json_.at("node").is_string()) {
+  if (infer_index == 0 && infer_json_.contains("node") && infer_json_.at("node").is_string()) {
     return RequireNode(infer_json_.at("node").get<std::string>(), "infer").name;
   }
   if (InferReplicaCount() > 1 && infer_index > 0) {
@@ -752,9 +741,6 @@ std::string DesiredStateV2Renderer::BuildCommandFromStartSpec(
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {
-  if (state_.inference.runtime_engine == "vllm") {
-    return "worker-vllm";
-  }
   if (state_.inference.runtime_engine == "llama.cpp" &&
       state_.inference.distributed_backend == "llama_rpc") {
     return "llama-rpc-head";
@@ -763,9 +749,6 @@ std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {
 }
 
 std::string DesiredStateV2Renderer::DefaultWorkerBootMode() const {
-  if (state_.inference.runtime_engine == "vllm") {
-    return "vllm-openai";
-  }
   if (state_.inference.runtime_engine == "llama.cpp" &&
       state_.inference.distributed_backend == "llama_rpc") {
     return "llama-rpc";
@@ -780,7 +763,7 @@ void DesiredStateV2Renderer::NormalizeInferenceSettings() {
   }
   if (settings.distributed_backend.empty()) {
     settings.distributed_backend =
-        settings.runtime_engine == "vllm" ? "vllm" : "local";
+        settings.runtime_engine == "llama.cpp" ? "llama_rpc" : "local";
   }
   if (settings.data_parallel_mode.empty()) {
     settings.data_parallel_mode = kDataParallelModeOff;
