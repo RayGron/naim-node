@@ -422,11 +422,26 @@ body {
 }
 
 .model-library-list {
-  flex: 1 1 auto;
-  min-height: clamp(320px, 52vh, 880px);
-  max-height: none;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: calc((132px * 10) + (12px * 9));
   overflow: auto;
   overscroll-behavior: contain;
+}
+
+.model-library-list-empty {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+}
+
+.model-library-list-empty .empty-state {
+  padding: 10px 14px;
+}
+
+.model-library-list-empty .empty-state-detail {
+  margin-top: 4px;
 }
 
 .model-library-jobs {

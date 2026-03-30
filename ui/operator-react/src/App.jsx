@@ -3142,14 +3142,16 @@ function App() {
               <span>Scroll to load the next page of tracked artifacts.</span>
             </div>
             <div
-              className="list-column model-library-list model-library-list-expanded"
+              className={`list-column model-library-list model-library-list-expanded ${
+                (modelLibrary.items || []).length === 0 ? "model-library-list-empty" : ""
+              }`}
               ref={modelLibraryListRef}
               onScroll={handleModelLibraryScroll}
             >
               {(modelLibrary.items || []).length === 0 ? (
                 <EmptyState
                   title="No discovered models"
-                  detail="Add a model URL below or point a plane at a local_path to seed library roots."
+                  detail="Add a model URL below or use local_path to seed the library."
                 />
               ) : (
                 visibleModelItems.map((item) => (
