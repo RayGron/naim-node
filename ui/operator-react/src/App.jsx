@@ -13,6 +13,7 @@ const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
 const EVENT_LIMIT = 24;
 const MODEL_LIBRARY_PAGE_SIZE = 24;
+const MODEL_LIBRARY_JOB_PAGE_SIZE = 8;
 const CHAT_LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
   { value: "de", label: "Deutsch" },
@@ -1027,6 +1028,7 @@ function App() {
   const [actionBusy, setActionBusy] = useState("");
   const [modelLibraryBusy, setModelLibraryBusy] = useState("");
   const [visibleModelCount, setVisibleModelCount] = useState(MODEL_LIBRARY_PAGE_SIZE);
+  const [modelJobPage, setModelJobPage] = useState(0);
   const [modelDownloadForm, setModelDownloadForm] = useState({
     modelId: "",
     targetRoot: "",
@@ -1152,10 +1154,18 @@ function App() {
   async function refreshModelLibrary() {
     try {
       const payload = await fetchJson(modelLibraryPath());
+      const nextJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
       setModelLibrary({
         items: Array.isArray(payload.items) ? payload.items : [],
         roots: Array.isArray(payload.roots) ? payload.roots : [],
-        jobs: Array.isArray(payload.jobs) ? payload.jobs : [],
+        jobs: nextJobs,
+      });
+      setModelJobPage((current) => {
+        const nextPageCount = Math.max(
+          1,
+          Math.ceil(nextJobs.length / MODEL_LIBRARY_JOB_PAGE_SIZE),
+        );
+        return Math.min(current, nextPageCount - 1);
       });
     } catch (error) {
       if (error?.status === 401) {
@@ -1500,12 +1510,31 @@ function App() {
     }
   }
 
+  async function hideModelLibraryJob(job) {
+    if (!job?.id) {
+      return;
+    }
+    setModelLibraryBusy(`hide:${job.id}`);
+    try {
+      await fetchJson(modelLibraryPath("jobs/hide"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ job_id: job.id }),
+      });
+      await refreshModelLibrary();
+    } finally {
+      setModelLibraryBusy("");
+    }
+  }
+
   async function deleteModelLibraryJob(job) {
     if (!job?.id) {
       return;
     }
     const confirmed = window.confirm(
-      `Delete download job ${job.model_id || job.id}? This removes the queue record but keeps downloaded files on disk.`,
+      `Delete download job ${job.model_id || job.id}? This removes the queue record and deletes downloaded files from disk.`,
     );
     if (!confirmed) {
       return;
@@ -2160,6 +2189,16 @@ function App() {
   const activeModelCount = Array.isArray(modelLibrary.items) ? modelLibrary.items.length : 0;
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
+  const modelLibraryJobs = Array.isArray(modelLibrary.jobs) ? modelLibrary.jobs : [];
+  const modelJobPageCount = Math.max(
+    1,
+    Math.ceil(modelLibraryJobs.length / MODEL_LIBRARY_JOB_PAGE_SIZE),
+  );
+  const currentModelJobPage = Math.min(modelJobPage, modelJobPageCount - 1);
+  const visibleModelJobs = modelLibraryJobs.slice(
+    currentModelJobPage * MODEL_LIBRARY_JOB_PAGE_SIZE,
+    (currentModelJobPage + 1) * MODEL_LIBRARY_JOB_PAGE_SIZE,
+  );
   const activeModelJobs = Array.isArray(modelLibrary.jobs)
     ? modelLibrary.jobs.filter((job) => {
         const status = String(job?.status || "").toLowerCase();
@@ -3089,16 +3128,25 @@ function App() {
             ) : null}
           </div>
           <div className="models-page-grid">
-            <div className="subpanel">
+            <div className="subpanel models-jobs-panel">
               <div className="subpanel-header">
                 <div>
                   <div className="section-label">Queue</div>
                   <h3>Download jobs</h3>
                 </div>
               </div>
-              {(modelLibrary.jobs || []).length > 0 ? (
-                <div className="list-column model-library-jobs model-library-jobs-expanded">
-                  {modelLibrary.jobs.map((job) => (
+              {modelLibraryJobs.length > 0 ? (
+                <>
+                  <div className="models-catalog-meta model-job-pagination-meta">
+                    <span>
+                      Showing {visibleModelJobs.length} of {modelLibraryJobs.length}
+                    </span>
+                    <span>
+                      Page {currentModelJobPage + 1} of {modelJobPageCount}
+                    </span>
+                  </div>
+                  <div className="list-column model-library-jobs model-library-jobs-expanded">
+                  {visibleModelJobs.map((job) => (
                     <article className="list-card" key={job.id}>
                       <div className="card-row">
                         <strong>{job.model_id || job.id}</strong>
@@ -3144,6 +3192,14 @@ function App() {
                           Resume
                         </button>
                         <button
+                          className="ghost-button"
+                          type="button"
+                          disabled={modelLibraryBusy !== "" || job.can_hide !== true}
+                          onClick={() => hideModelLibraryJob(job)}
+                        >
+                          Hide
+                        </button>
+                        <button
                           className="ghost-button danger-button"
                           type="button"
                           disabled={modelLibraryBusy !== "" || job.can_delete !== true}
@@ -3154,11 +3210,36 @@ function App() {
                       </div>
                     </article>
                   ))}
-                </div>
+                  </div>
+                  {modelJobPageCount > 1 ? (
+                    <div className="toolbar model-job-pagination">
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={currentModelJobPage <= 0}
+                        onClick={() => setModelJobPage((current) => Math.max(0, current - 1))}
+                      >
+                        Previous
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={currentModelJobPage >= modelJobPageCount - 1}
+                        onClick={() =>
+                          setModelJobPage((current) =>
+                            Math.min(modelJobPageCount - 1, current + 1),
+                          )
+                        }
+                      >
+                        Next
+                      </button>
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <EmptyState
                   title="No queued downloads"
-                  detail="Multipart and single-file model downloads will appear here while they are running."
+                  detail="Visible download jobs will appear here while they are running or after they finish."
                 />
               )}
             </div>

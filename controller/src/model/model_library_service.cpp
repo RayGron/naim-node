@@ -66,6 +66,9 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
   store.Initialize();
   json jobs = json::array();
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (job.hidden) {
+      continue;
+    }
     jobs.push_back(BuildJobPayload(job));
   }
   return json{{"items", items}, {"roots", roots}, {"jobs", jobs}};
@@ -374,10 +377,31 @@ HttpResponse ModelLibraryService::DeleteDownloadJob(
         {});
   }
 
-  std::error_code error;
+  std::vector<std::string> deleted_paths;
+  std::string delete_error_message;
   for (const auto& target_path_text : job->target_paths) {
-    std::filesystem::remove(std::filesystem::path(target_path_text).string() + ".part", error);
-    error.clear();
+    if (!RemovePathIfExists(
+            std::filesystem::path(target_path_text),
+            &deleted_paths,
+            &delete_error_message)) {
+      return support_.build_json_response(
+          500,
+          json{{"status", "internal_error"},
+               {"message", delete_error_message},
+               {"job", BuildJobPayload(*job)}},
+          {});
+    }
+    if (!RemovePathIfExists(
+            std::filesystem::path(target_path_text).string() + ".part",
+            &deleted_paths,
+            &delete_error_message)) {
+      return support_.build_json_response(
+          500,
+          json{{"status", "internal_error"},
+               {"message", delete_error_message},
+               {"job", BuildJobPayload(*job)}},
+          {});
+    }
   }
   ClearStopRequest(*job_id);
   comet::ControllerStore store(db_path);
@@ -385,7 +409,48 @@ HttpResponse ModelLibraryService::DeleteDownloadJob(
   store.DeleteModelLibraryDownloadJob(*job_id);
   return support_.build_json_response(
       200,
-      json{{"status", "deleted"}, {"job_id", *job_id}},
+      json{{"status", "deleted"},
+           {"job_id", *job_id},
+           {"deleted_paths", deleted_paths}},
+      {});
+}
+
+HttpResponse ModelLibraryService::HideDownloadJob(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  const auto job_id = ExtractJobId(request);
+  if (!job_id.has_value()) {
+    return support_.build_json_response(
+        400,
+        json{{"status", "bad_request"}, {"message", "job_id is required"}},
+        {});
+  }
+  const auto job = LoadDownloadJob(db_path, *job_id);
+  if (!job.has_value()) {
+    return support_.build_json_response(
+        404,
+        json{{"status", "not_found"}, {"message", "download job not found"}},
+        {});
+  }
+  if (job->status == "running" || job->status == "stopping" ||
+      job->status == "queued") {
+    return support_.build_json_response(
+        409,
+        json{{"status", "conflict"},
+             {"message", "only completed, failed, or stopped downloads can be hidden"},
+             {"job", BuildJobPayload(*job)}},
+        {});
+  }
+
+  UpdateJob(
+      db_path,
+      *job_id,
+      [](ModelLibraryDownloadJob& current) {
+        current.hidden = true;
+      });
+  return support_.build_json_response(
+      200,
+      json{{"status", "hidden"}, {"job_id", *job_id}},
       {});
 }
 
@@ -532,6 +597,38 @@ std::optional<std::uintmax_t> ModelLibraryService::FileSizeIfExists(
   return error ? std::nullopt : std::optional<std::uintmax_t>(total);
 }
 
+bool ModelLibraryService::RemovePathIfExists(
+    const std::filesystem::path& path,
+    std::vector<std::string>* removed_paths,
+    std::string* error_message) {
+  std::error_code error;
+  if (!std::filesystem::exists(path, error)) {
+    return !error;
+  }
+  if (error) {
+    if (error_message != nullptr) {
+      *error_message = error.message();
+    }
+    return false;
+  }
+  const auto normalized = NormalizePathString(path);
+  if (std::filesystem::is_directory(path, error)) {
+    std::filesystem::remove_all(path, error);
+  } else {
+    std::filesystem::remove(path, error);
+  }
+  if (error) {
+    if (error_message != nullptr) {
+      *error_message = error.message();
+    }
+    return false;
+  }
+  if (removed_paths != nullptr) {
+    removed_paths->push_back(normalized);
+  }
+  return true;
+}
+
 bool ModelLibraryService::LooksLikeRecognizedModelDirectory(
     const std::filesystem::path& path) {
   std::error_code error;
@@ -661,7 +758,12 @@ json ModelLibraryService::BuildJobPayload(
       {"current_item", job.current_item},
       {"can_stop", job.status == "queued" || job.status == "running"},
       {"can_resume", job.status == "stopped" || job.status == "failed"},
+      {"can_hide",
+       !job.hidden &&
+           (job.status == "completed" || job.status == "failed" ||
+            job.status == "stopped")},
       {"can_delete", job.status != "running" && job.status != "stopping"},
+      {"hidden", job.hidden},
       {"bytes_total",
        job.bytes_total.has_value() ? json(*job.bytes_total) : json(nullptr)},
       {"bytes_done", job.bytes_done},

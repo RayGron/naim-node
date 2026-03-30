@@ -259,6 +259,11 @@ void InitializeSchema(
       "registered_hosts",
       "last_heartbeat_at",
       "last_heartbeat_at TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "hidden",
+      "hidden INTEGER NOT NULL DEFAULT 0");
 }
 
 }  // namespace comet::sqlite_store_schema

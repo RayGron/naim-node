@@ -92,6 +92,23 @@ std::optional<HttpResponse> ModelLibraryHttpService::HandleRequest(
     }
   }
 
+  if (request.path == "/api/v1/model-library/jobs/hide") {
+    if (request.method != "POST") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
+    try {
+      return support_.model_library_service().HideDownloadJob(db_path, request);
+    } catch (const std::exception& error) {
+      return support_.build_json_response(
+          500,
+          json{{"status", "internal_error"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
+  }
+
   if (request.path == "/api/v1/model-library/jobs") {
     if (request.method != "DELETE") {
       return support_.build_json_response(

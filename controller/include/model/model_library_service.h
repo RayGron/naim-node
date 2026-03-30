@@ -34,6 +34,9 @@ class ModelLibraryService {
   HttpResponse ResumeDownloadJob(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse HideDownloadJob(
+      const std::string& db_path,
+      const HttpRequest& request) const;
   HttpResponse DeleteDownloadJob(
       const std::string& db_path,
       const HttpRequest& request) const;
@@ -76,6 +79,10 @@ class ModelLibraryService {
       const std::string& source_url) const;
   static std::optional<std::uintmax_t> FileSizeIfExists(
       const std::filesystem::path& path);
+  static bool RemovePathIfExists(
+      const std::filesystem::path& path,
+      std::vector<std::string>* removed_paths,
+      std::string* error_message);
   static bool LooksLikeRecognizedModelDirectory(
       const std::filesystem::path& path);
   static bool ParseMultipartGgufFilename(

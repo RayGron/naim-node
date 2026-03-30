@@ -80,6 +80,7 @@ int main() {
         0,
         1,
         "",
+        false,
         now,
         now,
     });
@@ -121,6 +122,7 @@ int main() {
         0,
         1,
         "",
+        false,
         now,
         now,
     });
@@ -158,6 +160,21 @@ int main() {
     Expect(resumed_completed, "stopped model library job should complete after resume");
     Expect(fs::exists(second_target_path), "resumed download target should exist");
 
+    const auto hide_response = service.HideDownloadJob(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/jobs/hide",
+            nlohmann::json{{"job_id", "job-2"}}));
+    Expect(hide_response.status_code == 200, "hide download job should succeed");
+    const auto visible_after_hide = service.BuildPayload(db_path.string());
+    Expect(
+        visible_after_hide.at("jobs").size() == 1,
+        "hidden download job should disappear from visible payload");
+    auto hidden_job = store.LoadModelLibraryDownloadJob("job-2");
+    Expect(hidden_job.has_value(), "hidden job should remain in the database");
+    Expect(hidden_job->hidden, "hidden job should be marked as hidden");
+
     const auto delete_response = service.DeleteDownloadJob(
         db_path.string(),
         JsonRequest(
@@ -168,6 +185,7 @@ int main() {
     Expect(
         !store.LoadModelLibraryDownloadJob("job-2").has_value(),
         "deleted model library job should be removed from the database");
+    Expect(!fs::exists(second_target_path), "delete download job should remove downloaded file");
 
     fs::remove_all(temp_root, error);
     std::cout << "model library service tests passed\n";

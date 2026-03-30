@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS model_library_download_jobs (
     bytes_done INTEGER NOT NULL DEFAULT 0,
     part_count INTEGER NOT NULL DEFAULT 0,
     error_message TEXT NOT NULL DEFAULT '',
+    hidden INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -439,8 +440,9 @@ ModelLibraryDownloadJobRecord ModelLibraryDownloadJobFromStatement(sqlite3_stmt*
   job.bytes_done = static_cast<std::uintmax_t>(sqlite3_column_int64(statement, 9));
   job.part_count = sqlite3_column_int(statement, 10);
   job.error_message = ToColumnText(statement, 11);
-  job.created_at = ToColumnText(statement, 12);
-  job.updated_at = ToColumnText(statement, 13);
+  job.hidden = sqlite3_column_int(statement, 12) != 0;
+  job.created_at = ToColumnText(statement, 13);
+  job.updated_at = ToColumnText(statement, 14);
   return job;
 }
 
@@ -699,8 +701,8 @@ void ControllerStore::UpsertModelLibraryDownloadJob(
       "INSERT INTO model_library_download_jobs("
       "id, status, model_id, target_root, target_subdir, source_urls_json, "
       "target_paths_json, current_item, bytes_total, bytes_done, part_count, "
-      "error_message, created_at, updated_at) "
-      "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) "
+      "error_message, hidden, created_at, updated_at) "
+      "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) "
       "ON CONFLICT(id) DO UPDATE SET "
       "status = excluded.status, "
       "model_id = excluded.model_id, "
@@ -713,6 +715,7 @@ void ControllerStore::UpsertModelLibraryDownloadJob(
       "bytes_done = excluded.bytes_done, "
       "part_count = excluded.part_count, "
       "error_message = excluded.error_message, "
+      "hidden = excluded.hidden, "
       "created_at = excluded.created_at, "
       "updated_at = excluded.updated_at;");
   statement.BindText(1, job.id);
@@ -731,8 +734,9 @@ void ControllerStore::UpsertModelLibraryDownloadJob(
   statement.BindInt64(10, static_cast<std::int64_t>(job.bytes_done));
   statement.BindInt(11, job.part_count);
   statement.BindText(12, job.error_message);
-  statement.BindText(13, job.created_at);
-  statement.BindText(14, job.updated_at);
+  statement.BindInt(13, job.hidden ? 1 : 0);
+  statement.BindText(14, job.created_at);
+  statement.BindText(15, job.updated_at);
   statement.StepDone();
 }
 
@@ -742,7 +746,7 @@ std::optional<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDo
       AsSqlite(db_),
       "SELECT id, status, model_id, target_root, target_subdir, source_urls_json, "
       "target_paths_json, current_item, bytes_total, bytes_done, part_count, "
-      "error_message, created_at, updated_at "
+      "error_message, hidden, created_at, updated_at "
       "FROM model_library_download_jobs WHERE id = ?1;");
   statement.BindText(1, job_id);
   if (!statement.StepRow()) {
@@ -756,7 +760,7 @@ std::vector<ModelLibraryDownloadJobRecord> ControllerStore::LoadModelLibraryDown
   std::string sql =
       "SELECT id, status, model_id, target_root, target_subdir, source_urls_json, "
       "target_paths_json, current_item, bytes_total, bytes_done, part_count, "
-      "error_message, created_at, updated_at "
+      "error_message, hidden, created_at, updated_at "
       "FROM model_library_download_jobs";
   if (status.has_value()) {
     sql += " WHERE status = ?1";

@@ -262,6 +262,7 @@ struct ModelLibraryDownloadJobRecord {
   std::uintmax_t bytes_done = 0;
   int part_count = 0;
   std::string error_message;
+  bool hidden = false;
   std::string created_at;
   std::string updated_at;
 };
