@@ -21,6 +21,7 @@ const FIELD_INFO = {
   targetFilename: "Optional target filename used when downloading model artifacts.",
   sha256: "Optional checksum used to validate downloaded model artifacts.",
   followUserLanguage: "If enabled, the assistant follows the language of the latest user message.",
+  thinkingEnabled: "If enabled, the model may use hidden reasoning internally, but only the final answer is shown to the user.",
   systemPrompt: "Default system prompt injected into LLM interactions for this plane.",
   gatewayPort: "HTTP port exposed by the plane gateway.",
   inferencePort: "Internal inference API port used by infer and worker services.",
@@ -182,6 +183,7 @@ export function buildNewPlaneFormState() {
     modelSha256: "",
     systemPrompt:
       "You are a helpful AI assistant. Reply clearly, concisely, and follow the user's instructions.",
+    thinkingEnabled: false,
     defaultResponseLanguage: "ru",
     followUserLanguage: true,
     runtimeEngine: "llama.cpp",
@@ -272,6 +274,8 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     modelTargetFilename: value?.model?.target_filename || "",
     modelSha256: value?.model?.sha256 || "",
     systemPrompt: value?.interaction?.system_prompt || defaults.systemPrompt,
+    thinkingEnabled:
+      value?.interaction?.thinking_enabled ?? defaults.thinkingEnabled,
     defaultResponseLanguage:
       value?.interaction?.default_response_language || defaults.defaultResponseLanguage,
     followUserLanguage:
@@ -442,6 +446,7 @@ export function buildDesiredStateV2FromForm(form) {
     }
     desiredState.interaction = {
       system_prompt: form.systemPrompt,
+      thinking_enabled: Boolean(form.thinkingEnabled),
       default_response_language: form.defaultResponseLanguage,
       supported_response_languages: DEFAULT_SUPPORTED_RESPONSE_LANGUAGES,
       follow_user_language: Boolean(form.followUserLanguage),
@@ -1221,6 +1226,14 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
               onChange={bindCheck("followUserLanguage")}
             />
             <InfoLabel info={FIELD_INFO.followUserLanguage} className="field-label-inline">Follow user language</InfoLabel>
+          </label>
+          <label className="field-label plane-checkbox">
+            <input
+              type="checkbox"
+              checked={form.thinkingEnabled}
+              onChange={bindCheck("thinkingEnabled")}
+            />
+            <InfoLabel info={FIELD_INFO.thinkingEnabled} className="field-label-inline">Enable thinking</InfoLabel>
           </label>
         </div>
       ) : null}
