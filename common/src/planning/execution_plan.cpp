@@ -114,7 +114,7 @@ std::string ComposePath(
       .string();
 }
 
-std::optional<std::string> InferRuntimeConfigPathForNode(
+std::optional<std::filesystem::path> ControlRootPathForNode(
     const DesiredState& state,
     const std::string& node_name) {
   bool has_infer_on_node = false;
@@ -159,20 +159,50 @@ std::optional<std::string> InferRuntimeConfigPathForNode(
     relative_control_path = std::filesystem::path("control") / state.plane_name;
   }
 
-  return (
-      std::filesystem::path(shared_disk->host_path) /
-      relative_control_path /
-      "infer-runtime.json")
-      .string();
+  return std::filesystem::path(shared_disk->host_path) / relative_control_path;
 }
 
-std::optional<std::string> InferRuntimeSignatureForNode(
+std::map<std::string, std::string> InferRuntimeConfigPathsForNode(
     const DesiredState& state,
     const std::string& node_name) {
-  if (!InferRuntimeConfigPathForNode(state, node_name).has_value()) {
-    return std::nullopt;
+  std::map<std::string, std::string> result;
+  const auto control_root = ControlRootPathForNode(state, node_name);
+  if (!control_root.has_value()) {
+    return result;
   }
-  return RenderInferRuntimeConfigJson(state);
+  for (const auto& instance : state.instances) {
+    if (instance.node_name != node_name || instance.role != InstanceRole::Infer) {
+      continue;
+    }
+    result[instance.name] =
+        ((*control_root) / InferRuntimeConfigRelativePath(instance.name)).string();
+  }
+  return result;
+}
+
+std::map<std::string, std::string> InferRuntimeSignaturesForNode(
+    const DesiredState& state,
+    const std::string& node_name) {
+  std::map<std::string, std::string> result;
+  for (const auto& instance : state.instances) {
+    if (instance.node_name != node_name || instance.role != InstanceRole::Infer) {
+      continue;
+    }
+    result[instance.name] = RenderInferRuntimeConfigJsonForInstance(state, instance.name);
+  }
+  return result;
+}
+
+bool HasWriteInferRuntimeConfigOperation(
+    const std::vector<HostOperation>& operations,
+    const std::string& infer_instance_name) {
+  return std::any_of(
+      operations.begin(),
+      operations.end(),
+      [&](const HostOperation& operation) {
+        return operation.kind == HostOperationKind::WriteInferRuntimeConfig &&
+               operation.details == infer_instance_name;
+      });
 }
 
 }  // namespace
@@ -206,16 +236,16 @@ std::vector<NodeExecutionPlan> BuildNodeExecutionPlans(
     const auto desired_instances = BuildInstanceMapForNode(desired_state.instances, node_name);
     const bool has_current_services = HasCurrentServices(current_instances);
     const bool has_desired_services = HasDesiredServices(desired_instances);
-    const auto current_infer_runtime_path =
-        current_state.has_value() ? InferRuntimeConfigPathForNode(*current_state, node_name)
-                                  : std::nullopt;
-    const auto desired_infer_runtime_path =
-        InferRuntimeConfigPathForNode(desired_state, node_name);
-    const auto current_infer_runtime_signature =
-        current_state.has_value() ? InferRuntimeSignatureForNode(*current_state, node_name)
-                                  : std::nullopt;
-    const auto desired_infer_runtime_signature =
-        InferRuntimeSignatureForNode(desired_state, node_name);
+    const auto current_infer_runtime_paths =
+        current_state.has_value() ? InferRuntimeConfigPathsForNode(*current_state, node_name)
+                                  : std::map<std::string, std::string>{};
+    const auto desired_infer_runtime_paths =
+        InferRuntimeConfigPathsForNode(desired_state, node_name);
+    const auto current_infer_runtime_signatures =
+        current_state.has_value() ? InferRuntimeSignaturesForNode(*current_state, node_name)
+                                  : std::map<std::string, std::string>{};
+    const auto desired_infer_runtime_signatures =
+        InferRuntimeSignaturesForNode(desired_state, node_name);
 
     const std::string current_plane_name =
         current_state.has_value() ? current_state->plane_name : desired_state.plane_name;
@@ -269,23 +299,35 @@ std::vector<NodeExecutionPlan> BuildNodeExecutionPlans(
       }
     }
 
-    if (desired_infer_runtime_path.has_value()) {
-      if (!current_infer_runtime_path.has_value() ||
-          current_infer_runtime_path != desired_infer_runtime_path ||
-          current_infer_runtime_signature != desired_infer_runtime_signature) {
+    for (const auto& [infer_instance_name, desired_runtime_path] : desired_infer_runtime_paths) {
+      const auto current_path_it = current_infer_runtime_paths.find(infer_instance_name);
+      const auto current_signature_it = current_infer_runtime_signatures.find(infer_instance_name);
+      const auto desired_signature_it = desired_infer_runtime_signatures.find(infer_instance_name);
+      const bool needs_write =
+          current_path_it == current_infer_runtime_paths.end() ||
+          current_path_it->second != desired_runtime_path ||
+          current_signature_it == current_infer_runtime_signatures.end() ||
+          desired_signature_it == desired_infer_runtime_signatures.end() ||
+          current_signature_it->second != desired_signature_it->second;
+      if (needs_write) {
         plan.operations.push_back(
             HostOperation{
                 HostOperationKind::WriteInferRuntimeConfig,
-                *desired_infer_runtime_path,
-                "render infer runtime config",
+                desired_runtime_path,
+                infer_instance_name,
             });
       }
-    } else if (current_infer_runtime_path.has_value()) {
+    }
+
+    for (const auto& [infer_instance_name, current_runtime_path] : current_infer_runtime_paths) {
+      if (desired_infer_runtime_paths.find(infer_instance_name) != desired_infer_runtime_paths.end()) {
+        continue;
+      }
       plan.operations.push_back(
           HostOperation{
               HostOperationKind::RemoveInferRuntimeConfig,
-              *current_infer_runtime_path,
-              "remove stale infer runtime config",
+              current_runtime_path,
+              infer_instance_name,
           });
     }
 
@@ -312,6 +354,17 @@ std::vector<NodeExecutionPlan> BuildNodeExecutionPlans(
         (!has_current_services || compose_path_changed || has_resource_changes);
 
     if (needs_compose_up) {
+      for (const auto& [infer_instance_name, desired_runtime_path] : desired_infer_runtime_paths) {
+        if (HasWriteInferRuntimeConfigOperation(plan.operations, infer_instance_name)) {
+          continue;
+        }
+        plan.operations.push_back(
+            HostOperation{
+                HostOperationKind::WriteInferRuntimeConfig,
+                desired_runtime_path,
+                infer_instance_name,
+            });
+      }
       plan.operations.push_back(
           HostOperation{
               HostOperationKind::WriteComposeFile,

@@ -33,7 +33,8 @@ void NormalizeInferenceSettings(InferenceRuntimeSettings* settings) {
     settings->worker_group_id = "default-worker-group";
   }
   if (settings->distributed_backend.empty()) {
-    settings->distributed_backend = "vllm";
+    settings->distributed_backend =
+        settings->runtime_engine == "vllm" ? "vllm" : "local";
   }
   if (settings->data_parallel_mode.empty()) {
     settings->data_parallel_mode = kDataParallelModeOff;
@@ -122,6 +123,7 @@ json ToJson(const NodeInventory& node) {
 json ToJson(const WorkerGroupMemberSpec& member) {
   json result = {
       {"name", member.name},
+      {"infer_instance_name", member.infer_instance_name},
       {"node_name", member.node_name},
       {"gpu_device", member.gpu_device},
       {"rank", member.rank},
@@ -136,6 +138,7 @@ json ToJson(const WorkerGroupMemberSpec& member) {
       {"data_parallel_api_endpoint", member.data_parallel_api_endpoint},
       {"data_parallel_head_address", member.data_parallel_head_address},
       {"data_parallel_rpc_port", member.data_parallel_rpc_port},
+      {"rpc_port", member.rpc_port},
       {"gpu_fraction", member.gpu_fraction},
       {"share_mode", ToString(member.share_mode)},
       {"priority", member.priority},
@@ -377,6 +380,7 @@ NodeInventory NodeInventoryFromJson(const json& value) {
 WorkerGroupMemberSpec WorkerGroupMemberSpecFromJson(const json& value) {
   WorkerGroupMemberSpec member;
   member.name = value.at("name").get<std::string>();
+  member.infer_instance_name = value.value("infer_instance_name", std::string{});
   member.node_name = value.at("node_name").get<std::string>();
   member.gpu_device = value.value("gpu_device", std::string{});
   member.rank = value.value("rank", 0);
@@ -394,6 +398,7 @@ WorkerGroupMemberSpec WorkerGroupMemberSpecFromJson(const json& value) {
   member.data_parallel_head_address =
       value.value("data_parallel_head_address", std::string{});
   member.data_parallel_rpc_port = value.value("data_parallel_rpc_port", 0);
+  member.rpc_port = value.value("rpc_port", member.data_parallel_rpc_port);
   member.gpu_fraction = value.value("gpu_fraction", 0.0);
   member.share_mode =
       ParseGpuShareMode(value.value("share_mode", std::string("exclusive")));
@@ -949,6 +954,10 @@ DesiredState DesiredStateFromJson(const json& value) {
         member.name = instance.name;
         member.node_name = instance.node_name;
         member.gpu_device = instance.gpu_device.value_or("");
+        if (const auto rpc_port_it = instance.environment.find("COMET_WORKER_RPC_PORT");
+            rpc_port_it != instance.environment.end() && !rpc_port_it->second.empty()) {
+          member.rpc_port = std::stoi(rpc_port_it->second);
+        }
         member.rank = next_rank++;
         member.gpu_fraction = instance.gpu_fraction;
         member.share_mode = instance.share_mode;
@@ -977,6 +986,11 @@ DesiredState DesiredStateFromJson(const json& value) {
   }
   if (state.worker_group.rendezvous_host.empty()) {
     state.worker_group.rendezvous_host = state.worker_group.infer_instance_name;
+  }
+  for (auto& member : state.worker_group.members) {
+    if (member.infer_instance_name.empty()) {
+      member.infer_instance_name = state.worker_group.infer_instance_name;
+    }
   }
   ValidateReplicaPacking(state.inference, state.worker_group);
   AssignReplicaTopology(state.inference, &state.worker_group);

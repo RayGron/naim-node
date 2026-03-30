@@ -159,8 +159,10 @@ struct InferenceRuntimeSettings {
 
 struct WorkerGroupMemberSpec {
   std::string name;
+  std::string infer_instance_name;
   std::string node_name;
   std::string gpu_device;
+  int rpc_port = 0;
   int rank = 0;
   std::string replica_group_id;
   int replica_index = 0;

@@ -69,14 +69,16 @@ RuntimeProfile ResolveProfile(const json& profiles_json, const std::string& name
 
 ControlPaths BuildControlPaths(const RuntimeConfig& config) {
   const fs::path root(config.control_root);
+  const fs::path infer_root =
+      config.instance_name.empty() ? root : (root / "infer" / config.instance_name);
   return ControlPaths{
       root,
       root / "runtime-assets.json",
       root / "model-cache-registry.json",
       root / "active-model.json",
-      root / "gateway-plan.json",
-      root / "prewarmed-replicas.json",
-      root / "runtime-status.json",
+      infer_root / "gateway-plan.json",
+      infer_root / "prewarmed-replicas.json",
+      infer_root / "runtime-status.json",
       root / "worker-group",
   };
 }

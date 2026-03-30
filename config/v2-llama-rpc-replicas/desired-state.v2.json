@@ -1,0 +1,86 @@
+{
+  "version": 2,
+  "plane_name": "llama-rpc-replicas",
+  "plane_mode": "llm",
+  "protected": false,
+  "model": {
+    "source": {
+      "type": "local",
+      "path": "/mnt/shared-storage/models/gguf/Qwen3.5-9B",
+      "ref": "Qwen/Qwen3.5-9B"
+    },
+    "materialization": {
+      "mode": "reference",
+      "local_path": "/mnt/shared-storage/models/gguf/Qwen3.5-9B"
+    },
+    "served_model_name": "qwen3.5-9b-rpc-replicas"
+  },
+  "runtime": {
+    "engine": "llama.cpp",
+    "distributed_backend": "llama_rpc",
+    "workers": 3,
+    "max_model_len": 8192,
+    "max_num_seqs": 16,
+    "gpu_memory_utilization": 0.85
+  },
+  "topology": {
+    "nodes": [
+      {
+        "name": "local-hostd",
+        "execution_mode": "mixed",
+        "gpu_memory_mb": {
+          "0": 24576,
+          "1": 24576,
+          "2": 24576
+        }
+      }
+    ]
+  },
+  "infer": {
+    "replicas": 3
+  },
+  "worker": {
+    "assignments": [
+      {
+        "node": "local-hostd",
+        "gpu_device": "0"
+      },
+      {
+        "node": "local-hostd",
+        "gpu_device": "1"
+      },
+      {
+        "node": "local-hostd",
+        "gpu_device": "2"
+      }
+    ]
+  },
+  "network": {
+    "gateway_port": 18184,
+    "inference_port": 18194,
+    "server_name": "llama-rpc-replicas.internal"
+  },
+  "interaction": {
+    "system_prompt": "You are a helpful AI assistant. Reply clearly, concisely, and follow the user's instructions.",
+    "default_response_language": "en",
+    "follow_user_language": true,
+    "supported_response_languages": [
+      "en",
+      "de",
+      "uk",
+      "ru"
+    ]
+  },
+  "app": {
+    "enabled": false
+  },
+  "resources": {
+    "worker": {
+      "placement_mode": "manual",
+      "share_mode": "exclusive",
+      "gpu_fraction": 1.0,
+      "memory_cap_mb": 24576
+    },
+    "shared_disk_gb": 40
+  }
+}

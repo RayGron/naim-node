@@ -25,6 +25,16 @@ std::string WorkerStatusService::CurrentTimestamp() const {
   return out.str();
 }
 
+void WorkerStatusService::MarkStarting(
+    const WorkerConfig& config,
+    const std::string& started_at,
+    const std::optional<std::string>& model_path) const {
+  TouchReadyFile(false);
+  WriteStatus(
+      BuildStatus(config, "starting", false, started_at, CurrentTimestamp(), model_path.value_or("")),
+      config.status_path);
+}
+
 void WorkerStatusService::MarkWaitingForModel(
     const WorkerConfig& config,
     const std::string& started_at,
@@ -101,7 +111,8 @@ comet::RuntimeStatus WorkerStatusService::BuildStatus(
   status.instance_name = config.instance_name;
   status.instance_role = config.instance_role;
   status.node_name = config.node_name;
-  status.runtime_backend = "comet-worker";
+  status.runtime_backend =
+      config.boot_mode == "llama-rpc" ? "llama-rpc-worker" : "comet-worker";
   status.runtime_phase = phase;
   status.runtime_pid = static_cast<int>(getpid());
   status.engine_pid = static_cast<int>(getpid());
@@ -110,6 +121,7 @@ comet::RuntimeStatus WorkerStatusService::BuildStatus(
   status.model_path = model_path;
   status.cached_local_model_path = model_path;
   status.gpu_device = config.gpu_device;
+  status.rpc_endpoint = config.rpc_endpoint;
   status.ready = ready;
   status.inference_ready = ready;
   status.launch_ready = ready;

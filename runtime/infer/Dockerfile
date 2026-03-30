@@ -9,8 +9,9 @@ RUN apt-get update \
 
 COPY runtime/infer /runtime/infer
 COPY build/linux/x64/comet-inferctl /runtime/bin/comet-inferctl
+COPY build/linux/x64/bin/llama-server /runtime/bin/llama-server
 
-RUN chmod +x /runtime/infer/entrypoint.sh /runtime/infer/inferctl.sh /runtime/bin/comet-inferctl \
+RUN chmod +x /runtime/infer/entrypoint.sh /runtime/infer/inferctl.sh /runtime/bin/comet-inferctl /runtime/bin/llama-server \
     && ldconfig
 
 WORKDIR /runtime

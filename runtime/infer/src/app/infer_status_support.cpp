@@ -77,15 +77,17 @@ bool IsLiveRuntimePhase(const std::string& phase) {
 
 json BuildGatewayPayload(const RuntimeConfig& config) {
   const json active_model = LoadActiveModel(config);
+  const std::string upstream_health_url = RuntimeUpstreamHealthUrl(config);
+  const std::string upstream_models_url = RuntimeUpstreamModelsUrl(config);
   return json{
       {"version", 1},
       {"plane_name", config.plane_name},
       {"listen_host", config.gateway_listen_host},
       {"listen_port", config.gateway_listen_port},
       {"server_name", config.gateway_server_name},
-      {"proxy_health_url", "http://127.0.0.1:8001/health"},
-      {"upstream_health_url", RuntimeUpstreamHealthUrl(config)},
-      {"upstream_models_url", RuntimeUpstreamModelsUrl(config)},
+      {"proxy_health_url", upstream_health_url},
+      {"upstream_health_url", upstream_health_url},
+      {"upstream_models_url", upstream_models_url},
       {"active_served_model_name", active_model.value("served_model_name", std::string{})},
       {"active_model_id", active_model.value("model_id", std::string{})},
   };

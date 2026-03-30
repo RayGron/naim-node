@@ -24,6 +24,7 @@
 #include "app/hostd_controller_transport_support.h"
 #include "app/hostd_local_state_support.h"
 #include "comet/core/platform_compat.h"
+#include "comet/runtime/infer_runtime_config.h"
 #include "comet/runtime/runtime_status.h"
 #include "comet/state/state_json.h"
 
@@ -293,7 +294,29 @@ std::optional<std::string> ControlFilePathForNode(
 std::optional<std::string> RuntimeStatusPathForNode(
     const comet::DesiredState& state,
     const std::string& node_name) {
+  for (const auto& instance : state.instances) {
+    if (instance.role == comet::InstanceRole::Infer &&
+        instance.node_name == node_name &&
+        !instance.name.empty()) {
+      return ControlFilePathForNode(
+          state,
+          node_name,
+          comet::InferRuntimeStatusRelativePath(instance.name));
+    }
+  }
   return ControlFilePathForNode(state, node_name, "runtime-status.json");
+}
+
+std::optional<std::string> InferRuntimeStatusPathForInstance(
+    const comet::DesiredState& state,
+    const comet::InstanceSpec& instance) {
+  if (instance.role != comet::InstanceRole::Infer || instance.name.empty()) {
+    return std::nullopt;
+  }
+  return ControlFilePathForNode(
+      state,
+      instance.node_name,
+      comet::InferRuntimeStatusRelativePath(instance.name));
 }
 
 std::optional<std::string> WorkerRuntimeStatusPathForInstance(
@@ -1143,7 +1166,7 @@ std::vector<comet::RuntimeProcessStatus> LoadLocalInstanceRuntimeStatuses(
       }
       std::optional<std::string> status_path;
       if (instance.role == comet::InstanceRole::Infer) {
-        status_path = RuntimeStatusPathForNode(local_state, node_name);
+        status_path = InferRuntimeStatusPathForInstance(local_state, instance);
       } else {
         status_path = WorkerRuntimeStatusPathForInstance(local_state, instance);
       }

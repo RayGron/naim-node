@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
+#include <iostream>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
@@ -11,6 +13,39 @@
 #include "runtime/infer_runtime_support.h"
 
 namespace comet::infer {
+
+namespace {
+
+std::optional<UpstreamTarget> ResolveStaticReplicaUpstream(const RuntimeConfig& config) {
+  if (config.replica_upstreams.empty()) {
+    return std::nullopt;
+  }
+  static std::atomic<std::uint64_t> next_replica{0};
+  const std::uint64_t slot = next_replica.fetch_add(1, std::memory_order_relaxed);
+  const std::string& base_url =
+      config.replica_upstreams[slot % config.replica_upstreams.size()];
+  constexpr std::string_view kHttpPrefix = "http://";
+  std::string authority =
+      base_url.rfind(std::string(kHttpPrefix), 0) == 0 ? base_url.substr(kHttpPrefix.size()) : base_url;
+  const std::size_t slash = authority.find('/');
+  if (slash != std::string::npos) {
+    authority = authority.substr(0, slash);
+  }
+  const std::size_t colon = authority.rfind(':');
+  if (colon == std::string::npos || colon == 0 || colon + 1 >= authority.size()) {
+    return std::nullopt;
+  }
+  try {
+    return UpstreamTarget{
+        authority.substr(0, colon),
+        std::stoi(authority.substr(colon + 1)),
+    };
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+}  // namespace
 
 LocalHttpServer::LocalHttpServer(
     std::string host,
@@ -103,10 +138,21 @@ void LocalHttpServer::HandleClient(int client_fd) {
     }
   }
   if (!request_data.empty()) {
+    const HttpRequest request = runtime_support::ParseHttpRequest(request_data);
     if (dynamic_upstream_) {
       const auto upstream = runtime_support::ResolveRuntimeUpstreamTarget(config_);
-      if (!upstream.has_value() ||
-          !runtime_support::ProxyHttpRequest(client_fd, request_data, *upstream)) {
+      const auto fallback_upstream =
+          upstream.has_value() ? upstream : ResolveStaticReplicaUpstream(config_);
+      if (!fallback_upstream.has_value() ||
+          !runtime_support::ProxyHttpRequest(client_fd, request_data, *fallback_upstream)) {
+        std::cerr << "[comet-infer] dynamic proxy failed path=" << request.path;
+        if (fallback_upstream.has_value()) {
+          std::cerr << " upstream=" << fallback_upstream->host << ":" << fallback_upstream->port;
+        } else {
+          std::cerr << " upstream=(unresolved)";
+        }
+        std::cerr << " replica_upstreams=" << config_.replica_upstreams.size();
+        std::cerr << std::endl;
         runtime_support::SendErrorResponse(client_fd, 503, "upstream runtime is unavailable");
       }
     } else if (upstream_.has_value()) {
@@ -114,7 +160,6 @@ void LocalHttpServer::HandleClient(int client_fd) {
         runtime_support::SendErrorResponse(client_fd, 503, "upstream runtime is unavailable");
       }
     } else {
-      const HttpRequest request = runtime_support::ParseHttpRequest(request_data);
       if (runtime_support::RequestWantsStream(request)) {
         runtime_support::HandleStreamingChatRequest(client_fd, config_, request, engine_);
       } else {

@@ -221,6 +221,19 @@ bool HybridGpuAlreadyAssigned(
   return false;
 }
 
+bool UsesLlamaRpcRuntime(const comet::DesiredState& desired_state) {
+  return desired_state.inference.runtime_engine == "llama.cpp" &&
+         desired_state.inference.distributed_backend == "llama_rpc";
+}
+
+std::string InferInstanceNameForWorker(const comet::InstanceSpec& instance) {
+  const auto it = instance.environment.find("COMET_INFER_INSTANCE_NAME");
+  if (it == instance.environment.end()) {
+    return {};
+  }
+  return it->second;
+}
+
 }  // namespace
 
 void DesiredStatePolicyService::ReservePlacement(
@@ -276,8 +289,13 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
 
     comet::WorkerGroupMemberSpec member;
     member.name = instance.name;
+    member.infer_instance_name = InferInstanceNameForWorker(instance);
     member.node_name = instance.node_name;
     member.gpu_device = instance.gpu_device.value_or("");
+    if (const auto rpc_port_it = instance.environment.find("COMET_WORKER_RPC_PORT");
+        rpc_port_it != instance.environment.end() && !rpc_port_it->second.empty()) {
+      member.rpc_port = std::stoi(rpc_port_it->second);
+    }
     member.rank = static_cast<int>(desired_state->worker_group.members.size());
     member.gpu_fraction = instance.gpu_fraction;
     member.share_mode = instance.share_mode;
@@ -301,6 +319,53 @@ void DesiredStatePolicyService::RefreshDerivedWorkerMetadata(
   if (desired_state->worker_group.rendezvous_host.empty()) {
     desired_state->worker_group.rendezvous_host =
         desired_state->worker_group.infer_instance_name;
+  }
+  if (UsesLlamaRpcRuntime(*desired_state)) {
+    std::map<std::string, int> replica_index_by_infer;
+    std::map<std::string, int> replica_size_by_infer;
+    int next_replica_index = 0;
+    for (const auto& member : desired_state->worker_group.members) {
+      if (!member.enabled) {
+        continue;
+      }
+      const std::string infer_name =
+          member.infer_instance_name.empty() ? desired_state->worker_group.infer_instance_name
+                                             : member.infer_instance_name;
+      if (replica_index_by_infer.find(infer_name) == replica_index_by_infer.end()) {
+        replica_index_by_infer.emplace(infer_name, next_replica_index++);
+      }
+      ++replica_size_by_infer[infer_name];
+    }
+    std::map<std::string, int> local_rank_by_infer;
+    for (auto& member : desired_state->worker_group.members) {
+      if (!member.enabled) {
+        continue;
+      }
+      if (member.infer_instance_name.empty()) {
+        member.infer_instance_name = desired_state->worker_group.infer_instance_name;
+      }
+      const int local_rank = local_rank_by_infer[member.infer_instance_name]++;
+      member.rank = local_rank;
+      member.replica_group_id = member.infer_instance_name;
+      member.replica_index = replica_index_by_infer[member.infer_instance_name];
+      member.replica_size = replica_size_by_infer[member.infer_instance_name];
+      member.replica_leader = local_rank == 0;
+      member.data_parallel_rank = member.replica_index;
+      member.data_parallel_size = static_cast<int>(replica_index_by_infer.size());
+      member.data_parallel_size_local = 1;
+      member.data_parallel_start_rank = member.replica_index;
+      member.data_parallel_api_endpoint = false;
+      member.data_parallel_head_address =
+          desired_state->worker_group.rendezvous_host.empty()
+              ? desired_state->worker_group.infer_instance_name
+              : desired_state->worker_group.rendezvous_host;
+      member.data_parallel_rpc_port =
+          desired_state->worker_group.rendezvous_port > 0
+              ? desired_state->worker_group.rendezvous_port + 100
+              : 29600;
+      member.leader = member.replica_leader && member.replica_index == 0;
+    }
+    return;
   }
   comet::ValidateReplicaPacking(desired_state->inference, desired_state->worker_group);
   comet::AssignReplicaTopology(desired_state->inference, &desired_state->worker_group);

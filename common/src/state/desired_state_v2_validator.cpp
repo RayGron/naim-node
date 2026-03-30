@@ -109,6 +109,9 @@ void DesiredStateV2Validator::ValidateRuntime() const {
   }
   const std::string engine = runtime.value("engine", std::string{});
   const std::string data_parallel_mode = runtime.value("data_parallel_mode", std::string("off"));
+  const std::string distributed_backend =
+      runtime.value("distributed_backend", engine == "vllm" ? std::string("vllm")
+                                                             : std::string("local"));
   if ((data_parallel_mode == "vllm_native" || data_parallel_mode == "auto_replicas") &&
       engine != "vllm") {
     throw std::runtime_error(
@@ -118,6 +121,21 @@ void DesiredStateV2Validator::ValidateRuntime() const {
       data_parallel_mode != "vllm_native" && data_parallel_mode != "auto_replicas") {
     throw std::runtime_error(
         "desired-state v2 data_parallel_lb_mode requires native data parallel mode");
+  }
+  if (engine == "llama.cpp" &&
+      (data_parallel_mode == "vllm_native" || data_parallel_mode == "auto_replicas")) {
+    throw std::runtime_error(
+        "desired-state v2 llama.cpp runtime does not support vllm native data parallel modes");
+  }
+  if (engine == "llama.cpp" && distributed_backend == "llama_rpc" &&
+      runtime.at("workers").get<int>() <= 0) {
+    throw std::runtime_error(
+        "desired-state v2 llama_rpc runtime requires at least one worker");
+  }
+  if (engine == "llama.cpp" && distributed_backend == "llama_rpc" &&
+      runtime.contains("data_parallel_lb_mode")) {
+    throw std::runtime_error(
+        "desired-state v2 llama_rpc runtime does not use data_parallel_lb_mode");
   }
 }
 
@@ -154,11 +172,32 @@ void DesiredStateV2Validator::ValidateInfer() const {
   }
   RequireObject("infer");
   const auto& infer = value_.at("infer");
+  const auto& runtime = value_.at("runtime");
   if (infer.contains("node") && !infer.at("node").is_string()) {
     throw std::runtime_error("desired-state v2 infer.node must be a string");
   }
   if (infer.contains("node") && infer.at("node").is_string()) {
     ValidateNodeRoleCompatibility(infer.at("node").get<std::string>(), "infer", "infer");
+  }
+  if (infer.contains("replicas")) {
+    if (!infer.at("replicas").is_number_integer() || infer.at("replicas").get<int>() <= 0) {
+      throw std::runtime_error("desired-state v2 infer.replicas must be a positive integer");
+    }
+    const std::string engine = runtime.value("engine", std::string{});
+    const std::string distributed_backend =
+        runtime.value("distributed_backend", engine == "vllm" ? std::string("vllm")
+                                                               : std::string("local"));
+    if (!(engine == "llama.cpp" && distributed_backend == "llama_rpc")) {
+      throw std::runtime_error(
+          "desired-state v2 infer.replicas is currently supported only for llama.cpp "
+          "runtime.distributed_backend=llama_rpc");
+    }
+    const int workers = runtime.at("workers").get<int>();
+    const int replicas = infer.at("replicas").get<int>();
+    if (workers % replicas != 0) {
+      throw std::runtime_error(
+          "desired-state v2 infer.replicas requires runtime.workers to be divisible by replicas");
+    }
   }
   ValidateStartBlock(infer, "infer");
 }

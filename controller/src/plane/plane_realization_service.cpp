@@ -56,6 +56,15 @@ std::string InferRuntimeArtifactPath(
       .string();
 }
 
+std::string InferRuntimeArtifactPathForInstance(
+    const std::string& artifacts_root,
+    const std::string& plane_name,
+    const std::string& infer_instance_name) {
+  return (std::filesystem::path(artifacts_root) / plane_name /
+          comet::InferRuntimeConfigRelativePath(infer_instance_name))
+      .string();
+}
+
 std::map<std::string, std::vector<comet::SchedulerRolloutAction>> BuildRolloutActionsByTargetNode(
     const comet::SchedulingPolicyReport& scheduling_report) {
   std::map<std::string, std::vector<comet::SchedulerRolloutAction>> result;
@@ -156,9 +165,21 @@ void PlaneRealizationService::MaterializeComposeArtifacts(
 void PlaneRealizationService::MaterializeInferRuntimeArtifact(
     const comet::DesiredState& desired_state,
     const std::string& artifacts_root) const {
-  WriteTextFile(
-      InferRuntimeArtifactPath(artifacts_root, desired_state.plane_name),
-      comet::RenderInferRuntimeConfigJson(desired_state));
+  bool wrote_primary = false;
+  for (const auto& instance : desired_state.instances) {
+    if (instance.role != comet::InstanceRole::Infer) {
+      continue;
+    }
+    WriteTextFile(
+        InferRuntimeArtifactPathForInstance(artifacts_root, desired_state.plane_name, instance.name),
+        comet::RenderInferRuntimeConfigJsonForInstance(desired_state, instance.name));
+    if (!wrote_primary) {
+      WriteTextFile(
+          InferRuntimeArtifactPath(artifacts_root, desired_state.plane_name),
+          comet::RenderInferRuntimeConfigJsonForInstance(desired_state, instance.name));
+      wrote_primary = true;
+    }
+  }
 }
 
 std::vector<comet::HostAssignment> PlaneRealizationService::BuildHostAssignments(

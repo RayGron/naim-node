@@ -20,6 +20,12 @@ WorkerConfig WorkerConfigLoader::Load() const {
       (std::filesystem::path(config.private_disk_path) / "worker-runtime-status.json").string());
   config.model_path = GetEnvOr("COMET_WORKER_MODEL_PATH");
   config.gpu_device = GetEnvOr("COMET_GPU_DEVICE", GetEnvOr("COMET_WORKER_GPU_DEVICE"));
+  config.boot_mode = GetEnvOr("COMET_WORKER_BOOT_MODE", "llama-idle");
+  config.distributed_backend = GetEnvOr("COMET_DISTRIBUTED_BACKEND", "local");
+  config.rpc_host = GetEnvOr("COMET_WORKER_RPC_HOST", "0.0.0.0");
+  config.rpc_port = GetEnvIntOr("COMET_WORKER_RPC_PORT", 50052);
+  config.rpc_endpoint = GetEnvOr("COMET_WORKER_RPC_ENDPOINT");
+  config.rpc_device = GetEnvOr("COMET_WORKER_RPC_DEVICE", GetEnvOr("COMET_RPC_SERVER_DEVICE"));
   config.llama_ctx_size = GetEnvIntOr("COMET_WORKER_CTX_SIZE", 2048);
   config.llama_threads = GetEnvIntOr("COMET_WORKER_THREADS", 2);
   config.llama_gpu_layers = GetEnvIntOr("COMET_LLAMA_GPU_LAYERS", 99);

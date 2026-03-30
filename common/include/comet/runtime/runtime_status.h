@@ -150,6 +150,7 @@ struct RuntimeStatus {
   std::string cached_local_model_path;
   std::string model_path;
   std::string gpu_device;
+  std::string rpc_endpoint;
   std::string gateway_listen;
   std::string upstream_models_url;
   std::string inference_health_url;

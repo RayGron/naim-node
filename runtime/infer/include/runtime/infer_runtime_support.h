@@ -17,6 +17,9 @@ bool ProxyHttpRequest(
     int client_fd,
     const std::string& request_data,
     const UpstreamTarget& upstream);
+std::optional<SimpleResponse> ForwardHttpRequest(
+    const HttpRequest& request,
+    const UpstreamTarget& upstream);
 void SendErrorResponse(int client_fd, int status_code, const std::string& message);
 bool RequestWantsStream(const HttpRequest& request);
 void HandleStreamingChatRequest(

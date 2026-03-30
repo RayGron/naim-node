@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "comet/runtime/infer_runtime_config.h"
+
 namespace comet {
 
 namespace {
@@ -46,9 +48,11 @@ InstanceSpec MakeInfer() {
       {"COMET_INFER_RUNTIME_BACKEND", "auto"},
       {"COMET_CONTROLLER_URL", "http://controller.internal:8080"},
       {"COMET_CONTROL_ROOT", "/comet/shared/control/alpha"},
-      {"COMET_INFER_RUNTIME_CONFIG", "/comet/shared/control/alpha/infer-runtime.json"},
+      {"COMET_INFER_RUNTIME_CONFIG",
+       InferRuntimeConfigControlPath("/comet/shared/control/alpha", "infer-main")},
       {"COMET_INFERENCE_PORT", "8000"},
       {"COMET_GATEWAY_PORT", "8080"},
+      {"COMET_LLAMA_PORT", "8000"},
       {"COMET_SHARED_DISK_PATH", "/comet/shared"},
       {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
   };

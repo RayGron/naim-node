@@ -410,7 +410,31 @@ std::string RequireSingleNodeName(const comet::DesiredState& state) {
   if (state.nodes.empty()) {
     throw std::runtime_error("desired node state is empty");
   }
-  return state.nodes.front().name;
+  const std::string node_name = state.nodes.front().name;
+  if (node_name.empty()) {
+    throw std::runtime_error("desired node state has an empty node name");
+  }
+  for (const auto& node : state.nodes) {
+    if (node.name != node_name) {
+      throw std::runtime_error(
+          "desired node state contains multiple node entries; expected a node-sliced state");
+    }
+  }
+  for (const auto& disk : state.disks) {
+    if (!disk.node_name.empty() && disk.node_name != node_name) {
+      throw std::runtime_error(
+          "desired node state contains disk '" + disk.name + "' for node '" + disk.node_name +
+          "' while applying node '" + node_name + "'");
+    }
+  }
+  for (const auto& instance : state.instances) {
+    if (!instance.node_name.empty() && instance.node_name != node_name) {
+      throw std::runtime_error(
+          "desired node state contains instance '" + instance.name + "' for node '" +
+          instance.node_name + "' while applying node '" + node_name + "'");
+    }
+  }
+  return node_name;
 }
 
 }  // namespace comet::hostd::local_state_support

@@ -1,5 +1,6 @@
 #include "comet/importing/import_bundle.h"
 #include "comet/planning/scheduling_policy.h"
+#include "comet/runtime/infer_runtime_config.h"
 #include "comet/state/state_json.h"
 
 #include <algorithm>
@@ -848,6 +849,9 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   infer.shared_disk_name = state.plane_shared_disk_name;
   infer.private_disk_size_gb = OptionalInt(infer_json, "private_disk_gb", 80);
   const bool use_vllm_runtime = state.inference.runtime_engine == "vllm";
+  const bool use_llama_rpc_runtime =
+      state.inference.runtime_engine == "llama.cpp" &&
+      state.inference.distributed_backend == "llama_rpc";
 
   infer.environment = {
       {"COMET_PLANE_NAME", state.plane_name},
@@ -855,12 +859,15 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       {"COMET_INSTANCE_ROLE", "infer"},
       {"COMET_NODE_NAME", infer.node_name},
       {"COMET_INFER_BOOT_MODE", "launch-runtime"},
-      {"COMET_INFER_RUNTIME_BACKEND", use_vllm_runtime ? "worker-vllm" : "auto"},
+      {"COMET_INFER_RUNTIME_BACKEND",
+       use_vllm_runtime ? "worker-vllm" : (use_llama_rpc_runtime ? "llama-rpc-head" : "auto")},
       {"COMET_CONTROLLER_URL", "http://controller.internal:8080"},
       {"COMET_CONTROL_ROOT", state.control_root},
-      {"COMET_INFER_RUNTIME_CONFIG", state.control_root + "/infer-runtime.json"},
+      {"COMET_INFER_RUNTIME_CONFIG",
+       InferRuntimeConfigControlPath(state.control_root, infer.name)},
       {"COMET_INFERENCE_PORT", std::to_string(state.inference.api_port)},
       {"COMET_GATEWAY_PORT", std::to_string(state.gateway.listen_port)},
+      {"COMET_LLAMA_PORT", std::to_string(state.inference.llama_port)},
       {"COMET_SHARED_DISK_PATH", "/comet/shared"},
       {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
   };
@@ -1000,6 +1007,11 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
       }
     }
 
+    const int worker_index = static_cast<int>(std::count_if(
+        state.instances.begin(),
+        state.instances.end(),
+        [](const InstanceSpec& instance) { return instance.role == InstanceRole::Worker; }));
+
     if (worker.node_name == infer.node_name) {
       worker.depends_on.push_back(infer.name);
     }
@@ -1010,12 +1022,21 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
         {"COMET_INSTANCE_ROLE", "worker"},
         {"COMET_NODE_NAME", worker.node_name},
         {"COMET_GPU_DEVICE", worker.gpu_device.value_or("")},
-        {"COMET_WORKER_BOOT_MODE", use_vllm_runtime ? "vllm-openai" : "llama-load"},
+        {"COMET_WORKER_BOOT_MODE",
+         use_vllm_runtime ? "vllm-openai" : (use_llama_rpc_runtime ? "llama-rpc" : "llama-idle")},
         {"COMET_CONTROL_ROOT", state.control_root},
+        {"COMET_DISTRIBUTED_BACKEND", state.inference.distributed_backend},
         {"COMET_SHARED_DISK_PATH", "/comet/shared"},
         {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
         {"COMET_WORKER_RUNTIME_STATUS_PATH", "/comet/private/worker-runtime-status.json"},
     };
+    if (use_llama_rpc_runtime) {
+      worker.environment["COMET_WORKER_RPC_PORT"] =
+          std::to_string(state.worker_group.rendezvous_port + 100 + worker_index);
+      worker.environment["COMET_WORKER_RPC_HOST"] = "0.0.0.0";
+      worker.environment["COMET_WORKER_RPC_ENDPOINT"] =
+          worker.name + ":" + worker.environment["COMET_WORKER_RPC_PORT"];
+    }
     worker.labels = {
         {"comet.plane", state.plane_name},
         {"comet.role", "worker"},
@@ -1073,10 +1094,15 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
     if (worker.role != InstanceRole::Worker) {
       continue;
     }
-    WorkerGroupMemberSpec member;
-    member.name = worker.name;
-    member.node_name = worker.node_name;
-    member.gpu_device = worker.gpu_device.value_or("");
+      WorkerGroupMemberSpec member;
+      member.name = worker.name;
+      member.infer_instance_name = state.worker_group.infer_instance_name;
+      member.node_name = worker.node_name;
+      member.gpu_device = worker.gpu_device.value_or("");
+    if (const auto rpc_port_it = worker.environment.find("COMET_WORKER_RPC_PORT");
+        rpc_port_it != worker.environment.end() && !rpc_port_it->second.empty()) {
+      member.rpc_port = std::stoi(rpc_port_it->second);
+    }
     member.rank = static_cast<int>(state.worker_group.members.size());
     member.gpu_fraction = worker.gpu_fraction;
     member.share_mode = worker.share_mode;

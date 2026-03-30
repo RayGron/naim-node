@@ -244,9 +244,35 @@ std::optional<std::string> InferRuntimeConfigPathForNode(
   return ControlFilePathForNode(state, node_name, "infer-runtime.json");
 }
 
+const comet::InstanceSpec* PrimaryInferInstanceForNode(
+    const comet::DesiredState& state,
+    const std::string& node_name) {
+  for (const auto& instance : state.instances) {
+    if (instance.role == comet::InstanceRole::Infer && instance.node_name == node_name) {
+      return &instance;
+    }
+  }
+  return nullptr;
+}
+
+std::optional<std::string> InferRuntimeStatusPathForInstance(
+    const comet::DesiredState& state,
+    const comet::InstanceSpec& infer_instance) {
+  if (infer_instance.role != comet::InstanceRole::Infer || infer_instance.name.empty()) {
+    return std::nullopt;
+  }
+  return ControlFilePathForNode(
+      state,
+      infer_instance.node_name,
+      comet::InferRuntimeStatusRelativePath(infer_instance.name));
+}
+
 std::optional<std::string> RuntimeStatusPathForNode(
     const comet::DesiredState& state,
     const std::string& node_name) {
+  if (const auto* infer = PrimaryInferInstanceForNode(state, node_name); infer != nullptr) {
+    return InferRuntimeStatusPathForInstance(state, *infer);
+  }
   return ControlFilePathForNode(state, node_name, "runtime-status.json");
 }
 
@@ -1864,7 +1890,12 @@ void ApplyNodePlan(
                 desired_node_state.plane_name,
                 plan.node_name));
         EnsureParentDirectory(operation.target);
-        WriteTextFile(operation.target, comet::RenderInferRuntimeConfigJson(desired_node_state));
+        WriteTextFile(
+            operation.target,
+            operation.details.empty()
+                ? comet::RenderInferRuntimeConfigJson(desired_node_state)
+                : comet::RenderInferRuntimeConfigJsonForInstance(
+                      desired_node_state, operation.details));
         PrintOperationApplied(operation, "applied");
         break;
       case comet::HostOperationKind::RemoveInferRuntimeConfig:

@@ -28,9 +28,11 @@ class DesiredStateV2Renderer final {
   void RenderAppInstance();
 
   bool InferEnabled() const;
+  int InferReplicaCount() const;
   int WorkerCount() const;
   int ExpectedWorkers() const;
   std::string ResolveInferNodeName() const;
+  std::string ResolveInferNodeName(int infer_index) const;
   std::string ResolveAppNodeName() const;
   std::string ResolveWorkerNodeName(int worker_index) const;
   std::optional<std::string> ResolveWorkerGpuDevice(int worker_index) const;
@@ -41,8 +43,13 @@ class DesiredStateV2Renderer final {
   std::string StripBundleRefPrefix(const std::string& value) const;
   std::string BuildWorkerName(int index, int total_workers) const;
   std::string BuildPlaneSharedDiskName() const;
-  std::string BuildInferInstanceName() const;
+  std::string BuildInferInstanceName(int infer_index = 0) const;
   std::string BuildAppInstanceName() const;
+  int BuildInferApiPort(int infer_index) const;
+  int BuildInferGatewayPort(int infer_index) const;
+  int BuildInferLlamaPort(int infer_index) const;
+  std::string BuildReplicaUpstreams(const std::vector<InstanceSpec>& infer_instances) const;
+  std::string InferInstanceNameForWorker(int worker_index) const;
   std::string BuildPlaneSharedHostPath() const;
   std::string BuildInstancePrivateHostPath(const std::string& instance_name) const;
   std::string BuildAppCommandFromScriptRef(const std::string& script_ref) const;
@@ -72,7 +79,7 @@ class DesiredStateV2Renderer final {
   nlohmann::json resources_json_;
   nlohmann::json worker_resources_json_;
   nlohmann::json app_json_;
-  std::optional<std::string> infer_name_;
+  std::vector<std::string> infer_names_;
 };
 
 }  // namespace comet

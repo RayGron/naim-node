@@ -113,8 +113,23 @@ int main() {
         aggregate_state->instances.front().plane_name == plane_b,
         "aggregate should only contain plane-b instances");
 
+    comet::DesiredState bad_state = BuildState("plane-c", node_name);
+    comet::NodeInventory other_node;
+    other_node.name = "remote-worker-a";
+    other_node.platform = "linux";
+    other_node.execution_mode = comet::HostExecutionMode::WorkerOnly;
+    bad_state.nodes.push_back(std::move(other_node));
+    bool threw = false;
+    try {
+      (void)comet::hostd::local_state_support::RequireSingleNodeName(bad_state);
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Expect(threw, "RequireSingleNodeName should reject non-sliced multi-node desired state");
+
     fs::remove_all(temp_root, cleanup_error);
     std::cout << "ok: recursive-plane-state-removal\n";
+    std::cout << "ok: require-single-node-sliced-state\n";
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';

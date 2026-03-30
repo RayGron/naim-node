@@ -12,6 +12,7 @@
 #include "runtime/infer_runtime_support.h"
 #include "runtime/infer_runtime_types.h"
 #include "runtime/llama_library_engine.h"
+#include "runtime/llama_rpc_runtime.h"
 #include "runtime/local_runtime.h"
 #include "comet/runtime/runtime_status.h"
 
@@ -63,6 +64,7 @@ namespace {
 using InferSignalService = comet::infer::InferSignalService;
 using InferCommandLineOptions = comet::infer::InferCommandLineOptions;
 using LlamaLibraryEngine = comet::infer::LlamaLibraryEngine;
+using LlamaRpcRuntime = comet::infer::LlamaRpcRuntime;
 using RuntimeConfig = comet::infer::RuntimeConfig;
 using RuntimeProfile = comet::infer::control_support::RuntimeProfile;
 using HttpRequest = comet::infer::HttpRequest;
@@ -157,9 +159,15 @@ std::vector<std::string> ObservedRuntimeUpstreamBaseUrls(const RuntimeConfig& co
   if (worker_vllm_upstream != nullptr && std::strlen(worker_vllm_upstream) > 0) {
     return {std::string(worker_vllm_upstream)};
   }
+  if (!config.replica_upstreams.empty()) {
+    return config.replica_upstreams;
+  }
   const auto ready_leaders = prewarm_support::ObservedReadyReplicaLeaderBaseUrls(config);
   if (!ready_leaders.empty()) {
     return ready_leaders;
+  }
+  if (config.runtime_engine == "llama.cpp" && config.distributed_backend == "llama_rpc") {
+    return {"http://127.0.0.1:" + std::to_string(config.llama_port)};
   }
   if (config.runtime_engine != "vllm") {
     return {"http://127.0.0.1:" + std::to_string(config.api_port)};
@@ -176,6 +184,13 @@ std::optional<std::string> ResolveRuntimeObservedUpstreamBaseUrl(const RuntimeCo
 }
 
 std::optional<UpstreamTarget> ResolveRuntimeUpstreamTarget(const RuntimeConfig& config) {
+  if (!config.replica_upstreams.empty()) {
+    static std::atomic<std::uint64_t> next_replica{0};
+    const std::uint64_t slot = next_replica.fetch_add(1, std::memory_order_relaxed);
+    const std::string& base_url =
+        config.replica_upstreams[slot % config.replica_upstreams.size()];
+    return ParseHttpUrl(base_url);
+  }
   const auto observed_base_urls = prewarm_support::ObservedReadyReplicaLeaderBaseUrls(config);
   const auto routable_base_urls =
       prewarm_support::FilterPrewarmedReplicaBaseUrls(config, observed_base_urls);
@@ -454,6 +469,8 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
 
   RuntimeConfig config;
   config.raw = root;
+  config.instance_name =
+      root.value("instance", json::object()).value("name", std::string{});
   config.plane_name = Require<std::string>(plane, "name", "plane");
   config.control_root = Require<std::string>(control, "root", "control");
   config.controller_url = Require<std::string>(control, "controller_url", "control");
@@ -461,6 +478,8 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
       Require<std::string>(inference, "primary_infer_node", "inference");
   config.runtime_engine =
       inference.value("runtime_engine", config.runtime_engine);
+  config.distributed_backend =
+      inference.value("distributed_backend", config.distributed_backend);
   config.data_parallel_mode =
       inference.value("data_parallel_mode", config.data_parallel_mode);
   config.data_parallel_lb_mode =
@@ -478,12 +497,21 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
   config.infer_log_dir = ExpandUserPath(Require<std::string>(inference, "infer_log_dir", "inference"));
   config.api_port = inference.value("api_port", config.api_port);
   config.llama_port = Require<int>(inference, "llama_port", "inference");
+  config.max_model_len = inference.value("max_model_len", config.max_model_len);
+  config.max_num_seqs = inference.value("max_num_seqs", config.max_num_seqs);
+  config.gpu_memory_utilization =
+      inference.value("gpu_memory_utilization", config.gpu_memory_utilization);
   config.llama_ctx_size = inference.value("llama_ctx_size", config.llama_ctx_size);
   config.llama_threads = inference.value("llama_threads", config.llama_threads);
   config.llama_gpu_layers = inference.value("llama_gpu_layers", config.llama_gpu_layers);
   config.gateway_listen_host = Require<std::string>(gateway, "listen_host", "gateway");
   config.gateway_listen_port = Require<int>(gateway, "listen_port", "gateway");
   config.gateway_server_name = Require<std::string>(gateway, "server_name", "gateway");
+  for (const auto& upstream : root.value("replica_upstreams", json::array())) {
+    if (upstream.is_string() && !upstream.get<std::string>().empty()) {
+      config.replica_upstreams.push_back(upstream.get<std::string>());
+    }
+  }
   config.gpu_nodes = Require<json>(root, "gpu_nodes", "root");
   config.serving_workers = root.value("serving_workers", config.gpu_nodes);
   return config;
@@ -648,7 +676,8 @@ json BuildModelListPayload(const RuntimeConfig& config) {
   const std::optional<comet::RuntimeStatus> runtime_status =
       comet::LoadRuntimeStatusJson(BuildControlPaths(config).runtime_status_path.string());
   const std::string owner =
-      runtime_status.has_value() && runtime_status->runtime_backend == "llama"
+      runtime_status.has_value() &&
+              runtime_status->runtime_backend.rfind("llama", 0) == 0
           ? "comet-llama-runtime"
           : "comet-embedded-runtime";
   json data = json::array();
@@ -933,17 +962,91 @@ std::string ForceConnectionClose(const std::string& request_text) {
   return out.str();
 }
 
+std::string BuildUpstreamRequest(
+    const HttpRequest& request,
+    const UpstreamTarget& upstream) {
+  std::ostringstream out;
+  out << request.method << " " << request.path << " HTTP/1.1\r\n";
+  out << "Host: " << upstream.host << "\r\n";
+  bool wrote_content_type = false;
+  for (const auto& [key, value] : request.headers) {
+    if (key == "host" || key == "connection" || key == "content-length") {
+      continue;
+    }
+    if (key == "content-type") {
+      wrote_content_type = true;
+    }
+    out << key << ": " << value << "\r\n";
+  }
+  if (!request.body.empty()) {
+    if (!wrote_content_type) {
+      out << "content-type: application/json\r\n";
+    }
+    out << "content-length: " << request.body.size() << "\r\n";
+  }
+  out << "connection: close\r\n\r\n";
+  out << request.body;
+  return out.str();
+}
+
+std::optional<SimpleResponse> ParseUpstreamResponse(const std::string& response) {
+  const std::size_t line_end = response.find("\r\n");
+  if (line_end == std::string::npos) {
+    return std::nullopt;
+  }
+  std::stringstream status_stream(response.substr(0, line_end));
+  std::string http_version;
+  int status_code = 0;
+  status_stream >> http_version >> status_code;
+  if (status_code <= 0) {
+    return std::nullopt;
+  }
+
+  const std::size_t headers_end = response.find("\r\n\r\n");
+  if (headers_end == std::string::npos) {
+    return std::nullopt;
+  }
+
+  std::string content_type = "application/json";
+  std::size_t offset = line_end + 2;
+  while (offset < headers_end) {
+    const std::size_t next = response.find("\r\n", offset);
+    if (next == std::string::npos || next > headers_end) {
+      break;
+    }
+    const std::string line = response.substr(offset, next - offset);
+    const std::size_t colon = line.find(':');
+    if (colon != std::string::npos) {
+      const std::string key = Lowercase(Trim(line.substr(0, colon)));
+      if (key == "content-type") {
+        content_type = Trim(line.substr(colon + 1));
+      }
+    }
+    offset = next + 2;
+  }
+
+  return SimpleResponse{
+      status_code,
+      content_type,
+      response.substr(headers_end + 4),
+  };
+}
+
 bool ProxyHttpRequest(
     int client_fd,
     const std::string& request_data,
     const UpstreamTarget& upstream) {
   const int upstream_fd = ConnectTcpHost(upstream.host, upstream.port);
   if (upstream_fd < 0) {
+    std::cerr << "[comet-infer] proxy connect failed upstream="
+              << upstream.host << ":" << upstream.port << std::endl;
     return false;
   }
 
   const std::string proxied_request = ForceConnectionClose(request_data);
   if (!SendAll(upstream_fd, proxied_request)) {
+    std::cerr << "[comet-infer] proxy send failed upstream="
+              << upstream.host << ":" << upstream.port << std::endl;
     shutdown(upstream_fd, SHUT_RDWR);
     close(upstream_fd);
     return false;
@@ -954,6 +1057,9 @@ bool ProxyHttpRequest(
   while (true) {
     const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
+      std::cerr << "[comet-infer] proxy recv failed upstream="
+                << upstream.host << ":" << upstream.port
+                << " errno=" << errno << std::endl;
       shutdown(upstream_fd, SHUT_RDWR);
       close(upstream_fd);
       return false;
@@ -963,6 +1069,8 @@ bool ProxyHttpRequest(
     }
     received_any_response = true;
     if (!SendAll(client_fd, std::string(buffer.data(), static_cast<std::size_t>(read_count)))) {
+      std::cerr << "[comet-infer] proxy send-to-client failed upstream="
+                << upstream.host << ":" << upstream.port << std::endl;
       shutdown(upstream_fd, SHUT_RDWR);
       close(upstream_fd);
       return false;
@@ -971,7 +1079,57 @@ bool ProxyHttpRequest(
 
   shutdown(upstream_fd, SHUT_RDWR);
   close(upstream_fd);
+  if (!received_any_response) {
+    const std::size_t line_end = request_data.find("\r\n");
+    const std::string request_line =
+        line_end == std::string::npos ? request_data : request_data.substr(0, line_end);
+    std::cerr << "[comet-infer] proxy received no response upstream="
+              << upstream.host << ":" << upstream.port
+              << " request=" << request_line << std::endl;
+  }
   return received_any_response;
+}
+
+std::optional<SimpleResponse> ForwardHttpRequest(
+    const HttpRequest& request,
+    const UpstreamTarget& upstream) {
+  const int upstream_fd = ConnectTcpHost(upstream.host, upstream.port);
+  if (upstream_fd < 0) {
+    std::cerr << "[comet-infer] forward connect failed upstream="
+              << upstream.host << ":" << upstream.port << std::endl;
+    return std::nullopt;
+  }
+
+  const std::string proxied_request = BuildUpstreamRequest(request, upstream);
+  if (!SendAll(upstream_fd, proxied_request)) {
+    std::cerr << "[comet-infer] forward send failed upstream="
+              << upstream.host << ":" << upstream.port << std::endl;
+    shutdown(upstream_fd, SHUT_RDWR);
+    close(upstream_fd);
+    return std::nullopt;
+  }
+
+  std::string response;
+  std::array<char, 8192> buffer{};
+  while (true) {
+    const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
+    if (read_count < 0) {
+      std::cerr << "[comet-infer] forward recv failed upstream="
+                << upstream.host << ":" << upstream.port
+                << " errno=" << errno << std::endl;
+      shutdown(upstream_fd, SHUT_RDWR);
+      close(upstream_fd);
+      return std::nullopt;
+    }
+    if (read_count == 0) {
+      break;
+    }
+    response.append(buffer.data(), static_cast<std::size_t>(read_count));
+  }
+
+  shutdown(upstream_fd, SHUT_RDWR);
+  close(upstream_fd);
+  return ParseUpstreamResponse(response);
 }
 
 bool SendSseHeaders(int client_fd) {
@@ -1331,10 +1489,16 @@ bool ProbeModelsUrl(const std::string& url) {
     return false;
   }
   json payload = json::parse(response.substr(body_pos + 4), nullptr, false);
-  if (!payload.is_object() || !payload.contains("data") || !payload.at("data").is_array()) {
+  if (!payload.is_object()) {
     return false;
   }
-  return !payload.at("data").empty();
+  if (payload.contains("data") && payload.at("data").is_array()) {
+    return !payload.at("data").empty();
+  }
+  if (payload.contains("models") && payload.at("models").is_array()) {
+    return !payload.at("models").empty();
+  }
+  return false;
 }
 
 bool HasResolvableGgufModel(const RuntimeConfig& config) {
@@ -1360,6 +1524,23 @@ int LaunchLlamaRuntime(const RuntimeConfig& config, InferSignalService& signal_s
   return runtime.Run();
 }
 
+int LaunchLlamaRpcHeadRuntime(
+    const RuntimeConfig& config,
+    InferSignalService& signal_service) {
+  if (!config.replica_upstreams.empty()) {
+    LocalRuntime runtime(
+        config,
+        "llama-rpc-gateway",
+        UtcNowIso(),
+        nullptr,
+        signal_service,
+        true);
+    return runtime.Run();
+  }
+  LlamaRpcRuntime runtime(config, UtcNowIso(), signal_service);
+  return runtime.Run();
+}
+
 int LaunchWorkerVllmRuntime(const RuntimeConfig& config, InferSignalService& signal_service) {
   LocalRuntime runtime(
       config,
@@ -1381,6 +1562,9 @@ int LaunchRuntime(
   if (requested_backend == "llama") {
     return LaunchLlamaRuntime(config, signal_service);
   }
+  if (requested_backend == "llama-rpc-head") {
+    return LaunchLlamaRpcHeadRuntime(config, signal_service);
+  }
   if (requested_backend == "worker-vllm" || requested_backend == "vllm") {
     return LaunchWorkerVllmRuntime(config, signal_service);
   }
@@ -1389,6 +1573,10 @@ int LaunchRuntime(
   }
   if (config.runtime_engine == "vllm") {
     return LaunchWorkerVllmRuntime(config, signal_service);
+  }
+  if (config.runtime_engine == "llama.cpp" &&
+      config.distributed_backend == "llama_rpc") {
+    return LaunchLlamaRpcHeadRuntime(config, signal_service);
   }
   const json active_model = LoadActiveModel(config);
   if (active_model.empty()) {
@@ -1427,6 +1615,12 @@ bool ProxyHttpRequest(
     const std::string& request_data,
     const UpstreamTarget& upstream) {
   return ::ProxyHttpRequest(client_fd, request_data, upstream);
+}
+
+std::optional<SimpleResponse> ForwardHttpRequest(
+    const HttpRequest& request,
+    const UpstreamTarget& upstream) {
+  return ::ForwardHttpRequest(request, upstream);
 }
 
 void SendErrorResponse(int client_fd, int status_code, const std::string& message) {

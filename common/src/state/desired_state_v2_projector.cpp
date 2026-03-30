@@ -1,6 +1,7 @@
 #include "comet/state/desired_state_v2_projector.h"
 
 #include <algorithm>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -147,6 +148,7 @@ void DesiredStateV2Projector::ProjectRuntime() {
       {"engine", state_.inference.runtime_engine},
       {"workers", std::max(1, static_cast<int>(worker_instances_.size()))},
       {"data_parallel_mode", state_.inference.data_parallel_mode},
+      {"distributed_backend", state_.inference.distributed_backend},
       {"max_model_len", state_.inference.max_model_len},
       {"max_num_seqs", state_.inference.max_num_seqs},
       {"gpu_memory_utilization", state_.inference.gpu_memory_utilization},
@@ -205,6 +207,10 @@ void DesiredStateV2Projector::ProjectInfer() {
   }
   if (infer_instance_->node_name != DefaultNodeName()) {
     infer["node"] = infer_instance_->node_name;
+  }
+  const int replicas = InferReplicaCount();
+  if (replicas > 1) {
+    infer["replicas"] = replicas;
   }
   const auto storage = ProjectServiceStorage(FindDiskByName(infer_instance_->private_disk_name));
   if (!storage.is_null()) {
@@ -353,6 +359,18 @@ std::string DesiredStateV2Projector::DefaultNodeName() const {
     return state_.nodes.front().name;
   }
   return "local-hostd";
+}
+
+int DesiredStateV2Projector::InferReplicaCount() const {
+  std::set<std::string> infer_instance_names;
+  for (const auto* worker_instance : worker_instances_) {
+    const auto it = worker_instance->environment.find("COMET_INFER_INSTANCE_NAME");
+    if (it == worker_instance->environment.end() || it->second.empty()) {
+      continue;
+    }
+    infer_instance_names.insert(it->second);
+  }
+  return static_cast<int>(infer_instance_names.size());
 }
 
 const InstanceSpec* DesiredStateV2Projector::FindInstance(InstanceRole role) const {

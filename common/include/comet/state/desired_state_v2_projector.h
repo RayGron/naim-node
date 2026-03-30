@@ -31,6 +31,7 @@ class DesiredStateV2Projector final {
   bool ShouldEmitTopology() const;
   bool IsDefaultSingleNodeTopology() const;
   std::string DefaultNodeName() const;
+  int InferReplicaCount() const;
 
   const InstanceSpec* FindInstance(InstanceRole role) const;
   std::vector<const InstanceSpec*> FindWorkerInstances() const;

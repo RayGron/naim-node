@@ -123,6 +123,9 @@ bool LocalRuntime::EnsureReplicaLeadersPrewarmed() const {
   if (!dynamic_upstream_ && !upstream_.has_value()) {
     return true;
   }
+  if (!config_.replica_upstreams.empty()) {
+    return true;
+  }
   if (!InferenceReady()) {
     return false;
   }

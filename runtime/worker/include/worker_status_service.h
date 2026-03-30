@@ -15,6 +15,10 @@ class WorkerStatusService final {
 
   std::string CurrentTimestamp() const;
 
+  void MarkStarting(
+      const WorkerConfig& config,
+      const std::string& started_at,
+      const std::optional<std::string>& model_path) const;
   void MarkWaitingForModel(
       const WorkerConfig& config,
       const std::string& started_at,

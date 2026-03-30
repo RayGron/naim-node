@@ -141,6 +141,59 @@ int main() {
         },
         "llm-with-app");
 
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "llama-rpc-replicas"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source",
+                  {{"type", "local"},
+                   {"path", "/models/qwen/Qwen3.5-9B-Q4_K_M.gguf"},
+                   {"ref", "Qwen/Qwen3.5-9B"}}},
+                 {"materialization",
+                  {{"mode", "reference"},
+                   {"local_path", "/models/qwen/Qwen3.5-9B-Q4_K_M.gguf"}}},
+                 {"served_model_name", "qwen-rpc"},
+             }},
+            {"runtime",
+             {
+                 {"engine", "llama.cpp"},
+                 {"distributed_backend", "llama_rpc"},
+                 {"workers", 3},
+                 {"max_model_len", 8192},
+                 {"max_num_seqs", 16},
+                 {"gpu_memory_utilization", 0.85},
+             }},
+            {"topology",
+             {{"nodes",
+               json::array(
+                   {{{"name", "local-hostd"},
+                     {"execution_mode", "mixed"},
+                     {"gpu_memory_mb", {{"0", 24576}, {"2", 24576}, {"3", 24576}}}}})}}},
+            {"infer", {{"replicas", 3}}},
+            {"worker",
+             {{"assignments",
+               json::array(
+                   {{{"node", "local-hostd"}, {"gpu_device", "0"}},
+                    {{"node", "local-hostd"}, {"gpu_device", "2"}},
+                    {{"node", "local-hostd"}, {"gpu_device", "3"}}})}}},
+            {"network",
+             {{"gateway_port", 18984},
+              {"inference_port", 18994},
+              {"server_name", "llama-rpc-replicas.internal"}}},
+            {"app", {{"enabled", false}}},
+            {"resources",
+             {{"worker",
+               {{"placement_mode", "manual"},
+                {"share_mode", "exclusive"},
+                {"gpu_fraction", 1.0},
+                {"memory_cap_mb", 24576}}},
+              {"shared_disk_gb", 40}}},
+        },
+        "llama-rpc-replicas");
+
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "desired_state_v2_projector_tests failed: " << ex.what() << '\n';

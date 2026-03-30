@@ -344,6 +344,7 @@ json ToJson(const RuntimeStatus& status) {
       {"cached_local_model_path", status.cached_local_model_path},
       {"model_path", status.model_path},
       {"gpu_device", status.gpu_device},
+      {"rpc_endpoint", status.rpc_endpoint},
       {"gateway_listen", status.gateway_listen},
       {"upstream_models_url", status.upstream_models_url},
       {"inference_health_url", status.inference_health_url},
@@ -392,6 +393,7 @@ RuntimeStatus RuntimeStatusFromJson(const json& value) {
   status.cached_local_model_path = value.value("cached_local_model_path", std::string{});
   status.model_path = value.value("model_path", std::string{});
   status.gpu_device = value.value("gpu_device", std::string{});
+  status.rpc_endpoint = value.value("rpc_endpoint", std::string{});
   status.gateway_listen = value.value("gateway_listen", std::string{});
   status.upstream_models_url = value.value("upstream_models_url", std::string{});
   status.inference_health_url = value.value("inference_health_url", std::string{});

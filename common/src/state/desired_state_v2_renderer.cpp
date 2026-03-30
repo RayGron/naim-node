@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "comet/runtime/infer_runtime_config.h"
 #include "comet/state/desired_state_v2_validator.h"
 #include "comet/state/worker_group_topology.h"
 
@@ -156,13 +157,14 @@ void DesiredStateV2Renderer::RenderInteraction() {
 
 void DesiredStateV2Renderer::RenderRuntime() {
   const auto& runtime_json = value_.at("runtime");
-  state_.inference.primary_infer_node = "local-hostd";
   state_.inference.runtime_engine = runtime_json.value("engine", std::string("vllm"));
   state_.inference.data_parallel_mode =
       runtime_json.value("data_parallel_mode", state_.inference.data_parallel_mode);
   state_.inference.data_parallel_lb_mode =
       runtime_json.value("data_parallel_lb_mode", state_.inference.data_parallel_lb_mode);
-  state_.inference.distributed_backend = "vllm";
+  state_.inference.distributed_backend = runtime_json.value(
+      "distributed_backend",
+      state_.inference.runtime_engine == "vllm" ? std::string("vllm") : std::string("local"));
   state_.inference.worker_selection_policy = "prefer-free-then-share";
   state_.inference.net_if = "eth0";
   state_.inference.models_root = "/comet/shared/models";
@@ -222,9 +224,10 @@ void DesiredStateV2Renderer::RenderNodeTopology() {
 }
 
 void DesiredStateV2Renderer::RenderWorkerGroup() {
+  state_.inference.primary_infer_node = InferEnabled() ? ResolveInferNodeName() : DefaultNodeName();
   state_.worker_group.group_id = state_.plane_name + "-workers";
   state_.worker_group.infer_instance_name = InferEnabled() ? BuildInferInstanceName() : "";
-  state_.worker_group.distributed_backend = "vllm";
+  state_.worker_group.distributed_backend = state_.inference.distributed_backend;
   state_.worker_group.rendezvous_host = state_.worker_group.infer_instance_name;
   state_.worker_group.rendezvous_port = state_.inference.rendezvous_port;
   state_.worker_group.expected_workers = ExpectedWorkers();
@@ -250,66 +253,90 @@ void DesiredStateV2Renderer::RenderInferInstance() {
     return;
   }
 
-  InstanceSpec infer;
-  infer.name = BuildInferInstanceName();
-  infer_name_ = infer.name;
-  infer.role = InstanceRole::Infer;
-  infer.plane_name = state_.plane_name;
-  infer.node_name = ResolveInferNodeName();
-  infer.image = infer_json_.value("image", std::string("comet/infer-runtime:dev"));
-  infer.command =
-      BuildCommandFromStartSpec(infer_json_.value("start", nlohmann::json::object()),
-                                "/runtime/infer/entrypoint.sh");
-  infer.private_disk_name = infer.name + "-private";
-  infer.shared_disk_name = state_.plane_shared_disk_name;
-  infer.private_disk_size_gb =
-      ExtractPrivateDiskSizeGb(infer_json_, kDefaultInferPrivateDiskSizeGb, "volumes");
-  infer.environment = {
-      {"COMET_PLANE_NAME", state_.plane_name},
-      {"COMET_INSTANCE_NAME", infer.name},
-      {"COMET_INSTANCE_ROLE", "infer"},
-      {"COMET_NODE_NAME", infer.node_name},
-      {"COMET_INFER_BOOT_MODE", "launch-runtime"},
-      {"COMET_INFER_RUNTIME_BACKEND", DefaultInferRuntimeBackend()},
-      {"COMET_CONTROLLER_URL", "http://controller.internal:18080"},
-      {"COMET_CONTROL_ROOT", state_.control_root},
-      {"COMET_INFER_RUNTIME_CONFIG", state_.control_root + "/infer-runtime.json"},
-      {"COMET_INFERENCE_PORT", std::to_string(state_.inference.api_port)},
-      {"COMET_GATEWAY_PORT", std::to_string(state_.gateway.listen_port)},
-      {"COMET_SHARED_DISK_PATH", "/comet/shared"},
-      {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
-  };
-  if (infer_json_.contains("env") && infer_json_.at("env").is_object()) {
-    const auto custom_env = infer_json_.at("env").get<std::map<std::string, std::string>>();
-    infer.environment.insert(custom_env.begin(), custom_env.end());
-  }
-  infer.labels = {
-      {"comet.plane", state_.plane_name},
-      {"comet.role", "infer"},
-      {"comet.node", infer.node_name},
-  };
-  if (infer_json_.contains("publish") && infer_json_.at("publish").is_array()) {
-    for (const auto& port_json : infer_json_.at("publish")) {
-      infer.published_ports.push_back(PublishedPort{
-          port_json.value("host_ip", std::string("127.0.0.1")),
-          port_json.value("host_port", 0),
-          port_json.value("container_port", 0),
-      });
-    }
-  }
-  state_.instances.push_back(infer);
+  const int infer_count =
+      state_.inference.runtime_engine == "llama.cpp" &&
+              state_.inference.distributed_backend == "llama_rpc" &&
+              InferReplicaCount() > 1
+          ? InferReplicaCount() + 1
+          : 1;
+  std::vector<InstanceSpec> rendered_infers;
+  rendered_infers.reserve(infer_count);
 
-  DiskSpec infer_private_disk;
-  infer_private_disk.name = infer.private_disk_name;
-  infer_private_disk.kind = DiskKind::InferPrivate;
-  infer_private_disk.plane_name = state_.plane_name;
-  infer_private_disk.owner_name = infer.name;
-  infer_private_disk.node_name = infer.node_name;
-  infer_private_disk.host_path = BuildInstancePrivateHostPath(infer.name);
-  infer_private_disk.container_path =
-      ExtractPrivateMountPath(infer_json_, "/comet/private", "volumes");
-  infer_private_disk.size_gb = infer.private_disk_size_gb;
-  state_.disks.push_back(std::move(infer_private_disk));
+  for (int infer_index = 0; infer_index < infer_count; ++infer_index) {
+    InstanceSpec infer;
+    infer.name = BuildInferInstanceName(infer_index);
+    infer.role = InstanceRole::Infer;
+    infer.plane_name = state_.plane_name;
+    infer.node_name = ResolveInferNodeName(infer_index);
+    infer.image = infer_json_.value("image", std::string("comet/infer-runtime:dev"));
+    infer.command =
+        BuildCommandFromStartSpec(infer_json_.value("start", nlohmann::json::object()),
+                                  "/runtime/infer/entrypoint.sh");
+    infer.private_disk_name = infer.name + "-private";
+    infer.shared_disk_name = state_.plane_shared_disk_name;
+    infer.private_disk_size_gb =
+        ExtractPrivateDiskSizeGb(infer_json_, kDefaultInferPrivateDiskSizeGb, "volumes");
+    infer.environment = {
+        {"COMET_PLANE_NAME", state_.plane_name},
+        {"COMET_INSTANCE_NAME", infer.name},
+        {"COMET_INSTANCE_ROLE", "infer"},
+        {"COMET_NODE_NAME", infer.node_name},
+        {"COMET_INFER_BOOT_MODE", "launch-runtime"},
+        {"COMET_INFER_RUNTIME_BACKEND", DefaultInferRuntimeBackend()},
+        {"COMET_CONTROLLER_URL", "http://controller.internal:18080"},
+        {"COMET_CONTROL_ROOT", state_.control_root},
+        {"COMET_INFER_RUNTIME_CONFIG",
+         InferRuntimeConfigControlPath(state_.control_root, infer.name)},
+        {"COMET_INFERENCE_PORT", std::to_string(BuildInferApiPort(infer_index))},
+        {"COMET_GATEWAY_PORT", std::to_string(BuildInferGatewayPort(infer_index))},
+        {"COMET_LLAMA_PORT", std::to_string(BuildInferLlamaPort(infer_index))},
+        {"COMET_SHARED_DISK_PATH", "/comet/shared"},
+        {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
+    };
+    if (infer_json_.contains("env") && infer_json_.at("env").is_object()) {
+      const auto custom_env = infer_json_.at("env").get<std::map<std::string, std::string>>();
+      for (const auto& [key, value] : custom_env) {
+        infer.environment[key] = value;
+      }
+    }
+    infer.labels = {
+        {"comet.plane", state_.plane_name},
+        {"comet.role", "infer"},
+        {"comet.node", infer.node_name},
+    };
+    if (infer_json_.contains("publish") && infer_json_.at("publish").is_array()) {
+      for (const auto& port_json : infer_json_.at("publish")) {
+        infer.published_ports.push_back(PublishedPort{
+            port_json.value("host_ip", std::string("127.0.0.1")),
+            port_json.value("host_port", 0),
+            port_json.value("container_port", 0),
+        });
+      }
+    }
+    infer_names_.push_back(infer.name);
+    rendered_infers.push_back(std::move(infer));
+  }
+
+  if (rendered_infers.size() > 1) {
+    rendered_infers.front().environment["COMET_REPLICA_UPSTREAMS"] =
+        BuildReplicaUpstreams(rendered_infers);
+  }
+
+  for (const auto& infer : rendered_infers) {
+    state_.instances.push_back(infer);
+
+    DiskSpec infer_private_disk;
+    infer_private_disk.name = infer.private_disk_name;
+    infer_private_disk.kind = DiskKind::InferPrivate;
+    infer_private_disk.plane_name = state_.plane_name;
+    infer_private_disk.owner_name = infer.name;
+    infer_private_disk.node_name = infer.node_name;
+    infer_private_disk.host_path = BuildInstancePrivateHostPath(infer.name);
+    infer_private_disk.container_path =
+        ExtractPrivateMountPath(infer_json_, "/comet/private", "volumes");
+    infer_private_disk.size_gb = infer.private_disk_size_gb;
+    state_.disks.push_back(std::move(infer_private_disk));
+  }
 }
 
 void DesiredStateV2Renderer::RenderWorkerInstances() {
@@ -348,14 +375,25 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
         {"COMET_INSTANCE_ROLE", "worker"},
         {"COMET_NODE_NAME", worker.node_name},
         {"COMET_WORKER_BOOT_MODE", DefaultWorkerBootMode()},
+        {"COMET_INFER_INSTANCE_NAME", InferInstanceNameForWorker(worker_index)},
         {"COMET_CONTROL_ROOT", state_.control_root},
+        {"COMET_DISTRIBUTED_BACKEND", state_.inference.distributed_backend},
         {"COMET_SHARED_DISK_PATH", "/comet/shared"},
         {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
         {"COMET_WORKER_RUNTIME_STATUS_PATH", "/comet/private/worker-runtime-status.json"},
     };
+    if (state_.inference.distributed_backend == "llama_rpc") {
+      const int rpc_port = state_.worker_group.rendezvous_port + 100 + worker_index;
+      worker.environment["COMET_WORKER_RPC_PORT"] = std::to_string(rpc_port);
+      worker.environment["COMET_WORKER_RPC_HOST"] = "0.0.0.0";
+      worker.environment["COMET_WORKER_RPC_ENDPOINT"] =
+          worker.name + ":" + std::to_string(rpc_port);
+    }
     if (worker_json_.contains("env") && worker_json_.at("env").is_object()) {
       const auto custom_env = worker_json_.at("env").get<std::map<std::string, std::string>>();
-      worker.environment.insert(custom_env.begin(), custom_env.end());
+      for (const auto& [key, value] : custom_env) {
+        worker.environment[key] = value;
+      }
     }
     worker.labels = {
         {"comet.plane", state_.plane_name},
@@ -372,6 +410,35 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
       }
     }
     state_.instances.push_back(worker);
+
+    if (state_.inference.distributed_backend == "llama_rpc") {
+      WorkerGroupMemberSpec member;
+      member.name = worker.name;
+      member.infer_instance_name = InferInstanceNameForWorker(worker_index);
+      member.node_name = worker.node_name;
+      member.gpu_device = worker.gpu_device.value_or("");
+      member.rpc_port = std::stoi(worker.environment.at("COMET_WORKER_RPC_PORT"));
+      member.rank = worker_index;
+      member.replica_group_id = member.infer_instance_name.empty() ? worker.name : member.infer_instance_name;
+      const int replica_groups = std::max(1, InferReplicaCount());
+      const int workers_per_replica = std::max(1, total_workers / replica_groups);
+      member.replica_index = std::min(replica_groups - 1, worker_index / workers_per_replica);
+      member.replica_size = workers_per_replica;
+      member.replica_leader = (worker_index % workers_per_replica) == 0;
+      member.data_parallel_rank = member.replica_index;
+      member.data_parallel_size = replica_groups;
+      member.data_parallel_size_local = 1;
+      member.data_parallel_start_rank = member.replica_index;
+      member.data_parallel_api_endpoint = false;
+      member.gpu_fraction = worker.gpu_fraction;
+      member.share_mode = worker.share_mode;
+      member.priority = worker.priority;
+      member.preemptible = worker.preemptible;
+      member.memory_cap_mb = worker.memory_cap_mb;
+      member.enabled = true;
+      member.leader = member.replica_leader && member.replica_index == 0;
+      state_.worker_group.members.push_back(std::move(member));
+    }
 
     DiskSpec worker_private_disk;
     worker_private_disk.name = worker.private_disk_name;
@@ -410,8 +477,8 @@ void DesiredStateV2Renderer::RenderAppInstance() {
   }
   app.private_disk_name = app.name + "-private";
   app.shared_disk_name = state_.plane_shared_disk_name;
-  if (infer_name_.has_value()) {
-    app.depends_on.push_back(*infer_name_);
+  if (!infer_names_.empty()) {
+    app.depends_on.push_back(infer_names_.front());
   }
   if (app_json_.contains("env") && app_json_.at("env").is_object()) {
     app.environment = app_json_.at("env").get<std::map<std::string, std::string>>();
@@ -461,6 +528,14 @@ bool DesiredStateV2Renderer::InferEnabled() const {
           state_.inference.runtime_engine == "llama.cpp");
 }
 
+int DesiredStateV2Renderer::InferReplicaCount() const {
+  if (!(state_.inference.runtime_engine == "llama.cpp" &&
+        state_.inference.distributed_backend == "llama_rpc")) {
+    return 1;
+  }
+  return std::max(1, infer_json_.value("replicas", 1));
+}
+
 int DesiredStateV2Renderer::WorkerCount() const {
   return value_.at("runtime").value("workers", 1);
 }
@@ -477,8 +552,23 @@ int DesiredStateV2Renderer::ExpectedWorkers() const {
 }
 
 std::string DesiredStateV2Renderer::ResolveInferNodeName() const {
+  return ResolveInferNodeName(0);
+}
+
+std::string DesiredStateV2Renderer::ResolveInferNodeName(int infer_index) const {
   if (infer_json_.contains("node") && infer_json_.at("node").is_string()) {
     return RequireNode(infer_json_.at("node").get<std::string>(), "infer").name;
+  }
+  if (InferReplicaCount() > 1 && infer_index > 0) {
+    const int replica_index = infer_index - 1;
+    const int workers_per_replica = std::max(1, WorkerCount() / InferReplicaCount());
+    const int worker_index = std::min(WorkerCount() - 1, replica_index * workers_per_replica);
+    return ResolveWorkerNodeName(worker_index);
+  }
+  for (const auto& node : state_.nodes) {
+    if (node.execution_mode != HostExecutionMode::WorkerOnly) {
+      return node.name;
+    }
   }
   return DefaultNodeName();
 }
@@ -563,8 +653,60 @@ std::string DesiredStateV2Renderer::BuildPlaneSharedDiskName() const {
   return "plane-" + state_.plane_name + "-shared";
 }
 
-std::string DesiredStateV2Renderer::BuildInferInstanceName() const {
-  return "infer-" + state_.plane_name;
+std::string DesiredStateV2Renderer::BuildInferInstanceName(int infer_index) const {
+  if (InferReplicaCount() <= 1 || infer_index == 0) {
+    return "infer-" + state_.plane_name;
+  }
+  return "infer-" + state_.plane_name + "-" + static_cast<char>('a' + (infer_index - 1));
+}
+
+int DesiredStateV2Renderer::BuildInferApiPort(int infer_index) const {
+  return state_.inference.api_port + infer_index;
+}
+
+int DesiredStateV2Renderer::BuildInferGatewayPort(int infer_index) const {
+  return state_.gateway.listen_port + infer_index;
+}
+
+int DesiredStateV2Renderer::BuildInferLlamaPort(int infer_index) const {
+  return state_.inference.llama_port + infer_index;
+}
+
+std::string DesiredStateV2Renderer::BuildReplicaUpstreams(
+    const std::vector<InstanceSpec>& infer_instances) const {
+  if (infer_instances.size() <= 1) {
+    return {};
+  }
+  const std::string primary_node = infer_instances.front().node_name;
+  std::vector<std::string> upstreams;
+  upstreams.reserve(infer_instances.size() - 1);
+  for (std::size_t index = 1; index < infer_instances.size(); ++index) {
+    const auto& infer = infer_instances[index];
+    const auto port_it = infer.environment.find("COMET_GATEWAY_PORT");
+    const int port = port_it == infer.environment.end() ? state_.gateway.listen_port
+                                                        : std::stoi(port_it->second);
+    const std::string host =
+        infer.node_name == primary_node ? infer.name : infer.node_name;
+    upstreams.push_back("http://" + host + ":" + std::to_string(port));
+  }
+  std::string result;
+  for (std::size_t index = 0; index < upstreams.size(); ++index) {
+    if (index > 0) {
+      result += ",";
+    }
+    result += upstreams[index];
+  }
+  return result;
+}
+
+std::string DesiredStateV2Renderer::InferInstanceNameForWorker(int worker_index) const {
+  if (InferReplicaCount() <= 1 || infer_names_.empty()) {
+    return BuildInferInstanceName();
+  }
+  const int workers_per_replica = std::max(1, WorkerCount() / InferReplicaCount());
+  const int replica_index = std::min(InferReplicaCount() - 1, worker_index / workers_per_replica);
+  const int infer_index = std::min(static_cast<int>(infer_names_.size()) - 1, replica_index + 1);
+  return infer_names_.at(infer_index);
 }
 
 std::string DesiredStateV2Renderer::BuildAppInstanceName() const {
@@ -610,11 +752,25 @@ std::string DesiredStateV2Renderer::BuildCommandFromStartSpec(
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {
-  return state_.inference.runtime_engine == "vllm" ? "worker-vllm" : "auto";
+  if (state_.inference.runtime_engine == "vllm") {
+    return "worker-vllm";
+  }
+  if (state_.inference.runtime_engine == "llama.cpp" &&
+      state_.inference.distributed_backend == "llama_rpc") {
+    return "llama-rpc-head";
+  }
+  return "auto";
 }
 
 std::string DesiredStateV2Renderer::DefaultWorkerBootMode() const {
-  return state_.inference.runtime_engine == "vllm" ? "vllm-openai" : "llama-load";
+  if (state_.inference.runtime_engine == "vllm") {
+    return "vllm-openai";
+  }
+  if (state_.inference.runtime_engine == "llama.cpp" &&
+      state_.inference.distributed_backend == "llama_rpc") {
+    return "llama-rpc";
+  }
+  return "llama-idle";
 }
 
 void DesiredStateV2Renderer::NormalizeInferenceSettings() {
@@ -623,7 +779,8 @@ void DesiredStateV2Renderer::NormalizeInferenceSettings() {
     settings.worker_group_id = "default-worker-group";
   }
   if (settings.distributed_backend.empty()) {
-    settings.distributed_backend = "vllm";
+    settings.distributed_backend =
+        settings.runtime_engine == "vllm" ? "vllm" : "local";
   }
   if (settings.data_parallel_mode.empty()) {
     settings.data_parallel_mode = kDataParallelModeOff;

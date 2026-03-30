@@ -248,6 +248,78 @@ def apply_vllm_native_external_lb_hotfix() -> None:
             "\n"
             "        self._ensure_output_queue_task()\n"
         )
+        dp_add_request_fixed_v1 = (
+            "    async def add_request_async(self, request: EngineCoreRequest) -> None:\n"
+            "        self._ensure_stats_update_task()\n"
+            "\n"
+            "        request.current_wave = self.current_wave\n"
+            "        request.client_index = self.client_index\n"
+            "\n"
+            "        chosen_engine = self.get_core_engine_for_request(request)\n"
+            "        to_await = self._send_input(EngineCoreRequestType.ADD, request, chosen_engine)\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] dp-add-request req={request.request_id} \"\n"
+            "            f\"wave={self.current_wave} engine={chosen_engine} \"\n"
+            "            f\"engines_running={self.engines_running}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "        pending_sends = getattr(self, \"_comet_pending_send_futures\", None)\n"
+            "        if pending_sends is None:\n"
+            "            pending_sends = set()\n"
+            "            self._comet_pending_send_futures = pending_sends\n"
+            "\n"
+            "        def _track_send_future(label, fut):\n"
+            "            if not hasattr(fut, \"add_done_callback\"):\n"
+            "                return\n"
+            "            pending_sends.add(fut)\n"
+            "            def _done(done_fut):\n"
+            "                pending_sends.discard(done_fut)\n"
+            "                try:\n"
+            "                    done_fut.result()\n"
+            "                    print(\n"
+            "                        f\"[comet-worker-debug] {label}-done req={request.request_id}\",\n"
+            "                        flush=True,\n"
+            "                    )\n"
+            "                except Exception:\n"
+            "                    logger.exception(f\"External DP {label} failed\")\n"
+            "            fut.add_done_callback(_done)\n"
+            "\n"
+            "        # Notify coordinator on every routed request so that stale\n"
+            "        # engines_running state cannot suppress the wake-up wave.\n"
+            "        # In practice the asyncio PAIR socket can hang forever here\n"
+            "        # even though the matching recv side is active, so prefer a\n"
+            "        # shadowed synchronous socket for the inproc wake-up marker.\n"
+            "        req_msg = msgspec.msgpack.encode((\"FIRST_REQ\", chosen_engine))\n"
+            "        try:\n"
+            "            sync_first_req_socket = getattr(\n"
+            "                self, \"_comet_first_req_send_socket_sync\", None\n"
+            "            )\n"
+            "            if sync_first_req_socket is None:\n"
+            "                underlying = getattr(\n"
+            "                    self.first_req_send_socket, \"underlying\", None\n"
+            "                )\n"
+            "                if underlying is not None:\n"
+            "                    sync_first_req_socket = zmq.Socket.shadow(underlying)\n"
+            "                    self._comet_first_req_send_socket_sync = (\n"
+            "                        sync_first_req_socket\n"
+            "                    )\n"
+            "            if sync_first_req_socket is not None:\n"
+            "                sync_first_req_socket.send(req_msg, flags=zmq.DONTWAIT)\n"
+            "            else:\n"
+            "                await asyncio.wait_for(\n"
+            "                    self.first_req_send_socket.send(req_msg), timeout=1.0\n"
+            "                )\n"
+            "            print(\n"
+            "                f\"[comet-worker-debug] first-req-send-done req={request.request_id}\",\n"
+            "                flush=True,\n"
+            "            )\n"
+            "        except Exception:\n"
+            "            logger.exception(\"External DP first-req-send failed\")\n"
+            "\n"
+            "        _track_send_future(\"routed-add-send\", to_await)\n"
+            "\n"
+            "        self._ensure_output_queue_task()\n"
+        )
         dp_add_request_fixed = (
             "    async def add_request_async(self, request: EngineCoreRequest) -> None:\n"
             "        self._ensure_stats_update_task()\n"
@@ -286,16 +358,46 @@ def apply_vllm_native_external_lb_hotfix() -> None:
             "\n"
             "        # Notify coordinator on every routed request so that stale\n"
             "        # engines_running state cannot suppress the wake-up wave.\n"
+            "        # In practice the asyncio PAIR socket can hang forever here\n"
+            "        # even though the matching recv side is active, so prefer a\n"
+            "        # shadowed synchronous socket for the inproc wake-up marker.\n"
             "        req_msg = msgspec.msgpack.encode((\"FIRST_REQ\", chosen_engine))\n"
             "        try:\n"
-            "            self.first_req_send_socket.send(req_msg, flags=zmq.DONTWAIT)\n"
+            "            sent_first_req = False\n"
+            "            for _ in range(50):\n"
+            "                sync_first_req_socket = getattr(\n"
+            "                    self, \"_comet_first_req_send_socket_sync\", None\n"
+            "                )\n"
+            "                if sync_first_req_socket is None:\n"
+            "                    underlying = getattr(\n"
+            "                        self.first_req_send_socket, \"underlying\", None\n"
+            "                    )\n"
+            "                    if underlying is not None:\n"
+            "                        sync_first_req_socket = zmq.Socket.shadow(underlying)\n"
+            "                        self._comet_first_req_send_socket_sync = (\n"
+            "                            sync_first_req_socket\n"
+            "                        )\n"
+            "                try:\n"
+            "                    if sync_first_req_socket is not None:\n"
+            "                        sync_first_req_socket.send(req_msg, flags=zmq.DONTWAIT)\n"
+            "                    else:\n"
+            "                        await asyncio.wait_for(\n"
+            "                            self.first_req_send_socket.send(req_msg), timeout=1.0\n"
+            "                        )\n"
+            "                    sent_first_req = True\n"
+            "                    break\n"
+            "                except zmq.Again:\n"
+            "                    await asyncio.sleep(0.02)\n"
+            "            if not sent_first_req:\n"
+            "                raise TimeoutError(\n"
+            "                    \"timed out waiting for external DP first-req receiver\"\n"
+            "                )\n"
             "            print(\n"
             "                f\"[comet-worker-debug] first-req-send-done req={request.request_id}\",\n"
             "                flush=True,\n"
             "            )\n"
-            "        except zmq.Again:\n"
-            "            first_req_future = self.first_req_send_socket.send(req_msg)\n"
-            "            _track_send_future(\"first-req-send\", first_req_future)\n"
+            "        except Exception:\n"
+            "            logger.exception(\"External DP first-req-send failed\")\n"
             "\n"
             "        _track_send_future(\"routed-add-send\", to_await)\n"
             "\n"
@@ -304,6 +406,231 @@ def apply_vllm_native_external_lb_hotfix() -> None:
         if dp_add_request_fixed not in source and dp_add_request_buggy in source:
             core_client_py.write_text(
                 source.replace(dp_add_request_buggy, dp_add_request_fixed, 1)
+            )
+            source = core_client_py.read_text()
+            patched = True
+        elif dp_add_request_fixed not in source and dp_add_request_fixed_v1 in source:
+            core_client_py.write_text(
+                source.replace(dp_add_request_fixed_v1, dp_add_request_fixed, 1)
+            )
+            source = core_client_py.read_text()
+            patched = True
+
+        utility_async_buggy = (
+            "    async def _call_utility_async(\n"
+            "        self, method: str, *args, engine: EngineIdentity\n"
+            "    ) -> Any:\n"
+            "        call_id = uuid.uuid1().int >> 64\n"
+            "        future = asyncio.get_running_loop().create_future()\n"
+            "        self.utility_results[call_id] = future\n"
+            "        message = (\n"
+            "            EngineCoreRequestType.UTILITY.value,\n"
+            "            *self.encoder.encode((self.client_index, call_id, method, args)),\n"
+            "        )\n"
+            "        await self._send_input_message(message, engine, args)\n"
+            "        self._ensure_output_queue_task()\n"
+            "        return await future\n"
+        )
+        utility_async_fixed = (
+            "    async def _call_utility_async(\n"
+            "        self, method: str, *args, engine: EngineIdentity\n"
+            "    ) -> Any:\n"
+            "        call_id = uuid.uuid1().int >> 64\n"
+            "        future = asyncio.get_running_loop().create_future()\n"
+            "        self.utility_results[call_id] = future\n"
+            "        message = (\n"
+            "            EngineCoreRequestType.UTILITY.value,\n"
+            "            *self.encoder.encode((self.client_index, call_id, method, args)),\n"
+            "        )\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] utility-send method={method} call_id={call_id} engine={engine}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "        await self._send_input_message(message, engine, args)\n"
+            "        self._ensure_output_queue_task()\n"
+            "        result = await future\n"
+            "        print(\n"
+            "            f\"[comet-worker-debug] utility-done method={method} call_id={call_id}\",\n"
+            "            flush=True,\n"
+            "        )\n"
+            "        return result\n"
+        )
+        if utility_async_fixed not in source and utility_async_buggy in source:
+            core_client_py.write_text(
+                source.replace(utility_async_buggy, utility_async_fixed, 1)
+            )
+            source = core_client_py.read_text()
+            patched = True
+
+        elastic_scale_send_buggy = (
+            "        await self.first_req_send_socket.send(scale_up_marker)\n"
+        )
+        elastic_scale_send_fixed_v1 = (
+            "        sync_first_req_socket = getattr(\n"
+            "            self, \"_comet_first_req_send_socket_sync\", None\n"
+            "        )\n"
+            "        if sync_first_req_socket is None:\n"
+            "            underlying = getattr(self.first_req_send_socket, \"underlying\", None)\n"
+            "            if underlying is not None:\n"
+            "                sync_first_req_socket = zmq.Socket.shadow(underlying)\n"
+            "                self._comet_first_req_send_socket_sync = sync_first_req_socket\n"
+            "        if sync_first_req_socket is not None:\n"
+            "            sync_first_req_socket.send(scale_up_marker, flags=zmq.DONTWAIT)\n"
+            "        else:\n"
+            "            await self.first_req_send_socket.send(scale_up_marker)\n"
+        )
+        elastic_scale_send_fixed = (
+            "        sync_first_req_socket = getattr(\n"
+            "            self, \"_comet_first_req_send_socket_sync\", None\n"
+            "        )\n"
+            "        if sync_first_req_socket is None:\n"
+            "            underlying = getattr(self.first_req_send_socket, \"underlying\", None)\n"
+            "            if underlying is not None:\n"
+            "                sync_first_req_socket = zmq.Socket.shadow(underlying)\n"
+            "                self._comet_first_req_send_socket_sync = sync_first_req_socket\n"
+            "        sent_scale_up_marker = False\n"
+            "        for _ in range(50):\n"
+            "            try:\n"
+            "                if sync_first_req_socket is not None:\n"
+            "                    sync_first_req_socket.send(scale_up_marker, flags=zmq.DONTWAIT)\n"
+            "                else:\n"
+            "                    await self.first_req_send_socket.send(scale_up_marker)\n"
+            "                sent_scale_up_marker = True\n"
+            "                break\n"
+            "            except zmq.Again:\n"
+            "                await asyncio.sleep(0.02)\n"
+            "        if not sent_scale_up_marker:\n"
+            "            raise TimeoutError(\n"
+            "                \"timed out waiting for external DP scale-up receiver\"\n"
+            "            )\n"
+        )
+        if elastic_scale_send_fixed not in source and elastic_scale_send_buggy in source:
+            core_client_py.write_text(
+                source.replace(elastic_scale_send_buggy, elastic_scale_send_fixed)
+            )
+            source = core_client_py.read_text()
+            patched = True
+        elif (
+            elastic_scale_send_fixed not in source
+            and elastic_scale_send_fixed_v1 in source
+        ):
+            core_client_py.write_text(
+                source.replace(elastic_scale_send_fixed_v1, elastic_scale_send_fixed)
+            )
+            source = core_client_py.read_text()
+            patched = True
+
+        elastic_scale_down_buggy = (
+            "        await self.first_req_send_socket.send(scale_down_marker)\n"
+        )
+        elastic_scale_down_fixed_v1 = (
+            "        sync_first_req_socket = getattr(\n"
+            "            self, \"_comet_first_req_send_socket_sync\", None\n"
+            "        )\n"
+            "        if sync_first_req_socket is None:\n"
+            "            underlying = getattr(self.first_req_send_socket, \"underlying\", None)\n"
+            "            if underlying is not None:\n"
+            "                sync_first_req_socket = zmq.Socket.shadow(underlying)\n"
+            "                self._comet_first_req_send_socket_sync = sync_first_req_socket\n"
+            "        if sync_first_req_socket is not None:\n"
+            "            sync_first_req_socket.send(scale_down_marker, flags=zmq.DONTWAIT)\n"
+            "        else:\n"
+            "            await self.first_req_send_socket.send(scale_down_marker)\n"
+        )
+        elastic_scale_down_fixed = (
+            "        sync_first_req_socket = getattr(\n"
+            "            self, \"_comet_first_req_send_socket_sync\", None\n"
+            "        )\n"
+            "        if sync_first_req_socket is None:\n"
+            "            underlying = getattr(self.first_req_send_socket, \"underlying\", None)\n"
+            "            if underlying is not None:\n"
+            "                sync_first_req_socket = zmq.Socket.shadow(underlying)\n"
+            "                self._comet_first_req_send_socket_sync = sync_first_req_socket\n"
+            "        sent_scale_down_marker = False\n"
+            "        for _ in range(50):\n"
+            "            try:\n"
+            "                if sync_first_req_socket is not None:\n"
+            "                    sync_first_req_socket.send(scale_down_marker, flags=zmq.DONTWAIT)\n"
+            "                else:\n"
+            "                    await self.first_req_send_socket.send(scale_down_marker)\n"
+            "                sent_scale_down_marker = True\n"
+            "                break\n"
+            "            except zmq.Again:\n"
+            "                await asyncio.sleep(0.02)\n"
+            "        if not sent_scale_down_marker:\n"
+            "            raise TimeoutError(\n"
+            "                \"timed out waiting for external DP scale-down receiver\"\n"
+            "            )\n"
+        )
+        if elastic_scale_down_fixed not in source and elastic_scale_down_buggy in source:
+            core_client_py.write_text(
+                source.replace(elastic_scale_down_buggy, elastic_scale_down_fixed)
+            )
+            source = core_client_py.read_text()
+            patched = True
+        elif (
+            elastic_scale_down_fixed not in source
+            and elastic_scale_down_fixed_v1 in source
+        ):
+            core_client_py.write_text(
+                source.replace(
+                    elastic_scale_down_fixed_v1, elastic_scale_down_fixed
+                )
+            )
+            source = core_client_py.read_text()
+            patched = True
+
+        utility_output_buggy = (
+            "def _process_utility_output(\n"
+            "    output: UtilityOutput, utility_results: dict[int, AnyFuture]\n"
+            "):\n"
+            "    \"\"\"Set the result from a utility method in the waiting future.\"\"\"\n"
+            "    future = utility_results.pop(output.call_id)\n"
+            "    failure_message = output.failure_message\n"
+            "    try:\n"
+            "        if failure_message is not None:\n"
+            "            future.set_exception(Exception(failure_message))\n"
+            "        else:\n"
+            "            assert output.result is not None\n"
+            "            future.set_result(output.result.result)\n"
+            "    except asyncio.InvalidStateError:\n"
+            "        # This can happen if the future is cancelled due to the\n"
+            "        # original calling task being cancelled.\n"
+            "        if failure_message is not None:\n"
+            "            logger.error(\n"
+            "                \"Cancelled call to utility method failed with error: %s\",\n"
+            "                failure_message,\n"
+            "            )\n"
+        )
+        utility_output_fixed = (
+            "def _process_utility_output(\n"
+            "    output: UtilityOutput, utility_results: dict[int, AnyFuture]\n"
+            "):\n"
+            "    \"\"\"Set the result from a utility method in the waiting future.\"\"\"\n"
+            "    print(\n"
+            "        f\"[comet-worker-debug] utility-output call_id={output.call_id} has_failure={output.failure_message is not None}\",\n"
+            "        flush=True,\n"
+            "    )\n"
+            "    future = utility_results.pop(output.call_id)\n"
+            "    failure_message = output.failure_message\n"
+            "    try:\n"
+            "        if failure_message is not None:\n"
+            "            future.set_exception(Exception(failure_message))\n"
+            "        else:\n"
+            "            assert output.result is not None\n"
+            "            future.set_result(output.result.result)\n"
+            "    except asyncio.InvalidStateError:\n"
+            "        # This can happen if the future is cancelled due to the\n"
+            "        # original calling task being cancelled.\n"
+            "        if failure_message is not None:\n"
+            "            logger.error(\n"
+            "                \"Cancelled call to utility method failed with error: %s\",\n"
+            "                failure_message,\n"
+            "            )\n"
+        )
+        if utility_output_fixed not in source and utility_output_buggy in source:
+            core_client_py.write_text(
+                source.replace(utility_output_buggy, utility_output_fixed, 1)
             )
             patched = True
 
@@ -602,6 +929,29 @@ def apply_vllm_native_external_lb_hotfix() -> None:
         if final_res_debug not in source and final_res_line in source:
             chat_serving_py.write_text(
                 source.replace(final_res_line, final_res_debug, 1)
+            )
+            patched = True
+
+    api_server_py = Path(
+        "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/api_server.py"
+    )
+    if api_server_py.is_file():
+        source = api_server_py.read_text()
+        build_and_serve_buggy = (
+            "    supported_tasks = await engine_client.get_supported_tasks()\n"
+            "    logger.info(\"Supported tasks: %s\", supported_tasks)\n"
+            "    app = build_app(args, supported_tasks)\n"
+        )
+        build_and_serve_fixed = (
+            "    logger.info(\"[comet-worker-debug] before get_supported_tasks\")\n"
+            "    supported_tasks = await engine_client.get_supported_tasks()\n"
+            "    logger.info(\"[comet-worker-debug] after get_supported_tasks: %s\", supported_tasks)\n"
+            "    logger.info(\"Supported tasks: %s\", supported_tasks)\n"
+            "    app = build_app(args, supported_tasks)\n"
+        )
+        if build_and_serve_fixed not in source and build_and_serve_buggy in source:
+            api_server_py.write_text(
+                source.replace(build_and_serve_buggy, build_and_serve_fixed, 1)
             )
             patched = True
 

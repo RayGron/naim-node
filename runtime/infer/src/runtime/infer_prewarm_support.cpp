@@ -333,16 +333,6 @@ PrewarmState PrewarmReadyReplicaLeaders(const RuntimeConfig& config) {
     return state;
   }
 
-  const bool native_external_lb =
-      config.data_parallel_mode == "vllm_native" &&
-      config.data_parallel_lb_mode == "external";
-  if (native_external_lb) {
-    SavePrewarmedBaseUrls(config, state.ready_base_urls);
-    state.prewarmed_base_urls = state.ready_base_urls;
-    state.prewarmed_upstreams = state.ready_upstreams;
-    return state;
-  }
-
   std::set<std::string> prewarmed = LoadPrewarmedBaseUrlSet(config);
   std::vector<std::string> updated_base_urls;
   updated_base_urls.reserve(state.ready_base_urls.size());

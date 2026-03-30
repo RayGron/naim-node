@@ -19,6 +19,7 @@ struct ReplicaGroupSummary {
   int ready_replica_groups = 0;
   int degraded_replica_groups = 0;
   int ready_worker_members = 0;
+  int expected_worker_members = 0;
   int expected_api_endpoints = 0;
   int ready_api_endpoints = 0;
   int data_parallel_size = 0;
@@ -35,15 +36,53 @@ std::string HybridReplicaGroupKey(const comet::WorkerGroupMemberSpec& member) {
 ReplicaGroupSummary SummarizeReplicaGroups(
     const comet::DesiredState& desired_state,
     const std::vector<comet::RuntimeProcessStatus>& instance_statuses) {
+  const bool llama_rpc_runtime =
+      desired_state.inference.runtime_engine == "llama.cpp" &&
+      desired_state.inference.distributed_backend == "llama_rpc";
   const bool hybrid_data_parallel =
       comet::DataParallelEnabled(desired_state.inference) &&
       desired_state.inference.data_parallel_lb_mode == comet::kDataParallelLbModeHybrid;
   ReplicaGroupSummary summary;
+  if (llama_rpc_runtime) {
+    std::map<std::string, std::pair<int, int>> groups;
+    for (const auto& member : desired_state.worker_group.members) {
+      if (!member.enabled) {
+        continue;
+      }
+      ++summary.expected_worker_members;
+      const std::string group_key =
+          member.infer_instance_name.empty() ? desired_state.worker_group.infer_instance_name
+                                             : member.infer_instance_name;
+      auto& group = groups[group_key];
+      ++group.first;
+      const auto status_it = std::find_if(
+          instance_statuses.begin(),
+          instance_statuses.end(),
+          [&](const comet::RuntimeProcessStatus& status) {
+            return status.instance_name == member.name;
+          });
+      if (status_it != instance_statuses.end() && status_it->ready) {
+        ++summary.ready_worker_members;
+        ++group.second;
+      }
+    }
+    summary.expected_replica_groups = static_cast<int>(groups.size());
+    for (const auto& [_, group] : groups) {
+      if (group.second >= group.first && group.first > 0) {
+        ++summary.ready_replica_groups;
+      } else {
+        ++summary.degraded_replica_groups;
+      }
+    }
+    return summary;
+  }
+
   std::map<std::string, std::pair<int, int>> groups;
   for (const auto& member : desired_state.worker_group.members) {
     if (!member.enabled) {
       continue;
     }
+    ++summary.expected_worker_members;
     const std::string key = hybrid_data_parallel
                                 ? HybridReplicaGroupKey(member)
                                 : (member.replica_group_id.empty() ? std::string("replica-0")
@@ -205,9 +244,12 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   runtime.data_parallel_lb_mode = desired_state.inference.data_parallel_lb_mode;
   runtime.data_parallel_size = replica_summary.data_parallel_size;
   runtime.data_parallel_size_local_max = replica_summary.data_parallel_size_local_max;
-  runtime.runtime_backend =
-      desired_state.inference.runtime_engine == "vllm" ? "worker-vllm"
-                                                       : runtime.runtime_backend;
+  if (desired_state.inference.runtime_engine == "vllm") {
+    runtime.runtime_backend = "worker-vllm";
+  } else if (desired_state.inference.runtime_engine == "llama.cpp" &&
+             desired_state.inference.distributed_backend == "llama_rpc") {
+    runtime.runtime_backend = "llama-rpc-head";
+  }
   runtime.runtime_phase = infer_status->runtime_phase;
   runtime.replica_groups_expected = replica_summary.expected_replica_groups;
   runtime.replica_groups_ready = replica_summary.ready_replica_groups;
@@ -246,7 +288,10 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   runtime.inference_ready = ProbeControllerTargetOk(target, "/v1/models");
   const bool replica_topology_ready =
       replica_summary.expected_replica_groups == 0 ||
-      replica_summary.ready_replica_groups >= replica_summary.expected_replica_groups;
+      (desired_state.inference.runtime_engine == "llama.cpp" &&
+       desired_state.inference.distributed_backend == "llama_rpc"
+           ? replica_summary.ready_worker_members >= replica_summary.expected_worker_members
+           : replica_summary.ready_replica_groups >= replica_summary.expected_replica_groups);
   runtime.launch_ready =
       runtime.gateway_ready &&
       runtime.inference_ready &&

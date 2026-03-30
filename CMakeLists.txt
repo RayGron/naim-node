@@ -84,14 +84,15 @@ else()
 endif()
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static llama.cpp for comet runtime binaries" FORCE)
-set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS ON CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER ON CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
 set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+set(GGML_RPC ON CACHE BOOL "" FORCE)
 set(_comet_cuda_available OFF)
 if(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/include/cuda_runtime.h")
   set(_comet_cuda_available ON)
@@ -397,6 +398,7 @@ if(NOT WIN32)
     runtime/infer/src/runtime/infer_prewarm_support.cpp
     runtime/infer/src/runtime/infer_replica_support.cpp
     runtime/infer/src/runtime/llama_library_engine.cpp
+    runtime/infer/src/runtime/llama_rpc_runtime.cpp
     runtime/infer/src/runtime/local_runtime.cpp
     runtime/infer/src/infer_app.cpp
     runtime/infer/src/main.cpp

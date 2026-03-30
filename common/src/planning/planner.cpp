@@ -15,9 +15,14 @@ bool UsesVllmRuntime(const DesiredState& state) {
   return state.inference.runtime_engine == "vllm";
 }
 
+bool UsesLlamaRpcRuntime(const DesiredState& state) {
+  return state.inference.runtime_engine == "llama.cpp" &&
+         state.inference.distributed_backend == "llama_rpc";
+}
+
 std::optional<ComposeVolume> BuildDirectModelCacheVolume(const DesiredState& state) {
-  if (!UsesVllmRuntime(state) || !state.bootstrap_model.has_value() ||
-      !state.bootstrap_model->local_path.has_value() ||
+  if ((!UsesVllmRuntime(state) && !UsesLlamaRpcRuntime(state)) ||
+      !state.bootstrap_model.has_value() || !state.bootstrap_model->local_path.has_value() ||
       state.bootstrap_model->materialization_mode != "reference") {
     return std::nullopt;
   }
@@ -49,6 +54,30 @@ uint32_t StableWorkerPortHash(const std::string& value) {
   return hash;
 }
 
+std::optional<int> IntEnvValue(
+    const std::map<std::string, std::string>& environment,
+    const std::string& key) {
+  const auto it = environment.find(key);
+  if (it == environment.end() || it->second.empty()) {
+    return std::nullopt;
+  }
+  return std::stoi(it->second);
+}
+
+int InferApiPort(const DesiredState& state, const InstanceSpec& instance) {
+  return IntEnvValue(instance.environment, "COMET_INFERENCE_PORT").value_or(state.inference.api_port);
+}
+
+int InferGatewayPort(const DesiredState& state, const InstanceSpec& instance) {
+  return IntEnvValue(instance.environment, "COMET_GATEWAY_PORT").value_or(state.gateway.listen_port);
+}
+
+int WorkerRpcPort(const WorkerGroupMemberSpec* worker_group_member) {
+  return worker_group_member != nullptr && worker_group_member->rpc_port > 0
+             ? worker_group_member->rpc_port
+             : 50052;
+}
+
 int WorkerPublishedHostPort(
     const DesiredState& state,
     const InstanceSpec& instance) {
@@ -64,6 +93,54 @@ int WorkerInternalRuntimePort(
                               state.plane_name + ":" + instance.name + ":internal") %
       kWorkerInternalPortSpan;
   return kWorkerInternalPortBase + static_cast<int>(offset);
+}
+
+bool IsManagedInferPublishedPort(
+    const DesiredState& state,
+    const InstanceSpec& instance,
+    const PublishedPort& port) {
+  if (instance.role != InstanceRole::Infer || port.host_port != port.container_port) {
+    return false;
+  }
+  const int infer_api_port = InferApiPort(state, instance);
+  const int infer_gateway_port = InferGatewayPort(state, instance);
+  return port.host_port == infer_api_port || port.host_port == infer_gateway_port ||
+         port.host_port == state.inference.api_port ||
+         port.host_port == state.gateway.listen_port;
+}
+
+bool IsManagedLlamaRpcWorkerPublishedPort(
+    const DesiredState& state,
+    const InstanceSpec& instance,
+    const WorkerGroupMemberSpec* worker_group_member,
+    const PublishedPort& port) {
+  if (!UsesLlamaRpcRuntime(state) || instance.role != InstanceRole::Worker ||
+      port.host_port != port.container_port) {
+    return false;
+  }
+  return port.host_port == WorkerRpcPort(worker_group_member) || port.host_port == 50052;
+}
+
+bool ContainsPublishedPort(
+    const std::vector<PublishedPort>& ports,
+    const PublishedPort& needle) {
+  return std::find_if(
+             ports.begin(),
+             ports.end(),
+             [&](const PublishedPort& port) {
+               return port.host_ip == needle.host_ip &&
+                      port.host_port == needle.host_port &&
+                      port.container_port == needle.container_port;
+             }) != ports.end();
+}
+
+void AppendUniquePublishedPort(
+    std::vector<PublishedPort>* ports,
+    const PublishedPort& port) {
+  if (ports == nullptr || ContainsPublishedPort(*ports, port)) {
+    return;
+  }
+  ports->push_back(port);
 }
 
 const DiskSpec& FindDiskByName(
@@ -243,6 +320,7 @@ ComposeService BuildComposeService(
   service.command = instance.command;
   service.extra_hosts = DefaultComposeExtraHosts();
   const bool use_vllm = UsesVllmRuntime(state);
+  const bool use_llama_rpc = UsesLlamaRpcRuntime(state);
   if (use_vllm && instance.role == InstanceRole::Worker &&
       service.image == "comet/worker-runtime:dev") {
     service.image = "comet/worker-vllm-runtime:dev";
@@ -452,17 +530,30 @@ ComposeService BuildComposeService(
         }
       }
       if (data_parallel_api_endpoint || !distributed_runtime) {
-        service.published_ports.push_back(
+        AppendUniquePublishedPort(
+            &service.published_ports,
             PublishedPort{"127.0.0.1", published_host_port, state.inference.api_port});
       }
       if (distributed_runtime) {
         service.shm_size = "1gb";
       }
     }
+  } else if (use_llama_rpc && instance.role == InstanceRole::Worker) {
+    const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
+    const int rpc_port = WorkerRpcPort(worker_group_member);
+    AppendUniquePublishedPort(
+        &service.published_ports,
+        PublishedPort{"0.0.0.0", rpc_port, rpc_port});
   }
   service.labels = instance.labels;
+  const auto* worker_group_member =
+      instance.role == InstanceRole::Worker ? FindWorkerGroupMember(state, instance.name) : nullptr;
   for (const auto& port : instance.published_ports) {
-    service.published_ports.push_back(port);
+    if (IsManagedInferPublishedPort(state, instance, port) ||
+        IsManagedLlamaRpcWorkerPublishedPort(state, instance, worker_group_member, port)) {
+      continue;
+    }
+    AppendUniquePublishedPort(&service.published_ports, port);
   }
   service.gpu_device = instance.gpu_device;
   if (use_vllm && instance.role == InstanceRole::Worker &&
@@ -475,7 +566,8 @@ ComposeService BuildComposeService(
       }
     }
   }
-  if (!service.gpu_device.has_value() && instance.role == InstanceRole::Infer && !use_vllm) {
+  if (!service.gpu_device.has_value() && instance.role == InstanceRole::Infer && !use_vllm &&
+      !use_llama_rpc) {
     const auto local_gpu_worker = std::find_if(
         node_instances.begin(),
         node_instances.end(),
@@ -501,9 +593,10 @@ ComposeService BuildComposeService(
       service.environment["NVIDIA_VISIBLE_DEVICES"] = *service.gpu_device;
     }
     service.security_opts.push_back("apparmor=unconfined");
-  } else if (use_vllm && instance.role == InstanceRole::Infer) {
-    // vLLM-backed infer still links against CUDA-enabled binaries, so expose driver
-    // libraries without claiming a device on infer-only hosts.
+  } else if ((use_vllm || use_llama_rpc) && instance.role == InstanceRole::Infer) {
+    // vLLM-backed and llama.cpp RPC-backed infer binaries can link against CUDA-enabled
+    // llama.cpp objects even when the infer role itself does not own a GPU. Expose the
+    // driver libraries without claiming a device on infer-only hosts.
     service.use_nvidia_runtime = true;
     service.environment["NVIDIA_VISIBLE_DEVICES"] = "none";
     service.environment["NVIDIA_DRIVER_CAPABILITIES"] = "compute,utility";
@@ -518,10 +611,14 @@ ComposeService BuildComposeService(
                                    ? "CMD-SHELL curl -fsS http://127.0.0.1:$${PORT:-8080}/health >/dev/null"
                                    : "CMD-SHELL test -f /tmp/comet-ready");
   if (instance.role == InstanceRole::Infer) {
-    service.published_ports.push_back(
-        PublishedPort{"127.0.0.1", state.inference.api_port, state.inference.api_port});
-    service.published_ports.push_back(
-        PublishedPort{"127.0.0.1", state.gateway.listen_port, state.gateway.listen_port});
+    const int infer_api_port = InferApiPort(state, instance);
+    const int infer_gateway_port = InferGatewayPort(state, instance);
+    AppendUniquePublishedPort(
+        &service.published_ports,
+        PublishedPort{"127.0.0.1", infer_api_port, infer_api_port});
+    AppendUniquePublishedPort(
+        &service.published_ports,
+        PublishedPort{"127.0.0.1", infer_gateway_port, infer_gateway_port});
   }
 
   const auto& shared_disk =

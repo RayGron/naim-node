@@ -77,6 +77,8 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
   topology.data_parallel_mode = config.data_parallel_mode.empty() ? "off" : config.data_parallel_mode;
   topology.data_parallel_lb_mode =
       config.data_parallel_lb_mode.empty() ? "external" : config.data_parallel_lb_mode;
+  const bool llama_rpc_runtime =
+      config.runtime_engine == "llama.cpp" && config.distributed_backend == "llama_rpc";
   const bool hybrid_mode =
       topology.data_parallel_mode == "vllm_native" && topology.data_parallel_lb_mode == "hybrid";
 
@@ -86,6 +88,51 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
   const std::string active_model_id = active_model.value("model_id", std::string{});
   topology.workers_per_replica =
       std::max(1, config.worker_group.value("expected_workers", 0));
+
+  if (!config.replica_upstreams.empty()) {
+    topology.replica_groups_expected = static_cast<int>(config.replica_upstreams.size());
+    topology.replica_groups_ready = topology.replica_groups_expected;
+    topology.api_endpoints_expected = topology.replica_groups_expected;
+    topology.api_endpoints_ready = topology.replica_groups_ready;
+    topology.ready_replica_base_urls = config.replica_upstreams;
+    topology.data_parallel_size = topology.replica_groups_expected;
+    topology.data_parallel_size_local_max = topology.replica_groups_expected > 0 ? 1 : 0;
+    return topology;
+  }
+
+  if (llama_rpc_runtime) {
+    int expected_workers = 0;
+    for (const auto& member : configured_members) {
+      if (!member.is_object() || !member.value("enabled", true)) {
+        continue;
+      }
+      ++expected_workers;
+    }
+    for (const auto& member : observed_worker_group.value("members", json::array())) {
+      if (!member.is_object()) {
+        continue;
+      }
+      if (member.value("ready", false)) {
+        ++topology.ready_worker_members;
+      }
+    }
+    topology.replica_groups_expected = expected_workers > 0 ? 1 : 0;
+    topology.replica_groups_ready =
+        expected_workers > 0 && topology.ready_worker_members >= expected_workers ? 1 : 0;
+    topology.replica_groups_degraded =
+        topology.replica_groups_expected > topology.replica_groups_ready ? 1 : 0;
+    topology.api_endpoints_expected = 0;
+    topology.api_endpoints_ready = 0;
+    topology.data_parallel_size = 0;
+    topology.data_parallel_size_local_max = 0;
+    if (topology.replica_groups_degraded > 0) {
+      AddUniqueReason(&topology.degraded_reasons, "rpc_worker_group_partial");
+      if (topology.ready_worker_members == 0) {
+        AddUniqueReason(&topology.degraded_reasons, "no_ready_rpc_workers");
+      }
+    }
+    return topology;
+  }
 
   std::map<std::string, ReplicaAccumulator> expected_groups;
   int configured_position = 0;
