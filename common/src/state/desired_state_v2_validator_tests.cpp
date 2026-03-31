@@ -60,6 +60,17 @@ const comet::InstanceSpec& FindInstance(
   throw std::runtime_error("instance not found: " + name);
 }
 
+const comet::DiskSpec& FindDisk(
+    const comet::DesiredState& state,
+    const std::string& name) {
+  for (const auto& disk : state.disks) {
+    if (disk.name == name) {
+      return disk;
+    }
+  }
+  throw std::runtime_error("disk not found: " + name);
+}
+
 }  // namespace
 
 int main() {
@@ -705,6 +716,74 @@ int main() {
       std::cout << "ok: llm-with-app" << '\n';
     }
 
+    {
+      const json llm_with_skills{
+          {"version", 2},
+          {"plane_name", "llm-with-skills"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-skills"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"skills",
+           {
+               {"enabled", true},
+               {"image", "example/skills:dev"},
+               {"env", {{"COMET_CUSTOM_SKILLS_FLAG", "enabled"}}},
+               {"storage", {{"size_gb", 9}, {"mount_path", "/srv/skills"}}},
+               {"publish",
+                json::array(
+                    {{{"host_ip", "127.0.0.1"}, {"host_port", 19120}, {"container_port", 18120}}})},
+           }},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(llm_with_skills, "llm-with-skills");
+      Expect(state.skills.has_value() && state.skills->enabled,
+             "llm-with-skills: state.skills.enabled should be true");
+      Expect(state.instances.size() == 4,
+             "llm-with-skills: expected aggregator + leaf infer + worker + skills");
+      const auto& skills = FindInstance(state, "skills-llm-with-skills");
+      Expect(skills.role == comet::InstanceRole::Skills,
+             "llm-with-skills: skills instance role mismatch");
+      Expect(skills.image == "example/skills:dev",
+             "llm-with-skills: custom skills image mismatch");
+      Expect(skills.environment.count("COMET_CUSTOM_SKILLS_FLAG") == 1 &&
+                 skills.environment.at("COMET_CUSTOM_SKILLS_FLAG") == "enabled",
+             "llm-with-skills: custom skills env mismatch");
+      Expect(!skills.published_ports.empty() &&
+                 skills.published_ports.front().host_port == 19120 &&
+                 skills.published_ports.front().container_port == 18120,
+             "llm-with-skills: published port mismatch");
+      const auto& skills_disk = FindDisk(state, "skills-llm-with-skills-private");
+      Expect(skills_disk.kind == comet::DiskKind::SkillsPrivate,
+             "llm-with-skills: skills disk kind mismatch");
+      Expect(skills_disk.container_path == "/srv/skills",
+             "llm-with-skills: skills disk mount path mismatch");
+      Expect(skills_disk.size_gb == 9,
+             "llm-with-skills: skills disk size mismatch");
+
+      const auto compose_plans = comet::BuildNodeComposePlans(state);
+      Expect(compose_plans.size() == 1,
+             "llm-with-skills: expected a single compose plan for single-node topology");
+      const auto service_it = std::find_if(
+          compose_plans.front().services.begin(),
+          compose_plans.front().services.end(),
+          [](const comet::ComposeService& service) {
+            return service.name == "skills-llm-with-skills";
+          });
+      Expect(service_it != compose_plans.front().services.end(),
+             "llm-with-skills: skills service missing from compose plan");
+      Expect(service_it->healthcheck.find("COMET_SKILLS_PORT") != std::string::npos &&
+                 service_it->healthcheck.find("/health") != std::string::npos,
+             "llm-with-skills: compose healthcheck should target skills health endpoint");
+      std::cout << "ok: llm-with-skills" << '\n';
+    }
+
     ExpectInvalid(
         json{
             {"version", 2},
@@ -795,6 +874,16 @@ int main() {
             {"app", {{"enabled", true}, {"image", "example/app:dev"}, {"start", {{"type", "script"}}}}},
         },
         "app-script-without-script-ref");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "compute-with-skills"},
+            {"plane_mode", "compute"},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"skills", {{"enabled", true}}},
+        },
+        "skills-require-llm-plane-mode");
 
     ExpectInvalid(
         json{

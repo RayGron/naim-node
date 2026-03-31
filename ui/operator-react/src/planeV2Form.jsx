@@ -2,6 +2,7 @@ const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 
 const FIELD_INFO = {
   planeName: "Unique plane identifier used by the controller, runtime artifacts, and API paths.",
+  skillsEnabled: "Enable a dedicated plane-scoped Skills service backed by SQLite for storing and resolving reusable skills.",
   planeMode: "Choose llm for model serving planes or compute for custom GPU workloads without chat interaction.",
   protectedPlane: "Protected planes require an explicit confirmation before destructive actions such as delete.",
   runtimeEngine: "Runtime implementation used by infer and worker services.",
@@ -169,6 +170,7 @@ export function isDesiredStateV2(value) {
 export function buildNewPlaneFormState() {
   return {
     planeName: "new-plane",
+    skillsEnabled: false,
     planeMode: "llm",
     protectedPlane: false,
     modelSourceType: "local",
@@ -261,6 +263,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   return {
     ...defaults,
     planeName: value?.plane_name || defaults.planeName,
+    skillsEnabled: Boolean(value?.skills?.enabled),
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
     modelSourceType: source.type || defaults.modelSourceType,
@@ -454,6 +457,11 @@ export function buildDesiredStateV2FromForm(form) {
     desiredState.infer = {
       replicas: parseNumber(form.inferReplicas, 1),
     };
+    if (form.skillsEnabled) {
+      desiredState.skills = {
+        enabled: true,
+      };
+    }
   }
 
   if (
@@ -1084,6 +1092,15 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
         description="Identity and mode for the plane you are about to create."
       />
       <div className="plane-form-grid">
+        <label className="field-label plane-checkbox">
+          <input
+            type="checkbox"
+            checked={form.skillsEnabled}
+            onChange={bindCheck("skillsEnabled")}
+            disabled={form.planeMode !== "llm"}
+          />
+          <InfoLabel info={FIELD_INFO.skillsEnabled} className="field-label-inline">Skills</InfoLabel>
+        </label>
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.planeName}>Plane name</InfoLabel>
           <input

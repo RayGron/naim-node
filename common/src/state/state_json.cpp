@@ -87,6 +87,9 @@ DiskKind ParseDiskKind(const std::string& value) {
   if (value == "app-private") {
     return DiskKind::AppPrivate;
   }
+  if (value == "skills-private") {
+    return DiskKind::SkillsPrivate;
+  }
   throw std::runtime_error("unknown disk kind '" + value + "'");
 }
 
@@ -99,6 +102,9 @@ InstanceRole ParseInstanceRole(const std::string& value) {
   }
   if (value == "app") {
     return InstanceRole::App;
+  }
+  if (value == "skills") {
+    return InstanceRole::Skills;
   }
   throw std::runtime_error("unknown instance role '" + value + "'");
 }
@@ -306,6 +312,12 @@ json ToJson(const InteractionSettings& interaction) {
         std::move(analysis_long_completion_policy);
   }
   return result;
+}
+
+json ToJson(const SkillsSettings& skills) {
+  return json{
+      {"enabled", skills.enabled},
+  };
 }
 
 json ToJson(const DiskSpec& disk) {
@@ -771,6 +783,9 @@ json DesiredStateToJson(const DesiredState& state) {
   if (state.interaction.has_value()) {
     result["interaction"] = ToJson(*state.interaction);
   }
+  if (state.skills.has_value()) {
+    result["skills"] = ToJson(*state.skills);
+  }
 
   for (const auto& gpu_node : state.runtime_gpu_nodes) {
     result["runtime_gpu_nodes"].push_back(ToJson(gpu_node));
@@ -810,6 +825,11 @@ DesiredState DesiredStateFromJson(const json& value) {
   }
   if (value.contains("interaction") && value.at("interaction").is_object()) {
     state.interaction = InteractionSettingsFromJson(value.at("interaction"));
+  }
+  if (value.contains("skills") && value.at("skills").is_object()) {
+    SkillsSettings skills;
+    skills.enabled = value.at("skills").value("enabled", skills.enabled);
+    state.skills = std::move(skills);
   }
 
   if (value.contains("inference") && value.at("inference").is_object()) {
@@ -1016,6 +1036,7 @@ DesiredState SliceDesiredStateForNode(
   result.placement_target = state.placement_target;
   result.bootstrap_model = state.bootstrap_model;
   result.interaction = state.interaction;
+  result.skills = state.skills;
   result.inference = state.inference;
   result.worker_group = state.worker_group;
   result.gateway = state.gateway;
@@ -1146,7 +1167,7 @@ void SaveDesiredStateJson(const DesiredState& state, const std::string& path) {
     throw std::runtime_error("failed to open desired state file for write: " + path);
   }
 
-  output << SerializeDesiredStateJson(state) << "\n";
+  output << SerializeDesiredStateV2Json(state) << "\n";
   if (!output.good()) {
     throw std::runtime_error("failed to write desired state file: " + path);
   }

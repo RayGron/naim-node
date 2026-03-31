@@ -1,12 +1,18 @@
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "app/hostd_local_state_support.h"
+#include "comet/state/desired_state_v2_renderer.h"
 
 namespace {
+
+using nlohmann::json;
 
 void Expect(bool condition, const std::string& message) {
   if (!condition) {
@@ -17,24 +23,29 @@ void Expect(bool condition, const std::string& message) {
 comet::DesiredState BuildState(
     const std::string& plane_name,
     const std::string& node_name) {
-  comet::DesiredState state;
-  state.plane_name = plane_name;
-
-  comet::NodeInventory node;
-  node.name = node_name;
-  node.platform = "linux";
-  node.execution_mode = comet::HostExecutionMode::Mixed;
-  state.nodes.push_back(std::move(node));
-
-  comet::InstanceSpec instance;
-  instance.name = "worker-" + plane_name;
-  instance.plane_name = plane_name;
-  instance.node_name = node_name;
-  instance.role = comet::InstanceRole::Worker;
-  instance.image = "example/worker:dev";
-  instance.command = "/app/run.sh";
-  state.instances.push_back(std::move(instance));
-  return state;
+  return comet::DesiredStateV2Renderer::Render(json{
+      {"version", 2},
+      {"plane_name", plane_name},
+      {"plane_mode", "llm"},
+      {"model",
+       {
+           {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+           {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+           {"served_model_name", "qwen-test"},
+       }},
+      {"runtime",
+       {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+      {"topology",
+       {{"nodes",
+         json::array(
+             {{{"name", node_name},
+               {"execution_mode", "mixed"},
+               {"gpu_memory_mb", {{"0", 24576}}}}})}}},
+      {"infer", {{"node", node_name}, {"replicas", 1}}},
+      {"worker", {{"node", node_name}, {"gpu_device", "0"}}},
+      {"skills", {{"enabled", true}, {"node", node_name}}},
+      {"app", {{"enabled", false}}},
+  });
 }
 
 }  // namespace
@@ -108,10 +119,19 @@ int main() {
     const auto aggregate_state =
         comet::hostd::local_state_support::LoadLocalAppliedState(state_root, node_name);
     Expect(aggregate_state.has_value(), "aggregate state should still exist");
-    Expect(aggregate_state->instances.size() == 1, "aggregate should only contain plane-b");
+    Expect(aggregate_state->instances.size() == 4,
+           "aggregate should only contain plane-b infer aggregator, infer leaf, worker, and skills instances");
     Expect(
-        aggregate_state->instances.front().plane_name == plane_b,
+        std::all_of(
+            aggregate_state->instances.begin(),
+            aggregate_state->instances.end(),
+            [&](const comet::InstanceSpec& instance) { return instance.plane_name == plane_b; }),
         "aggregate should only contain plane-b instances");
+    Expect(
+        comet::hostd::local_state_support::ExpectedRuntimeStatusCountForNode(
+            *aggregate_state,
+            node_name) == 4,
+        "infer aggregator, infer leaf, worker, and skills instances should all contribute runtime statuses");
 
     comet::DesiredState bad_state = BuildState("plane-c", node_name);
     comet::NodeInventory other_node;

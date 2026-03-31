@@ -29,6 +29,7 @@ void DesiredStateV2Validator::Validate() {
   ValidateInfer();
   ValidateWorker();
   ValidateApp();
+  ValidateSkills();
   ValidateHooks();
 }
 
@@ -318,6 +319,28 @@ void DesiredStateV2Validator::ValidateApp() const {
   }
 }
 
+void DesiredStateV2Validator::ValidateSkills() const {
+  if (!value_.contains("skills")) {
+    return;
+  }
+  RequireObject("skills");
+  const std::string plane_mode = value_.value("plane_mode", std::string("llm"));
+  if (plane_mode != "llm") {
+    throw std::runtime_error("desired-state v2 skills are supported only for plane_mode=llm");
+  }
+  const auto& skills = value_.at("skills");
+  if (!FieldEnabledByDefault(skills, false)) {
+    return;
+  }
+  if (skills.contains("node") && !skills.at("node").is_string()) {
+    throw std::runtime_error("desired-state v2 skills.node must be a string");
+  }
+  if (skills.contains("node") && skills.at("node").is_string()) {
+    ValidateNodeRoleCompatibility(skills.at("node").get<std::string>(), "skills", "skills");
+  }
+  ValidateStartBlock(skills, "skills");
+}
+
 void DesiredStateV2Validator::ValidateHooks() const {
   if (!value_.contains("hooks")) {
     return;
@@ -382,6 +405,14 @@ void DesiredStateV2Validator::ValidateNodeRoleCompatibility(
         node_name + "'");
   }
   if (required == "infer" || required == "app") {
+    if (*mode == "worker-only") {
+      throw std::runtime_error(
+          std::string("desired-state v2 ") + service_name +
+          " cannot target worker-only node '" + node_name + "'");
+    }
+    return;
+  }
+  if (required == "skills") {
     if (*mode == "worker-only") {
       throw std::runtime_error(
           std::string("desired-state v2 ") + service_name +

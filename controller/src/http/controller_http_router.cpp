@@ -305,6 +305,19 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
             validation_error->retryable,
             validation_error->details);
       }
+      if (const auto validation_error =
+              interaction_service_.ResolveRequestSkills(resolution, &request_context)) {
+        return build_plane_error(
+            validation_error->code == "model_mismatch" ||
+                    validation_error->code == "skills_disabled" ||
+                    validation_error->code == "skills_not_ready"
+                ? 409
+                : 400,
+            validation_error->code,
+            validation_error->message,
+            validation_error->retryable,
+            validation_error->details);
+      }
       try {
         return interaction_service_.BuildSessionResponse(
             resolution,

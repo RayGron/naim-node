@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <thread>
@@ -138,7 +139,19 @@ void SaveLocalAppliedGeneration(
 }
 
 std::optional<comet::DesiredState> LoadStateFromPath(const std::string& path) {
-  return comet::LoadDesiredStateJson(path);
+  if (!std::filesystem::exists(path)) {
+    return std::nullopt;
+  }
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open local state file: " + path);
+  }
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  if (!input.good() && !input.eof()) {
+    throw std::runtime_error("failed to read local state file: " + path);
+  }
+  return comet::DeserializeDesiredStateJson(buffer.str());
 }
 
 comet::DesiredState MergeLocalAppliedStates(const std::vector<comet::DesiredState>& states) {
@@ -334,7 +347,8 @@ void WaitForLocalRuntimeStatus(
 namespace {
 bool InstanceProducesRuntimeStatus(const comet::InstanceSpec& instance) {
   return instance.role == comet::InstanceRole::Infer ||
-         instance.role == comet::InstanceRole::Worker;
+         instance.role == comet::InstanceRole::Worker ||
+         instance.role == comet::InstanceRole::Skills;
 }
 }  // namespace
 

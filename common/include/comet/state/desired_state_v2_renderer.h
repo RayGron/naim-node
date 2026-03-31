@@ -26,6 +26,7 @@ class DesiredStateV2Renderer final {
   void RenderInferInstance();
   void RenderWorkerInstances();
   void RenderAppInstance();
+  void RenderSkillsInstance();
 
   bool InferEnabled() const;
   int InferReplicaCount() const;
@@ -45,9 +46,11 @@ class DesiredStateV2Renderer final {
   std::string BuildPlaneSharedDiskName() const;
   std::string BuildInferInstanceName(int infer_index = 0) const;
   std::string BuildAppInstanceName() const;
+  std::string BuildSkillsInstanceName() const;
   int BuildInferApiPort(int infer_index) const;
   int BuildInferGatewayPort(int infer_index) const;
   int BuildInferLlamaPort(int infer_index) const;
+  int BuildSkillsHostPort() const;
   std::string BuildReplicaUpstreams(const std::vector<InstanceSpec>& infer_instances) const;
   std::string InferInstanceNameForWorker(int worker_index) const;
   std::string BuildPlaneSharedHostPath() const;
@@ -79,6 +82,7 @@ class DesiredStateV2Renderer final {
   nlohmann::json resources_json_;
   nlohmann::json worker_resources_json_;
   nlohmann::json app_json_;
+  nlohmann::json skills_json_;
   std::vector<std::string> infer_names_;
 };
 

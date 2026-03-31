@@ -609,7 +609,9 @@ ComposeService BuildComposeService(
                               "http://127.0.0.1:$${COMET_INFERENCE_PORT:-8000}/health"
                             : (instance.role == InstanceRole::App
                                    ? "CMD-SHELL curl -fsS http://127.0.0.1:$${PORT:-8080}/health >/dev/null"
-                                   : "CMD-SHELL test -f /tmp/comet-ready");
+                                   : (instance.role == InstanceRole::Skills
+                                          ? "CMD-SHELL curl -fsS http://127.0.0.1:$${COMET_SKILLS_PORT:-18120}/health >/dev/null"
+                                          : "CMD-SHELL test -f /tmp/comet-ready"));
   if (instance.role == InstanceRole::Infer) {
     const int infer_api_port = InferApiPort(state, instance);
     const int infer_gateway_port = InferGatewayPort(state, instance);
@@ -696,6 +698,8 @@ std::string ToString(InstanceRole role) {
       return "worker";
     case InstanceRole::App:
       return "app";
+    case InstanceRole::Skills:
+      return "skills";
   }
   return "unknown";
 }
@@ -710,6 +714,8 @@ std::string ToString(DiskKind kind) {
       return "worker-private";
     case DiskKind::AppPrivate:
       return "app-private";
+    case DiskKind::SkillsPrivate:
+      return "skills-private";
   }
   return "unknown";
 }

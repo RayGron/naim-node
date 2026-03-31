@@ -258,7 +258,8 @@ class InteractionStreamPresenter {
       const std::string& request_id,
       const std::string& session_id,
       const std::string& plane_name,
-      const PlaneInteractionResolution& resolution) const;
+      const PlaneInteractionResolution& resolution,
+      const InteractionRequestContext& request_context) const;
 
   nlohmann::json BuildSegmentStartedEvent(
       const std::string& request_id,
@@ -297,7 +298,8 @@ class InteractionStreamPresenter {
       const PlaneInteractionResolution& resolution,
       const std::string& request_id,
       const InteractionSessionResult& session,
-      const nlohmann::json& session_payload) const;
+      const nlohmann::json& session_payload,
+      const InteractionRequestContext& request_context) const;
 
   nlohmann::json BuildCompleteEvent(
       const PlaneInteractionResolution& resolution,
@@ -383,10 +385,14 @@ class InteractionProxyExecutor {
       const std::string&,
       const std::string&,
       const std::string&)>;
+  using ResolveRequestSkillsFn = std::function<std::optional<InteractionValidationError>(
+      const PlaneInteractionResolution&,
+      InteractionRequestContext*)>;
 
   InteractionProxyExecutor(
       BuildInteractionUpstreamBodyFn build_interaction_upstream_body,
-      SendProxyRequestFn send_proxy_request);
+      SendProxyRequestFn send_proxy_request,
+      ResolveRequestSkillsFn resolve_request_skills);
 
   InteractionProxyResult Execute(
       const PlaneInteractionResolution& resolution,
@@ -398,6 +404,7 @@ class InteractionProxyExecutor {
  private:
   BuildInteractionUpstreamBodyFn build_interaction_upstream_body_;
   SendProxyRequestFn send_proxy_request_;
+  ResolveRequestSkillsFn resolve_request_skills_;
 };
 
 class InteractionStreamRequestResolver {
@@ -405,9 +412,13 @@ class InteractionStreamRequestResolver {
   using ResolvePlaneInteractionFn = std::function<PlaneInteractionResolution(
       const std::string&,
       const std::string&)>;
+  using ResolveRequestSkillsFn = std::function<std::optional<InteractionValidationError>(
+      const PlaneInteractionResolution&,
+      InteractionRequestContext*)>;
 
-  explicit InteractionStreamRequestResolver(
-      ResolvePlaneInteractionFn resolve_plane_interaction);
+  InteractionStreamRequestResolver(
+      ResolvePlaneInteractionFn resolve_plane_interaction,
+      ResolveRequestSkillsFn resolve_request_skills);
 
   InteractionStreamResolutionResult Resolve(
       const std::string& db_path,
@@ -418,6 +429,7 @@ class InteractionStreamRequestResolver {
 
  private:
   ResolvePlaneInteractionFn resolve_plane_interaction_;
+  ResolveRequestSkillsFn resolve_request_skills_;
 };
 
 class InteractionStreamSessionExecutor {

@@ -9,6 +9,12 @@ Authoritative endpoints:
 - `GET /api/v1/planes/<plane>/interaction/models`
 - `POST /api/v1/planes/<plane>/interaction/chat/completions`
 - `POST /api/v1/planes/<plane>/interaction/chat/completions/stream`
+- `GET /api/v1/planes/<plane>/skills`
+- `POST /api/v1/planes/<plane>/skills`
+- `GET /api/v1/planes/<plane>/skills/<skill_id>`
+- `PUT /api/v1/planes/<plane>/skills/<skill_id>`
+- `PATCH /api/v1/planes/<plane>/skills/<skill_id>`
+- `DELETE /api/v1/planes/<plane>/skills/<skill_id>`
 
 The raw plane gateway `/v1/*` is a runtime implementation detail. It is not the supported
 external contract.
@@ -41,6 +47,8 @@ Supported fields for chat requests:
 - `max_tokens`
 - `preferred_language`
 - `model`
+- `session_id`
+- `skill_ids`
 
 Controller-owned normalization:
 
@@ -56,6 +64,7 @@ Ignored or normalized internally:
 - plane-level interaction/completion policy from desired state
 - semantic completion instructions
 - vLLM no-thinking transport shaping
+- plane-scoped Skills resolution into a synthesized system instruction block
 
 Explicitly unsupported and rejected:
 
@@ -103,6 +112,12 @@ Important reasons currently emitted include:
 - `inference_not_ready`
 - `gateway_target_missing`
 
+When Skills are enabled for the plane, status may also include:
+
+- `skills_enabled`
+- `skills_ready`
+- `skills_container_name`
+
 ## Error Contract
 
 Interaction endpoints return a machine-readable error envelope:
@@ -139,6 +154,12 @@ HTTP behavior:
 - `503` upstream unavailable / degraded target unavailable
 - `504` upstream timeout
 
+Additional machine-readable interaction errors for Skills:
+
+- `409 skills_disabled` when `session_id` or `skill_ids` are supplied for a plane without enabled Skills
+- `409 skills_not_ready` when the dedicated `skills-<plane>` service is configured but not reachable yet
+- `400 invalid_skill_reference` when `skill_ids` references an unknown or disabled skill
+
 ## Streaming Contract
 
 SSE event order:
@@ -153,6 +174,8 @@ SSE event order:
 8. final `[DONE]`
 
 Every SSE lifecycle event includes `request_id`. Session-scoped events also include `session_id`.
+When Skills are active for a request, `session_started`, `session_complete`, and compatibility
+terminal events also include `applied_skills[]` and `skills_session_id`.
 
 Terminal semantics:
 
@@ -186,3 +209,33 @@ This phase does not provide:
 - tool calling
 - function calling
 - arbitrary JSON schema enforcement
+
+## Skills Contract
+
+Skills are plane-scoped records stored by the dedicated `skills-<plane>` runtime.
+
+Skill shape:
+
+- `id`
+- `name`
+- `description`
+- `content`
+- `enabled`
+- `session_ids[]`
+- `comet_links[]`
+- `created_at`
+- `updated_at`
+
+Resolution behavior for interaction requests:
+
+- `skill_ids[]` are resolved first, in request order
+- enabled skills bound to `session_id` are appended next, ordered by `updated_at DESC`
+- duplicates are removed by skill id
+- each resolved skill is materialized by `comet-node` into a controller-owned system prompt block
+- `comet_links[]` are stored as metadata in v1 and are not injected into the prompt
+
+Response metadata when Skills are applied:
+
+- top-level `applied_skills[]`
+- top-level `skills_session_id`
+- mirrored `applied_skills[]` and `skills_session_id` inside `session`

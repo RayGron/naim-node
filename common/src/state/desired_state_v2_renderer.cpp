@@ -1,6 +1,7 @@
 #include "comet/state/desired_state_v2_renderer.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -18,6 +19,19 @@ constexpr int kDefaultSharedDiskSizeGb = 40;
 constexpr int kDefaultInferPrivateDiskSizeGb = 12;
 constexpr int kDefaultWorkerPrivateDiskSizeGb = 12;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
+constexpr int kDefaultSkillsPrivateDiskSizeGb = 4;
+constexpr int kSkillsContainerPort = 18120;
+constexpr int kSkillsPublishedPortBase = 24000;
+constexpr int kSkillsPublishedPortSpan = 10000;
+
+uint32_t StablePortHash(const std::string& value) {
+  uint32_t hash = 2166136261u;
+  for (unsigned char ch : value) {
+    hash ^= static_cast<uint32_t>(ch);
+    hash *= 16777619u;
+  }
+  return hash;
+}
 
 }  // namespace
 
@@ -44,7 +58,10 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
               : nlohmann::json::object()),
       app_json_(
           value.contains("app") && value.at("app").is_object() ? value.at("app")
-                                                                : nlohmann::json::object()) {}
+                                                                : nlohmann::json::object()),
+      skills_json_(
+          value.contains("skills") && value.at("skills").is_object() ? value.at("skills")
+                                                                      : nlohmann::json::object()) {}
 
 DesiredState DesiredStateV2Renderer::RenderState() {
   RenderIdentity();
@@ -58,6 +75,7 @@ DesiredState DesiredStateV2Renderer::RenderState() {
   RenderInferInstance();
   RenderWorkerInstances();
   RenderAppInstance();
+  RenderSkillsInstance();
   return state_;
 }
 
@@ -67,6 +85,9 @@ void DesiredStateV2Renderer::RenderIdentity() {
   state_.control_root = "/comet/shared/control/" + state_.plane_name;
   state_.plane_mode = ParsePlaneMode(value_.value("plane_mode", std::string("llm")));
   state_.protected_plane = value_.value("protected", false);
+  if (skills_json_.value("enabled", false)) {
+    state_.skills = SkillsSettings{true};
+  }
 }
 
 void DesiredStateV2Renderer::RenderHooks() {
@@ -525,6 +546,83 @@ void DesiredStateV2Renderer::RenderAppInstance() {
   state_.disks.push_back(std::move(app_private_disk));
 }
 
+void DesiredStateV2Renderer::RenderSkillsInstance() {
+  if (!skills_json_.value("enabled", false)) {
+    return;
+  }
+
+  InstanceSpec skills;
+  skills.name = BuildSkillsInstanceName();
+  skills.role = InstanceRole::Skills;
+  skills.plane_name = state_.plane_name;
+  if (skills_json_.contains("node") && skills_json_.at("node").is_string()) {
+    skills.node_name = RequireNode(skills_json_.at("node").get<std::string>(), "skills").name;
+  } else {
+    skills.node_name = ResolveAppNodeName();
+  }
+  skills.image = skills_json_.value("image", std::string("comet/skills-runtime:dev"));
+  skills.command =
+      BuildCommandFromStartSpec(skills_json_.value("start", nlohmann::json::object()),
+                                "/runtime/skills/entrypoint.sh");
+  skills.private_disk_name = skills.name + "-private";
+  skills.shared_disk_name = state_.plane_shared_disk_name;
+  skills.private_disk_size_gb =
+      ExtractPrivateDiskSizeGb(skills_json_, kDefaultSkillsPrivateDiskSizeGb, "volumes");
+  skills.environment = {
+      {"COMET_PLANE_NAME", state_.plane_name},
+      {"COMET_INSTANCE_NAME", skills.name},
+      {"COMET_INSTANCE_ROLE", "skills"},
+      {"COMET_NODE_NAME", skills.node_name},
+      {"COMET_SHARED_DISK_PATH", "/comet/shared"},
+      {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
+      {"COMET_SKILLS_PORT", std::to_string(kSkillsContainerPort)},
+      {"COMET_SKILLS_DB_PATH", "/comet/private/skills.sqlite"},
+      {"COMET_SKILLS_RUNTIME_STATUS_PATH", "/comet/private/skills-runtime-status.json"},
+      {"COMET_CONTROLLER_URL", "http://controller.internal:18080"},
+      {"COMET_CONTROL_ROOT", state_.control_root},
+  };
+  if (skills_json_.contains("env") && skills_json_.at("env").is_object()) {
+    const auto custom_env = skills_json_.at("env").get<std::map<std::string, std::string>>();
+    for (const auto& [key, value] : custom_env) {
+      skills.environment[key] = value;
+    }
+  }
+  skills.labels = {
+      {"comet.plane", state_.plane_name},
+      {"comet.role", "skills"},
+      {"comet.node", skills.node_name},
+  };
+  if (skills_json_.contains("publish") && skills_json_.at("publish").is_array()) {
+    for (const auto& port_json : skills_json_.at("publish")) {
+      skills.published_ports.push_back(PublishedPort{
+          port_json.value("host_ip", std::string("127.0.0.1")),
+          port_json.value("host_port", 0),
+          port_json.value("container_port", 0),
+      });
+    }
+  }
+  if (skills.published_ports.empty()) {
+    skills.published_ports.push_back(PublishedPort{
+        "127.0.0.1",
+        BuildSkillsHostPort(),
+        kSkillsContainerPort,
+    });
+  }
+  state_.instances.push_back(skills);
+
+  DiskSpec skills_private_disk;
+  skills_private_disk.name = skills.private_disk_name;
+  skills_private_disk.kind = DiskKind::SkillsPrivate;
+  skills_private_disk.plane_name = state_.plane_name;
+  skills_private_disk.owner_name = skills.name;
+  skills_private_disk.node_name = skills.node_name;
+  skills_private_disk.host_path = BuildInstancePrivateHostPath(skills.name);
+  skills_private_disk.container_path =
+      ExtractPrivateMountPath(skills_json_, "/comet/private", "volumes");
+  skills_private_disk.size_gb = skills.private_disk_size_gb;
+  state_.disks.push_back(std::move(skills_private_disk));
+}
+
 bool DesiredStateV2Renderer::InferEnabled() const {
   return infer_json_.value(
       "enabled",
@@ -709,6 +807,10 @@ std::string DesiredStateV2Renderer::BuildAppInstanceName() const {
   return "app-" + state_.plane_name;
 }
 
+std::string DesiredStateV2Renderer::BuildSkillsInstanceName() const {
+  return "skills-" + state_.plane_name;
+}
+
 std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
   return "/var/lib/comet/disks/planes/" + state_.plane_name + "/shared";
 }
@@ -745,6 +847,12 @@ std::string DesiredStateV2Renderer::BuildCommandFromStartSpec(
   }
   const auto command = start.value("command", std::string{});
   return command.empty() ? default_command : command;
+}
+
+int DesiredStateV2Renderer::BuildSkillsHostPort() const {
+  const uint32_t offset =
+      StablePortHash(state_.plane_name + ":" + BuildSkillsInstanceName()) % kSkillsPublishedPortSpan;
+  return kSkillsPublishedPortBase + static_cast<int>(offset);
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {

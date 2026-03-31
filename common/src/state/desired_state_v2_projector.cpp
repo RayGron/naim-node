@@ -16,10 +16,13 @@ constexpr int kDefaultSharedDiskSizeGb = 40;
 constexpr int kDefaultInferPrivateDiskSizeGb = 12;
 constexpr int kDefaultWorkerPrivateDiskSizeGb = 12;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
+constexpr int kDefaultSkillsPrivateDiskSizeGb = 4;
 constexpr std::string_view kDefaultInferImage = "comet/infer-runtime:dev";
 constexpr std::string_view kDefaultWorkerImage = "comet/worker-runtime:dev";
+constexpr std::string_view kDefaultSkillsImage = "comet/skills-runtime:dev";
 constexpr std::string_view kDefaultInferCommand = "/runtime/infer/entrypoint.sh";
 constexpr std::string_view kDefaultWorkerCommand = "/runtime/worker/entrypoint.sh";
+constexpr std::string_view kDefaultSkillsCommand = "/runtime/skills/entrypoint.sh";
 
 }  // namespace
 
@@ -43,6 +46,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
   ProjectInfer();
   ProjectWorker();
   ProjectApp();
+  ProjectSkills();
   ProjectResources();
   return value_;
 }
@@ -50,6 +54,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
 void DesiredStateV2Projector::CollectInstancesAndDisks() {
   infer_instance_ = FindInstance(InstanceRole::Infer);
   app_instance_ = FindInstance(InstanceRole::App);
+  skills_instance_ = FindInstance(InstanceRole::Skills);
   worker_instances_ = FindWorkerInstances();
   shared_disk_ = FindSharedDisk();
 }
@@ -314,6 +319,46 @@ void DesiredStateV2Projector::ProjectApp() {
   value_["app"] = std::move(app);
 }
 
+void DesiredStateV2Projector::ProjectSkills() {
+  if (!state_.skills.has_value() && skills_instance_ == nullptr) {
+    return;
+  }
+
+  if (skills_instance_ == nullptr) {
+    value_["skills"] = {{"enabled", false}};
+    return;
+  }
+
+  nlohmann::json skills = {
+      {"enabled", state_.skills.value_or(SkillsSettings{}).enabled},
+  };
+  if (skills_instance_->image != kDefaultSkillsImage) {
+    skills["image"] = skills_instance_->image;
+  }
+  const auto start =
+      ProjectServiceStart(*skills_instance_, std::string(kDefaultSkillsCommand));
+  if (!start.is_null()) {
+    skills["start"] = start;
+  }
+  const auto env = ProjectCustomEnv(*skills_instance_, true);
+  if (!env.empty()) {
+    skills["env"] = env;
+  }
+  const auto publish = ProjectPublishedPorts(*skills_instance_);
+  if (!publish.empty()) {
+    skills["publish"] = publish;
+  }
+  if (skills_instance_->node_name != DefaultNodeName()) {
+    skills["node"] = skills_instance_->node_name;
+  }
+  const auto storage =
+      ProjectServiceStorage(FindDiskByName(skills_instance_->private_disk_name));
+  if (!storage.is_null()) {
+    skills["storage"] = storage;
+  }
+  value_["skills"] = std::move(skills);
+}
+
 void DesiredStateV2Projector::ProjectResources() {
   nlohmann::json resources = nlohmann::json::object();
   if (!worker_instances_.empty()) {
@@ -468,7 +513,9 @@ nlohmann::json DesiredStateV2Projector::ProjectServiceStorage(const DiskSpec* di
           ? disk->size_gb == kDefaultInferPrivateDiskSizeGb
           : disk->kind == DiskKind::WorkerPrivate
               ? disk->size_gb == kDefaultWorkerPrivateDiskSizeGb
-              : disk->size_gb == kDefaultAppPrivateDiskSizeGb;
+              : disk->kind == DiskKind::SkillsPrivate
+                  ? disk->size_gb == kDefaultSkillsPrivateDiskSizeGb
+                  : disk->size_gb == kDefaultAppPrivateDiskSizeGb;
   const bool default_mount = disk->container_path == "/comet/private";
   if (default_size && default_mount) {
     return nullptr;

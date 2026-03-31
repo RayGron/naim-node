@@ -46,6 +46,33 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(rerendered.bootstrap_model->source_urls == rendered.bootstrap_model->source_urls,
            name + ": source_urls mismatch");
   }
+  if (rendered.skills.has_value()) {
+    Expect(rerendered.skills.has_value(), name + ": skills missing after rerender");
+    Expect(rerendered.skills->enabled == rendered.skills->enabled,
+           name + ": skills.enabled mismatch");
+  }
+  if (source.contains("skills")) {
+    Expect(projected.contains("skills"), name + ": skills block missing after projection");
+    Expect(projected.at("skills").value("enabled", false) ==
+               source.at("skills").value("enabled", false),
+           name + ": skills.enabled projection mismatch");
+    if (source.at("skills").contains("node")) {
+      Expect(projected.at("skills").at("node") == source.at("skills").at("node"),
+             name + ": skills.node mismatch");
+    }
+    if (source.at("skills").contains("image")) {
+      Expect(projected.at("skills").at("image") == source.at("skills").at("image"),
+             name + ": skills.image mismatch");
+    }
+    if (source.at("skills").contains("env") && projected.at("skills").contains("env")) {
+      Expect(projected.at("skills").at("env") == source.at("skills").at("env"),
+             name + ": skills.env mismatch");
+    }
+    if (source.at("skills").contains("storage")) {
+      Expect(projected.at("skills").at("storage") == source.at("skills").at("storage"),
+             name + ": skills.storage mismatch");
+    }
+  }
   std::cout << "ok-roundtrip: " << name << '\n';
 }
 
@@ -204,6 +231,41 @@ int main() {
               {"shared_disk_gb", 40}}},
         },
         "llama-rpc-replicas");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "llm-with-skills"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-skills"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"node", "infer-hostd"}, {"replicas", 1}}},
+            {"skills",
+             {
+                 {"enabled", true},
+                 {"node", "skills-hostd"},
+                 {"image", "example/skills:dev"},
+                 {"env", {{"SKILLS_CUSTOM_FLAG", "enabled"}}},
+                 {"storage", {{"size_gb", 9}, {"mount_path", "/srv/skills"}}},
+             }},
+            {"topology",
+             {{"nodes",
+               json::array(
+                   {{{"name", "infer-hostd"},
+                     {"execution_mode", "mixed"},
+                     {"gpu_memory_mb", {{"0", 24576}}}},
+                    {{"name", "skills-hostd"},
+                     {"execution_mode", "mixed"},
+                     {"gpu_memory_mb", {{"1", 24576}}}}})}}},
+            {"app", {{"enabled", false}}},
+        },
+        "llm-with-skills");
 
     return 0;
   } catch (const std::exception& ex) {

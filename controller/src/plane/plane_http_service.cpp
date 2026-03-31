@@ -4,6 +4,9 @@
 #include <string>
 #include <utility>
 
+#include "comet/state/sqlite_store.h"
+#include "skills/plane_skills_service.h"
+
 using nlohmann::json;
 
 namespace {
@@ -171,6 +174,50 @@ HttpResponse PlaneHttpService::HandlePlanePath(
           500,
           json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
           {});
+    }
+  }
+
+  const auto skills_pos = remainder.find("/skills");
+  if (skills_pos != std::string::npos) {
+    const bool skills_suffix_valid =
+        skills_pos + std::string("/skills").size() == remainder.size() ||
+        remainder.at(skills_pos + std::string("/skills").size()) == '/';
+    if (skills_suffix_valid) {
+      const std::string plane_name = remainder.substr(0, skills_pos);
+      const std::string path_suffix =
+          remainder.substr(skills_pos + std::string("/skills").size());
+      try {
+        comet::ControllerStore store(db_path);
+        store.Initialize();
+        const auto desired_state = store.LoadDesiredState(plane_name);
+        if (!desired_state.has_value()) {
+          return support_.build_json_response(
+              404,
+              json{{"status", "plane_not_found"},
+                   {"message", "plane '" + plane_name + "' not found"},
+                   {"path", request.path}},
+              {});
+        }
+        comet::controller::PlaneInteractionResolution resolution;
+        resolution.desired_state = *desired_state;
+        const comet::controller::PlaneSkillsService skills_service;
+        std::string error_code;
+        std::string error_message;
+        const auto proxied = skills_service.ProxyPlaneSkillsRequest(
+            resolution, request.method, path_suffix, request.body, &error_code, &error_message);
+        if (!proxied.has_value()) {
+          return support_.build_json_response(
+              error_code == "skills_disabled" ? 409 : 409,
+              json{{"status", error_code}, {"message", error_message}, {"path", request.path}},
+              {});
+        }
+        return *proxied;
+      } catch (const std::exception& error) {
+        return support_.build_json_response(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
+            {});
+      }
     }
   }
 

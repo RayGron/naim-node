@@ -9,6 +9,7 @@
 #include <sstream>
 #include <thread>
 
+#include "skills/plane_skills_service.h"
 #include "comet/state/worker_group_topology.h"
 
 namespace comet::controller {
@@ -188,6 +189,24 @@ bool PayloadContainsUnsupportedInteractionField(
     }
   }
   return false;
+}
+
+nlohmann::json RequestAppliedSkills(const InteractionRequestContext& request_context) {
+  if (request_context.payload.contains(PlaneSkillsService::kAppliedSkillsPayloadKey) &&
+      request_context.payload.at(PlaneSkillsService::kAppliedSkillsPayloadKey).is_array()) {
+    return request_context.payload.at(PlaneSkillsService::kAppliedSkillsPayloadKey);
+  }
+  return nlohmann::json::array();
+}
+
+std::optional<std::string> RequestSkillsSessionId(
+    const InteractionRequestContext& request_context) {
+  if (request_context.payload.contains(PlaneSkillsService::kSkillsSessionIdPayloadKey) &&
+      request_context.payload.at(PlaneSkillsService::kSkillsSessionIdPayloadKey).is_string()) {
+    return request_context.payload.at(PlaneSkillsService::kSkillsSessionIdPayloadKey)
+        .get<std::string>();
+  }
+  return std::nullopt;
 }
 
 bool IsUtf8ContinuationByte(unsigned char value) {
@@ -1064,7 +1083,12 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
     const InteractionRequestContext& request_context,
     const InteractionSessionResult& result) const {
   const InteractionContractResponder responder;
-  const nlohmann::json session_payload = BuildSessionPayload(result);
+  nlohmann::json session_payload = BuildSessionPayload(result);
+  session_payload["applied_skills"] = RequestAppliedSkills(request_context);
+  session_payload["skills_session_id"] =
+      RequestSkillsSessionId(request_context).has_value()
+          ? nlohmann::json(*RequestSkillsSessionId(request_context))
+          : nlohmann::json(nullptr);
   if (request_context.structured_output_json) {
     if (result.completion_status != "completed") {
       return {
@@ -1122,6 +1146,11 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
              }})},
             {"usage", session_payload.at("usage")},
             {"session", session_payload},
+            {"applied_skills", RequestAppliedSkills(request_context)},
+            {"skills_session_id",
+             RequestSkillsSessionId(request_context).has_value()
+                 ? nlohmann::json(*RequestSkillsSessionId(request_context))
+                 : nlohmann::json(nullptr)},
             {"comet",
              BuildInteractionContractMetadata(
                  resolution,
@@ -1158,6 +1187,11 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
            }})},
           {"usage", session_payload.at("usage")},
           {"session", session_payload},
+          {"applied_skills", RequestAppliedSkills(request_context)},
+          {"skills_session_id",
+           RequestSkillsSessionId(request_context).has_value()
+               ? nlohmann::json(*RequestSkillsSessionId(request_context))
+               : nlohmann::json(nullptr)},
           {"comet",
            BuildInteractionContractMetadata(
                resolution,
@@ -1173,13 +1207,19 @@ nlohmann::json InteractionStreamPresenter::BuildSessionStartedEvent(
     const std::string& request_id,
     const std::string& session_id,
     const std::string& plane_name,
-    const PlaneInteractionResolution& resolution) const {
+    const PlaneInteractionResolution& resolution,
+    const InteractionRequestContext& request_context) const {
   return nlohmann::json{
       {"request_id", request_id},
       {"session_id", session_id},
       {"plane_name", plane_name},
       {"served_model_name", ResolveInteractionServedModelName(resolution)},
       {"active_model_id", ResolveInteractionActiveModelId(resolution)},
+      {"applied_skills", RequestAppliedSkills(request_context)},
+      {"skills_session_id",
+       RequestSkillsSessionId(request_context).has_value()
+           ? nlohmann::json(*RequestSkillsSessionId(request_context))
+           : nlohmann::json(nullptr)},
   };
 }
 
@@ -1283,10 +1323,16 @@ nlohmann::json InteractionStreamPresenter::BuildSessionCompleteEvent(
     const PlaneInteractionResolution& resolution,
     const std::string& request_id,
     const InteractionSessionResult& session,
-    const nlohmann::json& session_payload) const {
+    const nlohmann::json& session_payload,
+    const InteractionRequestContext& request_context) const {
   return nlohmann::json{
       {"request_id", request_id},
       {"session", session_payload},
+      {"applied_skills", RequestAppliedSkills(request_context)},
+      {"skills_session_id",
+       RequestSkillsSessionId(request_context).has_value()
+           ? nlohmann::json(*RequestSkillsSessionId(request_context))
+           : nlohmann::json(nullptr)},
       {"comet",
        BuildInteractionContractMetadata(
            resolution,
@@ -1311,6 +1357,11 @@ nlohmann::json InteractionStreamPresenter::BuildCompleteEvent(
       {"latency_ms", session.total_latency_ms},
       {"usage", session_payload.at("usage")},
       {"session", session_payload},
+      {"applied_skills", RequestAppliedSkills(request_context)},
+      {"skills_session_id",
+       RequestSkillsSessionId(request_context).has_value()
+           ? nlohmann::json(*RequestSkillsSessionId(request_context))
+           : nlohmann::json(nullptr)},
       {"comet",
        BuildInteractionContractMetadata(
            resolution,
@@ -1485,9 +1536,11 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
 
 InteractionProxyExecutor::InteractionProxyExecutor(
     BuildInteractionUpstreamBodyFn build_interaction_upstream_body,
-    SendProxyRequestFn send_proxy_request)
+    SendProxyRequestFn send_proxy_request,
+    ResolveRequestSkillsFn resolve_request_skills)
     : build_interaction_upstream_body_(std::move(build_interaction_upstream_body)),
-      send_proxy_request_(std::move(send_proxy_request)) {}
+      send_proxy_request_(std::move(send_proxy_request)),
+      resolve_request_skills_(std::move(resolve_request_skills)) {}
 
 InteractionProxyResult InteractionProxyExecutor::Execute(
     const PlaneInteractionResolution& resolution,
@@ -1542,6 +1595,19 @@ InteractionProxyResult InteractionProxyExecutor::Execute(
               &request_context)) {
         return build_plane_error(
             validation_error->code == "model_mismatch" ? 409 : 400,
+            validation_error->code,
+            validation_error->message,
+            validation_error->retryable,
+            validation_error->details);
+      }
+      if (const auto validation_error =
+              resolve_request_skills_(resolution, &request_context)) {
+        return build_plane_error(
+            validation_error->code == "model_mismatch" ||
+                    validation_error->code == "skills_disabled" ||
+                    validation_error->code == "skills_not_ready"
+                ? 409
+                : 400,
             validation_error->code,
             validation_error->message,
             validation_error->retryable,
@@ -1621,8 +1687,10 @@ InteractionProxyResult InteractionProxyExecutor::Execute(
 }
 
 InteractionStreamRequestResolver::InteractionStreamRequestResolver(
-    ResolvePlaneInteractionFn resolve_plane_interaction)
-    : resolve_plane_interaction_(std::move(resolve_plane_interaction)) {}
+    ResolvePlaneInteractionFn resolve_plane_interaction,
+    ResolveRequestSkillsFn resolve_request_skills)
+    : resolve_plane_interaction_(std::move(resolve_plane_interaction)),
+      resolve_request_skills_(std::move(resolve_request_skills)) {}
 
 InteractionStreamResolutionResult InteractionStreamRequestResolver::Resolve(
     const std::string& db_path,
@@ -1722,6 +1790,19 @@ InteractionStreamResolutionResult InteractionStreamRequestResolver::Resolve(
           validation_error->retryable,
           validation_error->details);
     }
+    if (const auto validation_error =
+            resolve_request_skills_(resolution, &request_context)) {
+      return build_plane_error(
+          validation_error->code == "model_mismatch" ||
+                  validation_error->code == "skills_disabled" ||
+                  validation_error->code == "skills_not_ready"
+              ? 409
+              : 400,
+          validation_error->code,
+          validation_error->message,
+          validation_error->retryable,
+          validation_error->details);
+    }
   } catch (const nlohmann::json::exception& error) {
     return build_standalone_error(
         400, "malformed_request", error.what(), false, plane_name);
@@ -1773,7 +1854,11 @@ void InteractionStreamSessionExecutor::Execute(
     if (!send_event(
             "session_started",
             stream_presenter.BuildSessionStartedEvent(
-                request_id, session.session_id, plane_name, resolution))) {
+                request_id,
+                session.session_id,
+                plane_name,
+                resolution,
+                request_context))) {
       throw std::runtime_error("failed to write session_started");
     }
 
@@ -1862,8 +1947,12 @@ void InteractionStreamSessionExecutor::Execute(
       session.stop_reason = "session_state_unresolved";
     }
 
-    const nlohmann::json session_payload =
-        session_presenter.BuildSessionPayload(session);
+    nlohmann::json session_payload = session_presenter.BuildSessionPayload(session);
+    session_payload["applied_skills"] = RequestAppliedSkills(request_context);
+    session_payload["skills_session_id"] =
+        RequestSkillsSessionId(request_context).has_value()
+            ? nlohmann::json(*RequestSkillsSessionId(request_context))
+            : nlohmann::json(nullptr);
     std::optional<nlohmann::json> parsed_structured_output = std::nullopt;
     if (request_context.structured_output_json) {
       if (session.completion_status != "completed") {
@@ -1917,7 +2006,7 @@ void InteractionStreamSessionExecutor::Execute(
     send_event(
         "session_complete",
         stream_presenter.BuildSessionCompleteEvent(
-            resolution, request_id, session, session_payload));
+            resolution, request_id, session, session_payload, request_context));
     send_event(
         "complete",
         stream_presenter.BuildCompleteEvent(
@@ -2425,6 +2514,18 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const bool llm_plane = desired_state->plane_mode == comet::PlaneMode::Llm;
   const bool running_plane =
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
+  const PlaneSkillsService skills_service;
+  const bool skills_enabled = skills_service.IsEnabled(*desired_state);
+  const auto skills_target = skills_service.ResolveTarget(*desired_state);
+  const bool skills_ready =
+      skills_enabled && running_plane && skills_target.has_value() &&
+      probe_controller_target_ok_(skills_target, "/health");
+  const auto skills_instance = std::find_if(
+      desired_state->instances.begin(),
+      desired_state->instances.end(),
+      [](const comet::InstanceSpec& instance) {
+        return instance.role == comet::InstanceRole::Skills;
+      });
   const bool data_parallel =
       comet::DataParallelEnabled(desired_state->inference);
   const bool hybrid_data_parallel =
@@ -2645,6 +2746,12 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       {"plane_name", plane_name},
       {"plane_mode", comet::ToString(desired_state->plane_mode)},
       {"interaction_enabled", llm_plane},
+      {"skills_enabled", skills_enabled},
+      {"skills_ready", skills_ready},
+      {"skills_container_name",
+       skills_instance != desired_state->instances.end()
+           ? nlohmann::json(skills_instance->name)
+           : nlohmann::json(nullptr)},
       {"ready", llm_plane && running_plane && observation_ready && runtime_ready &&
                     resolution.target.has_value()},
       {"reason", reason},

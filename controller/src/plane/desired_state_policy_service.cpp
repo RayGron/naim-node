@@ -109,7 +109,8 @@ bool DesiredStatePolicyService::NodeAllowsInstanceRole(
   switch (execution_mode) {
     case comet::HostExecutionMode::InferOnly:
       return role == comet::InstanceRole::Infer ||
-             role == comet::InstanceRole::App;
+             role == comet::InstanceRole::App ||
+             role == comet::InstanceRole::Skills;
     case comet::HostExecutionMode::WorkerOnly:
       return role == comet::InstanceRole::Worker;
     case comet::HostExecutionMode::Mixed:

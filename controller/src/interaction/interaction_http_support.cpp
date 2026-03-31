@@ -1,6 +1,7 @@
 #include "interaction/interaction_http_support.h"
 
 #include "app/controller_composition_support.h"
+#include "skills/plane_skills_service.h"
 
 using nlohmann::json;
 
@@ -54,6 +55,15 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
       resolution.desired_state.interaction->system_prompt.has_value() &&
       !resolution.desired_state.interaction->system_prompt->empty()) {
     system_instruction_parts.push_back(*resolution.desired_state.interaction->system_prompt);
+  }
+  if (payload.contains(comet::controller::PlaneSkillsService::kSystemInstructionPayloadKey) &&
+      payload.at(comet::controller::PlaneSkillsService::kSystemInstructionPayloadKey).is_string()) {
+    const std::string skills_instruction =
+        payload.at(comet::controller::PlaneSkillsService::kSystemInstructionPayloadKey)
+            .get<std::string>();
+    if (!skills_instruction.empty()) {
+      system_instruction_parts.push_back(skills_instruction);
+    }
   }
   if (resolved_policy.repository_analysis &&
       resolution.desired_state.interaction.has_value() &&
@@ -144,6 +154,11 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
   payload.erase("max_elapsed_time_ms");
   payload.erase("semantic_goal");
   payload.erase("response_format");
+  payload.erase("session_id");
+  payload.erase("skill_ids");
+  payload.erase(comet::controller::PlaneSkillsService::kSystemInstructionPayloadKey);
+  payload.erase(comet::controller::PlaneSkillsService::kAppliedSkillsPayloadKey);
+  payload.erase(comet::controller::PlaneSkillsService::kSkillsSessionIdPayloadKey);
   payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   if (force_stream) {
     payload["stream"] = true;

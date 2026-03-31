@@ -149,7 +149,8 @@ comet::DesiredState RebaseStateForRuntimeRoot(
     const bool node_local_disk =
         disk.kind == comet::DiskKind::InferPrivate ||
         disk.kind == comet::DiskKind::WorkerPrivate ||
-        disk.kind == comet::DiskKind::AppPrivate;
+        disk.kind == comet::DiskKind::AppPrivate ||
+        disk.kind == comet::DiskKind::SkillsPrivate;
     disk.host_path = RebaseManagedPath(
         disk.host_path,
         storage_root,
@@ -386,7 +387,8 @@ std::string ManagedDiskImagePath(
   const bool node_local_disk =
       disk.kind == comet::DiskKind::InferPrivate ||
       disk.kind == comet::DiskKind::WorkerPrivate ||
-      disk.kind == comet::DiskKind::AppPrivate;
+      disk.kind == comet::DiskKind::AppPrivate ||
+      disk.kind == comet::DiskKind::SkillsPrivate;
   const std::filesystem::path base(
       RebaseManagedPath(
           std::string(kDefaultManagedStorageRoot) + "/disk-images",

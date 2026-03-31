@@ -12,6 +12,7 @@ enum class InstanceRole {
   Infer,
   Worker,
   App,
+  Skills,
 };
 
 enum class DiskKind {
@@ -19,6 +20,7 @@ enum class DiskKind {
   InferPrivate,
   WorkerPrivate,
   AppPrivate,
+  SkillsPrivate,
 };
 
 struct PublishedPort {
@@ -235,6 +237,10 @@ struct InteractionSettings {
   std::optional<CompletionPolicy> analysis_long_completion_policy;
 };
 
+struct SkillsSettings {
+  bool enabled = false;
+};
+
 struct DesiredState {
   std::string plane_name;
   std::string plane_shared_disk_name;
@@ -245,6 +251,7 @@ struct DesiredState {
   std::optional<std::string> placement_target;
   std::optional<BootstrapModelSpec> bootstrap_model;
   std::optional<InteractionSettings> interaction;
+  std::optional<SkillsSettings> skills;
   InferenceRuntimeSettings inference;
   WorkerGroupSpec worker_group;
   GatewaySettings gateway;

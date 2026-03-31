@@ -26,6 +26,7 @@ class DesiredStateV2Projector final {
   void ProjectInfer();
   void ProjectWorker();
   void ProjectApp();
+  void ProjectSkills();
   void ProjectResources();
 
   bool ShouldEmitTopology() const;
@@ -57,6 +58,7 @@ class DesiredStateV2Projector final {
   nlohmann::json value_;
   const InstanceSpec* infer_instance_ = nullptr;
   const InstanceSpec* app_instance_ = nullptr;
+  const InstanceSpec* skills_instance_ = nullptr;
   std::vector<const InstanceSpec*> worker_instances_;
   const DiskSpec* shared_disk_ = nullptr;
 };

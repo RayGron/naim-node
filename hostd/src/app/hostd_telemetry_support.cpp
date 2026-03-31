@@ -322,13 +322,23 @@ std::optional<std::string> InferRuntimeStatusPathForInstance(
 std::optional<std::string> WorkerRuntimeStatusPathForInstance(
     const comet::DesiredState& state,
     const comet::InstanceSpec& instance) {
-  if (instance.role != comet::InstanceRole::Worker) {
+  if (instance.role != comet::InstanceRole::Worker &&
+      instance.role != comet::InstanceRole::Skills) {
     return std::nullopt;
   }
   for (const auto& disk : state.disks) {
-    if (disk.kind == comet::DiskKind::WorkerPrivate && disk.owner_name == instance.name &&
+    const bool matching_disk_kind =
+        (instance.role == comet::InstanceRole::Worker &&
+         disk.kind == comet::DiskKind::WorkerPrivate) ||
+        (instance.role == comet::InstanceRole::Skills &&
+         disk.kind == comet::DiskKind::SkillsPrivate);
+    if (matching_disk_kind && disk.owner_name == instance.name &&
         disk.node_name == instance.node_name) {
-      return (fs::path(disk.host_path) / "worker-runtime-status.json").string();
+      return (fs::path(disk.host_path) /
+              (instance.role == comet::InstanceRole::Skills
+                   ? "skills-runtime-status.json"
+                   : "worker-runtime-status.json"))
+          .string();
     }
   }
   return std::nullopt;

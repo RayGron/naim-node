@@ -348,6 +348,7 @@ add_executable(
   controller/src/scheduler/scheduler_http_service.cpp
   controller/src/scheduler/scheduler_view_service.cpp
   controller/src/plane/plane_service.cpp
+  controller/src/skills/plane_skills_service.cpp
   controller/src/scheduler/scheduler_service.cpp
   controller/src/read_model/state_aggregate_loader.cpp
   controller/src/web/web_ui_service.cpp

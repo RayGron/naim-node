@@ -2,6 +2,8 @@
 
 #include <sstream>
 
+#include "skills/plane_skills_service.h"
+
 using nlohmann::json;
 
 InteractionHttpService::InteractionHttpService(InteractionHttpSupport support)
@@ -17,6 +19,14 @@ comet::controller::InteractionSessionResult InteractionHttpService::ExecuteSessi
     const comet::controller::PlaneInteractionResolution& resolution,
     const comet::controller::InteractionRequestContext& request_context) const {
   return MakeSessionExecutor().Execute(resolution, request_context);
+}
+
+std::optional<comet::controller::InteractionValidationError>
+InteractionHttpService::ResolveRequestSkills(
+    const comet::controller::PlaneInteractionResolution& resolution,
+    comet::controller::InteractionRequestContext* request_context) const {
+  return comet::controller::PlaneSkillsService().ResolveInteractionSkills(
+      resolution, request_context);
 }
 
 json InteractionHttpService::BuildContinuationPayload(
@@ -276,6 +286,10 @@ InteractionHttpService::MakeProxyExecutor() const {
             response.body,
             response.headers,
         };
+      },
+      [&](const comet::controller::PlaneInteractionResolution& resolution,
+          comet::controller::InteractionRequestContext* request_context) {
+        return ResolveRequestSkills(resolution, request_context);
       });
 }
 
@@ -284,6 +298,10 @@ InteractionHttpService::MakeStreamRequestResolver() const {
   return comet::controller::InteractionStreamRequestResolver(
       [&](const std::string& db_path, const std::string& plane_name) {
         return MakePlaneResolver().Resolve(db_path, plane_name);
+      },
+      [&](const comet::controller::PlaneInteractionResolution& resolution,
+          comet::controller::InteractionRequestContext* request_context) {
+        return ResolveRequestSkills(resolution, request_context);
       });
 }
 

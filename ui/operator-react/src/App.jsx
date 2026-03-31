@@ -79,6 +79,10 @@ function interactionPath(planeName, suffix) {
   return planePath(planeName, `interaction/${suffix}`);
 }
 
+function skillsPath(planeName, suffix = "") {
+  return suffix ? planePath(planeName, `skills/${suffix}`) : planePath(planeName, "skills");
+}
+
 function queryPath(path, query) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -262,6 +266,29 @@ function compactBytes(value) {
     unitIndex += 1;
   }
   return `${amount.toFixed(amount >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function parseLineSeparatedValues(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function renderLineSeparatedValues(values) {
+  return Array.isArray(values) ? values.join("\n") : "";
+}
+
+function buildEmptySkillForm() {
+  return {
+    id: "",
+    name: "",
+    description: "",
+    content: "",
+    enabled: true,
+    sessionIdsText: "",
+    cometLinksText: "",
+  };
 }
 
 function formatDashboardBytesMbGb(value) {
@@ -1046,6 +1073,178 @@ function MetricSparklineButton({ label, history, onOpen }) {
   );
 }
 
+function SkillsDialog({
+  dialog,
+  onClose,
+  onRefresh,
+  onStartCreate,
+  onEdit,
+  onFormChange,
+  onSave,
+  onToggle,
+  onDelete,
+}) {
+  if (!dialog?.open) {
+    return null;
+  }
+
+  const items = Array.isArray(dialog.items) ? dialog.items : [];
+  const form = dialog.form || buildEmptySkillForm();
+  const editing = dialog.mode === "edit";
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="modal-card plane-detail-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skills-dialog-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Plane skills</div>
+            <h2 id="skills-dialog-title">{dialog.planeName}</h2>
+          </div>
+          <div className="toolbar">
+            <button className="ghost-button" type="button" onClick={onRefresh} disabled={dialog.busy}>
+              Refresh
+            </button>
+            <button className="ghost-button" type="button" onClick={onStartCreate} disabled={dialog.busy}>
+              New skill
+            </button>
+            <button
+              className="ghost-button compact-button icon-button"
+              type="button"
+              aria-label="Close skills dialog"
+              title="Close skills dialog"
+              onClick={onClose}
+            >
+              <ActionIcon kind="close" />
+            </button>
+          </div>
+        </div>
+        {dialog.error ? <div className="error-banner">{dialog.error}</div> : null}
+        <div className="panel-grid">
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Stored skills</h3>
+              <span className="subpanel-meta">{items.length} item(s)</span>
+            </div>
+            <div className="list-column">
+              {items.length === 0 ? (
+                <EmptyState
+                  title="No skills yet"
+                  detail="Create the first skill for this plane and bind it to sessions or explicit request ids later."
+                />
+              ) : (
+                items.map((item) => (
+                  <article className="list-card" key={item.id}>
+                    <div className="card-row">
+                      <div>
+                        <strong>{item.name || item.id}</strong>
+                        <div className="summary-meta">{item.description || "No description"}</div>
+                      </div>
+                      <span className={`tag ${item.enabled ? "is-healthy" : "is-warning"}`}>
+                        {statusDot(item.enabled ? "is-healthy" : "is-warning")}
+                        <span>{item.enabled ? "enabled" : "disabled"}</span>
+                      </span>
+                    </div>
+                    <div className="metric-grid compact-metric-grid">
+                      <div className="metric-row"><span>Sessions</span><strong>{Array.isArray(item.session_ids) ? item.session_ids.length : 0}</strong></div>
+                      <div className="metric-row"><span>Links</span><strong>{Array.isArray(item.comet_links) ? item.comet_links.length : 0}</strong></div>
+                      <div className="metric-row"><span>Updated</span><strong>{formatTimestamp(item.updated_at)}</strong></div>
+                    </div>
+                    <div className="toolbar">
+                      <button className="ghost-button" type="button" onClick={() => onEdit(item)} disabled={dialog.busy}>
+                        Edit
+                      </button>
+                      <button className="ghost-button" type="button" onClick={() => onToggle(item)} disabled={dialog.busy}>
+                        {item.enabled ? "Disable" : "Enable"}
+                      </button>
+                      <button className="ghost-button" type="button" onClick={() => onDelete(item)} disabled={dialog.busy}>
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>{editing ? "Edit skill" : "Create skill"}</h3>
+              <span className="subpanel-meta">Stored in plane-scoped SQLite</span>
+            </div>
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <span className="field-label-title">Name</span>
+                <input
+                  className="text-input"
+                  value={form.name}
+                  onChange={(event) => onFormChange("name", event.target.value)}
+                />
+              </label>
+              <label className="field-label plane-checkbox">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.enabled)}
+                  onChange={(event) => onFormChange("enabled", event.target.checked)}
+                />
+                <span className="field-label-inline">Enabled</span>
+              </label>
+            </div>
+            <label className="field-label">
+              <span className="field-label-title">Description</span>
+              <textarea
+                className="editor-textarea"
+                value={form.description}
+                onChange={(event) => onFormChange("description", event.target.value)}
+                rows={3}
+              />
+            </label>
+            <label className="field-label">
+              <span className="field-label-title">Content</span>
+              <textarea
+                className="editor-textarea"
+                value={form.content}
+                onChange={(event) => onFormChange("content", event.target.value)}
+                rows={10}
+              />
+            </label>
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <span className="field-label-title">Session ids</span>
+                <textarea
+                  className="editor-textarea"
+                  value={form.sessionIdsText}
+                  onChange={(event) => onFormChange("sessionIdsText", event.target.value)}
+                  rows={6}
+                />
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Comet links</span>
+                <textarea
+                  className="editor-textarea"
+                  value={form.cometLinksText}
+                  onChange={(event) => onFormChange("cometLinksText", event.target.value)}
+                  rows={6}
+                />
+              </label>
+            </div>
+            <div className="toolbar">
+              <button className="ghost-button" type="button" onClick={onSave} disabled={dialog.busy}>
+                {editing ? "Save skill" : "Create skill"}
+              </button>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SummaryCard({ label, value, meta, history, onOpenTrend }) {
   return (
     <article className="summary-card">
@@ -1447,6 +1646,16 @@ function App() {
     planeName: "",
     text: "",
     form: null,
+    originalSkillsEnabled: false,
+    busy: false,
+    error: "",
+  });
+  const [skillsDialog, setSkillsDialog] = useState({
+    open: false,
+    planeName: "",
+    items: [],
+    mode: "create",
+    form: buildEmptySkillForm(),
     busy: false,
     error: "",
   });
@@ -1476,6 +1685,15 @@ function App() {
     setChatError("");
     setApiHealthy(false);
     setStreamHealthy(false);
+    setSkillsDialog({
+      open: false,
+      planeName: "",
+      items: [],
+      mode: "create",
+      form: buildEmptySkillForm(),
+      busy: false,
+      error: "",
+    });
   }
 
   function handleUnauthorized() {
@@ -2070,6 +2288,7 @@ function App() {
           planeName: "",
           text: JSON.stringify(buildDesiredStateV2FromForm(form), null, 2),
           form,
+          originalSkillsEnabled: false,
           busy: false,
           error: "",
         });
@@ -2087,6 +2306,7 @@ function App() {
         form: payload.desired_state_v2
           ? buildPlaneFormStateFromDesiredStateV2(payload.desired_state_v2)
           : null,
+        originalSkillsEnabled: Boolean(payload?.desired_state_v2?.skills?.enabled),
         busy: false,
         error: "",
       });
@@ -2111,6 +2331,19 @@ function App() {
       if (planeDialog.mode === "edit" && desiredState.plane_name !== planeDialog.planeName) {
         throw new Error("Plane rename is not supported in edit mode.");
       }
+      if (
+        planeDialog.mode === "edit" &&
+        planeDialog.originalSkillsEnabled &&
+        !Boolean(desiredState?.skills?.enabled)
+      ) {
+        const confirmed = window.confirm(
+          "Disable Skills for this plane? The dedicated skills service and its SQLite data will be removed on rollout.",
+        );
+        if (!confirmed) {
+          setPlaneDialog((current) => ({ ...current, busy: false }));
+          return;
+        }
+      }
       const requestBody = isDesiredStateV2(desiredState)
         ? { desired_state_v2: desiredState }
         : { desired_state: desiredState };
@@ -2132,6 +2365,7 @@ function App() {
         planeName: "",
         text: "",
         form: null,
+        originalSkillsEnabled: false,
         busy: false,
         error: "",
       });
@@ -2532,6 +2766,7 @@ function App() {
   }, [selectedPlane, selectedPage]);
 
   const desiredState = planeDetail?.desired_state || null;
+  const desiredStateV2 = planeDetail?.desired_state_v2 || null;
   const planeRecord =
     planeDetail?.planes?.find((item) => item.name === selectedPlane) || null;
   const planeMode =
@@ -2540,6 +2775,8 @@ function App() {
     planeRecord?.plane_mode ||
     "compute";
   const llmPlane = planeMode === "llm";
+  const skillsEnabled =
+    Boolean(desiredStateV2?.skills?.enabled) || Boolean(desiredState?.skills?.enabled);
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
   const interactionReady = interactionStatus?.ready === true;
   const nodeItems = dashboard?.nodes || [];
@@ -2684,6 +2921,196 @@ function App() {
       setVisibleModelCount((current) =>
         Math.min(activeModelCount, current + MODEL_LIBRARY_PAGE_SIZE),
       );
+    }
+  }
+
+  async function refreshSkillsDialog(planeName = skillsDialog.planeName || selectedPlane) {
+    if (!planeName) {
+      return;
+    }
+    setSkillsDialog((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const payload = await fetchJson(skillsPath(planeName));
+      setSkillsDialog((current) => ({
+        ...current,
+        open: true,
+        planeName,
+        items: Array.isArray(payload.skills) ? payload.skills : [],
+        busy: false,
+        error: "",
+      }));
+    } catch (error) {
+      setSkillsDialog((current) => ({
+        ...current,
+        open: true,
+        planeName,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function openSkillsDialog(planeName = selectedPlane) {
+    setSkillsDialog({
+      open: true,
+      planeName,
+      items: [],
+      mode: "create",
+      form: buildEmptySkillForm(),
+      busy: true,
+      error: "",
+    });
+    await refreshSkillsDialog(planeName);
+  }
+
+  function closeSkillsDialog() {
+    setSkillsDialog({
+      open: false,
+      planeName: "",
+      items: [],
+      mode: "create",
+      form: buildEmptySkillForm(),
+      busy: false,
+      error: "",
+    });
+  }
+
+  function startCreateSkill() {
+    setSkillsDialog((current) => ({
+      ...current,
+      mode: "create",
+      form: buildEmptySkillForm(),
+      error: "",
+    }));
+  }
+
+  function startEditSkill(skill) {
+    setSkillsDialog((current) => ({
+      ...current,
+      mode: "edit",
+      form: {
+        id: skill.id || "",
+        name: skill.name || "",
+        description: skill.description || "",
+        content: skill.content || "",
+        enabled: skill.enabled !== false,
+        sessionIdsText: renderLineSeparatedValues(skill.session_ids),
+        cometLinksText: renderLineSeparatedValues(skill.comet_links),
+      },
+      error: "",
+    }));
+  }
+
+  function updateSkillFormField(key, value) {
+    setSkillsDialog((current) => ({
+      ...current,
+      form: {
+        ...(current.form || buildEmptySkillForm()),
+        [key]: value,
+      },
+    }));
+  }
+
+  async function saveSkillForm() {
+    const planeName = skillsDialog.planeName || selectedPlane;
+    if (!planeName) {
+      return;
+    }
+    const payload = {
+      name: String(skillsDialog.form?.name || "").trim(),
+      description: String(skillsDialog.form?.description || "").trim(),
+      content: String(skillsDialog.form?.content || "").trim(),
+      enabled: Boolean(skillsDialog.form?.enabled),
+      session_ids: parseLineSeparatedValues(skillsDialog.form?.sessionIdsText),
+      comet_links: parseLineSeparatedValues(skillsDialog.form?.cometLinksText),
+    };
+    if (!payload.name || !payload.description || !payload.content) {
+      setSkillsDialog((current) => ({
+        ...current,
+        error: "Name, description, and content are required.",
+      }));
+      return;
+    }
+    setSkillsDialog((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const editing = skillsDialog.mode === "edit" && skillsDialog.form?.id;
+      await fetchJson(
+        editing ? skillsPath(planeName, encodeURIComponent(skillsDialog.form.id)) : skillsPath(planeName),
+        {
+          method: editing ? "PUT" : "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+      await refreshSkillsDialog(planeName);
+      setSkillsDialog((current) => ({
+        ...current,
+        mode: "create",
+        form: buildEmptySkillForm(),
+      }));
+    } catch (error) {
+      setSkillsDialog((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function toggleSkill(skill) {
+    const planeName = skillsDialog.planeName || selectedPlane;
+    if (!planeName || !skill?.id) {
+      return;
+    }
+    setSkillsDialog((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      await fetchJson(skillsPath(planeName, encodeURIComponent(skill.id)), {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled: !skill.enabled }),
+      });
+      await refreshSkillsDialog(planeName);
+    } catch (error) {
+      setSkillsDialog((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function deleteSkill(skill) {
+    const planeName = skillsDialog.planeName || selectedPlane;
+    if (!planeName || !skill?.id) {
+      return;
+    }
+    const confirmed = window.confirm(`Delete skill ${skill.name || skill.id}?`);
+    if (!confirmed) {
+      return;
+    }
+    setSkillsDialog((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      await fetchJson(skillsPath(planeName, encodeURIComponent(skill.id)), {
+        method: "DELETE",
+      });
+      await refreshSkillsDialog(planeName);
+      if (skillsDialog.form?.id === skill.id) {
+        setSkillsDialog((current) => ({
+          ...current,
+          mode: "create",
+          form: buildEmptySkillForm(),
+        }));
+      }
+    } catch (error) {
+      setSkillsDialog((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || String(error),
+      }));
     }
   }
 
@@ -2973,6 +3400,16 @@ function App() {
               >
                 Edit plane
               </button>
+              {skillsEnabled ? (
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => openSkillsDialog(selectedPlane)}
+                  disabled={actionBusy !== ""}
+                >
+                  Skills
+                </button>
+              ) : null}
               <button
                 className="ghost-button compact-button icon-button"
                 type="button"
@@ -4524,12 +4961,25 @@ function App() {
             mode: "new",
             planeName: "",
             text: "",
+            form: null,
+            originalSkillsEnabled: false,
             busy: false,
             error: "",
           })
         }
         onSave={savePlaneDialog}
         modelLibraryItems={modelLibrary.items || []}
+      />
+      <SkillsDialog
+        dialog={skillsDialog}
+        onClose={closeSkillsDialog}
+        onRefresh={() => refreshSkillsDialog()}
+        onStartCreate={startCreateSkill}
+        onEdit={startEditSkill}
+        onFormChange={updateSkillFormField}
+        onSave={saveSkillForm}
+        onToggle={toggleSkill}
+        onDelete={deleteSkill}
       />
     </div>
   );

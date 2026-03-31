@@ -24,6 +24,10 @@ class InteractionHttpService {
       const comet::controller::PlaneInteractionResolution& resolution,
       const comet::controller::InteractionRequestContext& request_context) const;
 
+  std::optional<comet::controller::InteractionValidationError> ResolveRequestSkills(
+      const comet::controller::PlaneInteractionResolution& resolution,
+      comet::controller::InteractionRequestContext* request_context) const;
+
   HttpResponse BuildSessionResponse(
       const comet::controller::PlaneInteractionResolution& resolution,
       const comet::controller::InteractionRequestContext& request_context,
