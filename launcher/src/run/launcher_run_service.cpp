@@ -14,6 +14,7 @@
 #include <unistd.h>
 #endif
 
+#include "comet/core/platform_compat.h"
 #include "comet/security/crypto_utils.h"
 #include "comet/state/sqlite_store.h"
 
