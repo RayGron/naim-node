@@ -264,6 +264,16 @@ target_link_libraries(comet-controller-plane-deletion-tests PRIVATE comet-common
 comet_enable_strict_warnings(comet-controller-plane-deletion-tests)
 
 add_executable(
+  comet-plane-skills-tests
+  controller/src/skills/plane_skills_service.cpp
+  controller/src/skills/plane_skills_service_tests.cpp
+)
+target_include_directories(
+  comet-plane-skills-tests PRIVATE common/include controller/include)
+target_link_libraries(comet-plane-skills-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-plane-skills-tests)
+
+add_executable(
   comet-hostd-local-state-tests
   hostd/src/app/hostd_local_state_support.cpp
   hostd/src/app/hostd_local_state_support_tests.cpp

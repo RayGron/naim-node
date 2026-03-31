@@ -14,6 +14,13 @@ std::vector<std::pair<std::string, std::string>> DefaultJsonHeaders() {
   return {{"Content-Type", "application/json"}};
 }
 
+std::string NormalizeControllerTargetHost(const PublishedPort& port) {
+  if (port.host_ip.empty() || port.host_ip == "0.0.0.0") {
+    return "127.0.0.1";
+  }
+  return port.host_ip;
+}
+
 const InstanceSpec* FindSkillsInstance(const DesiredState& desired_state) {
   const auto it = std::find_if(
       desired_state.instances.begin(),
@@ -55,7 +62,7 @@ std::optional<ControllerEndpointTarget> PlaneSkillsService::ResolveTarget(
     return std::nullopt;
   }
   ControllerEndpointTarget target;
-  target.host = skills->node_name;
+  target.host = NormalizeControllerTargetHost(*published);
   target.port = published->host_port;
   target.raw = "http://" + target.host + ":" + std::to_string(target.port);
   return target;
