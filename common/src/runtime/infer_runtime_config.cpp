@@ -7,6 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "comet/state/worker_group_topology.h"
+
 namespace comet {
 
 namespace {
@@ -202,12 +204,17 @@ json BuildWorkerGroupJson(const DesiredState& state, const std::string& infer_in
     }
     const bool colocated_with_primary_infer =
         member.node_name == infer.node_name;
+    const int rpc_port =
+        state.inference.runtime_engine == "llama.cpp" &&
+                state.inference.distributed_backend == "llama_rpc"
+            ? StableLlamaRpcWorkerPort(state.plane_name, member.name)
+            : member.rpc_port;
     std::string rpc_endpoint;
-    if (member.rpc_port > 0) {
+    if (rpc_port > 0) {
       if (colocated_with_primary_infer && !member.name.empty()) {
-        rpc_endpoint = member.name + ":" + std::to_string(member.rpc_port);
+        rpc_endpoint = member.name + ":" + std::to_string(rpc_port);
       } else if (!member.node_name.empty()) {
-        rpc_endpoint = member.node_name + ":" + std::to_string(member.rpc_port);
+        rpc_endpoint = member.node_name + ":" + std::to_string(rpc_port);
       }
     }
     json item = {
@@ -227,7 +234,7 @@ json BuildWorkerGroupJson(const DesiredState& state, const std::string& infer_in
         {"data_parallel_api_endpoint", member.data_parallel_api_endpoint},
         {"data_parallel_head_address", member.data_parallel_head_address},
         {"data_parallel_rpc_port", member.data_parallel_rpc_port},
-        {"rpc_port", member.rpc_port},
+        {"rpc_port", rpc_port},
         {"rpc_endpoint", rpc_endpoint},
         {"colocated_with_primary_infer", colocated_with_primary_infer},
         {"gpu_fraction", member.gpu_fraction},

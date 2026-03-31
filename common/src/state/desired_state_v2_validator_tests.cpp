@@ -61,6 +61,20 @@ const comet::InstanceSpec& FindInstance(
   throw std::runtime_error("instance not found: " + name);
 }
 
+comet::InstanceSpec& FindMutableInstance(
+    comet::DesiredState* state,
+    const std::string& name) {
+  if (state == nullptr) {
+    throw std::runtime_error("state is null");
+  }
+  for (auto& instance : state->instances) {
+    if (instance.name == name) {
+      return instance;
+    }
+  }
+  throw std::runtime_error("instance not found: " + name);
+}
+
 const comet::DiskSpec& FindDisk(
     const comet::DesiredState& state,
     const std::string& name) {
@@ -337,6 +351,35 @@ int main() {
                   .environment.at("COMET_INFER_RUNTIME_CONFIG") ==
               "/comet/shared/control/llama-rpc-backend/infer/infer-llama-rpc-backend/infer-runtime.json",
           "llama-rpc-backend: infer runtime config path mismatch");
+      auto stale_state = state;
+      auto& stale_worker = FindMutableInstance(&stale_state, "worker-llama-rpc-backend-a");
+      stale_worker.environment["COMET_WORKER_RPC_PORT"] = "29600";
+      stale_worker.environment["COMET_WORKER_RPC_ENDPOINT"] =
+          "worker-llama-rpc-backend-a:29600";
+      stale_state.worker_group.members.front().rpc_port = 29600;
+      const auto stale_runtime_config = json::parse(
+          comet::RenderInferRuntimeConfigJsonForInstance(
+              stale_state,
+              "infer-llama-rpc-backend-a"));
+      Expect(stale_runtime_config.at("worker_group").at("members").at(0).at("rpc_port").get<int>() ==
+                 expected_rpc_port,
+             "llama-rpc-backend: infer runtime config should heal legacy worker rpc ports");
+      const auto stale_compose_plans = comet::BuildNodeComposePlans(stale_state);
+      bool found_stale_worker_service = false;
+      for (const auto& service : stale_compose_plans.front().services) {
+        if (service.name != "worker-llama-rpc-backend-a") {
+          continue;
+        }
+        found_stale_worker_service = true;
+        Expect(service.environment.at("COMET_WORKER_RPC_PORT") ==
+                   std::to_string(expected_rpc_port),
+               "llama-rpc-backend: compose worker env should heal legacy rpc port");
+        Expect(service.published_ports.size() == 1 &&
+                   service.published_ports.front().host_port == expected_rpc_port,
+               "llama-rpc-backend: compose worker publish should heal legacy rpc port");
+      }
+      Expect(found_stale_worker_service,
+             "llama-rpc-backend: expected compose service for healed worker");
       std::cout << "ok: llama-rpc-backend" << '\n';
     }
 

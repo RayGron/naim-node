@@ -78,6 +78,16 @@ int WorkerRpcPort(const WorkerGroupMemberSpec* worker_group_member) {
              : 50052;
 }
 
+int ManagedLlamaRpcWorkerPort(
+    const DesiredState& state,
+    const InstanceSpec& instance,
+    const WorkerGroupMemberSpec* worker_group_member) {
+  if (UsesLlamaRpcRuntime(state) && instance.role == InstanceRole::Worker) {
+    return StableLlamaRpcWorkerPort(state.plane_name, instance.name);
+  }
+  return WorkerRpcPort(worker_group_member);
+}
+
 int WorkerPublishedHostPort(
     const DesiredState& state,
     const InstanceSpec& instance) {
@@ -118,7 +128,8 @@ bool IsManagedLlamaRpcWorkerPublishedPort(
       port.host_port != port.container_port) {
     return false;
   }
-  return port.host_port == WorkerRpcPort(worker_group_member) || port.host_port == 50052;
+  return port.host_port == ManagedLlamaRpcWorkerPort(state, instance, worker_group_member) ||
+         port.host_port == 50052;
 }
 
 bool ContainsPublishedPort(
@@ -540,7 +551,11 @@ ComposeService BuildComposeService(
     }
   } else if (use_llama_rpc && instance.role == InstanceRole::Worker) {
     const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
-    const int rpc_port = WorkerRpcPort(worker_group_member);
+    const int rpc_port = ManagedLlamaRpcWorkerPort(state, instance, worker_group_member);
+    service.environment["COMET_WORKER_RPC_PORT"] = std::to_string(rpc_port);
+    service.environment["COMET_WORKER_RPC_HOST"] = "0.0.0.0";
+    service.environment["COMET_WORKER_RPC_ENDPOINT"] =
+        instance.name + ":" + std::to_string(rpc_port);
     AppendUniquePublishedPort(
         &service.published_ports,
         PublishedPort{"0.0.0.0", rpc_port, rpc_port});
