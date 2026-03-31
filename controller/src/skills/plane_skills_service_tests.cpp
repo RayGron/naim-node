@@ -17,15 +17,20 @@ comet::DesiredState BuildDesiredStateWithSkillsPort(const std::string& host_ip) 
   comet::DesiredState desired_state;
   desired_state.plane_name = "maglev";
   desired_state.plane_mode = comet::PlaneMode::Llm;
-  desired_state.skills = comet::SkillSettings{.enabled = true};
+  comet::SkillsSettings skills_settings;
+  skills_settings.enabled = true;
+  desired_state.skills = skills_settings;
 
   comet::InstanceSpec skills;
   skills.name = "skills-maglev";
   skills.plane_name = "maglev";
   skills.node_name = "local-hostd";
   skills.role = comet::InstanceRole::Skills;
-  skills.published_ports.push_back(
-      comet::PublishedPort{.host_ip = host_ip, .host_port = 27978, .container_port = 18120});
+  comet::PublishedPort published_port;
+  published_port.host_ip = host_ip;
+  published_port.host_port = 27978;
+  published_port.container_port = 18120;
+  skills.published_ports.push_back(published_port);
   desired_state.instances.push_back(skills);
   return desired_state;
 }
