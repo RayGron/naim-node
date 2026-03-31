@@ -766,6 +766,24 @@ function FieldTitle({ title, info, htmlFor }) {
   );
 }
 
+function FeatureToggle({ title, info, active, disabled = false, disabledLabel, onToggle }) {
+  const stateLabel = disabled ? disabledLabel || "Unavailable" : active ? "Enabled" : "Disabled";
+  return (
+    <button
+      className={`plane-feature-toggle${active ? " is-active" : ""}${disabled ? " is-disabled" : ""}`}
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      aria-pressed={active}
+    >
+      <span className="plane-feature-toggle-head">
+        <InfoLabel info={info} className="field-label-inline">{title}</InfoLabel>
+      </span>
+      <span className="plane-feature-toggle-state">{stateLabel}</span>
+    </button>
+  );
+}
+
 function ModelLibraryPicker({ items, selectedPath, onSelect }) {
   const rows = Array.isArray(items) ? items : [];
   if (rows.length === 0) {
@@ -998,6 +1016,26 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
       }));
   }
 
+  function bindPlaneMode() {
+    return (event) =>
+      updatePlaneDialogForm(setDialog, (current) => {
+        const nextPlaneMode = event.target.value;
+        return {
+          ...current,
+          planeMode: nextPlaneMode,
+          skillsEnabled: nextPlaneMode === "llm" ? current.skillsEnabled : false,
+        };
+      });
+  }
+
+  function toggleFeature(key) {
+    return () =>
+      updatePlaneDialogForm(setDialog, (current) => ({
+        ...current,
+        [key]: !current[key],
+      }));
+  }
+
   function selectLocalModel(item) {
     updatePlaneDialogForm(setDialog, (current) => {
       const planeName = String(current.planeName || "").trim();
@@ -1102,15 +1140,6 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
         description="Identity and mode for the plane you are about to create."
       />
       <div className="plane-form-grid">
-        <label className="field-label plane-checkbox">
-          <input
-            type="checkbox"
-            checked={form.skillsEnabled}
-            onChange={bindCheck("skillsEnabled")}
-            disabled={form.planeMode !== "llm"}
-          />
-          <InfoLabel info={FIELD_INFO.skillsEnabled} className="field-label-inline">Skills</InfoLabel>
-        </label>
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.planeName}>Plane name</InfoLabel>
           <input
@@ -1122,19 +1151,32 @@ export function PlaneV2FormBuilder({ dialog, setDialog, languageOptions, modelLi
         </label>
         <label className="field-label">
           <InfoLabel info={FIELD_INFO.planeMode}>Plane mode</InfoLabel>
-          <select className="text-input" value={form.planeMode} onChange={bindText("planeMode")}>
+          <select className="text-input" value={form.planeMode} onChange={bindPlaneMode()}>
             <option value="llm">llm</option>
             <option value="compute">compute</option>
           </select>
         </label>
-        <label className="field-label plane-checkbox">
-          <input
-            type="checkbox"
-            checked={form.protectedPlane}
-            onChange={bindCheck("protectedPlane")}
-          />
-          <InfoLabel info={FIELD_INFO.protectedPlane} className="field-label-inline">Protected plane</InfoLabel>
-        </label>
+      </div>
+
+      <SectionHeader
+        title="Features"
+        description="Plane-wide capabilities and protection flags."
+      />
+      <div className="plane-features-grid">
+        <FeatureToggle
+          title="Skills"
+          info={FIELD_INFO.skillsEnabled}
+          active={form.planeMode === "llm" && form.skillsEnabled}
+          disabled={form.planeMode !== "llm"}
+          disabledLabel="LLM only"
+          onToggle={toggleFeature("skillsEnabled")}
+        />
+        <FeatureToggle
+          title="Protected Plane"
+          info={FIELD_INFO.protectedPlane}
+          active={form.protectedPlane}
+          onToggle={toggleFeature("protectedPlane")}
+        />
       </div>
 
       <SectionHeader
