@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="comet-bg" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0a2a55" />
+      <stop offset="1" stop-color="#020b17" />
+    </linearGradient>
+    <linearGradient id="comet-trail" x1="18" y1="42" x2="40" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#78beff" />
+      <stop offset="1" stop-color="#ffd55e" />
+    </linearGradient>
+    <radialGradient id="comet-core" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(41 22) rotate(135) scale(12)">
+      <stop offset="0" stop-color="#fff4c4" />
+      <stop offset="0.55" stop-color="#ffd55e" />
+      <stop offset="1" stop-color="#ffb648" />
+    </radialGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#comet-bg)" />
+  <path
+    d="M17 44C17 33.5066 25.5066 25 36 25H47"
+    stroke="#4fa6ff"
+    stroke-width="4"
+    stroke-linecap="round"
+    opacity="0.95"
+  />
+  <path
+    d="M20 40L30.5 32.5L38 25"
+    stroke="url(#comet-trail)"
+    stroke-width="6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="41" cy="22" r="8" fill="url(#comet-core)" />
+  <circle cx="20" cy="19" r="2" fill="#78beff" opacity="0.95" />
+  <circle cx="48" cy="42" r="2.5" fill="#ffd55e" opacity="0.9" />
+</svg>
