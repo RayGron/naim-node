@@ -1,5 +1,6 @@
 #include "plane/dashboard_service.h"
 
+#include "plane/plane_dashboard_skills_summary_service.h"
 #include "read_model/state_aggregate_loader.h"
 
 #include <algorithm>
@@ -316,6 +317,9 @@ nlohmann::json DashboardService::BuildPayload(
       nodes_payload.ready_nodes,
       nodes_payload.not_ready_nodes,
       nodes_payload.degraded_gpu_nodes);
+  payload["skills"] = PlaneDashboardSkillsSummaryService::BuildPayload(
+      *view.desired_state,
+      store.LoadPlaneSkillBindings(view.desired_state->plane_name, std::nullopt));
 
   const auto latest_assignments_by_node =
       BuildLatestPlaneAssignmentsByNode(

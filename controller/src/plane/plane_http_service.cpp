@@ -6,6 +6,7 @@
 
 #include "comet/state/sqlite_store.h"
 #include "skills/plane_skill_catalog_service.h"
+#include "skills/plane_skills_service.h"
 
 using nlohmann::json;
 
@@ -191,6 +192,33 @@ HttpResponse PlaneHttpService::HandlePlanePath(
       const std::string path_suffix =
           remainder.substr(skills_pos + std::string("/skills").size());
       try {
+        if (path_suffix == "/resolve-context") {
+          if (request.method != "POST") {
+            return support_.build_json_response(
+                405, json{{"status", "method_not_allowed"}}, {});
+          }
+          comet::ControllerStore store(db_path);
+          store.Initialize();
+          const auto desired_state = store.LoadDesiredState(plane_name);
+          if (!desired_state.has_value()) {
+            return support_.build_json_response(
+                404,
+                json{{"status", "not_found"},
+                     {"message", "plane '" + plane_name + "' not found"},
+                     {"path", request.path}},
+                {});
+          }
+          comet::controller::PlaneInteractionResolution resolution;
+          resolution.db_path = db_path;
+          resolution.desired_state = *desired_state;
+          return support_.build_json_response(
+              200,
+              comet::controller::PlaneSkillsService().BuildContextResolutionPayload(
+                  db_path,
+                  resolution,
+                  support_.parse_json_request_body(request)),
+              {});
+        }
         if (path_suffix.empty() || path_suffix == "/") {
           if (request.method == "GET") {
             return support_.build_json_response(

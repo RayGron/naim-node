@@ -199,6 +199,18 @@ nlohmann::json RequestAppliedSkills(const InteractionRequestContext& request_con
   return nlohmann::json::array();
 }
 
+nlohmann::json RequestAutoAppliedSkills(
+    const InteractionRequestContext& request_context) {
+  if (request_context.payload.contains(
+          PlaneSkillsService::kAutoAppliedSkillsPayloadKey) &&
+      request_context.payload.at(
+          PlaneSkillsService::kAutoAppliedSkillsPayloadKey).is_array()) {
+    return request_context.payload.at(
+        PlaneSkillsService::kAutoAppliedSkillsPayloadKey);
+  }
+  return nlohmann::json::array();
+}
+
 std::optional<std::string> RequestSkillsSessionId(
     const InteractionRequestContext& request_context) {
   if (request_context.payload.contains(PlaneSkillsService::kSkillsSessionIdPayloadKey) &&
@@ -207,6 +219,19 @@ std::optional<std::string> RequestSkillsSessionId(
         .get<std::string>();
   }
   return std::nullopt;
+}
+
+std::string RequestSkillResolutionMode(
+    const InteractionRequestContext& request_context) {
+  if (request_context.payload.contains(
+          PlaneSkillsService::kSkillResolutionModePayloadKey) &&
+      request_context.payload.at(
+          PlaneSkillsService::kSkillResolutionModePayloadKey).is_string()) {
+    return request_context.payload.at(
+        PlaneSkillsService::kSkillResolutionModePayloadKey)
+        .get<std::string>();
+  }
+  return "none";
 }
 
 bool IsUtf8ContinuationByte(unsigned char value) {
@@ -959,6 +984,18 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
     context->normalized_model = active_model_id;
   }
 
+  if (payload.contains("auto_skills") && !payload.at("auto_skills").is_boolean()) {
+    return InteractionValidationError{
+        "malformed_request",
+        "auto_skills must be a boolean",
+        false,
+        nlohmann::json{{"field", "auto_skills"}},
+    };
+  }
+  if (!payload.contains("auto_skills")) {
+    payload["auto_skills"] = true;
+  }
+
   context->payload = std::move(payload);
   return std::nullopt;
 }
@@ -1085,6 +1122,9 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
   const InteractionContractResponder responder;
   nlohmann::json session_payload = BuildSessionPayload(result);
   session_payload["applied_skills"] = RequestAppliedSkills(request_context);
+  session_payload["auto_applied_skills"] = RequestAutoAppliedSkills(request_context);
+  session_payload["skill_resolution_mode"] =
+      RequestSkillResolutionMode(request_context);
   session_payload["skills_session_id"] =
       RequestSkillsSessionId(request_context).has_value()
           ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1147,6 +1187,9 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
             {"usage", session_payload.at("usage")},
             {"session", session_payload},
             {"applied_skills", RequestAppliedSkills(request_context)},
+            {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
+            {"skill_resolution_mode",
+             RequestSkillResolutionMode(request_context)},
             {"skills_session_id",
              RequestSkillsSessionId(request_context).has_value()
                  ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1188,6 +1231,9 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
           {"usage", session_payload.at("usage")},
           {"session", session_payload},
           {"applied_skills", RequestAppliedSkills(request_context)},
+          {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
+          {"skill_resolution_mode",
+           RequestSkillResolutionMode(request_context)},
           {"skills_session_id",
            RequestSkillsSessionId(request_context).has_value()
                ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1216,6 +1262,8 @@ nlohmann::json InteractionStreamPresenter::BuildSessionStartedEvent(
       {"served_model_name", ResolveInteractionServedModelName(resolution)},
       {"active_model_id", ResolveInteractionActiveModelId(resolution)},
       {"applied_skills", RequestAppliedSkills(request_context)},
+      {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
+      {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1329,6 +1377,8 @@ nlohmann::json InteractionStreamPresenter::BuildSessionCompleteEvent(
       {"request_id", request_id},
       {"session", session_payload},
       {"applied_skills", RequestAppliedSkills(request_context)},
+      {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
+      {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1358,6 +1408,8 @@ nlohmann::json InteractionStreamPresenter::BuildCompleteEvent(
       {"usage", session_payload.at("usage")},
       {"session", session_payload},
       {"applied_skills", RequestAppliedSkills(request_context)},
+      {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
+      {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1949,6 +2001,9 @@ void InteractionStreamSessionExecutor::Execute(
 
     nlohmann::json session_payload = session_presenter.BuildSessionPayload(session);
     session_payload["applied_skills"] = RequestAppliedSkills(request_context);
+    session_payload["auto_applied_skills"] = RequestAutoAppliedSkills(request_context);
+    session_payload["skill_resolution_mode"] =
+        RequestSkillResolutionMode(request_context);
     session_payload["skills_session_id"] =
         RequestSkillsSessionId(request_context).has_value()
             ? nlohmann::json(*RequestSkillsSessionId(request_context))

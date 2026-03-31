@@ -49,6 +49,7 @@ Supported fields for chat requests:
 - `model`
 - `session_id`
 - `skill_ids`
+- `auto_skills`
 
 Controller-owned normalization:
 
@@ -175,7 +176,8 @@ SSE event order:
 
 Every SSE lifecycle event includes `request_id`. Session-scoped events also include `session_id`.
 When Skills are active for a request, `session_started`, `session_complete`, and compatibility
-terminal events also include `applied_skills[]` and `skills_session_id`.
+terminal events also include `applied_skills[]`, `auto_applied_skills[]`,
+`skill_resolution_mode`, and `skills_session_id`.
 
 Terminal semantics:
 
@@ -231,6 +233,10 @@ Skill shape:
 Resolution behavior for interaction requests:
 
 - `skill_ids[]` are resolved first, in request order
+- if `skill_ids[]` is absent or empty, `auto_skills` defaults to `true`
+- when contextual resolution is enabled, only enabled plane-local skills already materialized in
+  `skills-<plane>` are candidates
+- `SkillsFactory` is not queried directly during interaction-time resolution
 - enabled skills bound to `session_id` are appended next, ordered by `updated_at DESC`
 - duplicates are removed by skill id
 - each resolved skill is materialized by `comet-node` into a controller-owned system prompt block
@@ -239,8 +245,18 @@ Resolution behavior for interaction requests:
 Response metadata when Skills are applied:
 
 - top-level `applied_skills[]`
+- top-level `auto_applied_skills[]`
+- top-level `skill_resolution_mode`
 - top-level `skills_session_id`
-- mirrored `applied_skills[]` and `skills_session_id` inside `session`
+- mirrored `applied_skills[]`, `auto_applied_skills[]`, `skill_resolution_mode`, and
+  `skills_session_id` inside `session`
+
+Contextual resolution debugging:
+
+- `POST /api/v1/planes/<plane>/skills/resolve-context`
+  - accepts `prompt` or `messages[]`
+  - returns `skill_resolution_mode`, `candidate_count`, `selected_skill_ids`, `selected_skills`
+  - uses only enabled plane-local skills for the current plane
 
 Plane selection and global catalog behavior for `SkillsFactory` are documented in
 [skills-factory.md](./skills-factory.md).

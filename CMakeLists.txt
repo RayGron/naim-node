@@ -269,6 +269,9 @@ add_executable(
   comet-plane-skills-tests
   controller/src/infra/controller_network_manager.cpp
   controller/src/http/controller_http_transport.cpp
+  controller/src/interaction/interaction_service.cpp
+  controller/src/plane/plane_dashboard_skills_summary_service.cpp
+  controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_service.cpp
   controller/src/skills/plane_skills_service_tests.cpp
@@ -288,6 +291,7 @@ add_executable(
   controller/src/plane/controller_state_service.cpp
   controller/src/plane/plane_deletion_support.cpp
   controller/src/plane/plane_service.cpp
+  controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_service.cpp
@@ -372,6 +376,7 @@ add_executable(
   controller/src/model/model_library_support.cpp
   controller/src/plane/plane_http_service.cpp
   controller/src/plane/plane_http_support.cpp
+  controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/plane/plane_mutation_service.cpp
   controller/src/plane/plane_realization_service.cpp
   controller/src/plane/plane_registry_service.cpp
@@ -386,6 +391,7 @@ add_executable(
   controller/src/scheduler/scheduler_http_service.cpp
   controller/src/scheduler/scheduler_view_service.cpp
   controller/src/plane/plane_service.cpp
+  controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_catalog_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
   controller/src/skills/plane_skills_service.cpp

@@ -11,6 +11,7 @@ import {
   filterSkillsFactoryItems,
   sortSkillsFactoryItems,
 } from "./skillsFactory.js";
+import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
 
 describe("skillsFactory utils", () => {
   const items = [
@@ -76,5 +77,33 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(validation.warnings).toContain(
       "Selected Skills Factory records are ignored until Skills is enabled.",
     );
+  });
+});
+
+describe("plane dashboard skills summary", () => {
+  it("formats disabled skills summary", () => {
+    expect(
+      formatPlaneDashboardSkillsSummary({
+        enabled: false,
+        enabled_count: 3,
+        total_count: 5,
+      }),
+    ).toEqual({
+      value: 0,
+      meta: "disabled",
+    });
+  });
+
+  it("formats enabled skills summary with counts", () => {
+    expect(
+      formatPlaneDashboardSkillsSummary({
+        enabled: true,
+        enabled_count: 2,
+        total_count: 5,
+      }),
+    ).toEqual({
+      value: 2,
+      meta: "enabled / 5 total",
+    });
   });
 });

@@ -98,6 +98,31 @@ Deleting from `SkillsFactory` is global detach:
 - deselection removes runtime copies no longer selected
 - interaction-time resolution still reads only the plane-local runtime copy
 
+### Contextual interaction-time activation
+
+Contextual skill activation is plane-local only:
+
+- interaction-time skill resolution reads only from the current plane's materialized
+  `skills-<plane>` catalog/runtime
+- `SkillsFactory` is never queried directly as a runtime source during interaction
+- canonical records become interaction candidates only after they are attached to the plane and
+  synchronized into that plane's local runtime/catalog
+
+Interaction behavior:
+
+- if `skill_ids[]` is present and non-empty, explicit selection takes precedence
+- otherwise `auto_skills` defaults to `true`
+- when `auto_skills=true`, `comet-node` may auto-select a bounded set of relevant enabled
+  plane-local skills
+- when `auto_skills=false`, contextual resolution is skipped
+
+Debugging:
+
+- `POST /api/v1/planes/<plane>/skills/resolve-context`
+  - resolves contextual skills for a prompt or `messages[]`
+  - returns selected ids, selected records, candidate count, and compact rationale
+  - uses only plane-local enabled skills
+
 ## Operator UI
 
 ### Sidebar
@@ -127,6 +152,22 @@ When `Skills` is enabled for an `llm` plane:
 - a `Skills Factory` selector table appears under `Features`
 - selected records persist into `desired-state.v2.skills.factory_skill_ids[]`
 - rollout or restart syncs those skills into the plane runtime copy
+
+### Plane dashboard
+
+Plane dashboard now exposes a compact Skills summary derived from plane-local state:
+
+- `enabled`
+- `enabled_count`
+- `total_count`
+
+The Web UI renders this as a dashboard summary card:
+
+- disabled planes show `0` with `disabled`
+- enabled planes show the enabled skill count with `enabled / X total`
+
+The counter is derived from the plane-local attached skill set, not from the global
+`SkillsFactory` catalog size.
 
 ### Models page
 

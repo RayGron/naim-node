@@ -19,6 +19,7 @@ import {
   PlaneV2FormBuilder,
   validatePlaneV2Form,
 } from "./planeV2Form.jsx";
+import { formatPlaneDashboardSkillsSummary } from "./planeSkills.js";
 import { filterSkillsFactoryItems, sortSkillsFactoryItems } from "./skillsFactory.js";
 
 const REFRESH_DEBOUNCE_MS = 350;
@@ -2901,6 +2902,13 @@ function App() {
   const llmPlane = planeMode === "llm";
   const skillsEnabled =
     Boolean(desiredStateV2?.skills?.enabled) || Boolean(desiredState?.skills?.enabled);
+  const dashboardSkillsSummary = dashboard?.skills || {
+    enabled: skillsEnabled,
+    enabled_count: 0,
+    total_count: 0,
+  };
+  const formattedSkillsSummary =
+    formatPlaneDashboardSkillsSummary(dashboardSkillsSummary);
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
   const interactionReady = interactionStatus?.ready === true;
   const nodeItems = dashboard?.nodes || [];
@@ -3754,6 +3762,11 @@ function App() {
                       )
                     }
                   />
+                <SummaryCard
+                  label="Skills"
+                  value={formattedSkillsSummary.value}
+                  meta={formattedSkillsSummary.meta}
+                />
                 <SummaryCard
                   label="Rollout actions"
                   value={dashboard.rollout?.total_actions ?? 0}
