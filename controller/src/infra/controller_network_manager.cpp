@@ -129,7 +129,9 @@ void ControllerNetworkManager::SendHttpResponse(
       << ReasonPhrase(response.status_code) << "\r\n";
   out << "Content-Type: " << response.content_type << "\r\n";
   for (const auto& [key, value] : response.headers) {
-    if (LowercaseCopy(key) == "content-type") {
+    const std::string lowered = LowercaseCopy(key);
+    if (lowered == "content-type" || lowered == "content-length" ||
+        lowered == "connection") {
       continue;
     }
     out << key << ": " << value << "\r\n";
