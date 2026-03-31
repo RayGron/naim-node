@@ -31,6 +31,40 @@ std::optional<int> FindQueryInt(
   return std::stoi(it->second);
 }
 
+bool StartsWithPlanesApiPath(const std::string& path) {
+  return ControllerHttpServerSupport::StartsWithPath(path, "/api/v1/planes/");
+}
+
+std::optional<std::string> ExtractPlaneFeatureRequestName(
+    const std::string& path,
+    const std::string& feature_suffix) {
+  if (!StartsWithPlanesApiPath(path)) {
+    return std::nullopt;
+  }
+  const std::string remainder = path.substr(std::string("/api/v1/planes/").size());
+  const auto feature_pos = remainder.find(feature_suffix);
+  if (feature_pos == std::string::npos) {
+    return std::nullopt;
+  }
+  const std::size_t suffix_end = feature_pos + feature_suffix.size();
+  if (suffix_end < remainder.size() && remainder.at(suffix_end) != '/') {
+    return std::nullopt;
+  }
+  if (feature_pos == 0) {
+    return std::nullopt;
+  }
+  return remainder.substr(0, feature_pos);
+}
+
+bool IsPlaneInteractionRequest(const std::string& path) {
+  return StartsWithPlanesApiPath(path) &&
+         path.find("/interaction/") != std::string::npos;
+}
+
+bool IsPlaneSkillsRequest(const std::string& path) {
+  return ExtractPlaneFeatureRequestName(path, "/skills").has_value();
+}
+
 }  // namespace
 
 ControllerHttpRouter::ControllerHttpRouter(
@@ -403,12 +437,9 @@ HttpResponse ControllerHttpRouter::HandleRequest(
       !ControllerHttpServerSupport::StartsWithPath(
           request.path,
           "/api/v1/hostd/")) {
-    const bool interaction_request =
-        ControllerHttpServerSupport::StartsWithPath(
-            request.path,
-            "/api/v1/planes/") &&
-        request.path.find("/interaction/") != std::string::npos;
-    if (!interaction_request) {
+    const bool interaction_request = IsPlaneInteractionRequest(request.path);
+    const bool skills_request = IsPlaneSkillsRequest(request.path);
+    if (!interaction_request && !skills_request) {
       try {
         comet::ControllerStore store(db_path_);
         store.Initialize();
@@ -421,6 +452,38 @@ HttpResponse ControllerHttpRouter::HandleRequest(
                    {"message", "authentication required"}},
               {{"Set-Cookie",
                 auth_support_.ClearSessionCookieHeader(request)}});
+        }
+      } catch (const std::exception& error) {
+        return deps_.build_json_response(
+            500,
+            json{{"status", "internal_error"},
+                 {"message", error.what()},
+                 {"path", request.path}},
+            {});
+      }
+    } else if (skills_request) {
+      try {
+        comet::ControllerStore store(db_path_);
+        store.Initialize();
+        const auto plane_name =
+            ExtractPlaneFeatureRequestName(request.path, "/skills");
+        if (plane_name.has_value()) {
+          const auto desired_state = store.LoadDesiredState(*plane_name);
+          if (desired_state.has_value() && desired_state->protected_plane &&
+              !auth_support_
+                   .AuthenticateProtectedPlaneRequest(
+                       store,
+                       request,
+                       *plane_name)
+                   .has_value()) {
+            return deps_.build_json_response(
+                401,
+                json{
+                    {"status", "unauthorized"},
+                    {"message",
+                     "protected plane requires an authenticated WebAuthn session or SSH API session"}},
+                {});
+          }
         }
       } catch (const std::exception& error) {
         return deps_.build_json_response(
