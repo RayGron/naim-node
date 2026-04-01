@@ -4368,7 +4368,7 @@ function App() {
                     </div>
                     <div className="toolbar">
                       <button
-                        className={`ghost-button compact-button ${
+                        className={`ghost-button compact-button icon-button ${
                           item.skills_factory_worker ? "warning-button" : ""
                         }`}
                         type="button"
