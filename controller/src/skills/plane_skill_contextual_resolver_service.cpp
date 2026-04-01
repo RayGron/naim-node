@@ -454,6 +454,16 @@ int ScoreCandidate(
   const auto description_terms = TokenizeRelevantTerms(candidate.description);
   const auto content_terms = TokenizeRelevantTerms(candidate.content);
 
+  auto contains_term = [](const std::vector<std::string>& terms,
+                          std::initializer_list<const char*> candidates) {
+    for (const auto* candidate_term : candidates) {
+      if (std::find(terms.begin(), terms.end(), candidate_term) != terms.end()) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   int score = 0;
   std::vector<std::string> matched_id_terms;
   std::vector<std::string> matched_name_terms;
@@ -487,6 +497,83 @@ int ScoreCandidate(
         content_terms.end()) {
       matched_content_terms.push_back(term);
       score += 1;
+    }
+  }
+
+  const bool prompt_session = contains_term(
+      prompt_terms, {"session", "auth", "login", "logout"});
+  const bool prompt_balance = contains_term(
+      prompt_terms, {"balance", "available"});
+  const bool prompt_public_market = contains_term(
+      prompt_terms, {"public", "pairs", "market", "trade", "chart", "orderbook"});
+  const bool prompt_copy_action = contains_term(
+      prompt_terms, {"subscribe", "follow", "unfollow", "trader", "copytrading"});
+  const bool prompt_spot_order = contains_term(
+      prompt_terms, {"order", "limit", "buy", "sell", "confirm"});
+  const bool prompt_streams = contains_term(
+      prompt_terms, {"socketio", "room", "stream", "user"});
+
+  const bool candidate_session = contains_term(
+      id_terms, {"session", "auth"}) ||
+      contains_term(name_terms, {"session", "auth"}) ||
+      contains_term(description_terms, {"session", "auth"});
+  const bool candidate_balance = contains_term(
+      id_terms, {"balance"}) ||
+      contains_term(name_terms, {"balance"}) ||
+      contains_term(description_terms, {"balance", "available"});
+  const bool candidate_public_market = contains_term(
+      id_terms, {"market"}) ||
+      contains_term(name_terms, {"market"}) ||
+      contains_term(description_terms, {"public", "pairs", "market", "trade", "chart", "orderbook"});
+  const bool candidate_copy_action = contains_term(
+      id_terms, {"subscribe", "follow", "unfollow", "copytrading", "trader"}) ||
+      contains_term(name_terms, {"subscribe", "follow", "unfollow", "copytrading", "trader"}) ||
+      contains_term(description_terms, {"subscribe", "follow", "unfollow", "copytrading", "trader", "confirm"});
+  const bool candidate_spot_order = contains_term(
+      id_terms, {"order", "limit"}) ||
+      contains_term(name_terms, {"order", "limit"}) ||
+      contains_term(description_terms, {"order", "limit", "buy", "sell", "confirm"});
+  const bool candidate_streams = contains_term(
+      id_terms, {"stream", "user"}) ||
+      contains_term(name_terms, {"stream", "user"}) ||
+      contains_term(description_terms, {"socketio", "room", "stream", "user"});
+
+  if (prompt_session) {
+    score += candidate_session ? 8 : 0;
+    if (candidate_streams && !candidate_session) {
+      score -= 2;
+    }
+  }
+  if (prompt_balance) {
+    score += candidate_balance ? 7 : 0;
+    if (candidate_session && !candidate_balance) {
+      score -= 2;
+    }
+  }
+  if (prompt_public_market) {
+    score += candidate_public_market ? 8 : 0;
+    if ((candidate_streams || candidate_session || candidate_balance) &&
+        !candidate_public_market) {
+      score -= 3;
+    }
+  }
+  if (prompt_copy_action) {
+    score += candidate_copy_action ? 8 : 0;
+    if (!candidate_copy_action &&
+        (candidate_public_market || candidate_streams || candidate_balance)) {
+      score -= 2;
+    }
+  }
+  if (prompt_spot_order) {
+    score += candidate_spot_order ? 8 : 0;
+    if (candidate_public_market && !candidate_spot_order) {
+      score -= 2;
+    }
+  }
+  if (prompt_streams) {
+    score += candidate_streams ? 6 : 0;
+    if (candidate_public_market && !candidate_streams) {
+      score -= 1;
     }
   }
 

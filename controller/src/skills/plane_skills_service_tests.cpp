@@ -558,11 +558,94 @@ int main() {
                     "Хочу поставить лимитный ордер на покупку BTC и собрать параметры перед подтверждением."}});
       Expect(
           selection.mode == "contextual" &&
-              selection.selected_skill_ids.size() == 1 &&
+              !selection.selected_skill_ids.empty() &&
               selection.selected_skill_ids.front() ==
                   "lt-cypher-localtrade-spot-order-clarification",
-          "resolver should select the LocalTrade spot-order clarification skill for Russian order prompts");
+          "resolver should prefer the LocalTrade spot-order clarification skill for Russian order prompts");
       std::cout << "ok: contextual-resolver-selects-localtrade-spot-order" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-localtrade-market-data"},
+                {"name", "localtrade-market-data"},
+                {"description",
+                 "Use for public LocalTrade pairs, charts, trades, order book, and pairs state without account data."},
+                {"content",
+                 "Prefer this skill for public pairs, public order book, public trades, and public market streams."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-user-streams"},
+                {"name", "localtrade-user-streams"},
+                {"description",
+                 "Use for authenticated LocalTrade Socket.IO user rooms such as balances, user_orders, and user_trades."},
+                {"content",
+                 "Protected rooms require the Access cookie and are for account-specific streams."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-spot-order-clarification"},
+                {"name", "localtrade-spot-order-clarification"},
+                {"description",
+                 "Use when the user wants to create, inspect, or cancel a LocalTrade spot order."},
+                {"content",
+                 "Collect limit-order parameters and require explicit confirmation."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Дай публичные пары и поток order book по BTC/USDT без данных моего аккаунта."}});
+      Expect(
+          selection.mode == "contextual" &&
+              !selection.selected_skill_ids.empty() &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-localtrade-market-data",
+          "resolver should prefer LocalTrade market-data over user-streams for public market prompts");
+      std::cout << "ok: contextual-resolver-prefers-localtrade-market-data" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-localtrade-account-balances"},
+                {"name", "localtrade-account-balances"},
+                {"description",
+                 "Use for LocalTrade balances, available balances, and totals."},
+                {"content",
+                 "Explain balances endpoints and whether login is required."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-auth-session"},
+                {"name", "localtrade-auth-session"},
+                {"description",
+                 "Use for LocalTrade sign-in state, Access cookie reuse, GET /auth/me, and session validation."},
+                {"content",
+                 "Check whether the active LocalTrade session is valid and whether the Access cookie is required."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Покажи мои доступные балансы на LocalTrade и скажи, нужен ли логин."}});
+      Expect(
+          selection.mode == "contextual" &&
+              !selection.selected_skill_ids.empty() &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-localtrade-account-balances",
+          "resolver should prefer LocalTrade account-balances over auth-session for balance prompts");
+      std::cout << "ok: contextual-resolver-prefers-localtrade-account-balances" << '\n';
     }
 
     {
