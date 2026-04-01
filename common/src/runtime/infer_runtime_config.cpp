@@ -71,6 +71,15 @@ const InstanceSpec& RequireInferInstanceByName(
       "desired state does not contain infer instance '" + infer_instance_name + "'");
 }
 
+const InstanceSpec& RequireDefaultInferInstance(const DesiredState& state) {
+  for (const auto& instance : state.instances) {
+    if (instance.role == InstanceRole::Infer) {
+      return instance;
+    }
+  }
+  throw std::runtime_error("desired state does not contain an infer instance");
+}
+
 std::set<std::string> SelectedWorkerNames(
     const DesiredState& state,
     const std::string& infer_instance_name) {
@@ -301,7 +310,7 @@ std::string InferRuntimeStatusControlPath(
 }
 
 std::string RenderInferRuntimeConfigJson(const DesiredState& state) {
-  const auto& infer = RequireInferInstanceByName(state, "");
+  const auto& infer = RequireDefaultInferInstance(state);
   return RenderInferRuntimeConfigJsonForInstance(state, infer.name);
 }
 
