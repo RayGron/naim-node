@@ -1,0 +1,23 @@
+{
+  auto_https off
+  admin off
+}
+
+:8080 {
+  root * /srv
+
+  handle /health {
+    respond "ok" 200
+  }
+
+  handle /api/v1/events/stream* {
+    reverse_proxy {$COMET_CONTROLLER_UPSTREAM}
+  }
+
+  handle /api/* {
+    reverse_proxy {$COMET_CONTROLLER_UPSTREAM}
+  }
+
+  try_files {path} /index.html
+  file_server
+}

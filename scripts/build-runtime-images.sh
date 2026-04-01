@@ -40,7 +40,7 @@ build_web_ui_image() {
   temp_root="$(mktemp -d "${repo_root}/var/web-ui-image.XXXXXX")"
   trap 'rm -rf "'"${temp_root}"'"' RETURN
   mkdir -p "${temp_root}/dist"
-  cp "${repo_root}/runtime/web-ui/nginx.conf.template" "${temp_root}/nginx.conf.template"
+  cp "${repo_root}/runtime/web-ui/Caddyfile" "${temp_root}/Caddyfile"
 
   local -a helper_args=(
     run
@@ -60,10 +60,10 @@ build_web_ui_image() {
   "${docker_cmd}" "${helper_args[@]}"
 
   cat > "${temp_root}/Dockerfile" <<'EOF'
-FROM nginx:1.29-alpine
+FROM caddy:2.10.2-alpine
 
-COPY nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY dist/ /usr/share/nginx/html/
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY dist/ /srv/
 
 EXPOSE 8080
 EOF

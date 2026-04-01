@@ -1,10 +1,6 @@
-FROM nginx:1.29-alpine
+FROM caddy:2.10.2-alpine
 
-RUN rm -f /docker-entrypoint.d/30-tune-worker-processes.sh
-
-COPY runtime/web-ui/nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY ui/operator-react/dist/ /usr/share/nginx/html/
+COPY runtime/web-ui/Caddyfile /etc/caddy/Caddyfile
+COPY ui/operator-react/dist/ /srv/
 
 EXPOSE 8080
-
-CMD ["nginx", "-g", "daemon off; master_process off;"]
