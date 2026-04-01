@@ -343,6 +343,7 @@ function buildEmptySkillForm() {
     groupPath: "",
     description: "",
     content: "",
+    matchTermsText: "",
     enabled: true,
     sessionIdsText: "",
     cometLinksText: "",
@@ -3314,6 +3315,7 @@ function App() {
         groupPath: skill.group_path || "",
         description: skill.description || "",
         content: skill.content || "",
+        matchTermsText: renderLineSeparatedValues(skill.match_terms),
         enabled: true,
         sessionIdsText: "",
         cometLinksText: "",
@@ -3440,6 +3442,7 @@ function App() {
       group_path: String(skillsFactory.form?.groupPath || "").trim(),
       description: String(skillsFactory.form?.description || "").trim(),
       content: String(skillsFactory.form?.content || "").trim(),
+      match_terms: parseLineSeparatedValues(skillsFactory.form?.matchTermsText),
     };
     if (!payload.name || !payload.description || !payload.content) {
       setSkillsFactory((current) => ({
@@ -5019,6 +5022,14 @@ function App() {
                     <div className="list-detail">
                       <div className="factory-skill-table-id">{item.id}</div>
                       <div>{item.description || "No description"}</div>
+                      <div className="skills-factory-match-terms">
+                        <span className="skills-factory-match-terms-label">Match terms</span>
+                        <span>
+                          {Array.isArray(item.match_terms) && item.match_terms.length > 0
+                            ? item.match_terms.join(", ")
+                            : "none"}
+                        </span>
+                      </div>
                       <div>{Array.isArray(item.plane_names) && item.plane_names.length > 0 ? item.plane_names.join(", ") : "not attached to any plane"}</div>
                     </div>
                     <div className="toolbar">
@@ -5093,6 +5104,19 @@ function App() {
                 onChange={(event) => updateFactorySkillFormField("content", event.target.value)}
               />
             </label>
+            <label className="field-label">
+              <span className="field-label-title">Match terms</span>
+              <textarea
+                className="editor-textarea plane-form-textarea match-terms-textarea"
+                rows={6}
+                value={form.matchTermsText}
+                onChange={(event) => updateFactorySkillFormField("matchTermsText", event.target.value)}
+                placeholder={"One term per line\nlogin\nlogout\naccess cookie"}
+              />
+            </label>
+            <div className="plane-form-section-meta">
+              These terms drive contextual skill matching. One term per line.
+            </div>
             <div className="toolbar">
               <button
                 className="ghost-button"
