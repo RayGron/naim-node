@@ -26,6 +26,8 @@ struct ContextualSkillCandidate {
 
 constexpr int kMinimumContextualScore = 6;
 constexpr std::size_t kMaximumSelectedSkills = 3;
+constexpr int kSecondaryScoreGapLimit = 3;
+constexpr int kSecondaryScorePercentOfTop = 85;
 
 std::vector<std::pair<std::string, std::string>> DefaultJsonHeaders() {
   return {{"Content-Type", "application/json"}};
@@ -708,9 +710,23 @@ ContextualSkillSelection PlaneSkillContextualResolverService::Resolve(
                right.second.value("id", std::string{});
       });
 
+  if (scored.empty()) {
+    return selection;
+  }
+
+  const int top_score = scored.front().first;
   for (std::size_t index = 0;
        index < scored.size() && index < kMaximumSelectedSkills;
        ++index) {
+    if (index > 0) {
+      const int score = scored[index].first;
+      const bool close_gap = (top_score - score) <= kSecondaryScoreGapLimit;
+      const bool close_percent =
+          (score * 100) >= (top_score * kSecondaryScorePercentOfTop);
+      if (!close_gap && !close_percent) {
+        continue;
+      }
+    }
     selection.selected_skills.push_back(scored[index].second);
     selection.selected_skill_ids.push_back(
         scored[index].second.value("id", std::string{}));

@@ -890,6 +890,56 @@ int main() {
     }
 
     {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-market-forecast"},
+                {"name", "asset-market-forecast"},
+                {"description",
+                 "Use when a request asks for a short-term forecast or directional view for BTC or ETH using CoinGecko and LocalTrade."},
+                {"content",
+                 "Give a probabilistic short-term forecast and state the main invalidation risk."},
+                {"match_terms",
+                 json::array({"прогноз", "куда дальше", "bullish or bearish"})},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-market-asset-report"},
+                {"name", "asset-market-report"},
+                {"description",
+                 "Use when a request asks for the current state of one tracked asset such as BTC or ETH."},
+                {"content",
+                 "Answer with a single-asset report and keep broader and venue data distinct."},
+                {"match_terms",
+                 json::array({"отчет по btc", "report on btc", "state of eth"})},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-market-source-mix"},
+                {"name", "asset-source-mix"},
+                {"description",
+                 "Use when a request explicitly asks to compare or mix CoinGecko and LocalTrade for the same asset."},
+                {"content",
+                 "Explain where CoinGecko and LocalTrade agree or diverge."},
+                {"match_terms",
+                 json::array({"смешай coingecko и localtrade", "coingecko vs localtrade"})},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Сделай прогноз по BTC и смешай CoinGecko с данными LocalTrade"}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "lt-cypher-market-forecast",
+          "resolver should keep only the dominant forecast skill when weaker market skills trail far behind");
+      std::cout << "ok: contextual-resolver-prefers-single-dominant-market-skill" << '\n';
+    }
+
+    {
       const std::string db_path = MakeTempDbPath();
       fs::remove(db_path);
       comet::ControllerStore store(db_path);
