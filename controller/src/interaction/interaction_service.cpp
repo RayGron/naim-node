@@ -783,7 +783,7 @@ std::optional<std::string> ParseInteractionStreamPlaneName(
   if (request_path.size() <= kPrefix.size() + kSuffix.size()) {
     return std::nullopt;
   }
-  if (request_path.substr(request_path.size() - kSuffix.size()) != kSuffix) {
+  if (!request_path.ends_with(kSuffix)) {
     return std::nullopt;
   }
   return request_path.substr(

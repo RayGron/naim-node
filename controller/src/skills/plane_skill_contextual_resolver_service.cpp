@@ -269,17 +269,12 @@ std::vector<std::string> TokenizeRelevantTerms(const std::string& value) {
       {"авторинг", "authoring"},
   };
 
-  auto has_suffix = [](const std::string& token, const std::string& suffix) {
-    return token.size() >= suffix.size() &&
-           token.compare(token.size() - suffix.size(), suffix.size(), suffix) == 0;
-  };
-
   auto canonicalize = [&](std::string token) {
-    if (token.size() > 5 && has_suffix(token, "ies")) {
+    if (token.size() > 5 && token.ends_with("ies")) {
       token = token.substr(0, token.size() - 3) + "y";
-    } else if (token.size() > 5 && has_suffix(token, "es")) {
+    } else if (token.size() > 5 && token.ends_with("es")) {
       token = token.substr(0, token.size() - 2);
-    } else if (token.size() > 4 && has_suffix(token, "s")) {
+    } else if (token.size() > 4 && token.ends_with('s')) {
       token.pop_back();
     }
 

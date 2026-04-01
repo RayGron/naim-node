@@ -770,11 +770,6 @@ std::string ShellQuote(const std::string& value) {
 
 bool RunCommandOk(const std::string& command);
 
-bool HasSuffix(const std::string& value, const std::string& suffix) {
-  return value.size() >= suffix.size() &&
-         value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
 std::string NormalizeLowercase(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
     return static_cast<char>(std::tolower(ch));
@@ -1171,7 +1166,7 @@ void EnsureRuntimeImageAvailable(const std::string& image) {
     return;
   }
 
-  if (image.rfind("comet/", 0) == 0 && HasSuffix(image, ":dev")) {
+  if (image.rfind("comet/", 0) == 0 && image.ends_with(":dev")) {
     if (const auto repo_root = DetectCometRepoRoot(); repo_root.has_value()) {
       BuildCometRuntimeImage(*repo_root, image);
       if (DockerImageExists(image)) {
