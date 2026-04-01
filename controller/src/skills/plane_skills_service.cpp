@@ -120,6 +120,77 @@ bool PlaneSkillsService::ParseAutoSkills(const json& payload) {
   return payload.at("auto_skills").get<bool>();
 }
 
+PlaneSkillsService::ParsedInteractionSkillRequest
+PlaneSkillsService::ParseInteractionSkillRequest(const json& payload) {
+  ParsedInteractionSkillRequest request;
+  request.session_id = ParseSessionId(payload);
+  request.skill_ids = ParseSkillIds(payload);
+  request.auto_skills = ParseAutoSkills(payload);
+  return request;
+}
+
+void PlaneSkillsService::SetNoResolvedSkills(InteractionRequestContext* context) {
+  if (context == nullptr) {
+    return;
+  }
+  context->payload[kAppliedSkillsPayloadKey] = json::array();
+  context->payload[kAutoAppliedSkillsPayloadKey] = json::array();
+  context->payload[kSkillResolutionModePayloadKey] = "none";
+}
+
+json PlaneSkillsService::BuildResolveRequestPayload(
+    const ParsedInteractionSkillRequest& request,
+    const ContextualSkillSelection& contextual_selection) {
+  json request_payload = json::object();
+  if (request.session_id.has_value()) {
+    request_payload["session_id"] = *request.session_id;
+  }
+  if (request.HasExplicitSkillIds()) {
+    request_payload["skill_ids"] = *request.skill_ids;
+  } else if (!contextual_selection.selected_skill_ids.empty()) {
+    request_payload["skill_ids"] = contextual_selection.selected_skill_ids;
+  }
+  return request_payload;
+}
+
+void PlaneSkillsService::ApplyResolvedSkillMetadata(
+    const ParsedInteractionSkillRequest& request,
+    const ContextualSkillSelection& contextual_selection,
+    const nlohmann::json& resolved_skills,
+    const nlohmann::json& response_payload,
+    InteractionRequestContext* context) {
+  if (context == nullptr) {
+    return;
+  }
+
+  json applied_skills = json::array();
+  for (const auto& skill : resolved_skills) {
+    if (!skill.is_object()) {
+      continue;
+    }
+    applied_skills.push_back(
+        json{{"id", skill.value("id", std::string{})},
+             {"name", skill.value("name", std::string{})},
+             {"source", skill.value("source", std::string{})}});
+  }
+  if (!resolved_skills.empty()) {
+    context->payload[kSystemInstructionPayloadKey] =
+        BuildSystemInstruction(resolved_skills);
+  }
+  context->payload[kAppliedSkillsPayloadKey] = applied_skills;
+  context->payload[kAutoAppliedSkillsPayloadKey] =
+      contextual_selection.mode == "contextual" ? applied_skills : json::array();
+  context->payload[kSkillResolutionModePayloadKey] =
+      contextual_selection.mode == "contextual" ? "contextual" : "explicit";
+  if (response_payload.contains("skills_session_id") &&
+      !response_payload.at("skills_session_id").is_null()) {
+    context->payload[kSkillsSessionIdPayloadKey] =
+        response_payload.at("skills_session_id");
+  } else if (request.session_id.has_value()) {
+    context->payload[kSkillsSessionIdPayloadKey] = *request.session_id;
+  }
+}
+
 std::string PlaneSkillsService::BuildSystemInstruction(const json& skills) {
   std::string instruction = "Skills currently applied for this request:";
   for (const auto& skill : skills) {
@@ -145,13 +216,9 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
     throw std::invalid_argument("interaction request context is required");
   }
 
-  std::optional<std::string> session_id;
-  std::optional<std::vector<std::string>> skill_ids;
-  bool auto_skills = true;
+  ParsedInteractionSkillRequest request;
   try {
-    session_id = ParseSessionId(context->payload);
-    skill_ids = ParseSkillIds(context->payload);
-    auto_skills = ParseAutoSkills(context->payload);
+    request = ParseInteractionSkillRequest(context->payload);
   } catch (const std::exception& error) {
     return InteractionValidationError{
         "malformed_request",
@@ -161,11 +228,10 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
     };
   }
 
-  const bool explicit_skill_ids =
-      skill_ids.has_value() && !skill_ids->empty();
-  const bool explicit_selection = session_id.has_value() || explicit_skill_ids;
   ContextualSkillSelection contextual_selection;
-  if (!explicit_selection && auto_skills && !resolution.db_path.empty()) {
+  if (!request.HasExplicitSelection() &&
+      request.auto_skills &&
+      !resolution.db_path.empty()) {
     try {
       contextual_selection = PlaneSkillContextualResolverService().Resolve(
           resolution.db_path, resolution, context->payload);
@@ -179,18 +245,14 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
     }
   }
 
-  if (!explicit_selection && contextual_selection.mode == "none") {
-    context->payload[kAppliedSkillsPayloadKey] = json::array();
-    context->payload[kAutoAppliedSkillsPayloadKey] = json::array();
-    context->payload[kSkillResolutionModePayloadKey] = "none";
+  if (!request.HasExplicitSelection() && contextual_selection.mode == "none") {
+    SetNoResolvedSkills(context);
     return std::nullopt;
   }
 
   if (!IsEnabled(resolution.desired_state)) {
-    if (!explicit_selection) {
-      context->payload[kAppliedSkillsPayloadKey] = json::array();
-      context->payload[kAutoAppliedSkillsPayloadKey] = json::array();
-      context->payload[kSkillResolutionModePayloadKey] = "none";
+    if (!request.HasExplicitSelection()) {
+      SetNoResolvedSkills(context);
       return std::nullopt;
     }
     return InteractionValidationError{
@@ -211,15 +273,8 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
     };
   }
 
-  json request_payload = json::object();
-  if (session_id.has_value()) {
-    request_payload["session_id"] = *session_id;
-  }
-  if (explicit_skill_ids) {
-    request_payload["skill_ids"] = *skill_ids;
-  } else if (!contextual_selection.selected_skill_ids.empty()) {
-    request_payload["skill_ids"] = contextual_selection.selected_skill_ids;
-  }
+  const json request_payload =
+      BuildResolveRequestPayload(request, contextual_selection);
 
   try {
     if (!resolution.db_path.empty()) {
@@ -258,33 +313,8 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
           json::object(),
       };
     }
-
-    json applied_skills = json::array();
-    for (const auto& skill : resolved_skills) {
-      if (!skill.is_object()) {
-        continue;
-      }
-      applied_skills.push_back(
-          json{{"id", skill.value("id", std::string{})},
-               {"name", skill.value("name", std::string{})},
-               {"source", skill.value("source", std::string{})}});
-    }
-    if (!resolved_skills.empty()) {
-      context->payload[kSystemInstructionPayloadKey] = BuildSystemInstruction(resolved_skills);
-    }
-    context->payload[kAppliedSkillsPayloadKey] = applied_skills;
-    context->payload[kAutoAppliedSkillsPayloadKey] =
-        contextual_selection.mode == "contextual"
-            ? applied_skills
-            : json::array();
-    context->payload[kSkillResolutionModePayloadKey] =
-        contextual_selection.mode == "contextual" ? "contextual" : "explicit";
-    if (response_payload.contains("skills_session_id") &&
-        !response_payload.at("skills_session_id").is_null()) {
-      context->payload[kSkillsSessionIdPayloadKey] = response_payload.at("skills_session_id");
-    } else if (session_id.has_value()) {
-      context->payload[kSkillsSessionIdPayloadKey] = *session_id;
-    }
+    ApplyResolvedSkillMetadata(
+        request, contextual_selection, resolved_skills, response_payload, context);
   } catch (const std::exception&) {
     return InteractionValidationError{
         "skills_not_ready",

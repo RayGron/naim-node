@@ -8,6 +8,7 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 #include "interaction/interaction_service.h"
+#include "skills/plane_skill_contextual_resolver_service.h"
 
 namespace comet::controller {
 
@@ -45,9 +46,35 @@ class PlaneSkillsService final {
       std::string* error_message) const;
 
  private:
+  struct ParsedInteractionSkillRequest {
+    std::optional<std::string> session_id;
+    std::optional<std::vector<std::string>> skill_ids;
+    bool auto_skills = true;
+
+    bool HasExplicitSkillIds() const {
+      return skill_ids.has_value() && !skill_ids->empty();
+    }
+
+    bool HasExplicitSelection() const {
+      return session_id.has_value() || HasExplicitSkillIds();
+    }
+  };
+
   static std::optional<std::string> ParseSessionId(const nlohmann::json& payload);
   static std::optional<std::vector<std::string>> ParseSkillIds(const nlohmann::json& payload);
   static bool ParseAutoSkills(const nlohmann::json& payload);
+  static ParsedInteractionSkillRequest ParseInteractionSkillRequest(
+      const nlohmann::json& payload);
+  static void SetNoResolvedSkills(InteractionRequestContext* context);
+  static nlohmann::json BuildResolveRequestPayload(
+      const ParsedInteractionSkillRequest& request,
+      const ContextualSkillSelection& contextual_selection);
+  static void ApplyResolvedSkillMetadata(
+      const ParsedInteractionSkillRequest& request,
+      const ContextualSkillSelection& contextual_selection,
+      const nlohmann::json& resolved_skills,
+      const nlohmann::json& response_payload,
+      InteractionRequestContext* context);
   static std::string BuildSystemInstruction(const nlohmann::json& skills);
 };
 
