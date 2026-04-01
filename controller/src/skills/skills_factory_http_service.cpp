@@ -58,11 +58,11 @@ std::optional<HttpResponse> SkillsFactoryHttpService::HandleRequest(
   }
 
   constexpr std::string_view kPrefix = "/api/v1/skills-factory/";
-  if (request.path.rfind(kPrefix.data(), 0) != 0) {
+  if (!request.path.starts_with(kPrefix)) {
     return std::nullopt;
   }
   const std::string skill_id = request.path.substr(kPrefix.size());
-  if (skill_id.empty() || skill_id.find('/') != std::string::npos) {
+  if (skill_id.empty() || skill_id.contains('/')) {
     return BuildJsonResponse(404, json{{"status", "not_found"}});
   }
 

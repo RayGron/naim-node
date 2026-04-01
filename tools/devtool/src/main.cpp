@@ -332,9 +332,9 @@ std::vector<std::pair<std::string, std::string>> ParseSseEvents(const std::strin
     if (!line.empty() && line.back() == '\r') {
       line.pop_back();
     }
-    if (line.rfind("event: ", 0) == 0) {
+    if (line.starts_with("event: ")) {
       event_name = line.substr(7);
-    } else if (line.rfind("data: ", 0) == 0) {
+    } else if (line.starts_with("data: ")) {
       data_lines.push_back(line.substr(6));
     } else if (line.empty()) {
       std::ostringstream data;
@@ -926,7 +926,7 @@ std::pair<std::string, std::map<std::string, std::string>> ParseArgs(int argc, c
   std::map<std::string, std::string> options;
   for (int index = 2; index < argc; ++index) {
     std::string arg = argv[index];
-    if (arg.rfind("--", 0) != 0) {
+    if (!arg.starts_with("--")) {
       throw std::runtime_error("unexpected argument: " + arg);
     }
     arg.erase(0, 2);
@@ -935,7 +935,7 @@ std::pair<std::string, std::map<std::string, std::string>> ParseArgs(int argc, c
     if (separator != std::string::npos) {
       value = arg.substr(separator + 1);
       arg = arg.substr(0, separator);
-    } else if (index + 1 < argc && std::string(argv[index + 1]).rfind("--", 0) != 0) {
+    } else if (index + 1 < argc && !std::string_view(argv[index + 1]).starts_with("--")) {
       value = argv[++index];
     }
     options[arg] = value;

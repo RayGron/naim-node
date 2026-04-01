@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <netdb.h>
@@ -21,6 +23,25 @@ struct ParsedUrl {
   std::string port;
   std::string target;
 };
+
+struct ParsedUrlResult {
+  std::optional<ParsedUrl> value;
+  std::string error;
+
+  [[nodiscard]] bool has_value() const { return value.has_value(); }
+};
+
+ParsedUrlResult MakeParseUrlError(std::string message) {
+  ParsedUrlResult result;
+  result.error = std::move(message);
+  return result;
+}
+
+ParsedUrlResult MakeParseUrlSuccess(ParsedUrl parsed) {
+  ParsedUrlResult result;
+  result.value = std::move(parsed);
+  return result;
+}
 
 std::string Trim(const std::string& value) {
   std::size_t start = 0;
@@ -42,27 +63,31 @@ std::string ToLower(std::string value) {
   return value;
 }
 
-ParsedUrl ParseUrl(const std::string& url) {
-  const std::string prefix = "http://";
-  if (url.rfind(prefix, 0) != 0) {
-    throw std::runtime_error("unsupported URL scheme for " + url);
+ParsedUrlResult ParseUrl(std::string_view url) {
+  constexpr std::string_view kPrefix = "http://";
+  if (!url.starts_with(kPrefix)) {
+    return MakeParseUrlError("unsupported URL scheme for " + std::string(url));
   }
-  const std::string remainder = url.substr(prefix.size());
+  const std::string_view remainder = url.substr(kPrefix.size());
   const std::size_t slash = remainder.find('/');
-  const std::string authority = slash == std::string::npos ? remainder : remainder.substr(0, slash);
-  const std::string target = slash == std::string::npos ? "/" : remainder.substr(slash);
+  const std::string_view authority =
+      slash == std::string::npos ? remainder : remainder.substr(0, slash);
+  const std::string target =
+      slash == std::string::npos ? "/" : std::string(remainder.substr(slash));
   const std::size_t colon = authority.rfind(':');
   if (authority.empty()) {
-    throw std::runtime_error("missing host in URL " + url);
+    return MakeParseUrlError("missing host in URL " + std::string(url));
   }
   ParsedUrl parsed;
-  parsed.host = colon == std::string::npos ? authority : authority.substr(0, colon);
-  parsed.port = colon == std::string::npos ? "80" : authority.substr(colon + 1);
+  parsed.host = colon == std::string::npos ? std::string(authority)
+                                           : std::string(authority.substr(0, colon));
+  parsed.port = colon == std::string::npos ? "80"
+                                           : std::string(authority.substr(colon + 1));
   parsed.target = target.empty() ? "/" : target;
   if (parsed.host.empty() || parsed.port.empty()) {
-    throw std::runtime_error("invalid URL " + url);
+    return MakeParseUrlError("invalid URL " + std::string(url));
   }
-  return parsed;
+  return MakeParseUrlSuccess(std::move(parsed));
 }
 
 std::string ReadExact(
@@ -160,7 +185,7 @@ HttpResponse ParseHttpResponse(const std::string& response_blob, int socket_fd) 
   }
   const auto transfer_encoding = response.headers.find("transfer-encoding");
   if (transfer_encoding != response.headers.end() &&
-      ToLower(transfer_encoding->second).find("chunked") != std::string::npos) {
+      ToLower(transfer_encoding->second).contains("chunked")) {
     body = DecodeChunkedBody(ReadUntilClose(socket_fd, body));
   } else if (const auto content_length = response.headers.find("content-length");
              content_length != response.headers.end()) {
@@ -175,7 +200,11 @@ HttpResponse ParseHttpResponse(const std::string& response_blob, int socket_fd) 
 }  // namespace
 
 HttpResponse PerformHttpRequest(const HttpRequest& request) {
-  const ParsedUrl url = ParseUrl(request.url);
+  const auto url_result = ParseUrl(request.url);
+  if (!url_result.has_value()) {
+    throw std::runtime_error(url_result.error);
+  }
+  const ParsedUrl& url = *url_result.value;
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
@@ -248,7 +277,7 @@ HttpResponse PerformHttpRequest(const HttpRequest& request) {
       throw std::runtime_error("failed to read HTTP response");
     }
     response_blob.append(buffer, static_cast<std::size_t>(bytes_read));
-    if (response_blob.find("\r\n\r\n") != std::string::npos) {
+    if (response_blob.contains("\r\n\r\n")) {
       break;
     }
   }

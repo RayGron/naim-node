@@ -32,7 +32,7 @@ std::string NormalizeControllerUpstreamForCompose(
   };
 
   for (const auto& [prefix, replacement] : prefixes) {
-    if (controller_upstream.rfind(prefix, 0) == 0) {
+    if (controller_upstream.starts_with(prefix)) {
       return replacement + controller_upstream.substr(prefix.size());
     }
   }
