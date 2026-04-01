@@ -506,6 +506,8 @@ int ScoreCandidate(
       prompt_terms, {"balance", "available"});
   const bool prompt_public_market = contains_term(
       prompt_terms, {"public", "pairs", "market", "trade", "chart", "orderbook"});
+  const bool prompt_protected_user = contains_term(
+      prompt_terms, {"user", "balance", "session", "auth", "cookie"});
   const bool prompt_copy_action = contains_term(
       prompt_terms, {"subscribe", "follow", "unfollow", "trader", "copytrading"});
   const bool prompt_spot_order = contains_term(
@@ -556,6 +558,9 @@ int ScoreCandidate(
         !candidate_public_market) {
       score -= 3;
     }
+    if (candidate_streams && !prompt_protected_user) {
+      score -= 6;
+    }
   }
   if (prompt_copy_action) {
     score += candidate_copy_action ? 8 : 0;
@@ -574,6 +579,9 @@ int ScoreCandidate(
     score += candidate_streams ? 6 : 0;
     if (candidate_public_market && !candidate_streams) {
       score -= 1;
+    }
+    if (candidate_streams && prompt_public_market && !prompt_protected_user) {
+      score -= 4;
     }
   }
 
