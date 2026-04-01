@@ -52,6 +52,8 @@ project(
   LANGUAGES CXX
 )
 
+find_package(Threads REQUIRED)
+
 function(comet_enable_strict_warnings target_name)
   if(MSVC)
     target_compile_options(${target_name} PRIVATE /W4)
@@ -278,7 +280,8 @@ add_executable(
 )
 target_include_directories(
   comet-plane-skills-tests PRIVATE common/include controller/include)
-target_link_libraries(comet-plane-skills-tests PRIVATE comet-common)
+target_link_libraries(
+  comet-plane-skills-tests PRIVATE comet-common Threads::Threads)
 comet_enable_strict_warnings(comet-plane-skills-tests)
 
 add_executable(

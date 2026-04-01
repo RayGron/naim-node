@@ -8,7 +8,7 @@
 #include <unordered_set>
 #include <utility>
 
-#include "comet/state/sqlite_store.h"
+#include "http/controller_http_transport.h"
 
 namespace comet::controller {
 
@@ -23,6 +23,50 @@ struct ContextualSkillCandidate {
 
 constexpr int kMinimumContextualScore = 6;
 constexpr std::size_t kMaximumSelectedSkills = 3;
+
+std::vector<std::pair<std::string, std::string>> DefaultJsonHeaders() {
+  return {{"Content-Type", "application/json"}};
+}
+
+std::string NormalizeControllerTargetHost(const PublishedPort& port) {
+  if (port.host_ip.empty() || port.host_ip == "0.0.0.0") {
+    return "127.0.0.1";
+  }
+  return port.host_ip;
+}
+
+const InstanceSpec* FindSkillsInstance(const DesiredState& desired_state) {
+  const auto it = std::find_if(
+      desired_state.instances.begin(),
+      desired_state.instances.end(),
+      [](const InstanceSpec& instance) {
+        return instance.role == InstanceRole::Skills;
+      });
+  if (it == desired_state.instances.end()) {
+    return nullptr;
+  }
+  return &*it;
+}
+
+std::optional<ControllerEndpointTarget> ResolvePlaneLocalSkillsTarget(
+    const DesiredState& desired_state) {
+  const auto* skills = FindSkillsInstance(desired_state);
+  if (skills == nullptr) {
+    return std::nullopt;
+  }
+  const auto published = std::find_if(
+      skills->published_ports.begin(),
+      skills->published_ports.end(),
+      [](const PublishedPort& port) { return port.host_port > 0; });
+  if (published == skills->published_ports.end()) {
+    return std::nullopt;
+  }
+  ControllerEndpointTarget target;
+  target.host = NormalizeControllerTargetHost(*published);
+  target.port = published->host_port;
+  target.raw = "http://" + target.host + ":" + std::to_string(target.port);
+  return target;
+}
 
 std::string NormalizeSkillText(const std::string& value) {
   std::string normalized;
@@ -78,30 +122,47 @@ std::string JoinTerms(const std::vector<std::string>& items) {
 }
 
 std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
-    const std::string& db_path,
     const DesiredState& desired_state) {
   if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
     return {};
   }
 
-  comet::ControllerStore store(db_path);
-  store.Initialize();
+  const auto target = ResolvePlaneLocalSkillsTarget(desired_state);
+  if (!target.has_value()) {
+    return {};
+  }
+
+  HttpResponse response;
+  try {
+    response = SendControllerHttpRequest(
+        *target, "GET", "/v1/skills", "", DefaultJsonHeaders());
+  } catch (const std::exception&) {
+    return {};
+  }
+  if (response.status_code != 200 || response.body.empty()) {
+    return {};
+  }
+
+  const auto payload = nlohmann::json::parse(response.body, nullptr, false);
+  if (payload.is_discarded() || !payload.is_object() ||
+      !payload.contains("skills") || !payload.at("skills").is_array()) {
+    return {};
+  }
+
   std::vector<ContextualSkillCandidate> candidates;
-  for (const auto& skill_id : desired_state.skills->factory_skill_ids) {
-    const auto canonical = store.LoadSkillsFactorySkill(skill_id);
-    if (!canonical.has_value()) {
+  for (const auto& item : payload.at("skills")) {
+    if (!item.is_object()) {
       continue;
     }
-    const auto binding =
-        store.LoadPlaneSkillBinding(desired_state.plane_name, skill_id);
-    if (binding.has_value() && !binding->enabled) {
+    if (item.contains("enabled") && item.at("enabled").is_boolean() &&
+        !item.at("enabled").get<bool>()) {
       continue;
     }
     candidates.push_back(ContextualSkillCandidate{
-        canonical->id,
-        canonical->name,
-        canonical->description,
-        canonical->content,
+        item.value("id", std::string{}),
+        item.value("name", std::string{}),
+        item.value("description", std::string{}),
+        item.value("content", std::string{}),
     });
   }
   return candidates;
@@ -207,6 +268,7 @@ ContextualSkillSelection PlaneSkillContextualResolverService::Resolve(
     const std::string& db_path,
     const PlaneInteractionResolution& resolution,
     const nlohmann::json& payload) const {
+  (void)db_path;
   ContextualSkillSelection selection;
   if (!resolution.desired_state.skills.has_value() ||
       !resolution.desired_state.skills->enabled) {
@@ -214,7 +276,7 @@ ContextualSkillSelection PlaneSkillContextualResolverService::Resolve(
   }
 
   const auto prompt_text = ExtractPromptText(payload);
-  const auto candidates = LoadPlaneLocalCandidates(db_path, resolution.desired_state);
+  const auto candidates = LoadPlaneLocalCandidates(resolution.desired_state);
   selection.candidate_count = static_cast<int>(candidates.size());
   if (prompt_text.empty() || candidates.empty()) {
     return selection;

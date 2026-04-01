@@ -1,10 +1,14 @@
 #include <filesystem>
 #include <iostream>
+#include <sstream>
+#include <atomic>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include <nlohmann/json.hpp>
 
+#include "comet/core/platform_compat.h"
 #include "comet/state/sqlite_store.h"
 #include "interaction/interaction_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
@@ -22,7 +26,130 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DesiredState BuildDesiredStateWithSkillsPort(const std::string& host_ip) {
+class SkillRuntimeTestServer {
+ public:
+  explicit SkillRuntimeTestServer(json skills_payload)
+      : skills_payload_(std::move(skills_payload)) {
+    comet::platform::EnsureSocketsInitialized();
+    listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (!comet::platform::IsSocketValid(listen_fd_)) {
+      throw std::runtime_error("failed to create test runtime socket");
+    }
+
+    int yes = 1;
+#if defined(_WIN32)
+    setsockopt(
+        listen_fd_,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        reinterpret_cast<const char*>(&yes),
+        sizeof(yes));
+#else
+    setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#endif
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(0);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to bind test runtime socket: " + error);
+    }
+    if (listen(listen_fd_, 8) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to listen on test runtime socket: " + error);
+    }
+
+    sockaddr_in bound_addr{};
+    socklen_t bound_size = sizeof(bound_addr);
+    if (getsockname(
+            listen_fd_,
+            reinterpret_cast<sockaddr*>(&bound_addr),
+            &bound_size) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to inspect test runtime socket: " + error);
+    }
+    port_ = ntohs(bound_addr.sin_port);
+    thread_ = std::thread([this]() { Serve(); });
+  }
+
+  ~SkillRuntimeTestServer() {
+    stop_requested_.store(true);
+    if (port_ > 0) {
+      const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (comet::platform::IsSocketValid(wake_fd)) {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<uint16_t>(port_));
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        comet::platform::CloseSocket(wake_fd);
+      }
+    }
+    if (comet::platform::IsSocketValid(listen_fd_)) {
+      comet::platform::CloseSocket(listen_fd_);
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  int port() const { return port_; }
+
+ private:
+  void Serve() {
+    while (true) {
+      sockaddr_in client_addr{};
+      socklen_t client_size = sizeof(client_addr);
+      const auto client_fd = accept(
+          listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
+      if (!comet::platform::IsSocketValid(client_fd)) {
+        return;
+      }
+      if (stop_requested_.load()) {
+        comet::platform::CloseSocket(client_fd);
+        return;
+      }
+
+      char buffer[4096];
+      (void)recv(client_fd, buffer, sizeof(buffer), 0);
+
+      const std::string body = json{{"skills", skills_payload_}}.dump();
+      std::ostringstream response;
+      response << "HTTP/1.1 200 OK\r\n";
+      response << "Content-Type: application/json\r\n";
+      response << "Content-Length: " << body.size() << "\r\n";
+      response << "Connection: close\r\n\r\n";
+      response << body;
+      const auto payload = response.str();
+      const char* data = payload.c_str();
+      std::size_t remaining = payload.size();
+      while (remaining > 0) {
+        const auto written = send(client_fd, data, remaining, 0);
+        if (written <= 0) {
+          break;
+        }
+        data += written;
+        remaining -= static_cast<std::size_t>(written);
+      }
+      comet::platform::CloseSocket(client_fd);
+    }
+  }
+
+  json skills_payload_;
+  std::atomic<bool> stop_requested_{false};
+  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  int port_ = 0;
+  std::thread thread_;
+};
+
+comet::DesiredState BuildDesiredStateWithSkillsPort(
+    const std::string& host_ip,
+    const int host_port) {
   comet::DesiredState desired_state;
   desired_state.plane_name = "maglev";
   desired_state.plane_mode = comet::PlaneMode::Llm;
@@ -37,7 +164,7 @@ comet::DesiredState BuildDesiredStateWithSkillsPort(const std::string& host_ip) 
   skills.role = comet::InstanceRole::Skills;
   comet::PublishedPort published_port;
   published_port.host_ip = host_ip;
-  published_port.host_port = 27978;
+  published_port.host_port = host_port;
   published_port.container_port = 18120;
   skills.published_ports.push_back(published_port);
   desired_state.instances.push_back(skills);
@@ -67,20 +194,6 @@ std::string MakeTempDbPath() {
   return (root / "controller.sqlite").string();
 }
 
-void SeedCanonicalSkill(
-    comet::ControllerStore* store,
-    const std::string& id,
-    const std::string& name,
-    const std::string& description,
-    const std::string& content) {
-  comet::SkillsFactorySkillRecord record;
-  record.id = id;
-  record.name = name;
-  record.description = description;
-  record.content = content;
-  store->UpsertSkillsFactorySkill(record);
-}
-
 }  // namespace
 
 int main() {
@@ -89,7 +202,7 @@ int main() {
 
     {
       const auto target =
-          service.ResolveTarget(BuildDesiredStateWithSkillsPort("127.0.0.1"));
+          service.ResolveTarget(BuildDesiredStateWithSkillsPort("127.0.0.1", 27978));
       Expect(target.has_value(), "skills target should resolve when a published port exists");
       Expect(target->host == "127.0.0.1", "skills target host should use published host_ip");
       Expect(target->port == 27978, "skills target port should use published host_port");
@@ -101,7 +214,7 @@ int main() {
 
     {
       const auto target =
-          service.ResolveTarget(BuildDesiredStateWithSkillsPort("0.0.0.0"));
+          service.ResolveTarget(BuildDesiredStateWithSkillsPort("0.0.0.0", 27978));
       Expect(target.has_value(), "skills target should resolve for wildcard published host_ip");
       Expect(
           target->host == "127.0.0.1",
@@ -113,27 +226,23 @@ int main() {
     }
 
     {
-      const std::string db_path = MakeTempDbPath();
-      fs::remove(db_path);
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto desired_state = BuildDesiredState(
-          "catalog-plane", {"code-agent-root-cause-debug"});
-      store.ReplaceDesiredState(desired_state, 1);
-      SeedCanonicalSkill(
-          &store,
-          "code-agent-root-cause-debug",
-          "root-cause-debug",
-          "Debug bugs by reproducing them, isolating the invariant, and validating the root cause.",
-          "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path.");
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "code-agent-root-cause-debug"},
+                {"name", "root-cause-debug"},
+                {"description",
+                 "Debug bugs by reproducing them, isolating the invariant, and validating the root cause."},
+                {"content",
+                 "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
       comet::controller::PlaneInteractionResolution resolution;
-      resolution.db_path = db_path;
       resolution.desired_state = desired_state;
 
       const auto selection =
           comet::controller::PlaneSkillContextualResolverService().Resolve(
-              db_path,
+              "",
               resolution,
               json{{"messages",
                     json::array(
@@ -155,27 +264,21 @@ int main() {
     }
 
     {
-      const std::string db_path = MakeTempDbPath();
-      fs::remove(db_path);
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto desired_state = BuildDesiredState(
-          "catalog-plane", {"code-agent-safe-change"});
-      store.ReplaceDesiredState(desired_state, 1);
-      SeedCanonicalSkill(
-          &store,
-          "code-agent-safe-change",
-          "safe-change",
-          "Limit changes to the smallest safe patch.",
-          "Keep the patch minimal and avoid unrelated edits.");
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "code-agent-safe-change"},
+                {"name", "safe-change"},
+                {"description", "Limit changes to the smallest safe patch."},
+                {"content", "Keep the patch minimal and avoid unrelated edits."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
       comet::controller::PlaneInteractionResolution resolution;
-      resolution.db_path = db_path;
       resolution.desired_state = desired_state;
 
       const auto selection =
           comet::controller::PlaneSkillContextualResolverService().Resolve(
-              db_path,
+              "",
               resolution,
               json{{"messages",
                     json::array(
@@ -190,26 +293,14 @@ int main() {
     }
 
     {
-      const std::string db_path = MakeTempDbPath();
-      fs::remove(db_path);
-      comet::ControllerStore store(db_path);
-      store.Initialize();
       const auto desired_state = BuildDesiredState("catalog-plane", {});
-      store.ReplaceDesiredState(desired_state, 1);
-      SeedCanonicalSkill(
-          &store,
-          "factory-only-skill",
-          "repo-map",
-          "Build a repository map before changes.",
-          "Map the repository before changing code.");
 
       comet::controller::PlaneInteractionResolution resolution;
-      resolution.db_path = db_path;
       resolution.desired_state = desired_state;
 
       const auto selection =
           comet::controller::PlaneSkillContextualResolverService().Resolve(
-              db_path,
+              "",
               resolution,
               json{{"messages",
                     json::array(
@@ -223,6 +314,70 @@ int main() {
     }
 
     {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "code-agent-root-cause-debug"},
+                {"name", "root-cause-debug"},
+                {"description",
+                 "Debug bugs by reproducing them, isolating the invariant, and validating the root cause."},
+                {"content",
+                 "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path."},
+                {"enabled", false}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"},
+                              {"content",
+                               "Please debug this regression and find the root cause."}}})}});
+      Expect(
+          selection.mode == "none" && selection.candidate_count == 0,
+          "resolver should exclude disabled plane-local skills");
+      std::cout << "ok: contextual-resolver-excludes-disabled-skills" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "code-agent-root-cause-debug"},
+                {"name", "root-cause-debug"},
+                {"description",
+                 "Debug bugs by reproducing them, isolating the invariant, and validating the root cause."},
+                {"content",
+                 "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto payload =
+          comet::controller::PlaneSkillContextualResolverService().BuildDebugPayload(
+              "",
+              resolution,
+              json{{"prompt", "Please debug this regression and find the root cause."}});
+      Expect(
+          payload.at("skill_resolution_mode").get<std::string>() == "contextual",
+          "debug payload should report contextual mode for a match");
+      Expect(
+          payload.at("candidate_count").get<int>() == 1,
+          "debug payload should include the plane-local candidate count");
+      Expect(
+          payload.at("selected_skill_ids").size() == 1 &&
+              payload.at("selected_skill_ids").front().get<std::string>() ==
+                  "code-agent-root-cause-debug",
+          "debug payload should report the selected skill id");
+      std::cout << "ok: contextual-resolver-debug-payload" << '\n';
+    }
+
+    {
       const std::string db_path = MakeTempDbPath();
       fs::remove(db_path);
       comet::ControllerStore store(db_path);
@@ -230,17 +385,14 @@ int main() {
       const auto desired_state = BuildDesiredState(
           "catalog-plane", {"code-agent-root-cause-debug"});
       store.ReplaceDesiredState(desired_state, 1);
-      SeedCanonicalSkill(
-          &store,
-          "code-agent-root-cause-debug",
-          "root-cause-debug",
-          "Debug bugs by reproducing them, isolating the invariant, and validating the root cause.",
-          "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path.");
-      comet::PlaneSkillBindingRecord binding;
-      binding.plane_name = "catalog-plane";
-      binding.skill_id = "code-agent-root-cause-debug";
-      binding.enabled = false;
-      store.UpsertPlaneSkillBinding(binding);
+      comet::SkillsFactorySkillRecord record;
+      record.id = "code-agent-root-cause-debug";
+      record.name = "root-cause-debug";
+      record.description =
+          "Debug bugs by reproducing them, isolating the invariant, and validating the root cause.";
+      record.content =
+          "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path.";
+      store.UpsertSkillsFactorySkill(record);
 
       comet::controller::PlaneInteractionResolution resolution;
       resolution.db_path = db_path;
@@ -257,46 +409,8 @@ int main() {
                                "Please debug this regression and find the root cause."}}})}});
       Expect(
           selection.mode == "none" && selection.candidate_count == 0,
-          "resolver should exclude disabled plane-local skills");
-      std::cout << "ok: contextual-resolver-excludes-disabled-skills" << '\n';
-    }
-
-    {
-      const std::string db_path = MakeTempDbPath();
-      fs::remove(db_path);
-      comet::ControllerStore store(db_path);
-      store.Initialize();
-      const auto desired_state = BuildDesiredState(
-          "catalog-plane", {"code-agent-root-cause-debug"});
-      store.ReplaceDesiredState(desired_state, 1);
-      SeedCanonicalSkill(
-          &store,
-          "code-agent-root-cause-debug",
-          "root-cause-debug",
-          "Debug bugs by reproducing them, isolating the invariant, and validating the root cause.",
-          "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path.");
-
-      comet::controller::PlaneInteractionResolution resolution;
-      resolution.db_path = db_path;
-      resolution.desired_state = desired_state;
-
-      const auto payload =
-          comet::controller::PlaneSkillContextualResolverService().BuildDebugPayload(
-              db_path,
-              resolution,
-              json{{"prompt", "Please debug this regression and find the root cause."}});
-      Expect(
-          payload.at("skill_resolution_mode").get<std::string>() == "contextual",
-          "debug payload should report contextual mode for a match");
-      Expect(
-          payload.at("candidate_count").get<int>() == 1,
-          "debug payload should include the plane-local candidate count");
-      Expect(
-          payload.at("selected_skill_ids").size() == 1 &&
-              payload.at("selected_skill_ids").front().get<std::string>() ==
-                  "code-agent-root-cause-debug",
-          "debug payload should report the selected skill id");
-      std::cout << "ok: contextual-resolver-debug-payload" << '\n';
+          "resolver should ignore controller catalog entries that are not present in runtime skillsd");
+      std::cout << "ok: contextual-resolver-requires-runtime-skill-copy" << '\n';
     }
 
     {
