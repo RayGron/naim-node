@@ -293,6 +293,111 @@ int main() {
     }
 
     {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "code-agent-repo-map"},
+                {"name", "repo-map"},
+                {"description",
+                 "Build a fast repository map before non-trivial changes."},
+                {"content",
+                 "Map the repository structure, entry points, and major dependencies before editing."},
+                {"enabled", true}},
+           json{{"id", "code-agent-test-first-fix"},
+                {"name", "test-first-fix"},
+                {"description",
+                 "Explain a test-first bug-fix approach without starting execution unless the user explicitly asks for it."},
+                {"content",
+                 "First define the failing regression test, then make the smallest safe patch."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array({json{{"role", "user"},
+                                      {"content",
+                                       "Построй карту репозитория перед тем, как вносить изменения."}}})}});
+      Expect(
+          selection.mode == "contextual",
+          "resolver should support Cyrillic prompts for contextual selection");
+      Expect(
+          selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "code-agent-repo-map",
+          "resolver should select repo-map instead of drifting into another skill");
+      std::cout << "ok: contextual-resolver-selects-cyrillic-repo-map" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "code-agent-deploy-path-check"},
+                {"name", "deploy-path-check"},
+                {"description",
+                 "Explain the real deployment path and required live verification steps before executing them."},
+                {"content",
+                 "Describe rollout order, rebuild requirements, restarts, pull steps, and live verification."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array({json{{"role", "user"},
+                                      {"content",
+                                       "Explain the deployment path and the live verification steps before rollout."}}})}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "code-agent-deploy-path-check",
+          "resolver should select deploy-path-check for deployment path prompts");
+      std::cout << "ok: contextual-resolver-selects-deploy-path-check" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "code-agent-state-schema-guard"},
+                {"name", "state-schema-guard"},
+                {"description",
+                 "Protect desired-state, projectors, validators, renderers, and store changes as one contract."},
+                {"content",
+                 "Review desired-state schema changes together with the projector, validator, renderer, and store."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"messages",
+                    json::array({json{{"role", "user"},
+                                      {"content",
+                                       "Check the desired-state schema together with the projector, validator, renderer, and store."}}})}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "code-agent-state-schema-guard",
+          "resolver should select state-schema-guard for schema contract prompts");
+      std::cout << "ok: contextual-resolver-selects-state-schema-guard" << '\n';
+    }
+
+    {
       const auto desired_state = BuildDesiredState("catalog-plane", {});
 
       comet::controller::PlaneInteractionResolution resolution;

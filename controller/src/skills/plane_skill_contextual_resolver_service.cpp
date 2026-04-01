@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -69,11 +71,125 @@ std::optional<ControllerEndpointTarget> ResolvePlaneLocalSkillsTarget(
 }
 
 std::string NormalizeSkillText(const std::string& value) {
+  auto next_code_point = [](const std::string& input, std::size_t* offset) {
+    if (*offset >= input.size()) {
+      return static_cast<char32_t>(0);
+    }
+
+    const auto lead = static_cast<unsigned char>(input[*offset]);
+    if ((lead & 0x80U) == 0) {
+      ++(*offset);
+      return static_cast<char32_t>(lead);
+    }
+
+    const auto fail = [offset]() {
+      ++(*offset);
+      return static_cast<char32_t>(' ');
+    };
+
+    if ((lead & 0xE0U) == 0xC0U) {
+      if (*offset + 1 >= input.size()) {
+        return fail();
+      }
+      const auto b1 = static_cast<unsigned char>(input[*offset + 1]);
+      if ((b1 & 0xC0U) != 0x80U) {
+        return fail();
+      }
+      *offset += 2;
+      return static_cast<char32_t>(((lead & 0x1FU) << 6) | (b1 & 0x3FU));
+    }
+
+    if ((lead & 0xF0U) == 0xE0U) {
+      if (*offset + 2 >= input.size()) {
+        return fail();
+      }
+      const auto b1 = static_cast<unsigned char>(input[*offset + 1]);
+      const auto b2 = static_cast<unsigned char>(input[*offset + 2]);
+      if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U) {
+        return fail();
+      }
+      *offset += 3;
+      return static_cast<char32_t>(
+          ((lead & 0x0FU) << 12) | ((b1 & 0x3FU) << 6) | (b2 & 0x3FU));
+    }
+
+    if ((lead & 0xF8U) == 0xF0U) {
+      if (*offset + 3 >= input.size()) {
+        return fail();
+      }
+      const auto b1 = static_cast<unsigned char>(input[*offset + 1]);
+      const auto b2 = static_cast<unsigned char>(input[*offset + 2]);
+      const auto b3 = static_cast<unsigned char>(input[*offset + 3]);
+      if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U ||
+          (b3 & 0xC0U) != 0x80U) {
+        return fail();
+      }
+      *offset += 4;
+      return static_cast<char32_t>(((lead & 0x07U) << 18) |
+                                   ((b1 & 0x3FU) << 12) |
+                                   ((b2 & 0x3FU) << 6) |
+                                   (b3 & 0x3FU));
+    }
+
+    return fail();
+  };
+
+  auto append_utf8 = [](char32_t code_point, std::string* output) {
+    if (code_point <= 0x7F) {
+      output->push_back(static_cast<char>(code_point));
+      return;
+    }
+    if (code_point <= 0x7FF) {
+      output->push_back(
+          static_cast<char>(0xC0U | ((code_point >> 6) & 0x1FU)));
+      output->push_back(static_cast<char>(0x80U | (code_point & 0x3FU)));
+      return;
+    }
+    output->push_back(
+        static_cast<char>(0xE0U | ((code_point >> 12) & 0x0FU)));
+    output->push_back(
+        static_cast<char>(0x80U | ((code_point >> 6) & 0x3FU)));
+    output->push_back(static_cast<char>(0x80U | (code_point & 0x3FU)));
+  };
+
+  auto lowercase_code_point = [](char32_t code_point) {
+    if (code_point >= U'A' && code_point <= U'Z') {
+      return static_cast<char32_t>(code_point + 32);
+    }
+    if (code_point >= 0x0410 && code_point <= 0x042F) {
+      return static_cast<char32_t>(code_point + 0x20);
+    }
+    if (code_point == 0x0401) {
+      return static_cast<char32_t>(0x0451);
+    }
+    return code_point;
+  };
+
+  auto is_token_code_point = [](char32_t code_point) {
+    if (code_point >= U'0' && code_point <= U'9') {
+      return true;
+    }
+    if (code_point >= U'a' && code_point <= U'z') {
+      return true;
+    }
+    if (code_point >= U'A' && code_point <= U'Z') {
+      return true;
+    }
+    if ((code_point >= 0x0410 && code_point <= 0x044F) || code_point == 0x0401 ||
+        code_point == 0x0451) {
+      return true;
+    }
+    return false;
+  };
+
   std::string normalized;
-  normalized.reserve(value.size());
-  for (unsigned char ch : value) {
-    if (std::isalnum(ch) != 0) {
-      normalized.push_back(static_cast<char>(std::tolower(ch)));
+  normalized.reserve(value.size() * 2);
+  std::size_t offset = 0;
+  while (offset < value.size()) {
+    const char32_t raw = next_code_point(value, &offset);
+    const char32_t code_point = lowercase_code_point(raw);
+    if (is_token_code_point(code_point)) {
+      append_utf8(code_point, &normalized);
     } else {
       normalized.push_back(' ');
     }
@@ -83,13 +199,93 @@ std::string NormalizeSkillText(const std::string& value) {
 
 std::vector<std::string> TokenizeRelevantTerms(const std::string& value) {
   static const std::unordered_set<std::string> kIgnoredTokens = {
-      "about",  "agent",   "apply",   "available", "build",   "catalog",
-      "change", "code",    "context", "controller","debug",   "default",
-      "enabled","field",   "from",    "have",      "interaction",
-      "into",   "local",   "mode",    "must",      "plane",   "request",
-      "response","runtime","service", "should",    "skill",   "skills",
-      "source", "state",   "that",    "their",     "this",    "through",
-      "when",   "with",    "without",
+      "about",      "agent",      "apply",      "available", "build",
+      "catalog",    "change",     "code",       "context",   "controller",
+      "debug",      "default",    "enabled",    "field",     "from",
+      "have",       "interaction","into",       "local",     "mode",
+      "must",       "plane",      "request",    "response",  "runtime",
+      "service",    "should",     "skill",      "skills",    "source",
+      "that",       "their",      "this",       "through",   "when",
+      "with",       "without",    "пожалуйста", "нужно",     "просто",
+      "обычной",    "человеческой","речи",      "сделай",    "сделать",
+      "надо",       "через",
+  };
+
+  static const std::unordered_map<std::string, std::string> kCanonicalAliases = {
+      {"repo", "repository"},
+      {"repositories", "repository"},
+      {"репо", "repository"},
+      {"репозиторий", "repository"},
+      {"репозитория", "repository"},
+      {"репозитории", "repository"},
+      {"карта", "map"},
+      {"карту", "map"},
+      {"картой", "map"},
+      {"причина", "cause"},
+      {"корень", "cause"},
+      {"регрессия", "regression"},
+      {"регрессии", "regression"},
+      {"отладить", "debug"},
+      {"отладка", "debug"},
+      {"разобрать", "debug"},
+      {"безопасный", "safe"},
+      {"безопасно", "safe"},
+      {"минимальный", "minimal"},
+      {"минимально", "minimal"},
+      {"патч", "patch"},
+      {"исправление", "fix"},
+      {"тест", "test"},
+      {"тесты", "test"},
+      {"деплой", "deploy"},
+      {"выкатка", "deploy"},
+      {"релиз", "deploy"},
+      {"контракт", "contract"},
+      {"эндпоинт", "endpoint"},
+      {"интерфейс", "ui"},
+      {"бандл", "bundle"},
+      {"сборка", "build"},
+      {"схема", "schema"},
+      {"валидатор", "validator"},
+      {"валидаторы", "validator"},
+      {"проектор", "projector"},
+      {"проекторы", "projector"},
+      {"рендерер", "renderer"},
+      {"рендереры", "renderer"},
+      {"хранилище", "store"},
+      {"жизненный", "lifecycle"},
+      {"цикл", "lifecycle"},
+      {"закрытие", "closeout"},
+      {"тикет", "issue"},
+      {"рефакторинг", "refactor"},
+      {"правила", "rules"},
+      {"скилл", "skill"},
+      {"скиллы", "skill"},
+      {"навык", "skill"},
+      {"навыки", "skill"},
+      {"триггер", "trigger"},
+      {"триггеры", "trigger"},
+      {"авторинг", "authoring"},
+  };
+
+  auto has_suffix = [](const std::string& token, const std::string& suffix) {
+    return token.size() >= suffix.size() &&
+           token.compare(token.size() - suffix.size(), suffix.size(), suffix) == 0;
+  };
+
+  auto canonicalize = [&](std::string token) {
+    if (token.size() > 5 && has_suffix(token, "ies")) {
+      token = token.substr(0, token.size() - 3) + "y";
+    } else if (token.size() > 5 && has_suffix(token, "es")) {
+      token = token.substr(0, token.size() - 2);
+    } else if (token.size() > 4 && has_suffix(token, "s")) {
+      token.pop_back();
+    }
+
+    const auto alias = kCanonicalAliases.find(token);
+    if (alias != kCanonicalAliases.end()) {
+      return alias->second;
+    }
+    return token;
   };
 
   std::vector<std::string> tokens;
@@ -97,7 +293,10 @@ std::vector<std::string> TokenizeRelevantTerms(const std::string& value) {
   std::stringstream stream(NormalizeSkillText(value));
   std::string token;
   while (stream >> token) {
-    if (token.size() < 4 || kIgnoredTokens.count(token) > 0) {
+    token = canonicalize(token);
+    const bool important_short_token = token == "api" || token == "ui";
+    if ((!important_short_token && token.size() < 3) ||
+        kIgnoredTokens.count(token) > 0) {
       continue;
     }
     if (seen.insert(token).second) {
@@ -174,11 +373,13 @@ int ScoreCandidate(
     std::string* rationale) {
   const std::string prompt_normalized = NormalizeSkillText(prompt_text);
   const auto prompt_terms = TokenizeRelevantTerms(prompt_text);
+  const auto id_terms = TokenizeRelevantTerms(candidate.id);
   const auto name_terms = TokenizeRelevantTerms(candidate.name);
   const auto description_terms = TokenizeRelevantTerms(candidate.description);
   const auto content_terms = TokenizeRelevantTerms(candidate.content);
 
   int score = 0;
+  std::vector<std::string> matched_id_terms;
   std::vector<std::string> matched_name_terms;
   std::vector<std::string> matched_description_terms;
   std::vector<std::string> matched_content_terms;
@@ -190,6 +391,11 @@ int ScoreCandidate(
   }
 
   for (const auto& term : prompt_terms) {
+    if (std::find(id_terms.begin(), id_terms.end(), term) != id_terms.end()) {
+      matched_id_terms.push_back(term);
+      score += 6;
+      continue;
+    }
     if (std::find(name_terms.begin(), name_terms.end(), term) != name_terms.end()) {
       matched_name_terms.push_back(term);
       score += 5;
@@ -217,6 +423,9 @@ int ScoreCandidate(
 
   if (rationale != nullptr) {
     std::vector<std::string> parts;
+    if (!matched_id_terms.empty()) {
+      parts.push_back("id terms: " + JoinTerms(matched_id_terms));
+    }
     if (!matched_name_terms.empty()) {
       parts.push_back("name terms: " + JoinTerms(matched_name_terms));
     }
