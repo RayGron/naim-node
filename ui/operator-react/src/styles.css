@@ -873,6 +873,16 @@ body {
   top: 24px;
 }
 
+.skills-factory-editor-panel .plane-form-section-meta {
+  margin: 4px 0 12px;
+  line-height: 1.55;
+}
+
+.skills-factory-editor-panel .field-label {
+  display: grid;
+  gap: 8px;
+}
+
 .plane-form-grid {
   display: grid;
   gap: 12px;
