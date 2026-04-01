@@ -842,6 +842,54 @@ int main() {
     }
 
     {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-market-overview-report"},
+                {"name", "market-overview-report"},
+                {"description",
+                 "Use when a request asks for the current state of the broader crypto market or a market overview."},
+                {"content",
+                 "Answer with a broad market view using the supplied market package."},
+                {"match_terms",
+                 json::array({"обзор рынка", "состояние рынка", "market overview"})},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-market-asset-report"},
+                {"name", "asset-market-report"},
+                {"description",
+                 "Use when a request asks for the current state of one tracked asset such as BTC or ETH."},
+                {"content",
+                 "Answer with a single-asset report and keep broader and venue data distinct."},
+                {"match_terms",
+                 json::array({"отчет по btc", "report on btc", "state of eth"})},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt", "Сделай обзор рынка по основным валютам"}});
+      Expect(
+          selection.mode == "contextual" &&
+              !selection.selected_skill_ids.empty() &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-market-overview-report",
+          "resolver should ignore stopwords and prefer the broad market overview skill");
+      Expect(
+          std::find(
+              selection.selected_skill_ids.begin(),
+              selection.selected_skill_ids.end(),
+              "lt-cypher-market-asset-report") ==
+              selection.selected_skill_ids.end(),
+          "resolver should not select a single-asset report only because of stopwords in match terms");
+      std::cout << "ok: contextual-resolver-ignores-stopword-market-overlaps" << '\n';
+    }
+
+    {
       const std::string db_path = MakeTempDbPath();
       fs::remove(db_path);
       comet::ControllerStore store(db_path);
