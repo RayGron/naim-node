@@ -483,6 +483,89 @@ int main() {
     }
 
     {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-localtrade-auth-session"},
+                {"name", "localtrade-auth-session"},
+                {"description",
+                 "Use for LocalTrade sign-in state, Access cookie reuse, GET /auth/me, and session validation."},
+                {"content",
+                 "Check whether the active LocalTrade session is valid and whether the Access cookie is required."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-user-streams"},
+                {"name", "localtrade-user-streams"},
+                {"description",
+                 "Use for LocalTrade Socket.IO rooms such as balances and user_orders."},
+                {"content",
+                 "Explain protected rooms, public rooms, and Socket.IO room names."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-account-balances"},
+                {"name", "localtrade-account-balances"},
+                {"description",
+                 "Use for LocalTrade balances, available balances, and totals."},
+                {"content",
+                 "Explain balance endpoints and when login is required."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Проверь авторизацию LocalTrade, активную сессию и Access cookie."}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-localtrade-auth-session",
+          "resolver should prefer auth-session over other LocalTrade skills for session prompts");
+      std::cout << "ok: contextual-resolver-selects-localtrade-auth-session" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-localtrade-spot-order-clarification"},
+                {"name", "localtrade-spot-order-clarification"},
+                {"description",
+                 "Use when the user wants to place, inspect, or cancel a LocalTrade spot order."},
+                {"content",
+                 "Clarify limit order parameters, pairId, side, amount, rate, and require confirmation."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-market-data"},
+                {"name", "localtrade-market-data"},
+                {"description",
+                 "Use for public pairs, charts, trades, and order book."},
+                {"content",
+                 "Explain pairs, chart endpoints, and public market-data rooms."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Хочу поставить лимитный ордер на покупку BTC и собрать параметры перед подтверждением."}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-localtrade-spot-order-clarification",
+          "resolver should select the LocalTrade spot-order clarification skill for Russian order prompts");
+      std::cout << "ok: contextual-resolver-selects-localtrade-spot-order" << '\n';
+    }
+
+    {
       const std::string db_path = MakeTempDbPath();
       fs::remove(db_path);
       comet::ControllerStore store(db_path);
