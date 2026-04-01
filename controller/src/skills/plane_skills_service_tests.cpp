@@ -649,6 +649,89 @@ int main() {
     }
 
     {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-localtrade-copy-trading-discovery"},
+                {"name", "localtrade-copy-trading-discovery"},
+                {"description",
+                 "Use to discover, compare, and filter LocalTrade copy-trading traders by ROI, drawdown, sharpe ratio, subscribers, and PnL."},
+                {"content",
+                 "Discovery is read-only and should not be confused with follow or subscribe actions."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-copy-trading-actions"},
+                {"name", "localtrade-copy-trading-actions"},
+                {"description",
+                 "Use to follow, unfollow, or subscribe to a LocalTrade trader and require confirmation before any write action."},
+                {"content",
+                 "These are write actions and need explicit confirmation."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Найди и сравни сильных трейдеров для копитрейдинга по ROI и drawdown."}});
+      Expect(
+          selection.mode == "contextual" &&
+              !selection.selected_skill_ids.empty() &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-localtrade-copy-trading-discovery",
+          "resolver should prefer LocalTrade copy-trading discovery over write actions for comparison prompts");
+      std::cout << "ok: contextual-resolver-prefers-localtrade-copy-discovery" << '\n';
+    }
+
+    {
+      SkillRuntimeTestServer runtime(json::array(
+          {json{{"id", "lt-cypher-localtrade-user-streams"},
+                {"name", "localtrade-user-streams"},
+                {"description",
+                 "Use for protected LocalTrade Socket.IO user rooms such as balances, user_orders, user_trades, and authenticated private channels."},
+                {"content",
+                 "Explain protected user rooms and the Access cookie requirement."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-account-balances"},
+                {"name", "localtrade-account-balances"},
+                {"description",
+                 "Use for LocalTrade balances, available balances, and totals."},
+                {"content",
+                 "Explain balances endpoints and whether login is required."},
+                {"enabled", true}},
+           json{{"id", "lt-cypher-localtrade-market-data"},
+                {"name", "localtrade-market-data"},
+                {"description",
+                 "Use for public LocalTrade pairs, charts, trades, order book, and pairs state without account data."},
+                {"content",
+                 "Prefer this skill for public market feeds."},
+                {"enabled", true}}}));
+      auto desired_state = BuildDesiredState("catalog-plane", {});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
+
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          comet::controller::PlaneSkillContextualResolverService().Resolve(
+              "",
+              resolution,
+              json{{"prompt",
+                    "Какие пользовательские websocket-каналы нужны для приватных обновлений балансов и ордеров?"}});
+      Expect(
+          selection.mode == "contextual" &&
+              !selection.selected_skill_ids.empty() &&
+              selection.selected_skill_ids.front() ==
+                  "lt-cypher-localtrade-user-streams",
+          "resolver should prefer LocalTrade user-streams over balances and public market data for private channel prompts");
+      std::cout << "ok: contextual-resolver-prefers-localtrade-user-streams" << '\n';
+    }
+
+    {
       const std::string db_path = MakeTempDbPath();
       fs::remove(db_path);
       comet::ControllerStore store(db_path);

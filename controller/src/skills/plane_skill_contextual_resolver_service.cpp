@@ -282,14 +282,23 @@ std::vector<std::string> TokenizeRelevantTerms(const std::string& value) {
       {"публичный", "public"},
       {"публичные", "public"},
       {"публичная", "public"},
+      {"публичное", "public"},
+      {"стакан", "orderbook"},
+      {"график", "chart"},
+      {"графики", "chart"},
       {"пары", "pairs"},
       {"пара", "pairs"},
       {"котировки", "market"},
       {"маркет", "market"},
       {"рынок", "market"},
+      {"рыночные", "market"},
+      {"данные", "market"},
+      {"аккаунта", "account"},
+      {"аккаунт", "account"},
       {"ордера", "order"},
       {"ордер", "order"},
       {"ордерами", "order"},
+      {"ордеров", "order"},
       {"лимитный", "limit"},
       {"лимитная", "limit"},
       {"лимитныйй", "limit"},
@@ -306,6 +315,14 @@ std::vector<std::string> TokenizeRelevantTerms(const std::string& value) {
       {"подписаться", "subscribe"},
       {"подписки", "subscribe"},
       {"подписка", "subscribe"},
+      {"сравни", "compare"},
+      {"сравнить", "compare"},
+      {"сравнение", "compare"},
+      {"найди", "discover"},
+      {"найти", "discover"},
+      {"подбери", "discover"},
+      {"лучших", "discover"},
+      {"сильных", "discover"},
       {"subscribing", "subscribe"},
       {"subscribe", "subscribe"},
       {"following", "follow"},
@@ -321,6 +338,15 @@ std::vector<std::string> TokenizeRelevantTerms(const std::string& value) {
       {"просадке", "drawdown"},
       {"комнаты", "room"},
       {"комната", "room"},
+      {"канал", "stream"},
+      {"каналы", "stream"},
+      {"каналов", "stream"},
+      {"пользовательские", "user"},
+      {"пользовательских", "user"},
+      {"приватные", "protected"},
+      {"приватных", "protected"},
+      {"защищенные", "protected"},
+      {"защищённых", "protected"},
       {"поток", "stream"},
       {"потоки", "stream"},
       {"streams", "stream"},
@@ -505,11 +531,16 @@ int ScoreCandidate(
   const bool prompt_balance = contains_term(
       prompt_terms, {"balance", "available"});
   const bool prompt_public_market = contains_term(
-      prompt_terms, {"public", "pairs", "market", "trade", "chart", "orderbook"});
+      prompt_terms,
+      {"public", "pairs", "market", "chart", "orderbook", "pairs_state"});
   const bool prompt_protected_user = contains_term(
-      prompt_terms, {"user", "balance", "session", "auth", "cookie"});
+      prompt_terms, {"user", "protected", "balance", "session", "auth"});
   const bool prompt_copy_action = contains_term(
-      prompt_terms, {"subscribe", "follow", "unfollow", "trader", "copytrading"});
+      prompt_terms, {"subscribe", "follow", "unfollow"});
+  const bool prompt_copy_discovery = contains_term(
+      prompt_terms,
+      {"discover", "compare", "copytrading", "trader", "drawdown", "sharpe",
+       "pnl", "roi"});
   const bool prompt_spot_order = contains_term(
       prompt_terms, {"order", "limit", "buy", "sell", "confirm"});
   const bool prompt_streams = contains_term(
@@ -526,11 +557,19 @@ int ScoreCandidate(
   const bool candidate_public_market = contains_term(
       id_terms, {"market"}) ||
       contains_term(name_terms, {"market"}) ||
-      contains_term(description_terms, {"public", "pairs", "market", "trade", "chart", "orderbook"});
+      contains_term(description_terms,
+                    {"public", "pairs", "chart", "orderbook", "pairs_state"});
   const bool candidate_copy_action = contains_term(
-      id_terms, {"subscribe", "follow", "unfollow", "copytrading", "trader"}) ||
-      contains_term(name_terms, {"subscribe", "follow", "unfollow", "copytrading", "trader"}) ||
-      contains_term(description_terms, {"subscribe", "follow", "unfollow", "copytrading", "trader", "confirm"});
+      id_terms, {"subscribe", "follow", "unfollow"}) ||
+      contains_term(name_terms, {"subscribe", "follow", "unfollow"}) ||
+      contains_term(description_terms,
+                    {"subscribe", "follow", "unfollow", "confirm"});
+  const bool candidate_copy_discovery = contains_term(
+      id_terms, {"copytrading", "trader", "discovery"}) ||
+      contains_term(name_terms, {"copytrading", "trader", "discovery"}) ||
+      contains_term(description_terms,
+                    {"compare", "discover", "copytrading", "trader", "roi",
+                     "drawdown", "sharpe", "pnl"});
   const bool candidate_spot_order = contains_term(
       id_terms, {"order", "limit"}) ||
       contains_term(name_terms, {"order", "limit"}) ||
@@ -569,6 +608,12 @@ int ScoreCandidate(
       score -= 2;
     }
   }
+  if (prompt_copy_discovery) {
+    score += candidate_copy_discovery ? 8 : 0;
+    if (candidate_copy_action && !prompt_copy_action) {
+      score -= 4;
+    }
+  }
   if (prompt_spot_order) {
     score += candidate_spot_order ? 8 : 0;
     if (candidate_public_market && !candidate_spot_order) {
@@ -576,11 +621,14 @@ int ScoreCandidate(
     }
   }
   if (prompt_streams) {
-    score += candidate_streams ? 6 : 0;
+    score += candidate_streams ? 8 : 0;
     if (candidate_public_market && !candidate_streams) {
       score -= 1;
     }
     if (candidate_streams && prompt_public_market && !prompt_protected_user) {
+      score -= 4;
+    }
+    if (candidate_balance && !candidate_streams) {
       score -= 4;
     }
   }
