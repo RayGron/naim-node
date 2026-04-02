@@ -396,6 +396,31 @@ function formatChartGigabytesFromMegabytes(value) {
   return `${(numeric / 1024).toFixed(2)} GB`;
 }
 
+function formatBytesPerSecond(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return "n/a";
+  }
+  return `${compactBytes(numeric)}/s`;
+}
+
+function latestRatePerSecond(history) {
+  if (!Array.isArray(history) || history.length < 2) {
+    return null;
+  }
+  const lastPoint = history[history.length - 1];
+  const previousPoint = history[history.length - 2];
+  const deltaSeconds = (Number(lastPoint?.ts) - Number(previousPoint?.ts)) / 1000;
+  const deltaValue = Number(lastPoint?.value) - Number(previousPoint?.value);
+  if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
+    return null;
+  }
+  if (!Number.isFinite(deltaValue) || deltaValue < 0) {
+    return null;
+  }
+  return deltaValue / deltaSeconds;
+}
+
 function modelLibraryJobStatusClass(status) {
   switch (String(status || "").toLowerCase()) {
     case "completed":
@@ -499,6 +524,8 @@ function summarizeGlobalObservations(items) {
       ) {
         summary.missingRuntime += 1;
       }
+      summary.cpuLoadHostCount += 1;
+      summary.totalCpuLoad1m += Number(cpu.loadavg_1m || 0);
       summary.totalMemoryBytes += Number(cpu.total_memory_bytes || 0);
       summary.usedMemoryBytes += Number(cpu.used_memory_bytes || 0);
       summary.totalGpuVramMb += Number(gpu.total_vram_mb || 0);
@@ -520,6 +547,8 @@ function summarizeGlobalObservations(items) {
       }
       summary.networkRxBytes += Number(network.rx_bytes || 0);
       summary.networkTxBytes += Number(network.tx_bytes || 0);
+      summary.diskReadBytes += Number(disk.read_bytes || 0);
+      summary.diskWriteBytes += Number(disk.write_bytes || 0);
       summary.diskUsedBytes += Number(disk.used_bytes || 0);
       summary.diskTotalBytes += Number(disk.total_bytes || 0);
       return summary;
@@ -527,6 +556,8 @@ function summarizeGlobalObservations(items) {
     {
       healthyNodes: 0,
       missingRuntime: 0,
+      cpuLoadHostCount: 0,
+      totalCpuLoad1m: 0,
       totalMemoryBytes: 0,
       usedMemoryBytes: 0,
       totalGpuVramMb: 0,
@@ -538,6 +569,8 @@ function summarizeGlobalObservations(items) {
       maxGpuTemperatureC: 0,
       networkRxBytes: 0,
       networkTxBytes: 0,
+      diskReadBytes: 0,
+      diskWriteBytes: 0,
       diskUsedBytes: 0,
       diskTotalBytes: 0,
     },
@@ -572,10 +605,13 @@ function appendMetricHistory(previousHistory, samples, timestamp = Date.now()) {
 function buildServerMetricSamples(summary, observedNodeCount) {
   return {
     "server.healthy_hosts": { value: Number(summary?.healthyNodes || 0) },
+    "server.cpu_load_1m": { value: Number(summary?.totalCpuLoad1m || 0) },
     "server.used_gpu_vram_mb": { value: Number(summary?.usedGpuVramMb || 0) },
     "server.used_memory_bytes": { value: Number(summary?.usedMemoryBytes || 0) },
     "server.max_cpu_temp_c": { value: Number(summary?.maxCpuTemperatureC || 0) },
     "server.max_gpu_temp_c": { value: Number(summary?.maxGpuTemperatureC || 0) },
+    "server.network_tx_bytes": { value: Number(summary?.networkTxBytes || 0) },
+    "server.disk_write_bytes": { value: Number(summary?.diskWriteBytes || 0) },
     "server.missing_runtime": { value: Number(summary?.missingRuntime || 0) },
     "server.observed_nodes": { value: Number(observedNodeCount || 0) },
   };
@@ -824,10 +860,16 @@ function observedInstancesForObservation(observation) {
 
 function hostObservationItemsFromPayload(payload) {
   if (Array.isArray(payload?.observations)) {
-    return payload.observations;
+    return payload.observations.map((item) => ({
+      ...item,
+      observed_at: item?.observed_at || item?.heartbeat_at || null,
+    }));
   }
   if (Array.isArray(payload?.items)) {
-    return payload.items;
+    return payload.items.map((item) => ({
+      ...item,
+      observed_at: item?.observed_at || item?.heartbeat_at || null,
+    }));
   }
   return [];
 }
@@ -3058,10 +3100,13 @@ function App() {
     "";
   const globalObservationSummary = summarizeGlobalObservations(globalObservationItems);
   const serverHealthyHostsHistory = metricHistory["server.healthy_hosts"] || [];
+  const serverCpuLoadHistory = metricHistory["server.cpu_load_1m"] || [];
   const serverGpuVramHistory = metricHistory["server.used_gpu_vram_mb"] || [];
   const serverMemoryHistory = metricHistory["server.used_memory_bytes"] || [];
   const serverCpuTempHistory = metricHistory["server.max_cpu_temp_c"] || [];
   const serverGpuTempHistory = metricHistory["server.max_gpu_temp_c"] || [];
+  const serverNetworkTxHistory = metricHistory["server.network_tx_bytes"] || [];
+  const serverDiskWriteHistory = metricHistory["server.disk_write_bytes"] || [];
   const planeMetricPrefix = selectedPlane ? `plane.${selectedPlane}` : "";
   const planeReadyNodesHistory = planeMetricPrefix
     ? metricHistory[`${planeMetricPrefix}.ready_nodes`] || []
@@ -3675,7 +3720,7 @@ function App() {
                 <div className="metric-row"><span>GPU temp</span><strong>{gpuTempCount > 0 ? formatTemperature(gpu.hottest_temperature_c) : "n/a"}</strong></div>
                 <div className="metric-row"><span>GPU count</span><strong>{gpuDeviceCount || "n/a"}</strong></div>
                 <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
-                <div className="metric-row"><span>Observed</span><strong>{formatTimestamp(host?.observed_at)}</strong></div>
+                <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at)}</strong></div>
               </div>
             </article>
           );
@@ -5833,21 +5878,21 @@ function App() {
                     }
                   />
                   <SummaryCard
-                    label="GPU VRAM used"
-                    value={formatDashboardMegabytesMbGb(globalObservationSummary.usedGpuVramMb)}
-                    meta={
-                      globalObservationSummary.totalGpuVramMb > 0
-                        ? `${formatDashboardMegabytesMbGb(globalObservationSummary.totalGpuVramMb)} total across ${globalObservationSummary.gpuDeviceCount} GPUs`
-                        : "no GPU telemetry"
+                    label="CPU load"
+                    value={
+                      globalObservationSummary.cpuLoadHostCount > 0
+                        ? globalObservationSummary.totalCpuLoad1m.toFixed(2)
+                        : "n/a"
                     }
-                    history={serverGpuVramHistory}
+                    meta={`${globalObservationSummary.cpuLoadHostCount} hosts reporting / 1m load average`}
+                    history={serverCpuLoadHistory}
                     onOpenTrend={() =>
                       openTelemetryChart(
-                        "GPU VRAM used",
-                        serverGpuVramHistory,
-                        "Aggregate used GPU VRAM across observed hosts.",
-                        (value) => formatChartGigabytesFromMegabytes(value),
-                        "server.used_gpu_vram_mb",
+                        "CPU load",
+                        serverCpuLoadHistory,
+                        "Aggregate 1-minute CPU load across observed hosts.",
+                        (value) => Number(value).toFixed(2),
+                        "server.cpu_load_1m",
                       )
                     }
                   />
@@ -5863,6 +5908,25 @@ function App() {
                         "Aggregate used host memory over time.",
                         (value) => formatChartGigabytesFromBytes(value),
                         "server.used_memory_bytes",
+                      )
+                    }
+                  />
+                  <SummaryCard
+                    label="GPU VRAM used"
+                    value={formatDashboardMegabytesMbGb(globalObservationSummary.usedGpuVramMb)}
+                    meta={
+                      globalObservationSummary.totalGpuVramMb > 0
+                        ? `${formatDashboardMegabytesMbGb(globalObservationSummary.totalGpuVramMb)} total across ${globalObservationSummary.gpuDeviceCount} GPUs`
+                        : "no GPU telemetry"
+                    }
+                    history={serverGpuVramHistory}
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "GPU VRAM used",
+                        serverGpuVramHistory,
+                        "Aggregate used GPU VRAM across observed hosts.",
+                        (value) => formatChartGigabytesFromMegabytes(value),
+                        "server.used_gpu_vram_mb",
                       )
                     }
                   />
@@ -5901,6 +5965,36 @@ function App() {
                         "Highest reported GPU temperature across observed devices.",
                         (value) => formatTemperature(value),
                         "server.max_gpu_temp_c",
+                      )
+                    }
+                  />
+                  <SummaryCard
+                    label="Network tx"
+                    value={formatBytesPerSecond(latestRatePerSecond(serverNetworkTxHistory))}
+                    meta={`${compactBytes(globalObservationSummary.networkTxBytes)} total transmitted`}
+                    history={serverNetworkTxHistory}
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "Network transmitted bytes",
+                        serverNetworkTxHistory,
+                        "Aggregate transmitted network bytes across observed hosts.",
+                        (value) => compactBytes(value),
+                        "server.network_tx_bytes",
+                      )
+                    }
+                  />
+                  <SummaryCard
+                    label="Disk writes"
+                    value={formatBytesPerSecond(latestRatePerSecond(serverDiskWriteHistory))}
+                    meta={`${compactBytes(globalObservationSummary.diskWriteBytes)} total written`}
+                    history={serverDiskWriteHistory}
+                    onOpenTrend={() =>
+                      openTelemetryChart(
+                        "Disk written bytes",
+                        serverDiskWriteHistory,
+                        "Aggregate written disk bytes across observed hosts.",
+                        (value) => compactBytes(value),
+                        "server.disk_write_bytes",
                       )
                     }
                   />
