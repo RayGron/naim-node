@@ -73,7 +73,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
-set(COMET_LLAMA_CPP_GIT_TAG "ec2b787ebe975cab1fa592c2505a6d3a9e4ff2e7" CACHE STRING
+set(COMET_LLAMA_CPP_GIT_TAG "7c7d6ce5c7caad3714ad1cd37ef057dfe0f317d0" CACHE STRING
     "Pinned ggml-org/llama.cpp revision used for comet runtime binaries")
 set(COMET_LLAMA_CPP_SOURCE_DIR "" CACHE PATH
     "Optional local llama.cpp source directory override for comet runtime binaries")
