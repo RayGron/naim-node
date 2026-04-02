@@ -175,7 +175,33 @@ std::string HostWithoutPort(const std::string& host_header) {
 
 std::string RequestScheme(const HttpRequest& request) {
   if (const auto forwarded = FindHeaderString(request, "x-forwarded-proto"); forwarded.has_value()) {
-    return LowercaseCopy(*forwarded);
+    const auto first = TrimCopy(
+        forwarded->substr(0, forwarded->find(',')));
+    if (!first.empty()) {
+      return LowercaseCopy(first);
+    }
+  }
+  if (const auto forwarded = FindHeaderString(request, "forwarded"); forwarded.has_value()) {
+    const std::string lowered = LowercaseCopy(*forwarded);
+    const auto proto_pos = lowered.find("proto=");
+    if (proto_pos != std::string::npos) {
+      const auto value_begin = proto_pos + 6;
+      const auto value_end = lowered.find_first_of(";,\t ", value_begin);
+      const auto value = TrimCopy(lowered.substr(value_begin, value_end - value_begin));
+      if (!value.empty()) {
+        return value;
+      }
+    }
+  }
+  if (const auto forwarded = FindHeaderString(request, "x-forwarded-ssl"); forwarded.has_value()) {
+    if (LowercaseCopy(TrimCopy(*forwarded)) == "on") {
+      return "https";
+    }
+  }
+  if (const auto forwarded = FindHeaderString(request, "x-forwarded-port"); forwarded.has_value()) {
+    if (TrimCopy(*forwarded) == "443") {
+      return "https";
+    }
   }
   return "http";
 }
