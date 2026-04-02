@@ -16,6 +16,17 @@ describe("model library uploader helpers", () => {
     ).toBe("safetensors");
   });
 
+  it("treats safetensors plus HF metadata files as safetensors source", () => {
+    expect(
+      detectModelSourceFormat([
+        "https://huggingface.co/example/model/config.json",
+        "https://huggingface.co/example/model/tokenizer.json",
+        "https://huggingface.co/example/model/model-00001-of-00002.safetensors",
+        "https://huggingface.co/example/model/model-00002-of-00002.safetensors",
+      ]),
+    ).toBe("safetensors");
+  });
+
   it("normalizes source URL textarea input", () => {
     expect(
       normalizeModelDownloadSourceUrls(

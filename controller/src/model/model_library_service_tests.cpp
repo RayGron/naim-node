@@ -591,6 +591,47 @@ int main() {
         completed_quantized_job.retained_output_paths.size() == 2,
         "quantized job should persist retained output paths");
 
+    const fs::path mixed_config_path = src_root / "config.json";
+    const fs::path mixed_tokenizer_path = src_root / "tokenizer.json";
+    {
+      std::ofstream out(mixed_config_path);
+      out << "{\"architectures\":[\"FakeModel\"]}";
+    }
+    {
+      std::ofstream out(mixed_tokenizer_path);
+      out << "{\"tokenizer\":\"fake\"}";
+    }
+    const auto mixed_bundle_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "google/gemma-4-31B-it"},
+                {"target_root", dst_root.string()},
+                {"target_subdir", "converted-mixed"},
+                {"source_urls",
+                 nlohmann::json::array(
+                     {FileUrlForPath(mixed_config_path),
+                      FileUrlForPath(mixed_tokenizer_path),
+                      FileUrlForPath(safetensors_source)})},
+                {"format", "gguf"},
+                {"quantizations", nlohmann::json::array()},
+                {"keep_base_gguf", true},
+            }));
+    Expect(
+        mixed_bundle_response.status_code == 202,
+        "mixed HF metadata plus safetensors bundle should be accepted");
+    const auto mixed_job_id =
+        nlohmann::json::parse(mixed_bundle_response.body).at("job").at("id").get<std::string>();
+    const auto completed_mixed_job = WaitForJobStatus(store, mixed_job_id, "completed");
+    Expect(
+        completed_mixed_job.detected_source_format == "safetensors",
+        "mixed HF metadata bundle should persist safetensors source format");
+    Expect(
+        fs::exists(dst_root / "converted-mixed" / "gemma-4-31B-it.gguf"),
+        "mixed HF metadata bundle should still produce a GGUF output");
+
     setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize_fail.string().c_str(), 1);
     const auto failed_quantized_response = service.EnqueueDownload(
         db_path.string(),

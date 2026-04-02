@@ -23,6 +23,11 @@ constexpr std::string_view kFormatGguf = "gguf";
 constexpr std::string_view kFormatSafetensors = "safetensors";
 constexpr std::string_view kFormatUnknown = "unknown";
 
+bool IsHfAuxiliaryConversionFile(const std::string& lowered_filename) {
+  return lowered_filename.ends_with(".json") || lowered_filename.ends_with(".model") ||
+         lowered_filename.ends_with(".txt");
+}
+
 std::filesystem::path JoinNormalized(
     const std::filesystem::path& left,
     const std::filesystem::path& right) {
@@ -49,6 +54,9 @@ std::string ModelConversionService::DetectSourceFormat(
     }
     if (lowered.ends_with(".safetensors")) {
       saw_safetensors = true;
+      continue;
+    }
+    if (IsHfAuxiliaryConversionFile(lowered)) {
       continue;
     }
     return std::string(kFormatUnknown);

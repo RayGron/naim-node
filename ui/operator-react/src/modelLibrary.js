@@ -37,6 +37,13 @@ export function detectModelSourceFormat(value) {
       sawSafetensors = true;
       continue;
     }
+    if (
+      normalized.endsWith(".json") ||
+      normalized.endsWith(".model") ||
+      normalized.endsWith(".txt")
+    ) {
+      continue;
+    }
     return "unknown";
   }
   if (sawGguf && !sawSafetensors) {
