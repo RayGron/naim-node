@@ -24,6 +24,16 @@
       "ctx_size": 16384,
       "batch_size": 1024,
       "gpu_layers": 99
+    },
+    "gemma4": {
+      "llama_args": [
+        "--jinja",
+        "--chat-template-file",
+        "/runtime/infer/templates/google-gemma-4.jinja"
+      ],
+      "ctx_size": 8192,
+      "batch_size": 512,
+      "gpu_layers": 99
     }
   }
 }
