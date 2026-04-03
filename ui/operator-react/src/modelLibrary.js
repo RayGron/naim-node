@@ -90,6 +90,7 @@ export function formatModelLibraryDisplayName(item) {
   if (quantization === "base") {
     return withoutExtension || rawName;
   }
-  const normalizedSuffix = new RegExp(`-${quantization}$`, "i");
+  const escapedQuantization = quantization.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const normalizedSuffix = new RegExp(`-${escapedQuantization}$`, "i");
   return `${withoutExtension.replace(normalizedSuffix, "")} - ${quantization}`;
 }

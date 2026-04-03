@@ -5029,6 +5029,7 @@ function App() {
             ) : (
               quantizationItems.map((item) => {
                 const itemQuantization = normalizeModelLibraryItemQuantization(item.quantization);
+                const canQuantize = itemQuantization === "base";
                 return (
                   <article className="list-card" key={item.path}>
                     <div className="card-row">
@@ -5051,10 +5052,15 @@ function App() {
                       <button
                         className="ghost-button"
                         type="button"
-                        disabled={modelLibraryBusy !== ""}
+                        disabled={modelLibraryBusy !== "" || !canQuantize}
                         onClick={() => openQuantizationDialog(item)}
+                        title={
+                          canQuantize
+                            ? "Create a new GGUF quantization variant"
+                            : "Only base GGUF models can be quantized"
+                        }
                       >
-                        Quantize
+                        {canQuantize ? "Quantize" : "Base only"}
                       </button>
                     </div>
                   </article>
