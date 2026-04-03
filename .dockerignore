@@ -1,16 +1,5 @@
 .git
 .vscode
-build
-!build/
-!build/linux/
-!build/linux/x64/
-!build/linux/x64/**
-!build/linux/x64/comet-inferctl
-!build/linux/x64/comet-skillsd
-!build/linux/x64/comet-workerd
-!build/linux/x64/bin/
-!build/linux/x64/bin/llama-server
-!build/linux/x64/bin/rpc-server
 dist
 !ui/
 !ui/operator-react/
