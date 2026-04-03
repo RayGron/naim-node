@@ -225,7 +225,7 @@ std::vector<std::string> TokenizeRelevantTerms(const std::string& value) {
       "как",        "мне",        "меня",       "нам",       "нас",
       "тебе",       "тебя",       "его",        "ее",        "её",
       "их",         "так",        "же",         "вот",       "там",
-      "тут",        "про",        "без",
+      "тут",        "про",        "без",        "кто",       "ты",
   };
 
   static const std::unordered_map<std::string, std::string> kCanonicalAliases = {
