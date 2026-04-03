@@ -452,6 +452,26 @@ std::vector<std::string> TokenizeTermList(const std::vector<std::string>& values
   return tokens;
 }
 
+bool IsAssistantIdentityPrompt(const std::string& prompt) {
+  const std::string normalized = NormalizeSkillText(prompt);
+  static const std::array<std::string_view, 8> kIdentityPhrases = {
+      "кто ты",
+      "кто вы",
+      "что ты",
+      "что вы",
+      "who are you",
+      "what are you",
+      "tell me about yourself",
+      "представься",
+  };
+  return std::any_of(
+      kIdentityPhrases.begin(),
+      kIdentityPhrases.end(),
+      [&normalized](std::string_view phrase) {
+        return normalized.find(phrase) != std::string::npos;
+      });
+}
+
 std::vector<std::string> ParseStringArray(const nlohmann::json& value) {
   if (!value.is_array()) {
     return {};
@@ -677,6 +697,9 @@ ContextualSkillSelection PlaneSkillContextualResolverService::Resolve(
   const auto candidates = LoadPlaneLocalCandidates(resolution.desired_state);
   selection.candidate_count = static_cast<int>(candidates.size());
   if (prompt_text.empty() || candidates.empty()) {
+    return selection;
+  }
+  if (IsAssistantIdentityPrompt(prompt_text)) {
     return selection;
   }
 
