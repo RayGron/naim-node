@@ -155,6 +155,14 @@ void AppendGemma4TextOutputArgs(
     args->push_back("--chat-template-file");
     args->push_back("/runtime/infer/templates/google-gemma-4.jinja");
   }
+  if (!HasArgument(*args, "--chat-template-kwargs")) {
+    args->push_back("--chat-template-kwargs");
+    args->push_back(R"({"enable_thinking":false})");
+  }
+  if (!HasArgument(*args, "--reasoning-format")) {
+    args->push_back("--reasoning-format");
+    args->push_back("none");
+  }
 }
 
 std::vector<std::string> SplitCommaSeparated(std::string_view text) {
