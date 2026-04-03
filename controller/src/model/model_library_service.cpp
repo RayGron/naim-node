@@ -488,7 +488,8 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
              {"message", "source GGUF entry not found in model library"}},
         {});
   }
-  if (NormalizeModelLibraryItemQuantization(entry_it->quantization) != "base") {
+  const auto source_quantization = entry_it->quantization.empty() ? "base" : entry_it->quantization;
+  if (source_quantization != "base") {
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
