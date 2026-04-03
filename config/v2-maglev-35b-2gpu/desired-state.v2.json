@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "plane_name": "maglev-backend-35b-2gpu",
+  "plane_name": "maglev",
   "plane_mode": "llm",
   "protected": true,
   "model": {
