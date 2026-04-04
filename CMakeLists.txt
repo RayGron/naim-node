@@ -146,6 +146,7 @@ add_library(
   common/src/planning/execution_plan.cpp
   common/src/importing/import_bundle.cpp
   common/src/runtime/infer_runtime_config.cpp
+  common/src/runtime/model_adapter.cpp
   common/src/planning/planner.cpp
   common/src/planning/reconcile.cpp
   common/src/runtime/runtime_status.cpp
@@ -183,6 +184,14 @@ target_link_libraries(
     unofficial::sqlite3::sqlite3
 )
 comet_enable_strict_warnings(comet-common)
+
+add_executable(
+  comet-model-adapter-tests
+  common/src/runtime/model_adapter_tests.cpp
+)
+target_include_directories(comet-model-adapter-tests PRIVATE common/include)
+target_link_libraries(comet-model-adapter-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-model-adapter-tests)
 
 add_executable(
   comet-state-v2-tests
@@ -379,6 +388,7 @@ add_executable(
   controller/src/host/hostd_http_support.cpp
   controller/src/interaction/interaction_http_service.cpp
   controller/src/interaction/interaction_http_support.cpp
+  controller/src/interaction/interaction_payload_builder.cpp
   controller/src/interaction/interaction_runtime_support_service.cpp
   controller/src/interaction/interaction_service.cpp
   controller/src/model/model_library_http_service.cpp

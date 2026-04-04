@@ -144,7 +144,8 @@ void LocalHttpServer::HandleClient(int client_fd) {
       const auto fallback_upstream =
           upstream.has_value() ? upstream : ResolveStaticReplicaUpstream(config_);
       if (!fallback_upstream.has_value() ||
-          !runtime_support::ProxyHttpRequest(client_fd, request_data, *fallback_upstream)) {
+          !runtime_support::ProxyHttpRequest(
+              config_, client_fd, request_data, *fallback_upstream)) {
         std::cerr << "[comet-infer] dynamic proxy failed path=" << request.path;
         if (fallback_upstream.has_value()) {
           std::cerr << " upstream=" << fallback_upstream->host << ":" << fallback_upstream->port;
@@ -156,7 +157,7 @@ void LocalHttpServer::HandleClient(int client_fd) {
         runtime_support::SendErrorResponse(client_fd, 503, "upstream runtime is unavailable");
       }
     } else if (upstream_.has_value()) {
-      if (!runtime_support::ProxyHttpRequest(client_fd, request_data, *upstream_)) {
+      if (!runtime_support::ProxyHttpRequest(config_, client_fd, request_data, *upstream_)) {
         runtime_support::SendErrorResponse(client_fd, 503, "upstream runtime is unavailable");
       }
     } else {

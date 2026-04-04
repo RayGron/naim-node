@@ -36,7 +36,7 @@ InstanceSpec MakeInfer() {
   instance.plane_name = "alpha";
   instance.node_name = "node-a";
   instance.image = "comet/infer-runtime:dev";
-  instance.command = "/runtime/infer/entrypoint.sh";
+  instance.command = "/runtime/bin/comet-inferctl container-boot";
   instance.private_disk_name = "infer-main-private";
   instance.shared_disk_name = "plane-alpha-shared";
   instance.environment = {
@@ -44,7 +44,6 @@ InstanceSpec MakeInfer() {
       {"COMET_INSTANCE_NAME", "infer-main"},
       {"COMET_INSTANCE_ROLE", "infer"},
       {"COMET_NODE_NAME", "node-a"},
-      {"COMET_INFER_BOOT_MODE", "launch-runtime"},
       {"COMET_INFER_RUNTIME_BACKEND", "auto"},
       {"COMET_CONTROLLER_URL", "http://controller.internal:8080"},
       {"COMET_CONTROL_ROOT", "/comet/shared/control/alpha"},
@@ -81,7 +80,7 @@ InstanceSpec MakeWorker(
   instance.plane_name = "alpha";
   instance.node_name = std::move(node_name);
   instance.image = "comet/worker-runtime:dev";
-  instance.command = "/runtime/worker/entrypoint.sh";
+  instance.command = "/runtime/bin/comet-workerd";
   instance.private_disk_name = instance.name + "-private";
   instance.shared_disk_name = "plane-alpha-shared";
   instance.depends_on = std::move(depends_on);

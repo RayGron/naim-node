@@ -14,6 +14,7 @@
 #include "runtime/llama_library_engine.h"
 #include "runtime/llama_rpc_runtime.h"
 #include "runtime/local_runtime.h"
+#include "comet/runtime/model_adapter.h"
 #include "comet/runtime/runtime_status.h"
 
 #include <arpa/inet.h>
@@ -108,15 +109,6 @@ std::string ExpandUserPath(const std::string& value) {
   if (value.size() > 1 && value[1] == '/') {
     return std::string(home) + value.substr(1);
   }
-  return value;
-}
-
-std::string ToLowerCopy(std::string value) {
-  std::transform(
-      value.begin(),
-      value.end(),
-      value.begin(),
-      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return value;
 }
 
@@ -234,239 +226,15 @@ int ConnectTcpHost(const std::string& host, int port) {
   return fd;
 }
 
-bool ActiveModelLooksLikeQwen(const json& active_model) {
-  const std::string model_id = ToLowerCopy(active_model.value("model_id", std::string{}));
-  const std::string served_model_name =
-      ToLowerCopy(active_model.value("served_model_name", std::string{}));
-  const std::string model_path = ToLowerCopy(active_model.value("model_path", std::string{}));
-  return model_id.find("qwen") != std::string::npos ||
-         served_model_name.find("qwen") != std::string::npos ||
-         model_path.find("qwen") != std::string::npos;
-}
-
-std::string NormalizeChatRole(const std::string& role) {
-  const std::string normalized = ToLowerCopy(role);
-  if (normalized == "system" || normalized == "user" || normalized == "assistant" ||
-      normalized == "tool") {
-    return normalized;
-  }
-  return "user";
-}
-
-std::string BuildLegacyChatPrompt(const json& payload) {
-  std::ostringstream prompt;
-  for (const auto& message : payload.at("messages")) {
-    if (!message.is_object()) {
-      continue;
-    }
-    const std::string role = message.value("role", std::string{"user"});
-    const std::string content = JsonString(message, "content");
-    if (!content.empty()) {
-      prompt << role << ": " << content << "\n";
-    }
-  }
-  prompt << "assistant: ";
-  return prompt.str();
-}
-
-std::string BuildQwenChatPrompt(const json& payload) {
-  std::ostringstream prompt;
-  for (const auto& message : payload.at("messages")) {
-    if (!message.is_object()) {
-      continue;
-    }
-    const std::string content = JsonString(message, "content");
-    if (content.empty()) {
-      continue;
-    }
-    prompt << "<|im_start|>" << NormalizeChatRole(message.value("role", std::string{"user"}))
-           << "\n"
-           << content << "<|im_end|>\n";
-  }
-  prompt << "<|im_start|>assistant\n";
-  return prompt.str();
-}
-
-std::string TrimLeadingWhitespace(std::string value) {
-  while (!value.empty() &&
-         std::isspace(static_cast<unsigned char>(value.front())) != 0) {
-    value.erase(value.begin());
-  }
-  return value;
-}
-
-std::string StripRepeatedAssistantPrefixes(std::string value) {
-  while (true) {
-    const std::string trimmed = TrimLeadingWhitespace(value);
-    if (trimmed.rfind("assistant:", 0) == 0) {
-      value = trimmed.substr(std::string("assistant:").size());
-      continue;
-    }
-    if (trimmed.rfind("assistant\n", 0) == 0) {
-      value = trimmed.substr(std::string("assistant\n").size());
-      continue;
-    }
-    if (trimmed.rfind("<|im_start|>assistant", 0) == 0) {
-      value = trimmed.substr(std::string("<|im_start|>assistant").size());
-      continue;
-    }
-    return TrimLeadingWhitespace(value);
-  }
-}
-
-bool StartsWithAssistantMarker(const std::string& line) {
-  const std::string trimmed = TrimLeadingWhitespace(line);
-  return trimmed.rfind("assistant:", 0) == 0 ||
-         trimmed.rfind("<|im_start|>assistant", 0) == 0 ||
-         trimmed == "assistant";
-}
-
-std::string StripAssistantMarkerFromLine(const std::string& line) {
-  std::string trimmed = TrimLeadingWhitespace(line);
-  if (trimmed.rfind("assistant:", 0) == 0) {
-    return Trim(trimmed.substr(std::string("assistant:").size()));
-  }
-  if (trimmed.rfind("<|im_start|>assistant", 0) == 0) {
-    return Trim(trimmed.substr(std::string("<|im_start|>assistant").size()));
-  }
-  if (trimmed == "assistant") {
-    return "";
-  }
-  return Trim(trimmed);
-}
-
-std::string CollapseAssistantTaggedTranscript(const std::string& value) {
-  std::stringstream stream(value);
-  std::string line;
-  std::vector<std::string> cleaned_lines;
-  bool saw_assistant_line = false;
-  while (std::getline(stream, line)) {
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
-    if (StartsWithAssistantMarker(line)) {
-      saw_assistant_line = true;
-    }
-    if (!saw_assistant_line) {
-      continue;
-    }
-    const std::string cleaned = StripAssistantMarkerFromLine(line);
-    if (cleaned.empty()) {
-      continue;
-    }
-    if (!cleaned_lines.empty() && cleaned_lines.back() == cleaned) {
-      continue;
-    }
-    cleaned_lines.push_back(cleaned);
-  }
-  if (!saw_assistant_line || cleaned_lines.empty()) {
-    return value;
-  }
-  std::ostringstream out;
-  for (std::size_t index = 0; index < cleaned_lines.size(); ++index) {
-    if (index > 0) {
-      out << "\n";
-    }
-    out << cleaned_lines[index];
-  }
-  return out.str();
-}
-
-std::string TruncateAtFirstMarker(
-    const std::string& value,
-    const std::vector<std::string>& markers) {
-  std::size_t cut = value.size();
-  for (const auto& marker : markers) {
-    const std::size_t pos = value.find(marker);
-    if (pos != std::string::npos) {
-      cut = std::min(cut, pos);
-    }
-  }
-  return value.substr(0, cut);
-}
-
-std::string RemoveThinkBlocks(std::string value) {
-  while (true) {
-    const std::size_t begin = value.find("<think>");
-    if (begin == std::string::npos) {
-      return value;
-    }
-    const std::size_t end = value.find("</think>", begin);
-    if (end == std::string::npos) {
-      return value.substr(0, begin);
-    }
-    value.erase(begin, end + std::string("</think>").size() - begin);
-  }
-}
-
-std::string StripLeadingGemmaChannelBlocks(std::string value) {
-  while (true) {
-    const std::string trimmed = TrimLeadingWhitespace(value);
-    if (!trimmed.starts_with("<|channel>")) {
-      return value;
-    }
-    const std::size_t close = trimmed.find("<channel|>");
-    if (close == std::string::npos) {
-      return value;
-    }
-    value = trimmed.substr(close + std::string("<channel|>").size());
-  }
-}
-
-std::string RemoveGemmaChannelBlocks(std::string value) {
-  constexpr std::string_view kOpen = "<|channel>";
-  constexpr std::string_view kClose = "<channel|>";
-  while (true) {
-    const std::size_t begin = value.find(kOpen);
-    if (begin == std::string::npos) {
-      break;
-    }
-    const std::size_t end = value.find(kClose, begin + kOpen.size());
-    if (end == std::string::npos) {
-      value.erase(begin);
-      break;
-    }
-    value.erase(begin, end + kClose.size() - begin);
-  }
-  while (true) {
-    const std::size_t close = value.find(kClose);
-    if (close == std::string::npos) {
-      break;
-    }
-    value.erase(close, kClose.size());
-  }
-  return value;
-}
-
-std::string SanitizeAssistantText(const std::string& raw_text) {
-  std::string sanitized = raw_text;
-  sanitized = RemoveThinkBlocks(sanitized);
-  sanitized = RemoveGemmaChannelBlocks(sanitized);
-  sanitized = StripLeadingGemmaChannelBlocks(sanitized);
-  sanitized = TruncateAtFirstMarker(
-      sanitized,
-      {
-          "<|im_end|>",
-          "<|endoftext|>",
-          "<|eot_id|>",
-          "\nuser:",
-          "\nsystem:",
-          "\n<|im_start|>user",
-          "\n<|im_start|>system",
-      });
-  sanitized = CollapseAssistantTaggedTranscript(sanitized);
-  sanitized = StripRepeatedAssistantPrefixes(sanitized);
-  sanitized = StripLeadingGemmaChannelBlocks(sanitized);
-  return sanitized;
-}
-
 std::string UpdateAssistantTextFilter(
     AssistantTextFilterState& state,
-    const std::string& appended_piece) {
+    const std::string& appended_piece,
+    const comet::runtime::ModelIdentity& model_identity) {
   if (!appended_piece.empty()) {
     state.raw_text += appended_piece;
   }
-  const std::string sanitized = SanitizeAssistantText(state.raw_text);
+  const std::string sanitized =
+      comet::runtime::ModelAdapter::SanitizeVisibleText(state.raw_text, model_identity);
   if (sanitized.size() < state.emitted_text.size()) {
     return "";
   }
@@ -558,6 +326,29 @@ json LoadProfiles(const std::string& path_str) {
 
 RuntimeProfile ResolveProfile(const json& profiles_json, const std::string& name) {
   return comet::infer::control_support::ResolveProfile(profiles_json, name);
+}
+
+RuntimeProfile ResolveRequestedProfile(
+    const RuntimeConfig& config,
+    const json& profiles_json,
+    const std::string& requested_name) {
+  if (!requested_name.empty()) {
+    return ResolveProfile(profiles_json, requested_name);
+  }
+  const json active_model = comet::infer::control_support::LoadActiveModel(config);
+  const std::string active_runtime_profile =
+      active_model.value("runtime_profile", std::string{});
+  if (!active_runtime_profile.empty()) {
+    return ResolveProfile(profiles_json, active_runtime_profile);
+  }
+  const json profiles = profiles_json.value("profiles", json::object());
+  if (profiles.contains("default") && profiles.at("default").is_object()) {
+    return ResolveProfile(profiles_json, "default");
+  }
+  if (!profiles.empty()) {
+    return ResolveProfile(profiles_json, profiles.begin().key());
+  }
+  Throw("runtime profiles are empty");
 }
 
 ControlPaths BuildControlPaths(const RuntimeConfig& config) {
@@ -743,6 +534,15 @@ std::string UtcNowIso() {
   return out.str();
 }
 
+std::string StartupDoctorChecks() {
+  if (const char* checks = std::getenv("COMET_INFER_STARTUP_DOCTOR_CHECKS")) {
+    if (*checks != '\0') {
+      return checks;
+    }
+  }
+  return "config,filesystem,tools,gateway";
+}
+
 int CreateListenSocket(const std::string& host, int port) {
   const int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) {
@@ -857,9 +657,8 @@ std::string CompletionPromptFromRequest(const RuntimeConfig& config, const HttpR
       Throw("chat completion request is missing messages");
     }
     const json active_model = LoadActiveModel(config);
-    const std::string result =
-        ActiveModelLooksLikeQwen(active_model) ? BuildQwenChatPrompt(payload)
-                                               : BuildLegacyChatPrompt(payload);
+    const std::string result = comet::runtime::ModelAdapter::BuildLegacyChatPrompt(
+        payload, comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model));
     if (result.empty()) {
       Throw("chat completion request contains no usable messages");
     }
@@ -881,6 +680,8 @@ SimpleResponse BuildCompletionResponse(
     const HttpRequest& request,
     const LlamaLibraryEngine::GenerationResult& result) {
   const json active_model = LoadActiveModel(config);
+  const comet::runtime::ModelIdentity model_identity =
+      comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
   const std::string served_model_name =
       active_model.value("served_model_name", active_model.value("model_id", std::string{"(unknown)"}));
   if (request.path == "/v1/chat/completions") {
@@ -895,7 +696,9 @@ SimpleResponse BuildCompletionResponse(
                  {"index", 0},
                  {"message",
                   json{{"role", "assistant"},
-                       {"content", SanitizeAssistantText(result.text)}}},
+                       {"content", comet::runtime::ModelAdapter::SanitizeVisibleText(
+                                       result.text,
+                                       model_identity)}}},
                  {"finish_reason", result.finish_reason},
              }})},
             {"usage",
@@ -1067,26 +870,8 @@ std::optional<SimpleResponse> ParseUpstreamResponse(const std::string& response)
   };
 }
 
-void SanitizeChatCompletionPayload(json& payload) {
-  if (!payload.contains("choices") || !payload.at("choices").is_array()) {
-    return;
-  }
-  for (auto& choice : payload["choices"]) {
-    if (!choice.is_object()) {
-      continue;
-    }
-    if (choice.contains("message") && choice.at("message").is_object()) {
-      auto& message = choice["message"];
-      if (message.contains("content") && message.at("content").is_string()) {
-        message["content"] = SanitizeAssistantText(message.at("content").get<std::string>());
-      }
-      message.erase("reasoning_content");
-    }
-    choice.erase("reasoning_content");
-  }
-}
-
 bool ProxyHttpRequest(
+    const RuntimeConfig& config,
     int client_fd,
     const std::string& request_data,
     const UpstreamTarget& upstream) {
@@ -1100,7 +885,10 @@ bool ProxyHttpRequest(
     if (response->content_type.starts_with("application/json")) {
       try {
         json payload = json::parse(response->body);
-        SanitizeChatCompletionPayload(payload);
+        comet::runtime::ModelAdapter::SanitizeChatCompletionPayload(
+            &payload,
+            comet::runtime::ModelAdapter::IdentityFromActiveModelJson(
+                LoadActiveModel(config)));
         response->body = payload.dump();
       } catch (const std::exception&) {
       }
@@ -1318,6 +1106,8 @@ void HandleStreamingChatRequest(
         active_model.value(
             "served_model_name",
             active_model.value("model_id", std::string{"(unknown)"}));
+    const comet::runtime::ModelIdentity model_identity =
+        comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
     if (!SendSseHeaders(client_fd)) {
       return;
     }
@@ -1340,7 +1130,7 @@ void HandleStreamingChatRequest(
     const auto flush_pending = [&](bool final_flush) {
       while (!pending_utf8.empty()) {
         if (CanEncodeJsonUtf8(pending_utf8)) {
-          emit_delta(UpdateAssistantTextFilter(filter_state, pending_utf8));
+          emit_delta(UpdateAssistantTextFilter(filter_state, pending_utf8, model_identity));
           pending_utf8.clear();
           return;
         }
@@ -1351,7 +1141,7 @@ void HandleStreamingChatRequest(
             prefix.pop_back();
           }
           if (!prefix.empty()) {
-            emit_delta(UpdateAssistantTextFilter(filter_state, prefix));
+            emit_delta(UpdateAssistantTextFilter(filter_state, prefix, model_identity));
             pending_utf8.erase(0, prefix.size());
             continue;
           }
@@ -1359,7 +1149,7 @@ void HandleStreamingChatRequest(
         if (!final_flush) {
           return;
         }
-        emit_delta(UpdateAssistantTextFilter(filter_state, "?"));
+        emit_delta(UpdateAssistantTextFilter(filter_state, "?", model_identity));
         pending_utf8.erase(0, 1);
       }
     };
@@ -1667,10 +1457,11 @@ std::optional<UpstreamTarget> ResolveRuntimeUpstreamTarget(const RuntimeConfig& 
 }
 
 bool ProxyHttpRequest(
+    const RuntimeConfig& config,
     int client_fd,
     const std::string& request_data,
     const UpstreamTarget& upstream) {
-  return ::ProxyHttpRequest(client_fd, request_data, upstream);
+  return ::ProxyHttpRequest(config, client_fd, request_data, upstream);
 }
 
 std::optional<SimpleResponse> ForwardHttpRequest(
@@ -1798,7 +1589,7 @@ int InferApp::Run() {
     if (args.command == "bootstrap-runtime") {
       cli_output_support::BootstrapRuntime(
           config,
-          ResolveProfile(profiles_json, args.profile),
+          ResolveRequestedProfile(config, profiles_json, args.profile),
           args.apply);
       return 0;
     }
@@ -1815,7 +1606,7 @@ int InferApp::Run() {
     if (args.command == "switch-model") {
       model_cache_support::SwitchModel(
           config,
-          ResolveProfile(profiles_json, args.profile),
+          ResolveRequestedProfile(config, profiles_json, args.profile),
           args,
           args.apply);
       return 0;
@@ -1845,13 +1636,32 @@ int InferApp::Run() {
       cli_output_support::PrintConfigSummary(config);
       cli_output_support::BootstrapRuntime(
           config,
-          ResolveProfile(profiles_json, args.profile),
+          ResolveRequestedProfile(config, profiles_json, args.profile),
           args.apply);
       const int doctor_rc = status_support::RunDoctor(config, args.checks);
       cli_output_support::PrintLaunchPlan(config);
       status_support::PrintGatewayPlan(config, args.apply);
       status_support::PrintStatus(config, args.backend, args.apply);
       return doctor_rc;
+    }
+    if (args.command == "container-boot") {
+      cli_output_support::BootstrapRuntime(
+          config,
+          ResolveRequestedProfile(config, profiles_json, args.profile),
+          true);
+      const int doctor_rc = status_support::RunDoctor(config, StartupDoctorChecks());
+      if (doctor_rc != 0) {
+        return doctor_rc;
+      }
+      const int topology_rc = status_support::RunDoctor(config, "topology");
+      if (topology_rc != 0) {
+        std::cerr << "[comet-infer] worker group topology is still bootstrapping; "
+                     "continuing startup\n";
+      }
+      status_support::PrintGatewayPlan(config, true);
+      cli_output_support::PrintLaunchPlan(config);
+      status_support::PrintStatus(config, args.backend, true);
+      return LaunchRuntime(config, args.backend, signal_service);
     }
     if (args.command == "launch-embedded-runtime") {
       return LaunchEmbeddedRuntime(config, "embedded", signal_service);

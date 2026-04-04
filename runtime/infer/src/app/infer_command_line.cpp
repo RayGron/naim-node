@@ -59,6 +59,7 @@ void InferCommandLine::PrintUsage() const {
       << "  comet-inferctl plan-launch [--config <path>]\n"
       << "  comet-inferctl doctor [--config <path>] [--checks <csv>]\n"
       << "  comet-inferctl bootstrap-dry-run [--config <path>] [--profile <name>] [--profiles <path>] [--apply]\n"
+      << "  comet-inferctl container-boot [--config <path>] [--backend <auto|embedded|llama|llama-rpc-head>]\n"
       << "  comet-inferctl launch-embedded-runtime [--config <path>]\n"
       << "  comet-inferctl launch-runtime [--config <path>] [--backend <auto|embedded|llama|llama-rpc-head>]\n"
       << "  comet-inferctl probe-url <url>\n";

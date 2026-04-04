@@ -20,9 +20,9 @@ constexpr int kDefaultSkillsPrivateDiskSizeGb = 4;
 constexpr std::string_view kDefaultInferImage = "comet/infer-runtime:dev";
 constexpr std::string_view kDefaultWorkerImage = "comet/worker-runtime:dev";
 constexpr std::string_view kDefaultSkillsImage = "comet/skills-runtime:dev";
-constexpr std::string_view kDefaultInferCommand = "/runtime/infer/entrypoint.sh";
-constexpr std::string_view kDefaultWorkerCommand = "/runtime/worker/entrypoint.sh";
-constexpr std::string_view kDefaultSkillsCommand = "/runtime/skills/entrypoint.sh";
+constexpr std::string_view kDefaultInferCommand = "/runtime/bin/comet-inferctl container-boot";
+constexpr std::string_view kDefaultWorkerCommand = "/runtime/bin/comet-workerd";
+constexpr std::string_view kDefaultSkillsCommand = "/runtime/bin/comet-skillsd";
 
 }  // namespace
 

@@ -23,7 +23,7 @@ int main() {
     comet::ComposeService service;
     service.name = "worker-a";
     service.image = "example/worker:dev";
-    service.command = "/runtime/worker/entrypoint.sh";
+    service.command = "/runtime/bin/comet-workerd";
     service.use_nvidia_runtime = true;
     service.gpu_devices = {"0", "2", "3", "0"};
     service.healthcheck = "CMD-SHELL test -f /tmp/comet-ready";

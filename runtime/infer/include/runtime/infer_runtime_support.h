@@ -14,6 +14,7 @@ namespace comet::infer::runtime_support {
 int CreateListenSocket(const std::string& host, int port);
 std::optional<UpstreamTarget> ResolveRuntimeUpstreamTarget(const RuntimeConfig& config);
 bool ProxyHttpRequest(
+    const RuntimeConfig& config,
     int client_fd,
     const std::string& request_data,
     const UpstreamTarget& upstream);

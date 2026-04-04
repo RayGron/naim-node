@@ -306,7 +306,7 @@ void DesiredStateV2Renderer::RenderInferInstance() {
     infer.image = infer_json_.value("image", std::string("comet/infer-runtime:dev"));
     infer.command =
         BuildCommandFromStartSpec(infer_json_.value("start", nlohmann::json::object()),
-                                  "/runtime/infer/entrypoint.sh");
+                                  "/runtime/bin/comet-inferctl container-boot");
     infer.private_disk_name = infer.name + "-private";
     infer.shared_disk_name = state_.plane_shared_disk_name;
     infer.private_disk_size_gb =
@@ -318,7 +318,6 @@ void DesiredStateV2Renderer::RenderInferInstance() {
         {"COMET_INSTANCE_SUBROLE",
          infer_index == 0 && infer_count > 1 ? "aggregator" : "infer"},
         {"COMET_NODE_NAME", infer.node_name},
-        {"COMET_INFER_BOOT_MODE", "launch-runtime"},
         {"COMET_INFER_RUNTIME_BACKEND", DefaultInferRuntimeBackend()},
         {"COMET_CONTROLLER_URL", "http://controller.internal:18080"},
         {"COMET_CONTROL_ROOT", state_.control_root},
@@ -391,7 +390,7 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
     worker.image = worker_json_.value("image", std::string("comet/worker-runtime:dev"));
     worker.command =
         BuildCommandFromStartSpec(worker_json_.value("start", nlohmann::json::object()),
-                                  "/runtime/worker/entrypoint.sh");
+                                  "/runtime/bin/comet-workerd");
     worker.private_disk_name = worker.name + "-private";
     worker.shared_disk_name = state_.plane_shared_disk_name;
     worker.placement_mode =
@@ -573,7 +572,7 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
   skills.image = skills_json_.value("image", std::string("comet/skills-runtime:dev"));
   skills.command =
       BuildCommandFromStartSpec(skills_json_.value("start", nlohmann::json::object()),
-                                "/runtime/skills/entrypoint.sh");
+                                "/runtime/bin/comet-skillsd");
   skills.private_disk_name = skills.name + "-private";
   skills.shared_disk_name = state_.plane_shared_disk_name;
   skills.private_disk_size_gb =

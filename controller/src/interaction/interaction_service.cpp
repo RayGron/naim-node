@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "skills/plane_skills_service.h"
+#include "comet/runtime/model_adapter.h"
 #include "comet/state/worker_group_topology.h"
 
 namespace comet::controller {
@@ -94,6 +95,26 @@ bool DecodeAvailableChunkedHttpBody(
     encoded.erase(0, chunk_data_begin + chunk_size + 2);
     progressed = true;
   }
+}
+
+comet::runtime::ModelIdentity BuildResolutionModelIdentity(
+    const PlaneInteractionResolution& resolution) {
+  comet::runtime::ModelIdentity identity;
+  identity.model_id = resolution.status_payload.value("active_model_id", std::string{});
+  identity.served_model_name =
+      resolution.status_payload.value("served_model_name", std::string{});
+  if (resolution.runtime_status.has_value()) {
+    if (identity.model_id.empty()) {
+      identity.model_id = resolution.runtime_status->active_model_id;
+    }
+    if (identity.served_model_name.empty()) {
+      identity.served_model_name = resolution.runtime_status->active_served_model_name;
+    }
+    identity.cached_local_model_path = resolution.runtime_status->cached_local_model_path;
+    identity.cached_runtime_model_path = resolution.runtime_status->model_path;
+    identity.runtime_profile = resolution.runtime_status->active_runtime_profile;
+  }
+  return identity;
 }
 
 int ClampInteractionPolicyValue(int value, int minimum, int maximum) {
@@ -574,34 +595,8 @@ bool StartsWithReasoningPreamble(const std::string& text) {
          lowered.rfind("chain of thought:", 0) == 0;
 }
 
-std::string RemoveGemmaChannelBlocks(std::string value) {
-  constexpr std::string_view kOpen = "<|channel>";
-  constexpr std::string_view kClose = "<channel|>";
-  while (true) {
-    const std::size_t begin = value.find(kOpen);
-    if (begin == std::string::npos) {
-      break;
-    }
-    const std::size_t end = value.find(kClose, begin + kOpen.size());
-    if (end == std::string::npos) {
-      value.erase(begin);
-      break;
-    }
-    value.erase(begin, end + kClose.size() - begin);
-  }
-  while (true) {
-    const std::size_t close = value.find(kClose);
-    if (close == std::string::npos) {
-      break;
-    }
-    value.erase(close, kClose.size());
-  }
-  return value;
-}
-
 std::string SanitizeInteractionText(std::string text) {
   text = RemoveThinkBlocks(std::move(text));
-  text = RemoveGemmaChannelBlocks(std::move(text));
   text = TrimCopy(text);
   if (StartsWithReasoningPreamble(text)) {
     const auto paragraphs = SplitParagraphs(text);
@@ -1490,6 +1485,8 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
   const ResolvedInteractionPolicy resolved_policy =
       ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload);
   const InteractionCompletionPolicy& policy = resolved_policy.policy;
+  const comet::runtime::ModelIdentity model_identity =
+      BuildResolutionModelIdentity(resolution);
   InteractionSessionResult result;
   result.session_id = GenerateInteractionSessionId();
   const auto session_started_at = std::chrono::steady_clock::now();
@@ -1538,7 +1535,9 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
     const nlohmann::json usage = extract_interaction_usage_(upstream_payload);
     bool marker_seen_in_segment = false;
     const std::string clean_text = remove_completion_markers_(
-        extract_interaction_text_(upstream_payload),
+        comet::runtime::ModelAdapter::SanitizeVisibleText(
+            extract_interaction_text_(upstream_payload),
+            model_identity),
         policy.completion_marker,
         &marker_seen_in_segment);
     InteractionSegmentSummary summary;
@@ -2154,6 +2153,8 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
     int segment_index,
     SendDeltaFn send_delta) const {
   const InteractionCompletionPolicy& policy = resolved_policy.policy;
+  const comet::runtime::ModelIdentity model_identity =
+      BuildResolutionModelIdentity(resolution);
   StreamedInteractionSegmentResult result;
   result.summary.index = segment_index;
   result.summary.continuation_index = segment_index;
@@ -2164,7 +2165,9 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
           bool assign_only = false) -> std::optional<StreamedInteractionSegmentResult> {
         bool marker_seen_in_fallback = false;
         const std::string fallback_text = RemoveCompletionMarkers(
-            extract_interaction_text_(fallback_payload),
+            comet::runtime::ModelAdapter::SanitizeVisibleText(
+                extract_interaction_text_(fallback_payload),
+                model_identity),
             policy.completion_marker,
             &marker_seen_in_fallback);
         if (!fallback_text.empty()) {
@@ -2275,6 +2278,8 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
                 &marker_seen);
             filter_state.marker_seen = filter_state.marker_seen || marker_seen;
             visible_text = sanitize_interaction_text_(std::move(visible_text));
+            visible_text = comet::runtime::ModelAdapter::SanitizeVisibleText(
+                std::move(visible_text), model_identity);
             if (visible_text.empty()) {
               return;
             }

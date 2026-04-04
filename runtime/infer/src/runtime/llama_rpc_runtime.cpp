@@ -21,6 +21,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "comet/runtime/model_adapter.h"
 #include "runtime/infer_control_support.h"
 #include "runtime/local_runtime.h"
 
@@ -78,91 +79,6 @@ std::optional<std::string> OptionalString(const json& value, const char* key) {
     return std::nullopt;
   }
   return value.at(key).get<std::string>();
-}
-
-std::string LowercaseCopy(std::string_view value) {
-  std::string lowered;
-  lowered.reserve(value.size());
-  for (const unsigned char ch : value) {
-    lowered.push_back(static_cast<char>(std::tolower(ch)));
-  }
-  return lowered;
-}
-
-bool ContainsCaseInsensitive(std::string_view haystack, std::string_view needle) {
-  if (needle.empty() || haystack.empty()) {
-    return false;
-  }
-  return LowercaseCopy(haystack).contains(LowercaseCopy(needle));
-}
-
-bool JsonFieldContainsCaseInsensitive(
-    const json& value,
-    const char* key,
-    std::string_view needle) {
-  if (!value.contains(key) || !value.at(key).is_string()) {
-    return false;
-  }
-  return ContainsCaseInsensitive(value.at(key).get<std::string>(), needle);
-}
-
-std::vector<std::string> JsonStringArray(const json& value, const char* key) {
-  if (!value.contains(key) || !value.at(key).is_array()) {
-    return {};
-  }
-  std::vector<std::string> result;
-  for (const auto& item : value.at(key)) {
-    if (item.is_string()) {
-      result.push_back(item.get<std::string>());
-    }
-  }
-  return result;
-}
-
-bool HasArgument(const std::vector<std::string>& args, std::string_view flag) {
-  return std::any_of(
-      args.begin(),
-      args.end(),
-      [&](const std::string& current) { return current == flag; });
-}
-
-bool UsesGemma4TextOutputTemplate(const json& active_model, std::string_view model_path) {
-  return JsonFieldContainsCaseInsensitive(active_model, "model_id", "gemma-4") ||
-         JsonFieldContainsCaseInsensitive(active_model, "served_model_name", "gemma-4") ||
-         JsonFieldContainsCaseInsensitive(active_model, "cached_local_model_path", "gemma-4") ||
-         JsonFieldContainsCaseInsensitive(active_model, "cached_runtime_model_path", "gemma-4") ||
-         ContainsCaseInsensitive(model_path, "gemma-4");
-}
-
-void AppendActiveModelArgs(std::vector<std::string>* args, const json& active_model) {
-  for (const auto& value : JsonStringArray(active_model, "llama_args")) {
-    args->push_back(value);
-  }
-}
-
-void AppendGemma4TextOutputArgs(
-    std::vector<std::string>* args,
-    const json& active_model,
-    std::string_view model_path) {
-  if (!UsesGemma4TextOutputTemplate(active_model, model_path)) {
-    return;
-  }
-  if (!HasArgument(*args, "--jinja") && !HasArgument(*args, "--no-jinja")) {
-    args->push_back("--jinja");
-  }
-  if (!HasArgument(*args, "--chat-template") &&
-      !HasArgument(*args, "--chat-template-file")) {
-    args->push_back("--chat-template-file");
-    args->push_back("/runtime/infer/templates/google-gemma-4.jinja");
-  }
-  if (!HasArgument(*args, "--chat-template-kwargs")) {
-    args->push_back("--chat-template-kwargs");
-    args->push_back(R"({"enable_thinking":false})");
-  }
-  if (!HasArgument(*args, "--reasoning-format")) {
-    args->push_back("--reasoning-format");
-    args->push_back("none");
-  }
 }
 
 std::vector<std::string> SplitCommaSeparated(std::string_view text) {
@@ -282,6 +198,11 @@ int LlamaRpcRuntime::Run() {
   }
   if (child == 0) {
     const json active_model = LoadActiveModel(config_);
+    comet::runtime::ModelIdentity model_identity =
+        comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
+    if (model_identity.cached_runtime_model_path.empty()) {
+      model_identity.cached_runtime_model_path = model_path;
+    }
     std::vector<std::string> args = {
         ResolveExecutablePath("COMET_LLAMA_SERVER_BIN", "/runtime/bin/llama-server"),
         "--host",
@@ -304,8 +225,7 @@ int LlamaRpcRuntime::Run() {
         "--rpc",
         rpc_servers,
     };
-    AppendActiveModelArgs(&args, active_model);
-    AppendGemma4TextOutputArgs(&args, active_model, model_path);
+    comet::runtime::ModelAdapter::AdaptLaunchArgs(&args, model_identity);
     if (!rpc_devices.empty()) {
       args.push_back("--device");
       args.push_back(rpc_devices);
