@@ -558,7 +558,7 @@ if(NOT WIN32)
   target_link_libraries(
     comet-inferctl
     PRIVATE
-      nlohmann_json::nlohmann_json
+      comet-common
       llama
   )
   comet_enable_strict_warnings(comet-inferctl)
