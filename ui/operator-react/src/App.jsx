@@ -853,6 +853,20 @@ function interactionReasonMessage(status) {
   return "Interaction is available when the LLM plane is running and launch-ready.";
 }
 
+function browsingIndicatorCompact(browsing) {
+  return browsing?.indicator?.compact || "";
+}
+
+function browsingTraceCompact(browsing) {
+  if (!Array.isArray(browsing?.trace) || browsing.trace.length === 0) {
+    return "";
+  }
+  return browsing.trace
+    .map((item) => item?.compact || "")
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function observedStateForObservation(observation) {
   return observation?.observed_state || {};
 }
@@ -2744,6 +2758,7 @@ function App() {
         metrics: null,
         error: "",
         session: null,
+        browsing: null,
       },
     ]);
     setChatInput("");
@@ -2785,6 +2800,23 @@ function App() {
           return;
         }
         const payload = JSON.parse(data);
+        if (event === "session_started") {
+          setChatMessages((current) =>
+            current.map((item) =>
+              item.id === assistantId
+                ? {
+                    ...item,
+                    browsing: payload.browsing || item.browsing || null,
+                    session: {
+                      ...(item.session || {}),
+                      status: "in_progress",
+                    },
+                  }
+                : item,
+            ),
+          );
+          return;
+        }
         if (event === "segment_started") {
           setChatMessages((current) =>
             current.map((item) =>
@@ -2868,6 +2900,7 @@ function App() {
               item.id === assistantId
                 ? {
                     ...item,
+                    browsing: payload.browsing || session.browsing || item.browsing || null,
                     metrics: {
                       latencyMs,
                       completionTokens,
@@ -2909,6 +2942,7 @@ function App() {
                 ? {
                     ...item,
                     error: message,
+                    browsing: payload.browsing || payload.session?.browsing || item.browsing || null,
                     session: {
                       ...(item.session || {}),
                       status: payload.status || "failed",
@@ -4638,6 +4672,21 @@ function App() {
                               </span>
                             ) : null}
                           </div>
+                          {message.role === "assistant" && message.browsing ? (
+                            <div className="chat-browsing-line">
+                              {browsingIndicatorCompact(message.browsing) ? (
+                                <span
+                                  className={`tag chat-browsing-tag chat-browsing-${(message.browsing.lookup_state || "disabled").replace(/_/g, "-")}`}
+                                  title={message.browsing?.indicator?.label || "Web execution state"}
+                                >
+                                  {browsingIndicatorCompact(message.browsing)}
+                                </span>
+                              ) : null}
+                              {browsingTraceCompact(message.browsing) ? (
+                                <span className="chat-browsing-trace">{browsingTraceCompact(message.browsing)}</span>
+                              ) : null}
+                            </div>
+                          ) : null}
                           <p className="chat-message-text">
                             {message.content || (message.role === "assistant" && chatBusy ? "Streaming..." : "")}
                           </p>

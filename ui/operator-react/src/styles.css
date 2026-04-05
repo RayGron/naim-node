@@ -1433,6 +1433,49 @@ body {
   line-height: 1.6;
 }
 
+.chat-browsing-line {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chat-browsing-tag {
+  border-color: rgba(120, 190, 255, 0.28);
+  background: rgba(13, 33, 60, 0.9);
+}
+
+.chat-browsing-enabled-toggle-only,
+.chat-browsing-enabled-not-needed {
+  border-color: rgba(120, 190, 255, 0.28);
+}
+
+.chat-browsing-evidence-attached {
+  border-color: rgba(74, 222, 128, 0.35);
+  background: rgba(14, 46, 32, 0.9);
+}
+
+.chat-browsing-attempted-no-evidence,
+.chat-browsing-required-but-unavailable {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(58, 39, 10, 0.88);
+}
+
+.chat-browsing-disabled-by-user,
+.chat-browsing-disabled {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(30, 41, 59, 0.82);
+}
+
+.chat-browsing-trace {
+  font-size: 0.76rem;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .chat-composer {
   margin-top: 16px;
   display: grid;
