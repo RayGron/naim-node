@@ -139,29 +139,6 @@ std::string UrlEncode(const std::string& value) {
   return out.str();
 }
 
-std::string UrlDecode(const std::string& value) {
-  std::string result;
-  result.reserve(value.size());
-  for (std::size_t i = 0; i < value.size(); ++i) {
-    if (value[i] == '+' ) {
-      result.push_back(' ');
-      continue;
-    }
-    if (value[i] == '%' && i + 2 < value.size()) {
-      const std::string hex = value.substr(i + 1, 2);
-      char* end = nullptr;
-      const long decoded = std::strtol(hex.c_str(), &end, 16);
-      if (end != nullptr && *end == '\0') {
-        result.push_back(static_cast<char>(decoded));
-        i += 2;
-        continue;
-      }
-    }
-    result.push_back(value[i]);
-  }
-  return result;
-}
-
 std::string StripHtmlTags(const std::string& html) {
   return std::regex_replace(html, std::regex("<[^>]+>"), " ");
 }
@@ -172,6 +149,7 @@ std::string HtmlEntityDecode(std::string text) {
       {"&lt;", "<"},
       {"&gt;", ">"},
       {"&quot;", "\""},
+      {"&apos;", "'"},
       {"&#39;", "'"},
       {"&nbsp;", " "},
   };
@@ -333,17 +311,17 @@ CommandResult RunCommandCapture(const std::vector<std::string>& args) {
   return result;
 }
 
-std::string DecodeDuckDuckGoHref(const std::string& raw_href) {
-  if (raw_href.rfind("http://", 0) == 0 || raw_href.rfind("https://", 0) == 0) {
-    return raw_href;
+std::optional<std::string> ExtractXmlElement(
+    const std::string& xml,
+    const std::string& tag) {
+  const std::regex pattern(
+      "<" + tag + R"([^>]*>([\s\S]*?)</)" + tag + ">",
+      std::regex::icase);
+  std::smatch match;
+  if (!std::regex_search(xml, match, pattern)) {
+    return std::nullopt;
   }
-  const auto uddg = raw_href.find("uddg=");
-  if (uddg == std::string::npos) {
-    return raw_href;
-  }
-  const auto value = raw_href.substr(uddg + 5);
-  const auto amp = value.find('&');
-  return UrlDecode(amp == std::string::npos ? value : value.substr(0, amp));
+  return match[1].str();
 }
 
 std::string ExtractTitle(const std::string& html) {
@@ -489,20 +467,24 @@ bool BrowsingServer::IsSafeBrowsingUrl(
   return true;
 }
 
-std::vector<SearchResult> BrowsingServer::ParseDuckDuckGoLiteResults(
-    const std::string& html,
+std::vector<SearchResult> BrowsingServer::ParseBingRssResults(
+    const std::string& rss_xml,
     const BrowsingPolicy& policy,
     const std::vector<std::string>& requested_domains,
     int limit) {
   std::vector<SearchResult> results;
-  std::regex anchor(
-      R"(<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>)",
-      std::regex::icase);
-  auto begin = std::sregex_iterator(html.begin(), html.end(), anchor);
+  std::regex item_pattern(R"(<item\b[^>]*>([\s\S]*?)</item>)", std::regex::icase);
+  auto begin = std::sregex_iterator(rss_xml.begin(), rss_xml.end(), item_pattern);
   auto end = std::sregex_iterator();
   int index = 0;
   for (auto it = begin; it != end && static_cast<int>(results.size()) < limit; ++it) {
-    const std::string href = DecodeDuckDuckGoHref((*it)[1].str());
+    const std::string item_xml = (*it)[1].str();
+    const auto link = ExtractXmlElement(item_xml, "link");
+    const auto title = ExtractXmlElement(item_xml, "title");
+    if (!link.has_value() || !title.has_value()) {
+      continue;
+    }
+    const std::string href = TrimCopy(HtmlEntityDecode(*link));
     std::string host;
     std::string reason;
     if (!IsSafeBrowsingUrl(href, policy, &reason, &host) ||
@@ -512,11 +494,19 @@ std::vector<SearchResult> BrowsingServer::ParseDuckDuckGoLiteResults(
     SearchResult item;
     item.url = href;
     item.domain = host;
-    item.title = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags((*it)[2].str())));
-    const std::size_t snippet_start = static_cast<std::size_t>((*it).position() + (*it).length());
-    const std::size_t snippet_size = std::min<std::size_t>(320, html.size() - snippet_start);
-    item.snippet = NormalizeWhitespace(HtmlEntityDecode(
-        StripHtmlTags(html.substr(snippet_start, snippet_size))));
+    item.title = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(*title)));
+    if (const auto description = ExtractXmlElement(item_xml, "description");
+        description.has_value()) {
+      item.snippet = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(*description)));
+    }
+    if (const auto pub_date = ExtractXmlElement(item_xml, "pubDate");
+        pub_date.has_value()) {
+      const std::string normalized_pub_date =
+          NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(*pub_date)));
+      if (!normalized_pub_date.empty()) {
+        item.published_at = normalized_pub_date;
+      }
+    }
     if (item.snippet.empty()) {
       item.snippet = item.title;
     }
@@ -861,9 +851,12 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   const int limit = std::max(1, std::min(config_.policy.max_search_results, requested_limit));
   const auto requested_domains = RequestedDomainsFromPayload(payload);
 
-  const std::string search_url = "https://lite.duckduckgo.com/lite/?q=" + UrlEncode(query);
+  const std::string search_url =
+      "https://www.bing.com/search?format=rss&q=" + UrlEncode(query);
   const auto command = RunCommandCapture(
       {"/usr/bin/curl",
+       "-A",
+       "Mozilla/5.0",
        "-fsSL",
        "--proto",
        "=https,http",
@@ -878,7 +871,7 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
     throw ApiError(502, "search_upstream_failed", TrimCopy(command.output));
   }
 
-  const auto results = ParseDuckDuckGoLiteResults(command.output, config_.policy, requested_domains, limit);
+  const auto results = ParseBingRssResults(command.output, config_.policy, requested_domains, limit);
   AppendAuditLog(
       nlohmann::json{{"ts", UtcNow()},
                      {"kind", "search"},

@@ -42,16 +42,21 @@ void TestSafeUrlValidation() {
 
 void TestSearchParsing() {
   comet::browsing::BrowsingPolicy policy;
-  const std::string html =
-      R"(<html><body><a href="https://example.com/article">Example Article</a><div>Snippet text here.</div><a href="/l/?uddg=https%3A%2F%2Fexample.org%2Fsecond">Second Result</a></body></html>)";
-  const auto results = comet::browsing::BrowsingServer::ParseDuckDuckGoLiteResults(
-      html,
+  const std::string rss_xml =
+      R"(<?xml version="1.0" encoding="utf-8" ?><rss version="2.0"><channel>
+      <item><title>OpenAI API Platform</title><link>https://openai.com/api/</link><description>Official API platform.</description><pubDate>Sun, 05 Apr 2026 10:00:00 GMT</pubDate></item>
+      <item><title>Blocked Result</title><link>https://evil.com/post</link><description>Should be filtered.</description></item>
+      <item><title>Second OpenAI Result</title><link>https://developers.openai.com/api/</link><description>Developer docs.</description></item>
+      </channel></rss>)";
+  const auto results = comet::browsing::BrowsingServer::ParseBingRssResults(
+      rss_xml,
       policy,
-      {},
+      {"openai.com"},
       5);
   Expect(results.size() == 2, "search parser should extract two results");
-  Expect(results[0].domain == "example.com", "first result domain mismatch");
-  Expect(results[1].url == "https://example.org/second", "redirect href should decode");
+  Expect(results[0].domain == "openai.com", "first result domain mismatch");
+  Expect(results[0].published_at.has_value(), "search parser should preserve pubDate");
+  Expect(results[1].url == "https://developers.openai.com/api/", "second result URL mismatch");
 }
 
 void TestFetchSanitization() {

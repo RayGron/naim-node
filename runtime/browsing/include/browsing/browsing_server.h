@@ -80,8 +80,8 @@ class BrowsingServer final {
       const BrowsingPolicy& policy,
       std::string* reason = nullptr,
       std::string* normalized_host = nullptr);
-  static std::vector<SearchResult> ParseDuckDuckGoLiteResults(
-      const std::string& html,
+  static std::vector<SearchResult> ParseBingRssResults(
+      const std::string& rss_xml,
       const BrowsingPolicy& policy,
       const std::vector<std::string>& requested_domains,
       int limit);
