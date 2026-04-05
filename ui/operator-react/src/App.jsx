@@ -985,6 +985,20 @@ function hostObservationStatusClass(status) {
   return "is-booting";
 }
 
+function selfServiceStatusClass(health) {
+  const normalized = String(health || "").toLowerCase();
+  if (normalized === "critical") {
+    return "is-critical";
+  }
+  if (normalized === "warning") {
+    return "is-warning";
+  }
+  if (normalized === "healthy") {
+    return "is-healthy";
+  }
+  return "is-booting";
+}
+
 function formatInstanceRoleSummary(instances) {
   const roleCounts = new Map();
   for (const instance of instances || []) {
@@ -2035,13 +2049,16 @@ function App() {
         }),
       );
       if (!planeName) {
-        const globalHostObservationsPayload = await globalHostObservationsRequest;
+        const [dashboardPayload, globalHostObservationsPayload] = await Promise.all([
+          fetchJson(queryPath("/api/v1/dashboard", { stale_after: 30 })),
+          globalHostObservationsRequest,
+        ]);
         const globalObservationItems = hostObservationItemsFromPayload(
           globalHostObservationsPayload,
         );
         const serverSummary = summarizeGlobalObservations(globalObservationItems);
         setPlaneDetail(null);
-        setDashboard(null);
+        setDashboard(dashboardPayload);
         setHostObservations(null);
         setGlobalHostObservations(globalHostObservationsPayload);
         setMetricHistory((current) =>
@@ -3180,6 +3197,16 @@ function App() {
   const selectedPlaneDeleting = planeRecord?.state === "deleting";
   const currentPlaneDisplayState = planeRecord ? planeDisplayState(planeRecord) : "";
   const currentPlaneDisplayClass = planeRecord ? planeDisplayStateClass(planeRecord) : "is-booting";
+  const dashboardSelfServiceSummary = dashboard?.self_services?.summary || {
+    total: 0,
+    healthy: 0,
+    warning: 0,
+    critical: 0,
+    unknown: 0,
+  };
+  const dashboardSelfServices = Array.isArray(dashboard?.self_services?.items)
+    ? dashboard.self_services.items
+    : [];
   const runningPlanes = planes.filter((plane) => plane?.state === "running");
   const activePlanes = planes.filter((plane) => {
     const state = String(plane?.state || "").toLowerCase();
@@ -3795,6 +3822,52 @@ function App() {
                 <div className="metric-row"><span>GPU count</span><strong>{gpuDeviceCount || "n/a"}</strong></div>
                 <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
                 <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at)}</strong></div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderSelfServiceCards(serviceItems) {
+    return (
+      <div className="plane-list">
+        {serviceItems.map((service) => {
+          const indicatorClass = selfServiceStatusClass(service?.health);
+          const targets = Array.isArray(service?.targets) ? service.targets : [];
+          return (
+            <article className="node-card" key={service?.id || service?.label}>
+              <div className="card-row">
+                <strong>{service?.label || "unknown-service"}</strong>
+                <div className={`pill ${indicatorClass}`}>
+                  {statusDot(indicatorClass)}
+                  <span>{service?.health || "unknown"}</span>
+                </div>
+              </div>
+              <div className="metric-grid">
+                <div className="metric-row"><span>Kind</span><strong>{service?.kind || "n/a"}</strong></div>
+                <div className="metric-row"><span>State</span><strong>{service?.state || "unknown"}</strong></div>
+                <div className="metric-row"><span>Detail</span><strong>{service?.detail || "n/a"}</strong></div>
+                <div className="metric-row"><span>Updated</span><strong>{formatTimestamp(service?.updated_at)}</strong></div>
+                {targets.length === 0 ? (
+                  <div className="metric-row"><span>Targets</span><strong>n/a</strong></div>
+                ) : (
+                  targets.map((target, index) => {
+                    const reachable =
+                      target?.reachable === true
+                        ? "reachable"
+                        : target?.reachable === false
+                          ? "unreachable"
+                          : "unchecked";
+                    return (
+                      <div className="metric-row" key={`${service?.id || "service"}-${index}`}>
+                        <span>{target?.label || "target"}</span>
+                        <strong>{`${target?.value || "n/a"} (${reachable})`}</strong>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </article>
           );
@@ -6278,6 +6351,23 @@ function App() {
                     }
                   />
                 </div>
+              </section>
+
+              <section className="subpanel dashboard-services-panel">
+                <div className="subpanel-header">
+                  <h3>Comet node services</h3>
+                  <span className="subpanel-meta">
+                    {`${dashboardSelfServiceSummary.total} services / ${dashboardSelfServiceSummary.warning + dashboardSelfServiceSummary.critical} degraded`}
+                  </span>
+                </div>
+                {dashboardSelfServices.length === 0 ? (
+                  <EmptyState
+                    title="No self-service status"
+                    detail="Waiting for controller-side service telemetry."
+                  />
+                ) : (
+                  renderSelfServiceCards(dashboardSelfServices)
+                )}
               </section>
 
               <section className="subpanel dashboard-hosts-panel">

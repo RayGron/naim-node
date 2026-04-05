@@ -456,8 +456,12 @@ int LauncherRunService::RunControllerSupervisor(
           ? ComputePublicKeyFingerprint(controller_public_key_path)
           : "";
 
-  if (!SetEnvVar("COMET_CONTROLLER_INTERNAL_HOST", options.internal_listen_host) ||
-      !SetEnvVar("COMET_CONTROLLER_INTERNAL_UPSTREAM", internal_controller_url)) {
+  if (!SetEnvVar("COMET_CONTROLLER_ADMIN_UPSTREAM", local_controller_url) ||
+      !SetEnvVar("COMET_CONTROLLER_INTERNAL_HOST", options.internal_listen_host) ||
+      !SetEnvVar("COMET_CONTROLLER_INTERNAL_UPSTREAM", internal_controller_url) ||
+      !SetEnvVar("COMET_SKILLS_FACTORY_UPSTREAM", local_skills_factory_url) ||
+      !SetEnvVar("COMET_WEB_UI_ROOT", options.web_ui_root.string()) ||
+      !SetEnvVar("COMET_HOSTD_NODE_NAME", options.node_name)) {
     throw std::runtime_error("failed to export controller internal routing environment");
   }
 

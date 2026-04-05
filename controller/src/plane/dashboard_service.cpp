@@ -1,10 +1,17 @@
 #include "plane/dashboard_service.h"
 
+#include "http/controller_http_transport.h"
+#include "infra/controller_runtime_support_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
 #include "read_model/state_aggregate_loader.h"
+#include "web/web_ui_service.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -140,6 +147,421 @@ int ComputeEffectivePlaneAppliedGeneration(
   return *desired_generation;
 }
 
+struct LocalHealthProbeResult {
+  bool attempted = false;
+  bool reachable = false;
+  std::string checked_at;
+  int status_code = 0;
+  json payload = nullptr;
+  std::string error;
+};
+
+std::string EnvValue(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && *value != '\0' ? std::string(value) : std::string{};
+}
+
+LocalHealthProbeResult ProbeLocalJsonHealth(
+    const std::optional<std::string>& upstream,
+    const std::string& path) {
+  LocalHealthProbeResult result;
+  if (!upstream.has_value() || upstream->empty()) {
+    return result;
+  }
+
+  const ControllerRuntimeSupportService runtime_support_service;
+  result.attempted = true;
+  result.checked_at = runtime_support_service.UtcNowSqlTimestamp();
+  try {
+    const auto response =
+        SendControllerHttpRequest(ParseControllerEndpointTarget(*upstream), "GET", path);
+    result.status_code = response.status_code;
+    result.reachable = response.status_code >= 200 && response.status_code < 300;
+    if (!response.body.empty()) {
+      try {
+        result.payload = json::parse(response.body);
+      } catch (...) {
+        result.payload = json::object();
+      }
+    }
+    if (!result.reachable && result.error.empty()) {
+      result.error = "http status " + std::to_string(response.status_code);
+    }
+  } catch (const std::exception& error) {
+    result.error = error.what();
+  }
+  return result;
+}
+
+bool ProbeLooksHealthy(
+    const LocalHealthProbeResult& probe,
+    const std::optional<std::string>& expected_service = std::nullopt) {
+  if (!probe.attempted || !probe.reachable) {
+    return false;
+  }
+  if (!probe.payload.is_object()) {
+    return true;
+  }
+  if (probe.payload.value("status", std::string()) != "ok") {
+    return false;
+  }
+  if (expected_service.has_value()) {
+    return probe.payload.value("service", std::string()) == *expected_service;
+  }
+  return true;
+}
+
+json BuildServiceTargetPayload(
+    const std::string& label,
+    const std::string& value,
+    const std::optional<bool>& reachable,
+    const std::optional<std::string>& detail = std::nullopt) {
+  return json{
+      {"label", label},
+      {"value", value},
+      {"reachable", reachable.has_value() ? json(*reachable) : json(nullptr)},
+      {"detail", detail.has_value() ? json(*detail) : json(nullptr)},
+  };
+}
+
+std::string JoinDetails(const std::vector<std::string>& parts) {
+  std::ostringstream out;
+  bool first = true;
+  for (const auto& part : parts) {
+    if (part.empty()) {
+      continue;
+    }
+    if (!first) {
+      out << "; ";
+    }
+    out << part;
+    first = false;
+  }
+  return out.str();
+}
+
+std::optional<std::string> PickLatestTimestamp(
+    const std::optional<std::string>& left,
+    const std::optional<std::string>& right) {
+  if (!left.has_value()) {
+    return right;
+  }
+  if (!right.has_value()) {
+    return left;
+  }
+  return *left >= *right ? left : right;
+}
+
+std::optional<std::string> LatestHostHeartbeatAt(
+    const comet::RegisteredHostRecord& host,
+    const std::vector<comet::HostObservation>& observations) {
+  std::optional<std::string> latest =
+      host.last_heartbeat_at.empty() ? std::nullopt
+                                     : std::optional<std::string>(host.last_heartbeat_at);
+  for (const auto& observation : observations) {
+    if (!observation.heartbeat_at.empty()) {
+      latest = PickLatestTimestamp(latest, observation.heartbeat_at);
+    }
+  }
+  return latest;
+}
+
+json BuildControllerSelfServicePayload() {
+  const ControllerRuntimeSupportService runtime_support_service;
+  const std::string checked_at = runtime_support_service.UtcNowSqlTimestamp();
+  const std::string admin_upstream = EnvValue("COMET_CONTROLLER_ADMIN_UPSTREAM");
+  const std::string internal_upstream = EnvValue("COMET_CONTROLLER_INTERNAL_UPSTREAM");
+
+  std::string health = "healthy";
+  std::string state = "running";
+  std::vector<std::string> details = {"dashboard API responding"};
+  json targets = json::array();
+
+  const auto add_target_probe =
+      [&](const std::string& label, const std::string& upstream) {
+        if (upstream.empty()) {
+          return;
+        }
+        const auto probe = ProbeLocalJsonHealth(upstream, "/health");
+        const bool target_healthy = ProbeLooksHealthy(probe, "comet-controller");
+        targets.push_back(BuildServiceTargetPayload(
+            label,
+            upstream,
+            probe.attempted ? std::optional<bool>(target_healthy) : std::nullopt,
+            !probe.error.empty() ? std::optional<std::string>(probe.error) : std::nullopt));
+        if (probe.attempted && !target_healthy) {
+          health = "warning";
+          details.push_back(label + " target probe failed");
+        }
+      };
+
+  add_target_probe("admin", admin_upstream);
+  if (internal_upstream != admin_upstream) {
+    add_target_probe("internal", internal_upstream);
+  }
+
+  return json{
+      {"id", "controller"},
+      {"label", "Controller"},
+      {"kind", "process"},
+      {"health", health},
+      {"state", state},
+      {"detail", JoinDetails(details)},
+      {"targets", std::move(targets)},
+      {"updated_at", checked_at},
+  };
+}
+
+json BuildSkillsFactorySelfServicePayload() {
+  const std::optional<std::string> upstream =
+      [&]() -> std::optional<std::string> {
+    const std::string value = EnvValue("COMET_SKILLS_FACTORY_UPSTREAM");
+    return value.empty() ? std::nullopt : std::optional<std::string>(value);
+  }();
+
+  if (!upstream.has_value()) {
+    return json{
+        {"id", "skills-factory"},
+        {"label", "Skills Factory"},
+        {"kind", "process"},
+        {"health", "unknown"},
+        {"state", "unknown"},
+        {"detail", "skills factory upstream is not configured"},
+        {"targets", json::array()},
+        {"updated_at", nullptr},
+    };
+  }
+
+  const auto probe = ProbeLocalJsonHealth(upstream, "/health");
+  const bool healthy = ProbeLooksHealthy(probe, "comet-skills-factory");
+  return json{
+      {"id", "skills-factory"},
+      {"label", "Skills Factory"},
+      {"kind", "process"},
+      {"health", healthy ? json("healthy") : json("critical")},
+      {"state", healthy ? json("running") : json("unreachable")},
+      {"detail",
+       healthy ? json("health endpoint responded")
+               : json(!probe.error.empty() ? probe.error : "health endpoint probe failed")},
+      {"targets",
+       json::array({BuildServiceTargetPayload(
+           "local",
+           *upstream,
+           probe.attempted ? std::optional<bool>(healthy) : std::nullopt,
+           !probe.error.empty() ? std::optional<std::string>(probe.error) : std::nullopt)})},
+      {"updated_at", probe.checked_at.empty() ? json(nullptr) : json(probe.checked_at)},
+  };
+}
+
+json BuildHostdSelfServicePayload(
+    comet::ControllerStore& store,
+    int stale_after_seconds) {
+  const ControllerRuntimeSupportService runtime_support_service;
+  const std::string node_name = [&]() {
+    const std::string configured = EnvValue("COMET_HOSTD_NODE_NAME");
+    return configured.empty() ? std::string("local-hostd") : configured;
+  }();
+
+  const auto host = store.LoadRegisteredHost(node_name);
+  if (!host.has_value()) {
+    return json{
+        {"id", "hostd"},
+        {"label", "Hostd"},
+        {"kind", "process"},
+        {"health", "critical"},
+        {"state", "missing"},
+        {"detail", "registered host record not found"},
+        {"targets", json::array({BuildServiceTargetPayload("node", node_name, std::nullopt)})},
+        {"updated_at", nullptr},
+    };
+  }
+
+  const auto observations = store.LoadHostObservations(node_name);
+  const auto latest_heartbeat_at = LatestHostHeartbeatAt(*host, observations);
+  const auto heartbeat_age =
+      latest_heartbeat_at.has_value()
+          ? runtime_support_service.HeartbeatAgeSeconds(*latest_heartbeat_at)
+          : std::optional<long long>{};
+  const std::string heartbeat_health =
+      runtime_support_service.HealthFromAge(heartbeat_age, stale_after_seconds);
+
+  std::string health = "healthy";
+  if (host->registration_state != "registered" || host->session_state != "connected" ||
+      !latest_heartbeat_at.has_value()) {
+    health = "critical";
+  } else if (heartbeat_health == "stale") {
+    health = "warning";
+  }
+
+  std::string detail =
+      "registration=" + host->registration_state + ", session=" + host->session_state;
+  if (latest_heartbeat_at.has_value()) {
+    detail += ", last heartbeat " + *latest_heartbeat_at;
+  } else {
+    detail += ", heartbeat missing";
+  }
+
+  json targets = json::array();
+  targets.push_back(BuildServiceTargetPayload("node", node_name, std::nullopt));
+  if (!host->advertised_address.empty()) {
+    targets.push_back(
+        BuildServiceTargetPayload("advertised", host->advertised_address, std::nullopt));
+  }
+
+  return json{
+      {"id", "hostd"},
+      {"label", "Hostd"},
+      {"kind", "process"},
+      {"health", health},
+      {"state", host->session_state.empty() ? json("unknown") : json(host->session_state)},
+      {"detail", detail},
+      {"targets", std::move(targets)},
+      {"updated_at",
+       latest_heartbeat_at.has_value()
+           ? json(*latest_heartbeat_at)
+           : (host->updated_at.empty() ? json(nullptr) : json(host->updated_at))},
+  };
+}
+
+json BuildWebUiSelfServicePayload() {
+  const ControllerRuntimeSupportService runtime_support_service;
+  const std::string web_ui_root = [&]() {
+    const std::string configured = EnvValue("COMET_WEB_UI_ROOT");
+    return configured.empty() ? WebUiService::DefaultWebUiRoot() : configured;
+  }();
+  const std::filesystem::path state_path =
+      std::filesystem::path(web_ui_root) / "web-ui-state.json";
+  const std::string checked_at = runtime_support_service.UtcNowSqlTimestamp();
+
+  if (!std::filesystem::exists(state_path)) {
+    return json{
+        {"id", "web-ui"},
+        {"label", "Web UI"},
+        {"kind", "container"},
+        {"health", "critical"},
+        {"state", "missing"},
+        {"detail", "web-ui state file is missing"},
+        {"targets",
+         json::array({BuildServiceTargetPayload(
+             "local",
+             "http://127.0.0.1:" + std::to_string(WebUiService::DefaultWebUiPort()),
+             std::nullopt)})},
+        {"updated_at", nullptr},
+    };
+  }
+
+  json state = json::object();
+  try {
+    std::ifstream input(state_path);
+    input >> state;
+  } catch (const std::exception& error) {
+    return json{
+        {"id", "web-ui"},
+        {"label", "Web UI"},
+        {"kind", "container"},
+        {"health", "critical"},
+        {"state", "error"},
+        {"detail", std::string("failed to parse web-ui state: ") + error.what()},
+        {"targets", json::array()},
+        {"updated_at", checked_at},
+    };
+  }
+
+  const int listen_port = state.value("listen_port", WebUiService::DefaultWebUiPort());
+  const std::string local_upstream =
+      "http://127.0.0.1:" + std::to_string(listen_port);
+  const std::string controller_upstream = state.value("controller_upstream", std::string());
+  const bool materialized = state.value("materialized", false);
+  const bool running = state.value("running", false);
+  const std::string persisted_status = state.value("status", std::string("unknown"));
+
+  LocalHealthProbeResult probe;
+  if (materialized || running || persisted_status == "running") {
+    probe = ProbeLocalJsonHealth(local_upstream, "/api/v1/health");
+  }
+  const bool healthy = ProbeLooksHealthy(probe);
+
+  std::string health = "warning";
+  std::string rendered_state = persisted_status;
+  std::vector<std::string> details;
+  if (!controller_upstream.empty()) {
+    details.push_back("controller upstream " + controller_upstream);
+  }
+  if (running && healthy) {
+    health = "healthy";
+    rendered_state = "running";
+    details.push_back("container responded to health probe");
+  } else if ((running || persisted_status == "running") && !healthy) {
+    health = "critical";
+    rendered_state = "unreachable";
+    details.push_back(!probe.error.empty() ? probe.error : "health endpoint probe failed");
+  } else if (materialized) {
+    health = "warning";
+    rendered_state = "materialized";
+    details.push_back("compose state exists but container is not running");
+  } else {
+    health = "warning";
+    details.push_back("web-ui is not running");
+  }
+
+  json targets = json::array();
+  targets.push_back(BuildServiceTargetPayload(
+      "local",
+      local_upstream,
+      probe.attempted ? std::optional<bool>(healthy) : std::nullopt,
+      !probe.error.empty() ? std::optional<std::string>(probe.error) : std::nullopt));
+
+  return json{
+      {"id", "web-ui"},
+      {"label", "Web UI"},
+      {"kind", "container"},
+      {"health", health},
+      {"state", rendered_state},
+      {"detail", JoinDetails(details)},
+      {"targets", std::move(targets)},
+      {"updated_at", checked_at},
+  };
+}
+
+json BuildSelfServicesPayload(
+    comet::ControllerStore& store,
+    int stale_after_seconds) {
+  json items = json::array();
+  items.push_back(BuildControllerSelfServicePayload());
+  items.push_back(BuildSkillsFactorySelfServicePayload());
+  items.push_back(BuildHostdSelfServicePayload(store, stale_after_seconds));
+  items.push_back(BuildWebUiSelfServicePayload());
+
+  int healthy = 0;
+  int warning = 0;
+  int critical = 0;
+  int unknown = 0;
+  for (const auto& item : items) {
+    const std::string service_health = item.value("health", std::string("unknown"));
+    if (service_health == "healthy") {
+      ++healthy;
+    } else if (service_health == "warning") {
+      ++warning;
+    } else if (service_health == "critical") {
+      ++critical;
+    } else {
+      ++unknown;
+    }
+  }
+
+  return json{
+      {"summary",
+       {
+           {"total", items.size()},
+           {"healthy", healthy},
+           {"warning", warning},
+           {"critical", critical},
+           {"unknown", unknown},
+       }},
+      {"items", std::move(items)},
+  };
+}
+
 }  // namespace
 
 DashboardService::DashboardService(Deps deps) : deps_(std::move(deps)) {}
@@ -220,6 +642,7 @@ nlohmann::json DashboardService::BuildPayload(
        view.desired_generation.has_value() ? json(*view.desired_generation)
                                            : json(nullptr)},
   };
+  payload["self_services"] = BuildSelfServicesPayload(store, stale_after_seconds);
   if (!view.desired_state.has_value()) {
     payload["plane"] = nullptr;
     payload["planes"] = json::array();

@@ -373,6 +373,26 @@ target_link_libraries(comet-skills-factory-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-skills-factory-tests)
 
 add_executable(
+  comet-dashboard-service-tests
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/infra/controller_runtime_support_service.cpp
+  controller/src/host/host_assignment_reconciliation_service.cpp
+  controller/src/plane/dashboard_service.cpp
+  controller/src/plane/dashboard_service_tests.cpp
+  controller/src/plane/plane_dashboard_skills_summary_service.cpp
+  controller/src/read_model/state_aggregate_loader.cpp
+  controller/src/scheduler/scheduler_domain_service.cpp
+  controller/src/scheduler/scheduler_view_service.cpp
+  controller/src/web/web_ui_service.cpp
+)
+target_include_directories(
+  comet-dashboard-service-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  comet-dashboard-service-tests PRIVATE comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-dashboard-service-tests)
+
+add_executable(
   comet-auth-http-tests
   controller/src/auth/auth_http_service.cpp
   controller/src/auth/auth_http_service_tests.cpp
