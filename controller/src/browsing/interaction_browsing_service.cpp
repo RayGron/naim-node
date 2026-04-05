@@ -527,6 +527,13 @@ std::string BuildBrowsingInstruction(const json& summary) {
     return instruction.str();
   }
 
+  if (reason == "search_returned_no_sources") {
+    instruction
+        << "\n\nController attempted a web lookup for this request, but the "
+        << "search step did not produce usable public evidence. "
+        << "Do not present the answer as freshly verified on the web.";
+  }
+
   if (summary.contains("searches") && summary.at("searches").is_array() &&
       !summary.at("searches").empty()) {
     instruction << "\n\nWeb search summary:";
@@ -729,7 +736,7 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
 
   BrowsingContextDecision final_decision = decision;
   if (sources.empty() && errors.empty()) {
-    final_decision.decision = "not_needed";
+    final_decision.decision = decision.search_required ? "search_and_fetch" : decision.decision;
     final_decision.reason = "search_returned_no_sources";
   } else if (sources.empty() && !errors.empty()) {
     final_decision.decision = "error";

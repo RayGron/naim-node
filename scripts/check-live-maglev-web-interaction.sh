@@ -499,8 +499,16 @@ elif mode == "search_intent":
     ensure(browsing.get("decision") == "search_and_fetch", "search_intent: decision should be search_and_fetch")
     searches = browsing.get("searches", [])
     sources = browsing.get("sources", [])
-    ensure(searches and searches[0].get("result_count", 0) > 0, "search_intent: search results should be recorded")
-    ensure(sources, "search_intent: browsing should provide at least one source or snippet fallback")
+    ensure(searches, "search_intent: search attempt should be recorded")
+    if not sources:
+        ensure(
+            browsing.get("reason") == "search_returned_no_sources",
+            "search_intent: empty evidence must explain that search found no usable sources",
+        )
+        ensure(
+            "Controller attempted a web lookup for this request" in content,
+            "search_intent: assistant should receive the attempted-search fallback instruction",
+        )
     ensure("Web search summary:" in content, "search_intent: system prompt should include search summary")
 elif mode == "direct_fetch":
     ensure(browsing.get("decision") == "direct_fetch", "direct_fetch: decision should be direct_fetch")

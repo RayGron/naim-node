@@ -1794,6 +1794,39 @@ int main() {
     }
 
     {
+      InteractionBrowsingRuntimeTestServer runtime(json::array());
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", "Enable web for this chat."}},
+                json{{"role", "user"},
+                     {"content", "What is the latest safe example update online?"}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state =
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "empty search results should not fail the interaction");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(
+          summary.at("decision").get<std::string>() == "search_and_fetch",
+          "empty search results should preserve the fact that a web lookup was attempted");
+      Expect(
+          summary.at("reason").get<std::string>() == "search_returned_no_sources",
+          "empty search results should explain why no evidence was attached");
+      Expect(
+          summary.at("searches").is_array() && !summary.at("searches").empty() &&
+              summary.at("searches").at(0).at("result_count").get<int>() == 0,
+          "empty search results should still expose the attempted search summary");
+      std::cout << "ok: interaction-browsing-search-no-results" << '\n';
+    }
+
+    {
       InteractionBrowsingRuntimeTestServer runtime;
       comet::controller::InteractionBrowsingService browsing_service;
       comet::controller::InteractionRequestContext request_context;
