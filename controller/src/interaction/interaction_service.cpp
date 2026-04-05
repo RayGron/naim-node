@@ -1,5 +1,6 @@
 #include "interaction/interaction_service.h"
 
+#include "browsing/interaction_browsing_service.h"
 #include "browsing/plane_browsing_service.h"
 #include <algorithm>
 #include <atomic>
@@ -254,6 +255,29 @@ std::string RequestSkillResolutionMode(
         .get<std::string>();
   }
   return "none";
+}
+
+nlohmann::json RequestBrowsingSummary(
+    const InteractionRequestContext& request_context) {
+  if (request_context.payload.contains(
+          InteractionBrowsingService::kSummaryPayloadKey) &&
+      request_context.payload.at(
+          InteractionBrowsingService::kSummaryPayloadKey).is_object()) {
+    return request_context.payload.at(
+        InteractionBrowsingService::kSummaryPayloadKey);
+  }
+  return nlohmann::json{
+      {"mode", "disabled"},
+      {"mode_source", "default_off"},
+      {"plane_enabled", false},
+      {"ready", false},
+      {"toggle_only", false},
+      {"decision", "disabled"},
+      {"reason", "web_mode_disabled"},
+      {"searches", nlohmann::json::array()},
+      {"sources", nlohmann::json::array()},
+      {"errors", nlohmann::json::array()},
+  };
 }
 
 bool IsUtf8ContinuationByte(unsigned char value) {
@@ -1147,6 +1171,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
   session_payload["auto_applied_skills"] = RequestAutoAppliedSkills(request_context);
   session_payload["skill_resolution_mode"] =
       RequestSkillResolutionMode(request_context);
+  session_payload["browsing"] = RequestBrowsingSummary(request_context);
   session_payload["skills_session_id"] =
       RequestSkillsSessionId(request_context).has_value()
           ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1212,6 +1237,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
             {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
             {"skill_resolution_mode",
              RequestSkillResolutionMode(request_context)},
+            {"browsing", RequestBrowsingSummary(request_context)},
             {"skills_session_id",
              RequestSkillsSessionId(request_context).has_value()
                  ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1256,6 +1282,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
           {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
           {"skill_resolution_mode",
            RequestSkillResolutionMode(request_context)},
+          {"browsing", RequestBrowsingSummary(request_context)},
           {"skills_session_id",
            RequestSkillsSessionId(request_context).has_value()
                ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1286,6 +1313,7 @@ nlohmann::json InteractionStreamPresenter::BuildSessionStartedEvent(
       {"applied_skills", RequestAppliedSkills(request_context)},
       {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
       {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
+      {"browsing", RequestBrowsingSummary(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1401,6 +1429,7 @@ nlohmann::json InteractionStreamPresenter::BuildSessionCompleteEvent(
       {"applied_skills", RequestAppliedSkills(request_context)},
       {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
       {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
+      {"browsing", RequestBrowsingSummary(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1432,6 +1461,7 @@ nlohmann::json InteractionStreamPresenter::BuildCompleteEvent(
       {"applied_skills", RequestAppliedSkills(request_context)},
       {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
       {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
+      {"browsing", RequestBrowsingSummary(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -2030,6 +2060,7 @@ void InteractionStreamSessionExecutor::Execute(
     session_payload["auto_applied_skills"] = RequestAutoAppliedSkills(request_context);
     session_payload["skill_resolution_mode"] =
         RequestSkillResolutionMode(request_context);
+    session_payload["browsing"] = RequestBrowsingSummary(request_context);
     session_payload["skills_session_id"] =
         RequestSkillsSessionId(request_context).has_value()
             ? nlohmann::json(*RequestSkillsSessionId(request_context))

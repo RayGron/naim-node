@@ -335,6 +335,7 @@ comet_enable_strict_warnings(comet-controller-plane-deletion-tests)
 
 add_executable(
   comet-plane-skills-tests
+  controller/src/browsing/interaction_browsing_service.cpp
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/infra/controller_network_manager.cpp
   controller/src/http/controller_http_transport.cpp
@@ -483,6 +484,7 @@ add_executable(
   controller/src/http/controller_http_transport.cpp
   controller/src/infra/controller_remote_client.cpp
   controller/src/plane/desired_state_policy_service.cpp
+  controller/src/browsing/interaction_browsing_service.cpp
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/plane/dashboard_service.cpp
   controller/src/plane/plane_desired_state_request_parser.cpp

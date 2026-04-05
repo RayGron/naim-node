@@ -344,7 +344,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
             validation_error->details);
       }
       if (const auto validation_error =
-              interaction_service_.ResolveRequestSkills(resolution, &request_context)) {
+              interaction_service_.ResolveRequestContext(resolution, &request_context)) {
         return build_plane_error(
             validation_error->code == "model_mismatch" ||
                     validation_error->code == "skills_disabled" ||

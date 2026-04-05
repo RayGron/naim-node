@@ -10,6 +10,7 @@
 
 #include "comet/core/platform_compat.h"
 #include "comet/state/sqlite_store.h"
+#include "browsing/interaction_browsing_service.h"
 #include "interaction/interaction_service.h"
 #include "browsing/plane_browsing_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
@@ -292,6 +293,195 @@ class BrowsingRuntimeTestServer {
   }
 
   std::atomic<bool> stop_requested_{false};
+  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  int port_ = 0;
+  std::thread thread_;
+};
+
+class InteractionBrowsingRuntimeTestServer {
+ public:
+  InteractionBrowsingRuntimeTestServer() {
+    comet::platform::EnsureSocketsInitialized();
+    listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (!comet::platform::IsSocketValid(listen_fd_)) {
+      throw std::runtime_error("failed to create interaction browsing test socket");
+    }
+
+    int yes = 1;
+#if defined(_WIN32)
+    setsockopt(
+        listen_fd_,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        reinterpret_cast<const char*>(&yes),
+        sizeof(yes));
+#else
+    setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#endif
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(0);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to bind interaction browsing test socket: " + error);
+    }
+    if (listen(listen_fd_, 8) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to listen on interaction browsing test socket: " + error);
+    }
+
+    sockaddr_in bound_addr{};
+    socklen_t bound_size = sizeof(bound_addr);
+    if (getsockname(
+            listen_fd_,
+            reinterpret_cast<sockaddr*>(&bound_addr),
+            &bound_size) != 0) {
+      const auto error = comet::platform::LastSocketErrorMessage();
+      comet::platform::CloseSocket(listen_fd_);
+      throw std::runtime_error("failed to inspect interaction browsing socket: " + error);
+    }
+    port_ = ntohs(bound_addr.sin_port);
+    thread_ = std::thread([this]() { Serve(); });
+  }
+
+  ~InteractionBrowsingRuntimeTestServer() {
+    stop_requested_.store(true);
+    if (port_ > 0) {
+      const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (comet::platform::IsSocketValid(wake_fd)) {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<uint16_t>(port_));
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        comet::platform::CloseSocket(wake_fd);
+      }
+    }
+    if (comet::platform::IsSocketValid(listen_fd_)) {
+      comet::platform::CloseSocket(listen_fd_);
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  int port() const { return port_; }
+
+  int search_count() const { return search_count_.load(); }
+  int fetch_count() const { return fetch_count_.load(); }
+
+ private:
+  static std::string ExtractBody(const std::string& request) {
+    const std::size_t split = request.find("\r\n\r\n");
+    if (split == std::string::npos) {
+      return "";
+    }
+    return request.substr(split + 4);
+  }
+
+  void WriteJsonResponse(
+      comet::platform::SocketHandle client_fd,
+      int status_code,
+      const json& payload) {
+    const std::string body = payload.dump();
+    std::ostringstream response;
+    response << "HTTP/1.1 " << status_code
+             << (status_code >= 200 && status_code < 300 ? " OK" : " ERROR") << "\r\n";
+    response << "Content-Type: application/json\r\n";
+    response << "Content-Length: " << body.size() << "\r\n";
+    response << "Connection: close\r\n\r\n";
+    response << body;
+    const auto serialized = response.str();
+    const char* data = serialized.c_str();
+    std::size_t remaining = serialized.size();
+    while (remaining > 0) {
+      const auto written = send(client_fd, data, remaining, 0);
+      if (written <= 0) {
+        break;
+      }
+      data += written;
+      remaining -= static_cast<std::size_t>(written);
+    }
+  }
+
+  void Serve() {
+    while (true) {
+      sockaddr_in client_addr{};
+      socklen_t client_size = sizeof(client_addr);
+      const auto client_fd = accept(
+          listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
+      if (!comet::platform::IsSocketValid(client_fd)) {
+        return;
+      }
+      if (stop_requested_.load()) {
+        comet::platform::CloseSocket(client_fd);
+        return;
+      }
+
+      char buffer[8192];
+      const auto read_count = recv(client_fd, buffer, sizeof(buffer), 0);
+      const std::string request =
+          read_count > 0 ? std::string(buffer, static_cast<std::size_t>(read_count)) : "";
+      const std::string body = ExtractBody(request);
+
+      if (request.rfind("GET /health ", 0) == 0) {
+        WriteJsonResponse(client_fd, 200, json{{"status", "ok"}});
+      } else if (request.rfind("GET /v1/browsing/status ", 0) == 0) {
+        WriteJsonResponse(
+            client_fd,
+            200,
+            json{{"status", "ok"},
+                 {"service", "comet-browsing"},
+                 {"ready", true},
+                 {"search_enabled", true},
+                 {"fetch_enabled", true}});
+      } else if (request.rfind("POST /v1/browsing/search ", 0) == 0) {
+        ++search_count_;
+        const json search_payload =
+            body.empty() ? json::object() : json::parse(body, nullptr, false);
+        WriteJsonResponse(
+            client_fd,
+            200,
+            json{{"query", search_payload.value("query", std::string{})},
+                 {"results",
+                  json::array({json{{"url", "https://example.com/article"},
+                                    {"domain", "example.com"},
+                                    {"title", "Example Article"},
+                                    {"snippet", "Example snippet"},
+                                    {"score", 0.9}}})}});
+      } else if (request.rfind("POST /v1/browsing/fetch ", 0) == 0) {
+        ++fetch_count_;
+        const json fetch_payload =
+            body.empty() ? json::object() : json::parse(body, nullptr, false);
+        const std::string requested_url = fetch_payload.value("url", std::string{});
+        WriteJsonResponse(
+            client_fd,
+            200,
+            json{{"url", requested_url},
+                 {"final_url", requested_url},
+                 {"content_type", "text/html"},
+                 {"title", "Example Article"},
+                 {"visible_text",
+                  "Example visible text about the requested topic from a safe test page."},
+                 {"citations", json::array({requested_url})},
+                 {"injection_flags", json::array()}});
+      } else {
+        WriteJsonResponse(
+            client_fd,
+            404,
+            json{{"status", "error"}, {"error", {{"code", "not_found"}}}});
+      }
+      comet::platform::CloseSocket(client_fd);
+    }
+  }
+
+  std::atomic<bool> stop_requested_{false};
+  std::atomic<int> search_count_{0};
+  std::atomic<int> fetch_count_{0};
   comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
   int port_ = 0;
   std::thread thread_;
@@ -1405,6 +1595,170 @@ int main() {
               "contextual",
           "interaction response should expose skill_resolution_mode");
       std::cout << "ok: interaction-response-includes-skill-resolution-fields" << '\n';
+    }
+
+    {
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array({json{{"role", "user"}, {"content", "Explain TCP handshakes."}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = BuildDesiredState("interaction-plane", {});
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "browsing resolver should not fail for default-off mode");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(
+          summary.at("mode").get<std::string>() == "disabled",
+          "browsing resolver should keep web mode disabled by default");
+      Expect(
+          summary.at("decision").get<std::string>() == "disabled",
+          "browsing resolver should mark disabled decision when web mode is off");
+      std::cout << "ok: interaction-browsing-default-off" << '\n';
+    }
+
+    {
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array({json{{"role", "user"},
+                             {"content", "Включи веб для этого разговора."}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", 18130);
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "browsing resolver should accept a toggle-only request");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(
+          summary.at("mode").get<std::string>() == "enabled",
+          "browsing resolver should enable web mode from Russian toggle text");
+      Expect(
+          summary.at("decision").get<std::string>() == "not_needed",
+          "toggle-only requests should not trigger a web lookup");
+      Expect(
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+                  .get<std::string>()
+                  .find("enabled") != std::string::npos,
+          "toggle-only requests should inject an enable acknowledgement instruction");
+      std::cout << "ok: interaction-browsing-toggle-only-enable" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeTestServer runtime;
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", "Enable web for this chat."}},
+                json{{"role", "user"},
+                     {"content", "What is the latest update on OpenAI models?"}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state =
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "browsing resolver should complete search/fetch enrichment");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(
+          summary.at("mode").get<std::string>() == "enabled",
+          "web toggle should persist across message history");
+      Expect(
+          summary.at("decision").get<std::string>() == "search_and_fetch",
+          "latest info prompts should trigger search-and-fetch browsing");
+      Expect(runtime.search_count() == 1, "search-and-fetch should call search once");
+      Expect(runtime.fetch_count() >= 1, "search-and-fetch should fetch at least one result");
+      Expect(
+          summary.at("sources").is_array() && !summary.at("sources").empty(),
+          "search-and-fetch should expose fetched sources");
+      std::cout << "ok: interaction-browsing-search-and-fetch" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeTestServer runtime;
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"},
+                     {"content", "Use the web and check https://example.com/article"}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state =
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "direct fetch browsing should succeed");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(
+          summary.at("decision").get<std::string>() == "direct_fetch",
+          "explicit URL requests should skip search and fetch directly");
+      Expect(runtime.search_count() == 0, "direct fetch should not call search");
+      Expect(runtime.fetch_count() == 1, "direct fetch should fetch the referenced URL");
+      std::cout << "ok: interaction-browsing-direct-fetch" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeTestServer runtime;
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.request_id = "req-1";
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", "Enable web."}},
+                json{{"role", "user"},
+                     {"content", "Disable web. What is the latest update on OpenAI models?"}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state =
+          BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "disable override should not fail");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(
+          summary.at("mode").get<std::string>() == "disabled",
+          "later disable directive should override earlier enable directive");
+      Expect(runtime.search_count() == 0, "disabled web mode should prevent search");
+      Expect(runtime.fetch_count() == 0, "disabled web mode should prevent fetch");
+
+      comet::controller::InteractionSessionPresenter presenter;
+      comet::controller::InteractionSessionResult result;
+      result.session_id = "sess-web";
+      result.model = "demo-model";
+      result.content = "ok";
+      result.completion_status = "completed";
+      result.final_finish_reason = "stop";
+      result.stop_reason = "natural_stop";
+      resolution.status_payload = json::object();
+      const auto response =
+          presenter.BuildResponseSpec(resolution, request_context, result);
+      Expect(
+          response.payload.at("browsing").at("mode").get<std::string>() == "disabled",
+          "interaction response should expose browsing summary at top level");
+      Expect(
+          response.payload.at("session").at("browsing").at("decision").get<std::string>() ==
+              "disabled",
+          "interaction session payload should expose browsing summary");
+      std::cout << "ok: interaction-response-includes-browsing-fields" << '\n';
     }
 
     return 0;

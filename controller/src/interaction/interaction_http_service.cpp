@@ -2,6 +2,7 @@
 
 #include <sstream>
 
+#include "browsing/interaction_browsing_service.h"
 #include "skills/plane_skills_service.h"
 
 using nlohmann::json;
@@ -27,6 +28,24 @@ InteractionHttpService::ResolveRequestSkills(
     comet::controller::InteractionRequestContext* request_context) const {
   return comet::controller::PlaneSkillsService().ResolveInteractionSkills(
       resolution, request_context);
+}
+
+std::optional<comet::controller::InteractionValidationError>
+InteractionHttpService::ResolveRequestBrowsing(
+    const comet::controller::PlaneInteractionResolution& resolution,
+    comet::controller::InteractionRequestContext* request_context) const {
+  return comet::controller::InteractionBrowsingService().ResolveInteractionBrowsing(
+      resolution, request_context);
+}
+
+std::optional<comet::controller::InteractionValidationError>
+InteractionHttpService::ResolveRequestContext(
+    const comet::controller::PlaneInteractionResolution& resolution,
+    comet::controller::InteractionRequestContext* request_context) const {
+  if (const auto error = ResolveRequestSkills(resolution, request_context)) {
+    return error;
+  }
+  return ResolveRequestBrowsing(resolution, request_context);
 }
 
 json InteractionHttpService::BuildContinuationPayload(
@@ -289,7 +308,7 @@ InteractionHttpService::MakeProxyExecutor() const {
       },
       [&](const comet::controller::PlaneInteractionResolution& resolution,
           comet::controller::InteractionRequestContext* request_context) {
-        return ResolveRequestSkills(resolution, request_context);
+        return ResolveRequestContext(resolution, request_context);
       });
 }
 
@@ -301,7 +320,7 @@ InteractionHttpService::MakeStreamRequestResolver() const {
       },
       [&](const comet::controller::PlaneInteractionResolution& resolution,
           comet::controller::InteractionRequestContext* request_context) {
-        return ResolveRequestSkills(resolution, request_context);
+        return ResolveRequestContext(resolution, request_context);
       });
 }
 

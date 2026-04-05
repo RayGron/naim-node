@@ -6,6 +6,7 @@
 
 #include "app/controller_composition_support.h"
 #include "app/controller_language_support.h"
+#include "browsing/interaction_browsing_service.h"
 #include "comet/runtime/model_adapter.h"
 #include "skills/plane_skills_service.h"
 
@@ -75,6 +76,15 @@ std::string BuildInteractionUpstreamBodyPayload(
         payload.at(PlaneSkillsService::kSystemInstructionPayloadKey).get<std::string>();
     if (!skills_instruction.empty()) {
       system_instruction_parts.push_back(skills_instruction);
+    }
+  }
+  if (payload.contains(InteractionBrowsingService::kSystemInstructionPayloadKey) &&
+      payload.at(InteractionBrowsingService::kSystemInstructionPayloadKey).is_string()) {
+    const std::string browsing_instruction =
+        payload.at(InteractionBrowsingService::kSystemInstructionPayloadKey)
+            .get<std::string>();
+    if (!browsing_instruction.empty()) {
+      system_instruction_parts.push_back(browsing_instruction);
     }
   }
   if (resolved_policy.repository_analysis &&
@@ -171,6 +181,8 @@ std::string BuildInteractionUpstreamBodyPayload(
   payload.erase(PlaneSkillsService::kSystemInstructionPayloadKey);
   payload.erase(PlaneSkillsService::kAppliedSkillsPayloadKey);
   payload.erase(PlaneSkillsService::kSkillsSessionIdPayloadKey);
+  payload.erase(InteractionBrowsingService::kSystemInstructionPayloadKey);
+  payload.erase(InteractionBrowsingService::kSummaryPayloadKey);
   payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   comet::runtime::ModelAdapter::AdaptInteractionPayload(
       &payload,
