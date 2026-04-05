@@ -73,18 +73,26 @@ browsing_pid=""
 gateway_pid=""
 
 cleanup() {
-  if [[ -n "${gateway_pid}" ]]; then
-    kill "${gateway_pid}" >/dev/null 2>&1 || true
-    wait "${gateway_pid}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${browsing_pid}" ]]; then
-    kill "${browsing_pid}" >/dev/null 2>&1 || true
-    wait "${browsing_pid}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${controller_pid}" ]]; then
-    kill "${controller_pid}" >/dev/null 2>&1 || true
-    wait "${controller_pid}" >/dev/null 2>&1 || true
-  fi
+  stop_pid() {
+    local pid="$1"
+    if [[ -z "${pid}" ]]; then
+      return 0
+    fi
+    kill "${pid}" >/dev/null 2>&1 || true
+    for _ in $(seq 1 10); do
+      if ! kill -0 "${pid}" >/dev/null 2>&1; then
+        wait "${pid}" >/dev/null 2>&1 || true
+        return 0
+      fi
+      sleep 0.1
+    done
+    kill -9 "${pid}" >/dev/null 2>&1 || true
+    wait "${pid}" >/dev/null 2>&1 || true
+  }
+
+  stop_pid "${gateway_pid}"
+  stop_pid "${browsing_pid}"
+  stop_pid "${controller_pid}"
   rm -rf "${work_root}"
 }
 trap cleanup EXIT
@@ -532,6 +540,11 @@ elif mode == "disable_override":
     ensure(browsing.get("decision") == "disabled", "disable_override: decision should be disabled")
     ensure(browsing.get("lookup_state") == "disabled_by_user", "disable_override: lookup_state should be disabled_by_user")
     ensure("Web browsing is disabled because the user explicitly turned it off." in content, "disable_override: assistant should receive disable instruction")
+elif mode == "enabled_not_needed":
+    ensure(browsing.get("mode") == "enabled", "enabled_not_needed: mode should stay enabled")
+    ensure(browsing.get("decision") == "not_needed", "enabled_not_needed: decision should be not_needed")
+    ensure(browsing.get("lookup_state") == "enabled_not_needed", "enabled_not_needed: lookup_state should be enabled_not_needed")
+    ensure("web access may remain available, but no web lookup was needed" in content, "enabled_not_needed: assistant should receive no-lookup-needed instruction")
 else:
     raise SystemExit(f"unknown mode: {mode}")
 PY
@@ -566,6 +579,17 @@ cat >"${fetch_request}" <<'EOF'
 EOF
 fetch_response="$(invoke_interaction "direct-fetch" "${fetch_request}")"
 assert_json "${fetch_response}" "direct_fetch"
+
+echo "maglev-web-live: test enabled web with no lookup needed"
+offline_request="${work_root}/enabled-not-needed.json"
+cat >"${offline_request}" <<'EOF'
+{"messages":[
+  {"role":"user","content":"Enable web for this chat."},
+  {"role":"user","content":"Explain TCP handshakes."}
+]}
+EOF
+offline_response="$(invoke_interaction "enabled-not-needed" "${offline_request}")"
+assert_json "${offline_response}" "enabled_not_needed"
 
 echo "maglev-web-live: test natural-language web disable override"
 disable_request="${work_root}/disable-override.json"
