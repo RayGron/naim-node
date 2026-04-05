@@ -461,7 +461,7 @@ fi
 invoke_interaction() {
   local name="$1"
   local request_file="$2"
-  local response_file="${work_root}/${name}.json"
+  local response_file="${work_root}/${name}.response.json"
   curl -fsS -X POST \
     -H "X-Comet-Session-Token: ${auth_token}" \
     -H 'Content-Type: application/json' \
