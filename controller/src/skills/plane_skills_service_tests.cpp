@@ -1904,8 +1904,14 @@ int main() {
           request_context.payload.at(
               comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
                   .get<std::string>()
-                  .find("Controller browsing state: enabled_toggle_only.") != std::string::npos,
-          "toggle-only requests should inject an enable acknowledgement instruction");
+                  .find("WebGateway state: enabled_toggle_only.") != std::string::npos,
+          "toggle-only requests should inject a WebGateway enable acknowledgement instruction");
+      Expect(
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+                  .get<std::string>()
+                  .find("The latest user message only changes web mode.") != std::string::npos,
+          "toggle-only requests should acknowledge that only web mode changed");
       std::cout << "ok: interaction-browsing-toggle-only-enable" << '\n';
     }
 
