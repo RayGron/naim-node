@@ -51,5 +51,5 @@ fi
 
 resolve_docker
 
-"${docker_cmd[@]}" compose -f "${compose_file}" up -d --no-deps "${service_name}"
+"${docker_cmd[@]}" compose -f "${compose_file}" up -d --no-deps --force-recreate "${service_name}"
 "${docker_cmd[@]}" compose -f "${compose_file}" ps "${service_name}"
