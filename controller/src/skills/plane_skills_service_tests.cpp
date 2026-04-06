@@ -366,127 +366,6 @@ class BrowsingRuntimeTestServer {
     }
   }
 
-  json BuildResolveTrace(
-      const std::string& lookup_state,
-      const std::string& decision,
-      const json& searches,
-      const json& sources,
-      bool ready,
-      bool rendered_ready) {
-    json trace = json::array();
-    std::string compact = "web:on";
-    if (lookup_state == "blocked") {
-      compact = "web:block";
-    } else if (lookup_state == "enabled_not_needed") {
-      compact = "web:on idle";
-    } else if (!ready) {
-      compact = "web:wait";
-    } else if (!sources.empty() && !searches.empty()) {
-      compact = "web:search ok";
-    } else if (!sources.empty()) {
-      compact = "web:fetch ok";
-    } else if (decision == "search_and_fetch") {
-      compact = "web:search none";
-    }
-    trace.push_back(json{{"stage", "mode"}, {"status", "on"}, {"compact", compact}});
-    if (lookup_state == "enabled_toggle_only") {
-      trace.push_back(
-          json{{"stage", "toggle"}, {"status", "applied"}, {"compact", "toggle:applied"}});
-      return trace;
-    }
-    if (lookup_state == "enabled_not_needed") {
-      trace.push_back(
-          json{{"stage", "lookup"}, {"status", "skipped"}, {"compact", "lookup:skip"}});
-      return trace;
-    }
-    if (lookup_state == "blocked") {
-      trace.push_back(
-          json{{"stage", "policy"}, {"status", "blocked"}, {"compact", "policy:block"}});
-      return trace;
-    }
-    trace.push_back(
-        json{{"stage", "decision"}, {"status", decision}, {"compact", "decide:" + decision}});
-    trace.push_back(json{{"stage", "webgateway_status"},
-                         {"status", ready ? "ready" : "unavailable"},
-                         {"compact", ready ? "wg:ready" : "wg:wait"}});
-    if (!ready) {
-      return trace;
-    }
-    const bool rendered_used =
-        rendered_ready &&
-        std::any_of(
-            sources.begin(),
-            sources.end(),
-            [](const json& source) {
-              return source.value("rendered", false) ||
-                     NormalizeJsonString(source, "backend") == "browser_render";
-            });
-    if (rendered_used) {
-      trace.push_back(
-          json{{"stage", "browser_render"}, {"status", "done"}, {"compact", "browser:render"}});
-    }
-    if (!searches.empty()) {
-      int total_results = 0;
-      for (const auto& search : searches) {
-        total_results += search.value("result_count", 0);
-      }
-      trace.push_back(json{{"stage", "search"},
-                           {"status", total_results > 0 ? "done" : "empty"},
-                           {"compact", "search:" + std::to_string(total_results)}});
-    }
-    if (decision == "search_and_fetch" || decision == "direct_fetch") {
-      trace.push_back(json{{"stage", "fetch"},
-                           {"status", !sources.empty() ? "attached" : "none"},
-                           {"compact", "fetch:" + std::to_string(sources.size())}});
-    }
-    trace.push_back(json{{"stage", "evidence"},
-                         {"status", !sources.empty() ? "attached" : "none"},
-                         {"compact", !sources.empty() ? "evidence:yes" : "evidence:none"}});
-    return trace;
-  }
-
-  json BuildResponsePolicy(
-      const std::string& decision,
-      const std::string& reason,
-      const json& sources,
-      const json& errors) {
-    const bool evidence_attached = sources.is_array() && !sources.empty();
-    const bool unavailable =
-        decision == "unavailable" || decision == "error" ||
-        reason == "search_returned_no_sources" || (!evidence_attached && !errors.empty());
-    return json{{"must_disclose_web_unavailable", unavailable},
-                {"must_not_suggest_local_access", decision == "blocked"},
-                {"must_refuse_upload", reason == "restricted_upload_request"},
-                {"must_use_only_evidence", evidence_attached},
-                {"must_not_claim_unverified_web_lookup", unavailable || !evidence_attached},
-                {"blocked_reason", decision == "blocked" ? json(reason) : json(nullptr)},
-                {"unavailable_disclaimer",
-                 unavailable
-                     ? json("Web browsing was unavailable for this request, so I could not verify fresh public sources online.")
-                     : json(nullptr)}};
-  }
-
-  json NormalizeFetchedSource(const std::string& requested_url, const json& payload) {
-    const std::string final_url = NormalizeJsonString(payload, "final_url");
-    const std::string backend = NormalizeJsonString(payload, "backend");
-    return json{{"url", final_url.empty() ? requested_url : final_url},
-                {"title", NormalizeJsonString(payload, "title")},
-                {"backend", backend.empty() ? "broker_fetch" : backend},
-                {"rendered", payload.value("rendered", false)},
-                {"content_type", NormalizeJsonString(payload, "content_type")},
-                {"excerpt", NormalizeJsonString(payload, "visible_text")},
-                {"citations", NormalizeJsonArray(payload, "citations")},
-                {"injection_flags", NormalizeJsonArray(payload, "injection_flags")},
-                {"snippet_only", false}};
-  }
-
-  json BuildBlockedResolveResponse(
-      const std::string& mode_source,
-      const std::string& reason,
-      const std::string& refusal);
-
-  json BuildResolveResponse(const json& payload);
-
   void Serve() {
     while (true) {
       sockaddr_in client_addr{};
@@ -795,6 +674,29 @@ class InteractionBrowsingRuntimeTestServer {
   }
 
  private:
+  json BuildResolveTrace(
+      const std::string& lookup_state,
+      const std::string& decision,
+      const json& searches,
+      const json& sources,
+      bool ready,
+      bool rendered_ready);
+
+  json BuildResponsePolicy(
+      const std::string& decision,
+      const std::string& reason,
+      const json& sources,
+      const json& errors);
+
+  json NormalizeFetchedSource(const std::string& requested_url, const json& payload);
+
+  json BuildBlockedResolveResponse(
+      const std::string& mode_source,
+      const std::string& reason,
+      const std::string& refusal);
+
+  json BuildResolveResponse(const json& payload);
+
   static std::string ExtractBody(const std::string& request) {
     const std::size_t split = request.find("\r\n\r\n");
     if (split == std::string::npos) {
@@ -959,6 +861,122 @@ class InteractionBrowsingRuntimeTestServer {
   int port_ = 0;
   std::thread thread_;
 };
+
+json InteractionBrowsingRuntimeTestServer::BuildResolveTrace(
+    const std::string& lookup_state,
+    const std::string& decision,
+    const json& searches,
+    const json& sources,
+    bool ready,
+    bool rendered_ready) {
+  json trace = json::array();
+  std::string compact = "web:on";
+  if (lookup_state == "blocked") {
+    compact = "web:block";
+  } else if (lookup_state == "enabled_not_needed") {
+    compact = "web:on idle";
+  } else if (!ready) {
+    compact = "web:wait";
+  } else if (!sources.empty() && !searches.empty()) {
+    compact = "web:search ok";
+  } else if (!sources.empty()) {
+    compact = "web:fetch ok";
+  } else if (decision == "search_and_fetch") {
+    compact = "web:search none";
+  }
+  trace.push_back(json{{"stage", "mode"}, {"status", "on"}, {"compact", compact}});
+  if (lookup_state == "enabled_toggle_only") {
+    trace.push_back(
+        json{{"stage", "toggle"}, {"status", "applied"}, {"compact", "toggle:applied"}});
+    return trace;
+  }
+  if (lookup_state == "enabled_not_needed") {
+    trace.push_back(
+        json{{"stage", "lookup"}, {"status", "skipped"}, {"compact", "lookup:skip"}});
+    return trace;
+  }
+  if (lookup_state == "blocked") {
+    trace.push_back(
+        json{{"stage", "policy"}, {"status", "blocked"}, {"compact", "policy:block"}});
+    return trace;
+  }
+  trace.push_back(
+      json{{"stage", "decision"}, {"status", decision}, {"compact", "decide:" + decision}});
+  trace.push_back(json{{"stage", "webgateway_status"},
+                       {"status", ready ? "ready" : "unavailable"},
+                       {"compact", ready ? "wg:ready" : "wg:wait"}});
+  if (!ready) {
+    return trace;
+  }
+  const bool rendered_used =
+      rendered_ready &&
+      std::any_of(
+          sources.begin(),
+          sources.end(),
+          [](const json& source) {
+            return source.value("rendered", false) ||
+                   NormalizeJsonString(source, "backend") == "browser_render";
+          });
+  if (rendered_used) {
+    trace.push_back(
+        json{{"stage", "browser_render"}, {"status", "done"}, {"compact", "browser:render"}});
+  }
+  if (!searches.empty()) {
+    int total_results = 0;
+    for (const auto& search : searches) {
+      total_results += search.value("result_count", 0);
+    }
+    trace.push_back(json{{"stage", "search"},
+                         {"status", total_results > 0 ? "done" : "empty"},
+                         {"compact", "search:" + std::to_string(total_results)}});
+  }
+  if (decision == "search_and_fetch" || decision == "direct_fetch") {
+    trace.push_back(json{{"stage", "fetch"},
+                         {"status", !sources.empty() ? "attached" : "none"},
+                         {"compact", "fetch:" + std::to_string(sources.size())}});
+  }
+  trace.push_back(json{{"stage", "evidence"},
+                       {"status", !sources.empty() ? "attached" : "none"},
+                       {"compact", !sources.empty() ? "evidence:yes" : "evidence:none"}});
+  return trace;
+}
+
+json InteractionBrowsingRuntimeTestServer::BuildResponsePolicy(
+    const std::string& decision,
+    const std::string& reason,
+    const json& sources,
+    const json& errors) {
+  const bool evidence_attached = sources.is_array() && !sources.empty();
+  const bool unavailable =
+      decision == "unavailable" || decision == "error" ||
+      reason == "search_returned_no_sources" || (!evidence_attached && !errors.empty());
+  return json{{"must_disclose_web_unavailable", unavailable},
+              {"must_not_suggest_local_access", decision == "blocked"},
+              {"must_refuse_upload", reason == "restricted_upload_request"},
+              {"must_use_only_evidence", evidence_attached},
+              {"must_not_claim_unverified_web_lookup", unavailable || !evidence_attached},
+              {"blocked_reason", decision == "blocked" ? json(reason) : json(nullptr)},
+              {"unavailable_disclaimer",
+               unavailable
+                   ? json("Web browsing was unavailable for this request, so I could not verify fresh public sources online.")
+                   : json(nullptr)}};
+}
+
+json InteractionBrowsingRuntimeTestServer::NormalizeFetchedSource(
+    const std::string& requested_url,
+    const json& payload) {
+  const std::string final_url = NormalizeJsonString(payload, "final_url");
+  const std::string backend = NormalizeJsonString(payload, "backend");
+  return json{{"url", final_url.empty() ? requested_url : final_url},
+              {"title", NormalizeJsonString(payload, "title")},
+              {"backend", backend.empty() ? "broker_fetch" : backend},
+              {"rendered", payload.value("rendered", false)},
+              {"content_type", NormalizeJsonString(payload, "content_type")},
+              {"excerpt", NormalizeJsonString(payload, "visible_text")},
+              {"citations", NormalizeJsonArray(payload, "citations")},
+              {"injection_flags", NormalizeJsonArray(payload, "injection_flags")},
+              {"snippet_only", false}};
+}
 
 json InteractionBrowsingRuntimeTestServer::BuildBlockedResolveResponse(
     const std::string& mode_source,
@@ -2551,6 +2569,7 @@ int main() {
     }
 
     {
+      InteractionBrowsingRuntimeTestServer runtime;
       comet::controller::InteractionBrowsingService browsing_service;
       comet::controller::InteractionRequestContext request_context;
       request_context.payload = json{
