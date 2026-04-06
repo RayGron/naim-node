@@ -94,6 +94,17 @@ std::filesystem::path EnsureDirectory(const std::filesystem::path& path) {
   return absolute_path;
 }
 
+std::filesystem::path ResetDirectory(const std::filesystem::path& path) {
+  const auto absolute_path = std::filesystem::absolute(path);
+  std::error_code error;
+  std::filesystem::remove_all(absolute_path, error);
+  if (error) {
+    throw std::runtime_error(
+        "failed to reset CEF cache directory at " + absolute_path.string() + ": " + error.message());
+  }
+  return EnsureDirectory(absolute_path);
+}
+
 void ApplyEnvironmentIsolation(const std::filesystem::path& cache_root) {
   const auto isolated_home = EnsureDirectory(cache_root / "home");
   const auto isolated_config = EnsureDirectory(cache_root / "xdg-config");
@@ -184,10 +195,17 @@ void InitializeCefOrThrow(
   CefString(&settings.browser_subprocess_path) = executable_path.string();
   CefString(&settings.resources_dir_path) = executable_dir.string();
   CefString(&settings.locales_dir_path) = (executable_dir / "locales").string();
-  CefString(&settings.root_cache_path) = cache_root.string();
+  auto initialize_with_cache = [&](const std::filesystem::path& root_cache_path) {
+    CefString(&settings.root_cache_path) = root_cache_path.string();
+    return CefInitialize(main_args, settings, g_cef_app, nullptr);
+  };
 
-  if (!CefInitialize(main_args, settings, g_cef_app, nullptr)) {
-    throw std::runtime_error("CEF initialization failed");
+  if (!initialize_with_cache(cache_root)) {
+    const auto cleaned_cache_root = ResetDirectory(cache_root);
+    ApplyEnvironmentIsolation(cleaned_cache_root);
+    if (!initialize_with_cache(cleaned_cache_root)) {
+      throw std::runtime_error("CEF initialization failed");
+    }
   }
   g_cef_runtime_enabled = true;
 #else

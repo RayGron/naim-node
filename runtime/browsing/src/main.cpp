@@ -12,6 +12,13 @@ std::string GetEnvOr(const char* name, const char* fallback) {
   return value != nullptr && *value != '\0' ? std::string(value) : std::string(fallback);
 }
 
+std::filesystem::path DefaultCefCacheRoot(const std::filesystem::path& state_root) {
+  if (state_root.has_parent_path()) {
+    return state_root.parent_path() / "cef-cache";
+  }
+  return state_root / "cef-cache";
+}
+
 int GetEnvIntOr(const char* name, int fallback) {
   const char* value = std::getenv(name);
   if (value == nullptr || *value == '\0') {
@@ -39,6 +46,8 @@ int main(int argc, char** argv) {
     config.status_path =
         GetEnvOr("COMET_BROWSING_RUNTIME_STATUS_PATH", "/comet/private/browsing-runtime-status.json");
     config.state_root = GetEnvOr("COMET_BROWSING_STATE_ROOT", "/comet/private/sessions");
+    const auto cef_cache_root =
+        GetEnvOr("COMET_BROWSING_CEF_CACHE_ROOT", DefaultCefCacheRoot(config.state_root).string().c_str());
     config.port = GetEnvIntOr("COMET_BROWSING_PORT", 18130);
     config.policy =
         comet::browsing::BrowsingServer::ParsePolicyJson(GetEnvOr("COMET_BROWSING_POLICY_JSON", "{}"));
@@ -46,6 +55,7 @@ int main(int argc, char** argv) {
     std::cout << "[comet-browsing] booting plane=" << config.plane_name
               << " instance=" << config.instance_name << "\n";
     std::cout << "[comet-browsing] state_root=" << config.state_root.string() << "\n";
+    std::cout << "[comet-browsing] cef_cache_root=" << cef_cache_root << "\n";
     std::cout << "[comet-browsing] status_path=" << config.status_path.string() << "\n";
     std::cout << "[comet-browsing] port=" << config.port << "\n";
     std::cout << "[comet-browsing] cef_build=" << comet::browsing::CefBuildSummary() << "\n";
@@ -55,7 +65,7 @@ int main(int argc, char** argv) {
       comet::browsing::InitializeCefOrThrow(
           argc,
           argv,
-          config.state_root,
+          cef_cache_root,
           comet::browsing::CurrentExecutablePath());
     }
 
