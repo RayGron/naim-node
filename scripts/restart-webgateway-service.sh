@@ -8,19 +8,35 @@ fi
 
 plane_name="$1"
 node_name="$2"
-artifacts_root="${3:-/var/lib/comet-node/artifacts}"
+artifacts_root="${3:-}"
 service_name="${4:-webgateway-${plane_name}}"
+
+if [[ -z "${artifacts_root}" ]]; then
+  if [[ -d "/var/lib/comet-node/hostd-state/artifacts" ]]; then
+    artifacts_root="/var/lib/comet-node/hostd-state/artifacts"
+  else
+    artifacts_root="/var/lib/comet-node/artifacts"
+  fi
+fi
+
 compose_file="${artifacts_root}/${plane_name}/${node_name}/docker-compose.yml"
+
+declare -a docker_cmd
 
 resolve_docker() {
   if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
-    echo "docker"
+    docker_cmd=(docker)
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker version >/dev/null 2>&1; then
+    docker_cmd=(sudo -n docker)
     return 0
   fi
 
   local windows_docker="/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe"
   if [[ -x "${windows_docker}" ]] && "${windows_docker}" version >/dev/null 2>&1; then
-    echo "${windows_docker}"
+    docker_cmd=("${windows_docker}")
     return 0
   fi
 
@@ -33,7 +49,7 @@ if [[ ! -f "${compose_file}" ]]; then
   exit 1
 fi
 
-docker_cmd="$(resolve_docker)"
+resolve_docker
 
-"${docker_cmd}" compose -f "${compose_file}" up -d --no-deps "${service_name}"
-"${docker_cmd}" compose -f "${compose_file}" ps "${service_name}"
+"${docker_cmd[@]}" compose -f "${compose_file}" up -d --no-deps "${service_name}"
+"${docker_cmd[@]}" compose -f "${compose_file}" ps "${service_name}"
