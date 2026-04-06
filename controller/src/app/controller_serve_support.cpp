@@ -39,7 +39,7 @@ bool IsPrivateIpv4Host(const std::string& host) {
   if (std::sscanf(host.c_str(), "%d.%d.%d.%d%c", &a, &b, &c, &d, &tail) != 4) {
     return false;
   }
-  return a == 10 || a == 127 || a == 0 || (a == 169 && b == 254) ||
+  return a == 10 || a == 127 || (a == 169 && b == 254) ||
          (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168);
 }
 
