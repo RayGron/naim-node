@@ -211,6 +211,25 @@ void TestRenderedSearchRelevanceFiltering() {
       "rendered search relevance filter should keep the bitcoin chart result");
 }
 
+void TestTickerNormalizationAvoidsAmbiguousResults() {
+  comet::browsing::BrowsingPolicy policy;
+  const std::string rss_xml =
+      R"(<?xml version="1.0" encoding="utf-8" ?><rss version="2.0"><channel>
+      <item><title>BTC Trauma Centre</title><link>https://example.com/btc-trauma</link><description>Brain trauma rehabilitation clinic.</description></item>
+      <item><title>Bitcoin Price Trend</title><link>https://www.coingecko.com/en/coins/bitcoin</link><description>Bitcoin market price and trend.</description></item>
+      </channel></rss>)";
+  const auto results = comet::browsing::BrowsingServer::ParseBingRssResults(
+      rss_xml,
+      "btc price today",
+      policy,
+      {},
+      5);
+  Expect(results.size() == 1, "ticker normalization should drop ambiguous BTC non-crypto results");
+  Expect(
+      results[0].url == "https://www.coingecko.com/en/coins/bitcoin",
+      "ticker normalization should prefer the canonical bitcoin result");
+}
+
 void TestFetchSanitization() {
   comet::browsing::BrowsingPolicy policy;
   const auto fetched = comet::browsing::BrowsingServer::SanitizeFetchedDocument(
@@ -313,6 +332,7 @@ int main() {
     TestRenderedSearchParsing();
     TestSearchRelevanceFiltering();
     TestRenderedSearchRelevanceFiltering();
+    TestTickerNormalizationAvoidsAmbiguousResults();
     TestFetchSanitization();
     TestSessionCleanupAndAuditLog();
     TestUnsupportedBrowserActionFailsSafely();

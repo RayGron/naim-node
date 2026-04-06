@@ -413,13 +413,13 @@ std::string AugmentSearchQuery(std::string query) {
 
   if (crypto_query || market_query || macro_query) {
     if (ContainsAnySubstring(lowered, {"bitcoin", "btc", "биткоин"})) {
-      hints.push_back("bitcoin btc");
+      hints.push_back("bitcoin");
     }
     if (ContainsAnySubstring(lowered, {"ethereum", "eth", "эфир", "эфириум"})) {
-      hints.push_back("ethereum eth");
+      hints.push_back("ethereum");
     }
     if (ContainsAnySubstring(lowered, {"solana", "sol", "солана"})) {
-      hints.push_back("solana sol");
+      hints.push_back("solana");
     }
     if (ContainsAnySubstring(lowered, {"xrp"})) {
       hints.push_back("xrp ripple");
@@ -566,20 +566,25 @@ std::vector<std::string> SignificantQueryTerms(const std::string& query) {
   std::vector<std::string> terms;
   std::unordered_set<std::string> seen;
   for (const auto& token : TokenizeSearchTerms(query)) {
-    if (token.empty() || IsSearchStopword(token)) {
+    std::string normalized = token;
+    if (normalized == "btc") {
+      normalized = "bitcoin";
+    } else if (normalized == "eth") {
+      normalized = "ethereum";
+    } else if (normalized == "sol") {
+      normalized = "solana";
+    }
+    if (normalized.empty() || IsSearchStopword(normalized)) {
       continue;
     }
-    if (token.size() < 3 &&
-        token != "btc" &&
-        token != "eth" &&
-        token != "sol" &&
-        token != "xrp" &&
-        token != "dxy" &&
-        token != "etf") {
+    if (normalized.size() < 3 &&
+        normalized != "xrp" &&
+        normalized != "dxy" &&
+        normalized != "etf") {
       continue;
     }
-    if (seen.insert(token).second) {
-      terms.push_back(token);
+    if (seen.insert(normalized).second) {
+      terms.push_back(normalized);
     }
   }
   return terms;
