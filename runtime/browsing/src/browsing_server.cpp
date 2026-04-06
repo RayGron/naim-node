@@ -1647,6 +1647,26 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
     std::vector<SearchResult> fallback_rendered_results;
     int discovery_index = 0;
     for (const auto& domain : requested_domains) {
+      if (EndsWithDomain(domain, "alternative.me") &&
+          ContainsAnySubstring(LowercaseCopy(query), {"fear", "greed", "страх", "жадн"})) {
+        SearchResult item;
+        item.url = "https://alternative.me/crypto/fear-and-greed-index/";
+        item.domain = "alternative.me";
+        item.title = "Crypto Fear & Greed Index - Bitcoin Sentiment - Alternative.me";
+        item.snippet =
+            "Current crypto market sentiment index published by Alternative.me with fear/greed score history.";
+        item.backend = "broker_search";
+        item.rendered = false;
+        item.score = std::max(0.0, 0.95 - static_cast<double>(discovery_index) * 0.1);
+        if (seen_urls.insert(item.url).second) {
+          rendered_results.push_back(std::move(item));
+          ++discovery_index;
+        }
+        if (static_cast<int>(rendered_results.size()) >= limit) {
+          break;
+        }
+        continue;
+      }
       const auto discovery_url = BuildSiteDiscoveryUrl(domain, query);
       if (!discovery_url.has_value()) {
         continue;
