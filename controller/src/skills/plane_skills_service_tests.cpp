@@ -3073,7 +3073,7 @@ int main() {
       Expect(queries.size() == 1, "sanitization test should issue exactly one search query");
       Expect(queries.front().find("search the web") == std::string::npos,
              "sanitized query should remove explicit search-the-web marker");
-      Expect(queries.front().find("openai api pricing") != std::string::npos,
+      Expect(ContainsAscii(queries.front(), "openai api pricing"),
              "sanitized query should retain the substantive topic");
       std::cout << "ok: interaction-browsing-search-query-sanitization" << '\n';
     }
@@ -3097,7 +3097,7 @@ int main() {
              "sanitized query should strip user message label");
       Expect(queries.front().find("используй веб") == std::string::npos,
              "sanitized query should remove explicit web toggle marker");
-      Expect(queries.front().find("bitcoin за последние 7 дней") != std::string::npos,
+      Expect(ContainsAscii(queries.front(), "bitcoin за последние 7 дней"),
              "sanitized query should preserve the substantive market prompt");
       Expect(!queries.front().empty() && queries.front().front() != '.',
              "sanitized query should not keep leading punctuation");
@@ -3129,7 +3129,7 @@ int main() {
              "sanitized query should strip platform metadata");
       Expect(queries.front().find("compiler:") == std::string::npos,
              "sanitized query should strip compiler metadata");
-      Expect(queries.front().find("цену eth") != std::string::npos,
+      Expect(ContainsAscii(queries.front(), "цену eth"),
              "sanitized query should preserve the substantive ETH request");
       std::cout << "ok: interaction-browsing-metadata-suffix-query-sanitization" << '\n';
     }
