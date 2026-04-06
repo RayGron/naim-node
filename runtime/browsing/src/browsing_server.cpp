@@ -383,18 +383,21 @@ std::string ComposeSearchQuery(
 }
 
 std::string SearchSnippetFromHtml(const std::string& item_html) {
-  static const std::regex kSnippetPattern(
-      R"(<(p|div)[^>]*(class\s*=\s*["'][^"']*(b_caption|snippet|content)[^"']*["'])?[^>]*>([\s\S]*?)</\1>)",
-      std::regex::icase);
-  auto begin = std::sregex_iterator(item_html.begin(), item_html.end(), kSnippetPattern);
-  auto end = std::sregex_iterator();
-  for (auto it = begin; it != end; ++it) {
-    const std::string snippet = NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags((*it)[3].str())));
+  static const std::regex kParagraphPattern(R"(<p[^>]*>([\s\S]*?)</p>)", std::regex::icase);
+  std::smatch paragraph_match;
+  if (std::regex_search(item_html, paragraph_match, kParagraphPattern)) {
+    const std::string snippet =
+        NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(paragraph_match[1].str())));
     if (!snippet.empty()) {
       return snippet;
     }
   }
-  return {};
+
+  std::string flattened = std::regex_replace(
+      item_html,
+      std::regex(R"(<h2[^>]*>[\s\S]*?</h2>)", std::regex::icase),
+      " ");
+  return NormalizeWhitespace(HtmlEntityDecode(StripHtmlTags(flattened)));
 }
 
 bool SearchResultsLookThin(
