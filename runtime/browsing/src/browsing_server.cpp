@@ -24,6 +24,7 @@
 
 #include <sys/types.h>
 #include <unistd.h>
+#include <sodium.h>
 
 #include "browsing/process_support.h"
 #include "browsing/cef_browser_backend.h"
@@ -190,6 +191,26 @@ std::optional<std::string> ExtractUrlQueryParameter(
   return std::nullopt;
 }
 
+std::string DecodeBase64ToString(const std::string& text) {
+  if (text.empty()) {
+    return {};
+  }
+  std::vector<unsigned char> output(text.size(), 0);
+  std::size_t actual_size = 0;
+  if (sodium_base642bin(
+          output.data(),
+          output.size(),
+          text.c_str(),
+          text.size(),
+          nullptr,
+          &actual_size,
+          nullptr,
+          sodium_base64_VARIANT_ORIGINAL) != 0) {
+    throw std::runtime_error("failed to decode base64 bing redirect url");
+  }
+  return std::string(output.begin(), output.begin() + static_cast<std::ptrdiff_t>(actual_size));
+}
+
 std::string StripHtmlTags(const std::string& html) {
   return std::regex_replace(html, std::regex("<[^>]+>"), " ");
 }
@@ -268,8 +289,7 @@ std::string ResolveBingRedirectUrl(const std::string& url) {
   std::string decoded = *encoded_url;
   if (decoded.rfind("a1", 0) == 0) {
     try {
-      const auto decoded_bytes = comet::DecodeBase64(decoded.substr(2), "bing redirect url");
-      decoded.assign(decoded_bytes.begin(), decoded_bytes.end());
+      decoded = DecodeBase64ToString(decoded.substr(2));
     } catch (const std::exception&) {
       return url;
     }
