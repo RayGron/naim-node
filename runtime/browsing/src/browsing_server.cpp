@@ -1031,11 +1031,11 @@ nlohmann::json BuildBrowsingFlags(
       context.reason == "search_returned_no_sources";
 
   std::string lookup_state = "disabled";
-  if (!context.mode_enabled) {
+  if (context.decision == "blocked") {
+    lookup_state = "blocked";
+  } else if (!context.mode_enabled) {
     lookup_state =
         context.reason == "user_disabled_web_mode" ? "disabled_by_user" : "disabled";
-  } else if (context.decision == "blocked") {
-    lookup_state = "blocked";
   } else if (context.toggle_only || context.reason == "toggle_only") {
     lookup_state = "enabled_toggle_only";
   } else if (context.decision == "not_needed" || context.reason == "context_not_needed") {
@@ -1075,14 +1075,14 @@ nlohmann::json BuildBrowsingIndicator(
 
   std::string compact = "web:off";
   std::string label = "Web disabled";
-  if (!context.mode_enabled) {
+  if (lookup_state == "blocked") {
+    compact = "web:block";
+    label = "Blocked web request";
+  } else if (!context.mode_enabled) {
     if (context.reason == "user_disabled_web_mode") {
       compact = "web:off user";
       label = "Web disabled by user";
     }
-  } else if (lookup_state == "blocked") {
-    compact = "web:block";
-    label = "Blocked web request";
   } else if (lookup_state == "enabled_toggle_only") {
     compact = "web:on";
     label = "Web enabled";
@@ -1138,6 +1138,14 @@ nlohmann::json BuildBrowsingTrace(
       {"status", context.decision},
       {"compact", "decide:" + context.decision},
   });
+  if (context.decision == "blocked") {
+    trace.push_back(nlohmann::json{
+        {"stage", "guard"},
+        {"status", "blocked"},
+        {"compact", "guard:blocked"},
+    });
+    return trace;
+  }
   if (!context.mode_enabled) {
     return trace;
   }
@@ -1146,14 +1154,6 @@ nlohmann::json BuildBrowsingTrace(
         {"stage", "toggle"},
         {"status", "applied"},
         {"compact", "toggle:applied"},
-    });
-    return trace;
-  }
-  if (context.decision == "blocked") {
-    trace.push_back(nlohmann::json{
-        {"stage", "guard"},
-        {"status", "blocked"},
-        {"compact", "guard:blocked"},
     });
     return trace;
   }
