@@ -382,6 +382,85 @@ std::string ComposeSearchQuery(
   return out.str();
 }
 
+bool ContainsAnySubstring(
+    const std::string& haystack,
+    const std::vector<std::string>& needles) {
+  return std::any_of(
+      needles.begin(),
+      needles.end(),
+      [&](const std::string& needle) {
+        return !needle.empty() && haystack.find(needle) != std::string::npos;
+      });
+}
+
+std::string AugmentSearchQuery(std::string query) {
+  const std::string lowered = LowercaseCopy(query);
+  std::vector<std::string> hints;
+
+  const bool crypto_query = ContainsAnySubstring(
+      lowered,
+      {"bitcoin", "btc", "ethereum", "eth", "solana", "sol", "xrp", "crypto",
+       "cryptocurrency", "крипт", "биткоин", "эфир", "эфириум", "солана"});
+  const bool market_query = ContainsAnySubstring(
+      lowered,
+      {"price", "current", "today", "market", "trend", "momentum", "forecast",
+       "цена", "текущ", "сегодня", "рын", "динам", "тренд", "импульс",
+       "прогноз", "поведен", "24h", "24 hour", "7 day", "7 дней"});
+  const bool macro_query = ContainsAnySubstring(
+      lowered,
+      {"dxy", "dollar index", "treasury", "yield", "10-year", "10 year", "gold",
+       "s&p", "nasdaq", "etf", "fear", "greed", "индекс", "доходност", "золото"});
+
+  if (crypto_query || market_query || macro_query) {
+    if (ContainsAnySubstring(lowered, {"bitcoin", "btc", "биткоин"})) {
+      hints.push_back("bitcoin btc");
+    }
+    if (ContainsAnySubstring(lowered, {"ethereum", "eth", "эфир", "эфириум"})) {
+      hints.push_back("ethereum eth");
+    }
+    if (ContainsAnySubstring(lowered, {"solana", "sol", "солана"})) {
+      hints.push_back("solana sol");
+    }
+    if (ContainsAnySubstring(lowered, {"xrp"})) {
+      hints.push_back("xrp ripple");
+    }
+    if (ContainsAnySubstring(lowered, {"fear", "greed", "страх", "жадн"})) {
+      hints.push_back("crypto fear greed index");
+    }
+    if (ContainsAnySubstring(lowered, {"etf"})) {
+      hints.push_back("etf inflows outflows");
+    }
+    if (ContainsAnySubstring(lowered, {"dxy", "dollar index"})) {
+      hints.push_back("dxy us dollar index");
+    }
+    if (ContainsAnySubstring(lowered, {"treasury", "yield", "10-year", "10 year", "доходност"})) {
+      hints.push_back("10 year treasury yield");
+    }
+    if (ContainsAnySubstring(lowered, {"gold", "золото"})) {
+      hints.push_back("gold price macro");
+    }
+    if (market_query || crypto_query) {
+      hints.push_back("price market trend");
+    }
+    if (ContainsAnySubstring(lowered, {"7 day", "7 days", "7 дней", "недел"})) {
+      hints.push_back("7 day");
+    }
+    if (ContainsAnySubstring(lowered, {"24h", "24 hour", "24 часа", "сутк"})) {
+      hints.push_back("24 hour");
+    }
+    if (ContainsAnySubstring(lowered, {"current", "today", "текущ", "сегодня", "сейчас"})) {
+      hints.push_back("current");
+    }
+  }
+
+  for (const auto& hint : hints) {
+    if (lowered.find(hint) == std::string::npos) {
+      query += " " + hint;
+    }
+  }
+  return TrimCopy(query);
+}
+
 std::optional<std::string> BuildSiteDiscoveryUrl(
     const std::string& domain,
     const std::string& query) {
@@ -437,7 +516,133 @@ bool SearchResultsLookThin(
       ++low_signal_results;
     }
   }
-  return low_signal_results == static_cast<int>(results.size());
+  if (low_signal_results == static_cast<int>(results.size())) {
+    return true;
+  }
+  return std::all_of(
+      results.begin(),
+      results.end(),
+      [](const SearchResult& result) { return result.score < 0.55; });
+}
+
+std::vector<std::string> TokenizeSearchTerms(const std::string& value) {
+  const std::string lowered = LowercaseCopy(value);
+  std::vector<std::string> tokens;
+  std::string current;
+  auto flush = [&]() {
+    if (!current.empty()) {
+      tokens.push_back(current);
+      current.clear();
+    }
+  };
+  for (unsigned char ch : lowered) {
+    if (std::isalnum(ch) != 0 || ch >= 0x80) {
+      current.push_back(static_cast<char>(ch));
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return tokens;
+}
+
+bool IsSearchStopword(const std::string& token) {
+  static const std::unordered_set<std::string> stopwords = {
+      "the",   "and",    "for",      "with",    "that",     "this",
+      "from",  "into",   "reply",    "user",    "message",  "chat",
+      "mode",  "look",   "find",     "check",   "online",   "search",
+      "what",  "which",  "how",      "why",     "today",    "current",
+      "last",  "short",  "brief",    "give",    "используй","веб",
+      "интернет", "посмотри", "проверь", "найди", "поищи", "дай",
+      "какая", "какой",  "какие",    "сейчас",  "сегодня",  "последние",
+      "последний", "короткий", "вывод", "рынка", "рынок", "цена",
+      "текущая", "текущий", "посмотри", "через", "про", "для",
+      "как",   "что",    "это",      "или",     "при",      "над",
+  };
+  return stopwords.contains(token);
+}
+
+std::vector<std::string> SignificantQueryTerms(const std::string& query) {
+  std::vector<std::string> terms;
+  std::unordered_set<std::string> seen;
+  for (const auto& token : TokenizeSearchTerms(query)) {
+    if (token.empty() || IsSearchStopword(token)) {
+      continue;
+    }
+    if (token.size() < 3 &&
+        token != "btc" &&
+        token != "eth" &&
+        token != "sol" &&
+        token != "xrp" &&
+        token != "dxy" &&
+        token != "etf") {
+      continue;
+    }
+    if (seen.insert(token).second) {
+      terms.push_back(token);
+    }
+  }
+  return terms;
+}
+
+int CountMatchedTerms(const std::string& text, const std::vector<std::string>& terms) {
+  int count = 0;
+  for (const auto& term : terms) {
+    if (!term.empty() && text.find(term) != std::string::npos) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+void ReRankSearchResultsByQuery(
+    const std::string& query,
+    int limit,
+    std::vector<SearchResult>* results) {
+  if (results == nullptr || results->empty()) {
+    return;
+  }
+  const auto terms = SignificantQueryTerms(query);
+  if (terms.empty()) {
+    return;
+  }
+
+  std::vector<SearchResult> ranked;
+  ranked.reserve(results->size());
+  for (auto& result : *results) {
+    const std::string title = LowercaseCopy(result.title);
+    const std::string snippet = LowercaseCopy(result.snippet);
+    const std::string url = LowercaseCopy(result.url);
+    const int title_matches = CountMatchedTerms(title, terms);
+    const int snippet_matches = CountMatchedTerms(snippet, terms);
+    const int url_matches = CountMatchedTerms(url, terms);
+    const int total_matches = title_matches + snippet_matches + url_matches;
+    if (total_matches == 0) {
+      continue;
+    }
+
+    double score = result.score * 0.35;
+    score += static_cast<double>(title_matches) * 0.30;
+    score += static_cast<double>(snippet_matches) * 0.18;
+    score += static_cast<double>(url_matches) * 0.07;
+    score += std::min(0.10, static_cast<double>(total_matches) * 0.02);
+    result.score = std::min(1.0, score);
+    ranked.push_back(std::move(result));
+  }
+
+  std::stable_sort(
+      ranked.begin(),
+      ranked.end(),
+      [](const SearchResult& left, const SearchResult& right) {
+        if (left.score == right.score) {
+          return left.url < right.url;
+        }
+        return left.score > right.score;
+      });
+  if (static_cast<int>(ranked.size()) > limit) {
+    ranked.resize(static_cast<std::size_t>(limit));
+  }
+  *results = std::move(ranked);
 }
 
 std::string TruncateText(const std::string& value, std::size_t limit) {
@@ -608,6 +813,7 @@ bool BrowsingServer::IsSafeBrowsingUrl(
 
 std::vector<SearchResult> BrowsingServer::ParseBingRssResults(
     const std::string& rss_xml,
+    const std::string& query,
     const BrowsingPolicy& policy,
     const std::vector<std::string>& requested_domains,
     int limit) {
@@ -655,11 +861,13 @@ std::vector<SearchResult> BrowsingServer::ParseBingRssResults(
       ++index;
     }
   }
+  ReRankSearchResultsByQuery(query, limit, &results);
   return results;
 }
 
 std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
     const std::string& html,
+    const std::string& query,
     const BrowsingPolicy& policy,
     const std::vector<std::string>& requested_domains,
     int limit) {
@@ -707,6 +915,7 @@ std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
   }
 
   if (!results.empty()) {
+    ReRankSearchResultsByQuery(query, limit, &results);
     return results;
   }
 
@@ -745,6 +954,7 @@ std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
       ++index;
     }
   }
+  ReRankSearchResultsByQuery(query, limit, &results);
   return results;
 }
 
@@ -1094,7 +1304,8 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   const int requested_limit = payload.value("limit", config_.policy.max_search_results);
   const int limit = std::max(1, std::min(config_.policy.max_search_results, requested_limit));
   const auto requested_domains = ExpandDiscoveryDomains(RequestedDomainsFromPayload(payload));
-  const std::string effective_query = ComposeSearchQuery(query, requested_domains);
+  const std::string query_with_hints = AugmentSearchQuery(query);
+  const std::string effective_query = ComposeSearchQuery(query_with_hints, requested_domains);
   const bool rendered_browser_ready =
       config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable();
 
@@ -1125,11 +1336,9 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   }
 
   std::vector<SearchResult> results =
-      ParseBingRssResults(command.output, config_.policy, requested_domains, limit);
+      ParseBingRssResults(command.output, query_with_hints, config_.policy, requested_domains, limit);
   bool rendered_discovery_used = false;
-  if (!requested_domains.empty() &&
-      SearchResultsLookThin(results, limit) &&
-      rendered_browser_ready) {
+  if (SearchResultsLookThin(results, limit) && rendered_browser_ready) {
     std::unordered_set<std::string> seen_urls;
     std::vector<SearchResult> rendered_results;
     std::vector<SearchResult> fallback_rendered_results;
@@ -1194,7 +1403,12 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
           true);
       if (rendered.has_value() && !rendered->html_source.empty()) {
         rendered_results =
-            ParseBingHtmlResults(rendered->html_source, config_.policy, requested_domains, limit);
+            ParseBingHtmlResults(
+                rendered->html_source,
+                query_with_hints,
+                config_.policy,
+                requested_domains,
+                limit);
         if (!rendered_results.empty()) {
           results = std::move(rendered_results);
           rendered_discovery_used = true;

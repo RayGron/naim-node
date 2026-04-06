@@ -102,6 +102,7 @@ void TestSearchParsing() {
       </channel></rss>)";
   const auto results = comet::browsing::BrowsingServer::ParseBingRssResults(
       rss_xml,
+      "openai api platform docs",
       policy,
       {"openai.com"},
       5);
@@ -128,6 +129,7 @@ void TestRenderedSearchParsing() {
       </ol></body></html>)";
   const auto results = comet::browsing::BrowsingServer::ParseBingHtmlResults(
       html,
+      "reddit example discussion",
       policy,
       {"reddit.com", "old.reddit.com"},
       5);
@@ -138,6 +140,52 @@ void TestRenderedSearchParsing() {
   Expect(
       results[0].snippet.find("discoverable") != std::string::npos,
       "html parser should extract snippet text");
+}
+
+void TestSearchRelevanceFiltering() {
+  comet::browsing::BrowsingPolicy policy;
+  const std::string rss_xml =
+      R"(<?xml version="1.0" encoding="utf-8" ?><rss version="2.0"><channel>
+      <item><title>ChatGPT Israel Packages</title><link>https://chatgpt.co.il/packages</link><description>Hebrew ChatGPT packages and plans.</description></item>
+      <item><title>Bitcoin Price Trend This Week</title><link>https://www.coindesk.com/markets/bitcoin-price-weekly-trend</link><description>Bitcoin market trend and seven day price move.</description></item>
+      <item><title>AI Pedia Chat Tools</title><link>https://aipedia.co.il/chat-tools</link><description>Chat assistant catalog.</description></item>
+      </channel></rss>)";
+  const auto results = comet::browsing::BrowsingServer::ParseBingRssResults(
+      rss_xml,
+      "bitcoin price trend last 7 days",
+      policy,
+      {},
+      5);
+  Expect(results.size() == 1, "relevance filter should keep only finance-relevant result");
+  Expect(
+      results[0].url == "https://www.coindesk.com/markets/bitcoin-price-weekly-trend",
+      "relevance filter should prefer the bitcoin result");
+  Expect(results[0].score >= 0.55, "relevance filter should boost matched result score");
+}
+
+void TestRenderedSearchRelevanceFiltering() {
+  comet::browsing::BrowsingPolicy policy;
+  const std::string html =
+      R"(<html><body><ol id="b_results">
+      <li class="b_algo">
+        <h2><a href="https://chatgpt.co.il/packages">ChatGPT Israel Packages</a></h2>
+        <div class="b_caption"><p>Plans for AI chat products.</p></div>
+      </li>
+      <li class="b_algo">
+        <h2><a href="https://www.coingecko.com/en/coins/bitcoin">Bitcoin Price Chart</a></h2>
+        <div class="b_caption"><p>Bitcoin price, market cap, and 7 day performance.</p></div>
+      </li>
+      </ol></body></html>)";
+  const auto results = comet::browsing::BrowsingServer::ParseBingHtmlResults(
+      html,
+      "bitcoin price trend 7 day",
+      policy,
+      {},
+      5);
+  Expect(results.size() == 1, "rendered search relevance filter should drop unrelated chat pages");
+  Expect(
+      results[0].url == "https://www.coingecko.com/en/coins/bitcoin",
+      "rendered search relevance filter should keep the bitcoin chart result");
 }
 
 void TestFetchSanitization() {
@@ -240,6 +288,8 @@ int main() {
     TestSafeUrlValidation();
     TestSearchParsing();
     TestRenderedSearchParsing();
+    TestSearchRelevanceFiltering();
+    TestRenderedSearchRelevanceFiltering();
     TestFetchSanitization();
     TestSessionCleanupAndAuditLog();
     TestUnsupportedBrowserActionFailsSafely();
