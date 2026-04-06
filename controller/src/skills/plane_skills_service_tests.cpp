@@ -1,8 +1,10 @@
 #include <filesystem>
 #include <iostream>
-#include <sstream>
 #include <atomic>
+#include <map>
+#include <mutex>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -299,17 +301,57 @@ class BrowsingRuntimeTestServer {
   std::thread thread_;
 };
 
+json DefaultInteractionBrowsingStatusPayload() {
+  return json{{"status", "ok"},
+              {"service", "comet-browsing"},
+              {"ready", true},
+              {"search_enabled", true},
+              {"fetch_enabled", true},
+              {"session_backend", "cef"},
+              {"rendered_browser_enabled", true},
+              {"rendered_browser_ready", true},
+              {"rendered_fetch_enabled", true},
+              {"login_enabled", false}};
+}
+
+json DefaultInteractionBrowsingSearchResults() {
+  return json::array({json{{"url", "https://example.com/article"},
+                           {"domain", "example.com"},
+                           {"title", "Example Article"},
+                           {"snippet", "Example snippet"},
+                           {"score", 0.9}}});
+}
+
+json DefaultInteractionBrowsingFetchPayload(const std::string& requested_url) {
+  return json{{"url", requested_url},
+              {"final_url", requested_url},
+              {"backend", "browser_render"},
+              {"rendered", true},
+              {"content_type", "text/html"},
+              {"title", "Example Article"},
+              {"visible_text",
+               "Example visible text about the requested topic from a safe test page."},
+              {"citations", json::array({requested_url})},
+              {"injection_flags", json::array()}};
+}
+
+struct InteractionBrowsingRuntimeServerConfig {
+  int status_code = 200;
+  json status_payload = DefaultInteractionBrowsingStatusPayload();
+  int search_status_code = 200;
+  json search_results = DefaultInteractionBrowsingSearchResults();
+  json search_response_payload = json{};
+  std::string search_backend = "broker_search";
+  std::set<std::string> fetch_fail_urls;
+  std::map<std::string, int> fetch_status_overrides;
+  std::map<std::string, json> fetch_payload_overrides;
+};
+
 class InteractionBrowsingRuntimeTestServer {
  public:
   explicit InteractionBrowsingRuntimeTestServer(
-      json search_results = json::array({json{{"url", "https://example.com/article"},
-                                              {"domain", "example.com"},
-                                              {"title", "Example Article"},
-                                              {"snippet", "Example snippet"},
-                                              {"score", 0.9}}}),
-      std::set<std::string> fetch_fail_urls = {})
-      : search_results_(std::move(search_results)),
-        fetch_fail_urls_(std::move(fetch_fail_urls)) {
+      InteractionBrowsingRuntimeServerConfig config)
+      : config_(std::move(config)) {
     comet::platform::EnsureSocketsInitialized();
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (!comet::platform::IsSocketValid(listen_fd_)) {
@@ -357,6 +399,20 @@ class InteractionBrowsingRuntimeTestServer {
     thread_ = std::thread([this]() { Serve(); });
   }
 
+  explicit InteractionBrowsingRuntimeTestServer(
+      json search_results = json::array({json{{"url", "https://example.com/article"},
+                                              {"domain", "example.com"},
+                                              {"title", "Example Article"},
+                                              {"snippet", "Example snippet"},
+                                              {"score", 0.9}}}),
+      std::set<std::string> fetch_fail_urls = {})
+      : InteractionBrowsingRuntimeTestServer([&]() {
+          InteractionBrowsingRuntimeServerConfig config;
+          config.search_results = std::move(search_results);
+          config.fetch_fail_urls = std::move(fetch_fail_urls);
+          return config;
+        }()) {}
+
   ~InteractionBrowsingRuntimeTestServer() {
     stop_requested_.store(true);
     if (port_ > 0) {
@@ -382,6 +438,14 @@ class InteractionBrowsingRuntimeTestServer {
 
   int search_count() const { return search_count_.load(); }
   int fetch_count() const { return fetch_count_.load(); }
+  std::vector<std::string> search_queries() const {
+    std::lock_guard<std::mutex> lock(records_mutex_);
+    return search_queries_;
+  }
+  std::vector<std::string> fetched_urls() const {
+    std::lock_guard<std::mutex> lock(records_mutex_);
+    return fetched_urls_;
+  }
 
  private:
   static std::string ExtractBody(const std::string& request) {
@@ -440,34 +504,65 @@ class InteractionBrowsingRuntimeTestServer {
       if (request.rfind("GET /health ", 0) == 0) {
         WriteJsonResponse(client_fd, 200, json{{"status", "ok"}});
       } else if (request.rfind("GET /v1/browsing/status ", 0) == 0) {
-        WriteJsonResponse(
-            client_fd,
-            200,
-            json{{"status", "ok"},
-                 {"service", "comet-browsing"},
-                 {"ready", true},
-                 {"search_enabled", true},
-                 {"fetch_enabled", true},
-                 {"session_backend", "cef"},
-                 {"rendered_browser_enabled", true},
-                 {"rendered_browser_ready", true},
-                 {"rendered_fetch_enabled", true},
-                 {"login_enabled", false}});
+        WriteJsonResponse(client_fd, config_.status_code, config_.status_payload);
       } else if (request.rfind("POST /v1/browsing/search ", 0) == 0) {
         ++search_count_;
         const json search_payload =
             body.empty() ? json::object() : json::parse(body, nullptr, false);
+        {
+          std::lock_guard<std::mutex> lock(records_mutex_);
+          search_queries_.push_back(search_payload.value("query", std::string{}));
+        }
+        if (config_.search_status_code != 200) {
+          const json payload =
+              config_.search_response_payload.is_object() &&
+                      !config_.search_response_payload.empty()
+                  ? config_.search_response_payload
+                  : json{{"status", "error"},
+                         {"error",
+                          {{"code", "search_failed"},
+                           {"message", "simulated search failure"}}}};
+          WriteJsonResponse(client_fd, config_.search_status_code, payload);
+          comet::platform::CloseSocket(client_fd);
+          continue;
+        }
+        if (config_.search_response_payload.is_object() &&
+            !config_.search_response_payload.empty()) {
+          WriteJsonResponse(client_fd, 200, config_.search_response_payload);
+          comet::platform::CloseSocket(client_fd);
+          continue;
+        }
         WriteJsonResponse(
             client_fd,
             200,
             json{{"query", search_payload.value("query", std::string{})},
-                 {"backend", "broker_search"},
-                 {"results", search_results_}});
+                 {"backend", config_.search_backend},
+                 {"results", config_.search_results}});
       } else if (request.rfind("POST /v1/browsing/fetch ", 0) == 0) {
         ++fetch_count_;
         const json fetch_payload =
             body.empty() ? json::object() : json::parse(body, nullptr, false);
         const std::string requested_url = fetch_payload.value("url", std::string{});
+        {
+          std::lock_guard<std::mutex> lock(records_mutex_);
+          fetched_urls_.push_back(requested_url);
+        }
+        const auto status_override = config_.fetch_status_overrides.find(requested_url);
+        if (status_override != config_.fetch_status_overrides.end() &&
+            status_override->second != 200) {
+          const auto payload_override = config_.fetch_payload_overrides.find(requested_url);
+          const json payload =
+              payload_override != config_.fetch_payload_overrides.end()
+                  ? payload_override->second
+                  : json{{"status", "error"},
+                         {"error",
+                          {{"code", "fetch_failed"},
+                           {"message", "simulated fetch failure"},
+                           {"url", requested_url}}}};
+          WriteJsonResponse(client_fd, status_override->second, payload);
+          comet::platform::CloseSocket(client_fd);
+          continue;
+        }
         if (fetch_fail_urls_.count(requested_url) > 0) {
           WriteJsonResponse(
               client_fd,
@@ -480,19 +575,15 @@ class InteractionBrowsingRuntimeTestServer {
           comet::platform::CloseSocket(client_fd);
           continue;
         }
-        WriteJsonResponse(
-            client_fd,
-            200,
-            json{{"url", requested_url},
-                 {"final_url", requested_url},
-                 {"backend", "browser_render"},
-                 {"rendered", true},
-                 {"content_type", "text/html"},
-                 {"title", "Example Article"},
-                 {"visible_text",
-                  "Example visible text about the requested topic from a safe test page."},
-                 {"citations", json::array({requested_url})},
-                 {"injection_flags", json::array()}});
+        json response_payload = DefaultInteractionBrowsingFetchPayload(requested_url);
+        if (const auto override = config_.fetch_payload_overrides.find(requested_url);
+            override != config_.fetch_payload_overrides.end() &&
+            override->second.is_object()) {
+          for (const auto& [key, value] : override->second.items()) {
+            response_payload[key] = value;
+          }
+        }
+        WriteJsonResponse(client_fd, 200, response_payload);
       } else {
         WriteJsonResponse(
             client_fd,
@@ -506,8 +597,11 @@ class InteractionBrowsingRuntimeTestServer {
   std::atomic<bool> stop_requested_{false};
   std::atomic<int> search_count_{0};
   std::atomic<int> fetch_count_{0};
-  json search_results_;
-  std::set<std::string> fetch_fail_urls_;
+  InteractionBrowsingRuntimeServerConfig config_;
+  std::set<std::string> fetch_fail_urls_ = config_.fetch_fail_urls;
+  mutable std::mutex records_mutex_;
+  std::vector<std::string> search_queries_;
+  std::vector<std::string> fetched_urls_;
   comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
   int port_ = 0;
   std::thread thread_;
@@ -580,6 +674,29 @@ comet::DesiredState BuildDesiredState(
     desired_state.skills = settings;
   }
   return desired_state;
+}
+
+comet::controller::InteractionRequestContext BuildBrowsingRequestContext(
+    const std::vector<std::string>& user_messages) {
+  comet::controller::InteractionRequestContext request_context;
+  json messages = json::array();
+  for (const auto& message : user_messages) {
+    messages.push_back(json{{"role", "user"}, {"content", message}});
+  }
+  request_context.payload = json{{"messages", std::move(messages)}};
+  return request_context;
+}
+
+comet::controller::PlaneInteractionResolution BuildBrowsingResolution(int port) {
+  comet::controller::PlaneInteractionResolution resolution;
+  resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", port);
+  return resolution;
+}
+
+const json& BrowsingSummary(
+    const comet::controller::InteractionRequestContext& request_context) {
+  return request_context.payload.at(
+      comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
 }
 
 std::string MakeTempDbPath() {
@@ -2019,6 +2136,336 @@ int main() {
               "disabled",
           "interaction session payload should expose browsing summary");
       std::cout << "ok: interaction-response-includes-browsing-fields" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.status_payload["ready"] = false;
+      config.status_payload["rendered_browser_ready"] = false;
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.", "What is the latest OpenAI update online?"});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "not-ready browsing runtime should not fail the interaction");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(summary.at("decision").get<std::string>() == "unavailable",
+             "not-ready browsing runtime should surface unavailable decision");
+      Expect(summary.at("lookup_state").get<std::string>() == "required_but_unavailable",
+             "not-ready browsing runtime should expose required_but_unavailable state");
+      Expect(!summary.at("lookup_attempted").get<bool>(),
+             "not-ready browsing runtime should not mark lookup_attempted");
+      Expect(runtime.search_count() == 0, "not-ready browsing runtime should prevent search");
+      Expect(runtime.fetch_count() == 0, "not-ready browsing runtime should prevent fetch");
+      std::cout << "ok: interaction-browsing-status-not-ready" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.status_code = 503;
+      config.status_payload = json{{"status", "error"},
+                                   {"error",
+                                    {{"code", "status_unavailable"},
+                                     {"message", "status unavailable"}}}};
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.", "What is the latest OpenAI update online?"});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "status upstream errors should not fail the interaction");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(summary.at("decision").get<std::string>() == "unavailable",
+             "status upstream errors should surface unavailable decision");
+      Expect(summary.at("lookup_state").get<std::string>() == "required_but_unavailable",
+             "status upstream errors should expose required_but_unavailable state");
+      Expect(summary.at("errors").is_array() && !summary.at("errors").empty(),
+             "status upstream errors should expose an error entry");
+      Expect(summary.at("errors").at(0).at("code").get<std::string>() == "browsing_not_ready",
+             "status upstream errors should normalize to browsing_not_ready");
+      std::cout << "ok: interaction-browsing-status-error" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.search_status_code = 502;
+      config.search_response_payload = json{{"status", "error"},
+                                            {"error",
+                                             {{"code", "search_failed"},
+                                              {"message", "simulated search failure"}}}};
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.", "Search online for the latest OpenAI update."});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "search failures should not fail the interaction outright");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(summary.at("decision").get<std::string>() == "error",
+             "search failures should surface error decision");
+      Expect(summary.at("reason").get<std::string>() == "browsing_lookup_failed",
+             "search failures should explain browsing_lookup_failed");
+      Expect(summary.at("lookup_state").get<std::string>() == "required_but_unavailable",
+             "search failures should expose required_but_unavailable state");
+      Expect(summary.at("errors").at(0).at("code").get<std::string>() == "search_failed",
+             "search failures should preserve normalized search_failed code");
+      Expect(runtime.search_count() == 1, "search failures should still attempt one search");
+      Expect(runtime.fetch_count() == 0, "search failures should not attempt fetch");
+      std::cout << "ok: interaction-browsing-search-error" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.fetch_fail_urls.insert("https://example.com/bad");
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Use the web and check https://example.com/bad"});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "direct fetch failures should not fail the interaction outright");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(summary.at("decision").get<std::string>() == "error",
+             "direct fetch failures should surface error decision");
+      Expect(summary.at("reason").get<std::string>() == "browsing_lookup_failed",
+             "direct fetch failures should explain browsing_lookup_failed");
+      Expect(summary.at("lookup_state").get<std::string>() == "required_but_unavailable",
+             "direct fetch failures should expose required_but_unavailable state");
+      Expect(summary.at("errors").at(0).at("code").get<std::string>() == "fetch_failed",
+             "direct fetch failures should preserve normalized fetch_failed code");
+      Expect(runtime.search_count() == 0, "direct fetch failures should not use search");
+      Expect(runtime.fetch_count() == 1, "direct fetch failures should still attempt one fetch");
+      std::cout << "ok: interaction-browsing-direct-fetch-error" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeTestServer runtime;
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.", "Search the web for OpenAI API pricing today."});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "search query sanitization should not fail");
+      const auto queries = runtime.search_queries();
+      Expect(queries.size() == 1, "sanitization test should issue exactly one search query");
+      Expect(queries.front().find("search the web") == std::string::npos,
+             "sanitized query should remove explicit search-the-web marker");
+      Expect(queries.front().find("openai api pricing") != std::string::npos,
+             "sanitized query should retain the substantive topic");
+      std::cout << "ok: interaction-browsing-search-query-sanitization" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.search_results = json::array(
+          {json{{"url", "https://example.com/shared"},
+                {"domain", "example.com"},
+                {"title", "Shared Result"},
+                {"snippet", "Duplicate one."},
+                {"score", 0.95}},
+           json{{"url", "https://example.com/shared"},
+                {"domain", "example.com"},
+                {"title", "Shared Result Again"},
+                {"snippet", "Duplicate two."},
+                {"score", 0.90}},
+           json{{"url", "https://example.com/second"},
+                {"domain", "example.com"},
+                {"title", "Second Result"},
+                {"snippet", "Second unique result."},
+                {"score", 0.85}}});
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.", "Search online for the latest example update."});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "duplicate search results should not fail");
+      const auto fetched_urls = runtime.fetched_urls();
+      Expect(runtime.fetch_count() == 2, "duplicate search results should dedupe fetches");
+      Expect(
+          static_cast<int>(std::count(
+              fetched_urls.begin(),
+              fetched_urls.end(),
+              "https://example.com/shared")) == 1,
+          "duplicate search results should fetch a shared URL only once");
+      std::cout << "ok: interaction-browsing-dedupes-search-results" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeTestServer runtime;
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Use the web and check https://example.com/one https://example.com/two "
+           "https://example.com/three"});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "multi-url direct fetch should not fail");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(summary.at("decision").get<std::string>() == "direct_fetch",
+             "multi-url request should stay in direct_fetch mode");
+      Expect(runtime.fetch_count() == 2, "multi-url direct fetch should stop at two fetches");
+      Expect(summary.at("sources").size() == 2,
+             "multi-url direct fetch should expose only the first two fetched sources");
+      std::cout << "ok: interaction-browsing-direct-fetch-limits-to-two-urls" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.fetch_payload_overrides["https://example.com/nulls"] =
+          json{{"title", nullptr},
+               {"content_type", nullptr},
+               {"visible_text", nullptr},
+               {"citations", nullptr},
+               {"injection_flags", nullptr}};
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context =
+          BuildBrowsingRequestContext({"Use the web and check https://example.com/nulls"});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "nullable fetch fields should not fail");
+      const auto& source = BrowsingSummary(request_context).at("sources").at(0);
+      Expect(source.at("title").get<std::string>().empty(),
+             "nullable fetch title should normalize to empty string");
+      Expect(source.at("content_type").get<std::string>().empty(),
+             "nullable fetch content_type should normalize to empty string");
+      Expect(source.at("excerpt").get<std::string>().empty(),
+             "nullable fetch visible_text should normalize to empty excerpt");
+      Expect(source.at("citations").is_array() && source.at("citations").empty(),
+             "nullable fetch citations should normalize to empty array");
+      Expect(source.at("injection_flags").is_array() && source.at("injection_flags").empty(),
+             "nullable fetch injection_flags should normalize to empty array");
+      std::cout << "ok: interaction-browsing-null-fetch-fields-safe" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.search_response_payload =
+          json{{"query", nullptr},
+               {"backend", nullptr},
+               {"results",
+                json::array({json{{"url", "https://example.com/article"},
+                                  {"title", nullptr},
+                                  {"snippet", "Snippet from nullable result."}}})}};
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.", "Search online for the latest OpenAI API update."});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "nullable search fields should not fail");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(summary.at("searches").at(0).at("backend").get<std::string>() == "broker_search",
+             "nullable search backend should fall back to broker_search");
+      Expect(!summary.at("searches").at(0).at("query").get<std::string>().empty(),
+             "nullable search query should fall back to requested query");
+      Expect(summary.at("sources").at(0).at("url").get<std::string>() == "https://example.com/article",
+             "nullable search fields should still lead to a usable fetched source");
+      std::cout << "ok: interaction-browsing-null-search-fields-safe" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.fetch_payload_overrides["https://example.com/injected"] =
+          json{{"injection_flags", json::array({"prompt_injection_detected"})}};
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context =
+          BuildBrowsingRequestContext({"Use the web and check https://example.com/injected"});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "injection flag propagation should not fail");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(summary.at("sources").at(0).at("injection_flags").size() == 1,
+             "injection flag propagation should preserve source markers");
+      Expect(
+          request_context.payload
+                  .at(comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+                  .get<std::string>()
+                  .find("prompt-injection markers were detected") != std::string::npos,
+          "injection flag propagation should warn the model in the system instruction");
+      std::cout << "ok: interaction-browsing-injection-warning" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.status_payload["session_backend"] = "broker_fallback";
+      config.status_payload["rendered_browser_enabled"] = false;
+      config.status_payload["rendered_browser_ready"] = false;
+      config.status_payload["rendered_fetch_enabled"] = false;
+      config.fetch_payload_overrides["https://example.com/brokered"] =
+          json{{"backend", "broker_fetch"}, {"rendered", false}};
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context =
+          BuildBrowsingRequestContext({"Use the web and check https://example.com/brokered"});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "broker fallback provenance should not fail");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(summary.at("session_backend").get<std::string>() == "broker_fallback",
+             "broker fallback status should preserve session backend provenance");
+      Expect(summary.at("sources").at(0).at("backend").get<std::string>() == "broker_fetch",
+             "broker fallback status should preserve source backend provenance");
+      Expect(
+          std::none_of(
+              summary.at("trace").begin(),
+              summary.at("trace").end(),
+              [](const json& item) {
+                return item.value("stage", std::string{}) == "browser_render";
+              }),
+          "broker fallback responses should not inject rendered browser trace stages");
+      std::cout << "ok: interaction-browsing-broker-provenance" << '\n';
+    }
+
+    {
+      InteractionBrowsingRuntimeServerConfig config;
+      config.search_results = json::array(
+          {json{{"url", "https://example.com/1"},
+                {"domain", "example.com"},
+                {"title", "Result One"},
+                {"snippet", "One"},
+                {"score", 0.99}},
+           json{{"url", "https://example.com/2"},
+                {"domain", "example.com"},
+                {"title", "Result Two"},
+                {"snippet", "Two"},
+                {"score", 0.95}},
+           json{{"url", "https://example.com/3"},
+                {"domain", "example.com"},
+                {"title", "Result Three"},
+                {"snippet", "Three"},
+                {"score", 0.90}},
+           json{{"url", "https://example.com/4"},
+                {"domain", "example.com"},
+                {"title", "Result Four"},
+                {"snippet", "Four"},
+                {"score", 0.85}}});
+      InteractionBrowsingRuntimeTestServer runtime(std::move(config));
+      comet::controller::InteractionBrowsingService browsing_service;
+      auto request_context = BuildBrowsingRequestContext(
+          {"Enable web for this chat.", "Search online for the latest example update."});
+      auto resolution = BuildBrowsingResolution(runtime.port());
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "source cap test should not fail");
+      const auto& summary = BrowsingSummary(request_context);
+      Expect(runtime.fetch_count() == 2, "search-and-fetch should cap fetched sources at two");
+      Expect(summary.at("sources").size() == 2,
+             "search-and-fetch should expose at most two fetched sources");
+      std::cout << "ok: interaction-browsing-source-cap" << '\n';
     }
 
     return 0;
