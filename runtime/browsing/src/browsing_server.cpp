@@ -163,6 +163,33 @@ std::string UrlDecode(const std::string& value) {
   return decoded;
 }
 
+std::optional<std::string> ExtractUrlQueryParameter(
+    const std::string& url,
+    const std::string& key) {
+  const auto query_pos = url.find('?');
+  if (query_pos == std::string::npos || key.empty()) {
+    return std::nullopt;
+  }
+  const std::string query = url.substr(query_pos + 1);
+  std::size_t start = 0;
+  while (start < query.size()) {
+    const auto end = query.find('&', start);
+    const std::string pair = query.substr(
+        start,
+        end == std::string::npos ? std::string::npos : end - start);
+    const auto equals = pair.find('=');
+    const std::string raw_key = equals == std::string::npos ? pair : pair.substr(0, equals);
+    if (UrlDecode(raw_key) == key) {
+      return UrlDecode(equals == std::string::npos ? std::string{} : pair.substr(equals + 1));
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  return std::nullopt;
+}
+
 std::string StripHtmlTags(const std::string& html) {
   return std::regex_replace(html, std::regex("<[^>]+>"), " ");
 }
@@ -194,6 +221,8 @@ std::string NormalizeWhitespace(std::string text) {
   return TrimCopy(text);
 }
 
+bool EndsWithDomain(const std::string& host, const std::string& domain);
+
 std::optional<std::string> ExtractHost(const std::string& url) {
   static const std::regex kUrlPattern(R"(^(https?)://([^/?#]+))", std::regex::icase);
   std::smatch match;
@@ -217,6 +246,39 @@ std::optional<std::string> ExtractHost(const std::string& url) {
     return std::nullopt;
   }
   return host;
+}
+
+std::string ResolveBingRedirectUrl(const std::string& url) {
+  const auto host = ExtractHost(url);
+  if (!host.has_value() || !EndsWithDomain(*host, "bing.com")) {
+    return url;
+  }
+
+  const auto direct_url = ExtractUrlQueryParameter(url, "url");
+  if (direct_url.has_value() &&
+      (direct_url->rfind("https://", 0) == 0 || direct_url->rfind("http://", 0) == 0)) {
+    return *direct_url;
+  }
+
+  const auto encoded_url = ExtractUrlQueryParameter(url, "u");
+  if (!encoded_url.has_value()) {
+    return url;
+  }
+
+  std::string decoded = *encoded_url;
+  if (decoded.rfind("a1", 0) == 0) {
+    try {
+      const auto decoded_bytes = comet::DecodeBase64(decoded.substr(2), "bing redirect url");
+      decoded.assign(decoded_bytes.begin(), decoded_bytes.end());
+    } catch (const std::exception&) {
+      return url;
+    }
+  }
+
+  if (decoded.rfind("https://", 0) == 0 || decoded.rfind("http://", 0) == 0) {
+    return decoded;
+  }
+  return url;
 }
 
 bool EndsWithDomain(const std::string& host, const std::string& domain) {
@@ -972,7 +1034,8 @@ std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
       continue;
     }
 
-    const std::string href = TrimCopy(HtmlEntityDecode(link_match[1].str()));
+    const std::string href =
+        ResolveBingRedirectUrl(TrimCopy(HtmlEntityDecode(link_match[1].str())));
     std::string host;
     std::string reason;
     if (!BrowsingServer::IsSafeBrowsingUrl(href, policy, &reason, &host) ||
@@ -1009,7 +1072,8 @@ std::vector<SearchResult> BrowsingServer::ParseBingHtmlResults(
   end = std::sregex_iterator();
   index = 0;
   for (auto it = begin; it != end && static_cast<int>(results.size()) < limit; ++it) {
-    const std::string href = TrimCopy(HtmlEntityDecode((*it)[1].str()));
+    const std::string href =
+        ResolveBingRedirectUrl(TrimCopy(HtmlEntityDecode((*it)[1].str())));
     std::string host;
     std::string reason;
     if (!BrowsingServer::IsSafeBrowsingUrl(href, policy, &reason, &host) ||
@@ -1522,6 +1586,13 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   }
   const bool suggested_domains_only =
       explicit_requested_domains.empty() && !requested_domains.empty();
+  const bool prefer_alternative_me_special_case =
+      suggested_domains_only &&
+      std::any_of(
+          requested_domains.begin(),
+          requested_domains.end(),
+          [](const std::string& domain) { return EndsWithDomain(domain, "alternative.me"); }) &&
+      ContainsAnySubstring(LowercaseCopy(query), {"fear", "greed", "страх", "жадн"});
   const std::string effective_query = ComposeSearchQuery(query_with_hints, requested_domains);
   const bool rendered_browser_ready =
       config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable();
@@ -1644,7 +1715,9 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
       }
     }
 
-    if (SearchResultsLookThin(results, limit) && suggested_domains_only) {
+    if (SearchResultsLookThin(results, limit) &&
+        suggested_domains_only &&
+        !prefer_alternative_me_special_case) {
       const std::string unconstrained_bing_html_search_url =
           "https://www.bing.com/search?q=" + UrlEncode(query_with_hints);
       const auto unconstrained_bing_html_command = RunCommandCapture(CommandRequest{
