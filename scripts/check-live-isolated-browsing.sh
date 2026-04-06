@@ -135,7 +135,7 @@ cat >"${desired_state_path}" <<EOF
     "enabled": true,
     "policy": {
       "browser_session_enabled": true,
-      "allowed_domains": ["example.com", "openai.com"],
+      "allowed_domains": ["example.com", "openai.com", "reddit.com", "old.reddit.com", "x.com", "twitter.com"],
       "blocked_domains": ["localhost", "internal"],
       "max_search_results": 4,
       "max_fetch_bytes": 16384
@@ -254,7 +254,7 @@ COMET_CONTROLLER_URL="http://127.0.0.1:${controller_port}" \
 COMET_BROWSING_RUNTIME_STATUS_PATH="${browsing_status_path}" \
 COMET_BROWSING_STATE_ROOT="${browsing_state_root}" \
 COMET_BROWSING_PORT="${browsing_port}" \
-COMET_BROWSING_POLICY_JSON='{"browser_session_enabled":true,"allowed_domains":["example.com","openai.com"],"blocked_domains":["localhost","internal"],"max_search_results":4,"max_fetch_bytes":16384}' \
+COMET_BROWSING_POLICY_JSON='{"browser_session_enabled":true,"rendered_browser_enabled":true,"allowed_domains":["example.com","openai.com","reddit.com","old.reddit.com","x.com","twitter.com"],"blocked_domains":["localhost","internal"],"max_search_results":4,"max_fetch_bytes":16384}' \
   "${build_dir}/comet-browsingd" >"${browsing_log}" 2>&1 &
 browsing_pid="$!"
 wait_for_http "http://127.0.0.1:${browsing_port}/health"
@@ -268,6 +268,8 @@ status_payload="$(
 printf '%s' "${status_payload}" | grep -F '"browsing_ready":true' >/dev/null
 printf '%s' "${status_payload}" | grep -F "\"browsing_target\":\"http://127.0.0.1:${browsing_port}\"" >/dev/null
 printf '%s' "${status_payload}" | grep -F '"browser_session_enabled":true' >/dev/null
+printf '%s' "${status_payload}" | grep -F '"rendered_browser_ready":true' >/dev/null
+printf '%s' "${status_payload}" | grep -F '"session_backend":"cef"' >/dev/null
 
 echo "isolated-browsing-live: verify maglev dashboard exposes browsing state"
 dashboard_payload="$(
@@ -307,7 +309,50 @@ fetch_payload="$(curl -fsS -X POST \
   "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/fetch")"
 printf '%s' "${fetch_payload}" | grep -F '"content_type":"text/html' >/dev/null
 printf '%s' "${fetch_payload}" | grep -F 'Example Domain' >/dev/null
+printf '%s' "${fetch_payload}" | grep -F '"backend":"browser_render"' >/dev/null
+printf '%s' "${fetch_payload}" | grep -F '"rendered":true' >/dev/null
 printf '%s' "${fetch_payload}" | grep -F '"injection_flags":[' >/dev/null
+
+assert_rendered_fetch() {
+  local url="$1"
+  local expected_url_fragment="$2"
+  local response_file="${work_root}/fetch-$(printf '%s' "${expected_url_fragment}" | tr '/:.' '_').json"
+  curl -fsS -X POST \
+    -H "X-Comet-Session-Token: ${auth_token}" \
+    -H 'Content-Type: application/json' \
+    --data "{\"url\":\"${url}\"}" \
+    "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/fetch" \
+    >"${response_file}"
+  python3 - "${response_file}" "${expected_url_fragment}" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+expected = sys.argv[2]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+
+backend = payload.get("backend")
+rendered = payload.get("rendered")
+final_url = payload.get("final_url", "")
+visible_text = payload.get("visible_text", "")
+
+if backend != "browser_render":
+    raise SystemExit(f"expected browser_render backend, got {backend!r}")
+if not rendered:
+    raise SystemExit("expected rendered=true")
+if expected not in final_url:
+    raise SystemExit(f"expected {expected!r} in final_url {final_url!r}")
+if len(visible_text) < 32:
+    raise SystemExit(f"expected visible_text to be non-trivial, got length {len(visible_text)}")
+PY
+}
+
+echo "isolated-browsing-live: verify JS-heavy direct rendered fetches"
+assert_rendered_fetch "https://old.reddit.com/r/OpenAI/" "old.reddit.com"
+assert_rendered_fetch "https://www.reddit.com/r/OpenAI/" "reddit.com"
+assert_rendered_fetch "https://x.com/OpenAI" "x.com"
+assert_rendered_fetch "https://twitter.com/OpenAI" "x.com"
 
 echo "isolated-browsing-live: verify unsafe target rejection"
 unsafe_body="${work_root}/unsafe-fetch.json"
@@ -344,11 +389,49 @@ extract_payload="$(curl -fsS -X POST \
   "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/sessions/${session_id}/actions")"
 printf '%s' "${extract_payload}" | grep -F 'sanitized extract from current session URL' >/dev/null
 
+unsupported_body="${work_root}/unsupported-action.json"
+unsupported_status="$(
+  curl -sS -o "${unsupported_body}" -w '%{http_code}' \
+    -X POST \
+    -H "X-Comet-Session-Token: ${auth_token}" \
+    -H 'Content-Type: application/json' \
+    --data '{"action":"click","confirmed":true}' \
+    "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/sessions/${session_id}/actions"
+)"
+test "${unsupported_status}" = "502"
+grep -F '"code":"browser_action_not_supported"' "${unsupported_body}" >/dev/null
+
 curl -fsS -X DELETE \
   -H "X-Comet-Session-Token: ${auth_token}" \
   "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/sessions/${session_id}" \
   | grep -F "\"session_id\":\"${session_id}\"" >/dev/null
 test ! -d "${browsing_state_root}/${session_id}"
+
+echo "isolated-browsing-live: verify rendered OpenAI session path"
+openai_session_payload="$(curl -fsS -X POST \
+  -H "X-Comet-Session-Token: ${auth_token}" \
+  -H 'Content-Type: application/json' \
+  --data '{"confirmed":true,"url":"https://openai.com"}' \
+  "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/sessions")"
+openai_session_id="$(printf '%s' "${openai_session_payload}" | sed -n 's/.*"session_id":"\([^"]*\)".*/\1/p')"
+test -n "${openai_session_id}"
+printf '%s' "${openai_session_payload}" | grep -F '"backend":"browser_render"' >/dev/null
+printf '%s' "${openai_session_payload}" | grep -F '"rendered":true' >/dev/null
+printf '%s' "${openai_session_payload}" | grep -F 'https://openai.com/' >/dev/null
+
+openai_snapshot_payload="$(curl -fsS -X POST \
+  -H "X-Comet-Session-Token: ${auth_token}" \
+  -H 'Content-Type: application/json' \
+  --data '{"action":"snapshot"}' \
+  "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/sessions/${openai_session_id}/actions")"
+printf '%s' "${openai_snapshot_payload}" | grep -F '"backend":"browser_render"' >/dev/null
+printf '%s' "${openai_snapshot_payload}" | grep -F '"rendered":true' >/dev/null
+printf '%s' "${openai_snapshot_payload}" | grep -F '"screenshot_path":"' >/dev/null
+curl -fsS -X DELETE \
+  -H "X-Comet-Session-Token: ${auth_token}" \
+  "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/sessions/${openai_session_id}" \
+  | grep -F "\"session_id\":\"${openai_session_id}\"" >/dev/null
+test ! -d "${browsing_state_root}/${openai_session_id}"
 test -f "${browsing_state_root}/audit.log"
 test -f "${browsing_status_path}"
 

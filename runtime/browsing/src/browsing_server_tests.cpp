@@ -203,6 +203,35 @@ void TestSessionCleanupAndAuditLog() {
   Expect(audit_entries[2].at("kind").get<std::string>() == "browser_session_delete", "delete audit entry kind mismatch");
 }
 
+void TestUnsupportedBrowserActionFailsSafely() {
+  TempDir temp_dir;
+
+  comet::browsing::BrowsingRuntimeConfig config;
+  config.state_root = temp_dir.path();
+  config.status_path = temp_dir.path() / "status.json";
+  config.ready_path = temp_dir.path() / "ready";
+  config.policy.browser_session_enabled = true;
+  config.policy.rendered_browser_enabled = false;
+
+  comet::browsing::BrowsingServer server(std::move(config));
+  const auto created = server.CreateSession(nlohmann::json{{"confirmed", true}});
+  const std::string session_id = created.at("session_id").get<std::string>();
+
+  bool threw = false;
+  try {
+    (void)server.ApplySessionAction(
+        session_id,
+        nlohmann::json{{"action", "click"}, {"confirmed", true}});
+  } catch (const std::exception& error) {
+    threw = true;
+    Expect(
+        std::string(error.what()).find("not supported") != std::string::npos,
+        "unsupported browser action should fail with an explicit error message");
+  }
+
+  Expect(threw, "unsupported browser action should fail explicitly");
+}
+
 }  // namespace
 
 int main() {
@@ -213,6 +242,7 @@ int main() {
     TestRenderedSearchParsing();
     TestFetchSanitization();
     TestSessionCleanupAndAuditLog();
+    TestUnsupportedBrowserActionFailsSafely();
     std::cout << "browsing server tests passed\n";
     return 0;
   } catch (const std::exception& error) {
