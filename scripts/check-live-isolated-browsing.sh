@@ -388,7 +388,12 @@ extract_payload="$(curl -fsS -X POST \
   -H 'Content-Type: application/json' \
   --data '{"action":"extract"}' \
   "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/sessions/${session_id}/actions")"
-printf '%s' "${extract_payload}" | grep -F 'sanitized extract from current session URL' >/dev/null
+if ! printf '%s' "${extract_payload}" | grep -F 'sanitized extract from active rendered browser session' >/dev/null && \
+   ! printf '%s' "${extract_payload}" | grep -F 'sanitized extract from current session URL' >/dev/null; then
+  echo "isolated-browsing-live: unexpected extract observation" >&2
+  printf '%s\n' "${extract_payload}" >&2
+  exit 1
+fi
 
 unsupported_body="${work_root}/unsupported-action.json"
 unsupported_status="$(

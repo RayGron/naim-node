@@ -9,6 +9,7 @@
 #include <chrono>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 #include "skills/plane_skills_service.h"
@@ -18,6 +19,16 @@
 namespace comet::controller {
 
 namespace {
+
+std::string ReadJsonStringOrEmpty(
+    const nlohmann::json& payload,
+    std::string_view key) {
+  const auto found = payload.find(std::string(key));
+  if (found == payload.end() || found->is_null() || !found->is_string()) {
+    return {};
+  }
+  return found->get<std::string>();
+}
 
 std::string TrimCopy(const std::string& value) {
   std::size_t start = 0;
@@ -102,9 +113,9 @@ bool DecodeAvailableChunkedHttpBody(
 comet::runtime::ModelIdentity BuildResolutionModelIdentity(
     const PlaneInteractionResolution& resolution) {
   comet::runtime::ModelIdentity identity;
-  identity.model_id = resolution.status_payload.value("active_model_id", std::string{});
+  identity.model_id = ReadJsonStringOrEmpty(resolution.status_payload, "active_model_id");
   identity.served_model_name =
-      resolution.status_payload.value("served_model_name", std::string{});
+      ReadJsonStringOrEmpty(resolution.status_payload, "served_model_name");
   if (resolution.runtime_status.has_value()) {
     if (identity.model_id.empty()) {
       identity.model_id = resolution.runtime_status->active_model_id;
@@ -878,7 +889,7 @@ std::string ResolveInteractionServedModelName(
       !resolution.runtime_status->active_served_model_name.empty()) {
     return resolution.runtime_status->active_served_model_name;
   }
-  return resolution.status_payload.value("served_model_name", std::string{});
+  return ReadJsonStringOrEmpty(resolution.status_payload, "served_model_name");
 }
 
 std::string ResolveInteractionActiveModelId(
@@ -887,7 +898,7 @@ std::string ResolveInteractionActiveModelId(
       !resolution.runtime_status->active_model_id.empty()) {
     return resolution.runtime_status->active_model_id;
   }
-  return resolution.status_payload.value("active_model_id", std::string{});
+  return ReadJsonStringOrEmpty(resolution.status_payload, "active_model_id");
 }
 
 nlohmann::json BuildInteractionContractMetadata(

@@ -2,6 +2,7 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "app/controller_composition_support.h"
@@ -14,13 +15,22 @@ namespace comet::controller {
 
 namespace {
 
+std::string ReadJsonStringOrEmpty(
+    const nlohmann::json& payload,
+    std::string_view key) {
+  const auto found = payload.find(std::string(key));
+  if (found == payload.end() || found->is_null() || !found->is_string()) {
+    return {};
+  }
+  return found->get<std::string>();
+}
+
 comet::runtime::ModelIdentity BuildModelIdentity(
     const PlaneInteractionResolution& resolution) {
   comet::runtime::ModelIdentity identity;
-  identity.model_id =
-      resolution.status_payload.value("active_model_id", std::string{});
+  identity.model_id = ReadJsonStringOrEmpty(resolution.status_payload, "active_model_id");
   identity.served_model_name =
-      resolution.status_payload.value("served_model_name", std::string{});
+      ReadJsonStringOrEmpty(resolution.status_payload, "served_model_name");
   if (resolution.runtime_status.has_value()) {
     if (identity.model_id.empty()) {
       identity.model_id = resolution.runtime_status->active_model_id;
