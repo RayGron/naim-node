@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -18,6 +19,8 @@
 #include "http/controller_http_transport.h"
 
 namespace comet::browsing {
+
+class CefBrowserBackend;
 
 struct BrowsingPolicy {
   bool browser_session_enabled = false;
@@ -41,7 +44,10 @@ struct FetchResult {
   std::string final_url;
   std::string content_type;
   std::string fetched_at;
+  std::string backend = "broker_fetch";
+  bool rendered = false;
   std::optional<std::string> title;
+  std::optional<std::string> screenshot_path;
   std::string visible_text;
   std::string response_hash;
   nlohmann::json citations = nlohmann::json::array();
@@ -126,6 +132,10 @@ class BrowsingServer final {
   nlohmann::json DeleteSession(const std::string& session_id);
 
   std::string NewSessionId() const;
+  std::optional<FetchResult> FetchUrlViaBroker(
+      const std::string& url,
+      std::string* error_code,
+      std::string* error_message) const;
   std::optional<FetchResult> FetchUrl(
       const std::string& url,
       std::string* error_code,
@@ -134,6 +144,7 @@ class BrowsingServer final {
   BrowsingRuntimeConfig config_;
   std::atomic<bool> stop_requested_{false};
   comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  std::unique_ptr<CefBrowserBackend> cef_backend_;
   mutable std::mutex sessions_mutex_;
   std::unordered_map<std::string, SessionRecord> sessions_;
 };

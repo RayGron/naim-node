@@ -136,6 +136,13 @@ vcpkg_installed_dir="${repo_dir}/vcpkg_installed/${VCPKG_TRIPLET}-root"
 ninja_exe="$("${script_dir}/find-ninja.sh")"
 cmake_exe="$("${script_dir}/find-cmake.sh")"
 cmake_prefix_path="${vcpkg_installed_dir}/${VCPKG_TRIPLET}"
+extra_cmake_args=()
+
+if [[ -n "${COMET_CMAKE_ARGS:-}" ]]; then
+  # COMET_CMAKE_ARGS uses shell-style tokenization so callers can pass multiple -D flags.
+  # shellcheck disable=SC2206
+  extra_cmake_args=( ${COMET_CMAKE_ARGS} )
+fi
 
 mkdir -p "${build_dir}"
 cache_path="${build_dir}/CMakeCache.txt"
@@ -243,6 +250,8 @@ if [[ -n "${openmp_root}" ]]; then
     "-DOpenMP_libomp_LIBRARY=${openmp_library}"
   )
 fi
+
+cmake_args+=("${extra_cmake_args[@]}")
 
 "${cmake_exe}" "${cmake_args[@]}"
 

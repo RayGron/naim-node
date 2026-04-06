@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <csignal>
 #include <cctype>
 #include <chrono>
@@ -17,12 +18,15 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
+#include "browsing/process_support.h"
+#include "browsing/cef_browser_backend.h"
+#include "browsing/cef_support.h"
 #include "comet/runtime/runtime_status.h"
 #include "comet/security/crypto_utils.h"
 #include "http/controller_http_server_support.h"
@@ -39,11 +43,6 @@ void SignalHandler(int) {
     g_stop_requested->store(true);
   }
 }
-
-struct CommandResult {
-  int exit_code = 0;
-  std::string output;
-};
 
 class ApiError final : public std::exception {
  public:
@@ -256,59 +255,11 @@ bool DomainAllowed(
   return false;
 }
 
-CommandResult RunCommandCapture(const std::vector<std::string>& args) {
-  if (args.empty()) {
-    throw std::invalid_argument("command args must not be empty");
-  }
-
-  int pipe_fds[2];
-  if (pipe(pipe_fds) != 0) {
-    throw std::runtime_error("pipe failed");
-  }
-
-  const pid_t pid = fork();
-  if (pid < 0) {
-    close(pipe_fds[0]);
-    close(pipe_fds[1]);
-    throw std::runtime_error("fork failed");
-  }
-
-  if (pid == 0) {
-    close(pipe_fds[0]);
-    dup2(pipe_fds[1], STDOUT_FILENO);
-    dup2(pipe_fds[1], STDERR_FILENO);
-    close(pipe_fds[1]);
-
-    std::vector<char*> argv;
-    argv.reserve(args.size() + 1);
-    for (const auto& arg : args) {
-      argv.push_back(const_cast<char*>(arg.c_str()));
-    }
-    argv.push_back(nullptr);
-    execvp(argv[0], argv.data());
-    _exit(127);
-  }
-
-  close(pipe_fds[1]);
-  CommandResult result;
-  std::array<char, 4096> buffer{};
-  while (true) {
-    const ssize_t read_count = read(pipe_fds[0], buffer.data(), buffer.size());
-    if (read_count <= 0) {
-      break;
-    }
-    result.output.append(buffer.data(), static_cast<std::size_t>(read_count));
-  }
-  close(pipe_fds[0]);
-
-  int status = 0;
-  waitpid(pid, &status, 0);
-  if (WIFEXITED(status)) {
-    result.exit_code = WEXITSTATUS(status);
-  } else {
-    result.exit_code = 1;
-  }
-  return result;
+bool IsJsHeavyDomain(const std::string& host) {
+  return EndsWithDomain(host, "x.com") ||
+         EndsWithDomain(host, "twitter.com") ||
+         EndsWithDomain(host, "reddit.com") ||
+         EndsWithDomain(host, "old.reddit.com");
 }
 
 std::optional<std::string> ExtractXmlElement(
@@ -385,9 +336,65 @@ std::string TruncateText(const std::string& value, std::size_t limit) {
   return value.substr(0, limit);
 }
 
+bool EvidenceLooksThin(const FetchResult& fetched) {
+  const std::string text = TrimCopy(fetched.visible_text);
+  if (text.size() < 160) {
+    return true;
+  }
+  const std::string lowered = LowercaseCopy(text);
+  return lowered.find("enable javascript") != std::string::npos ||
+         lowered.find("javascript is required") != std::string::npos ||
+         lowered.find("please wait while your request is being verified") != std::string::npos;
+}
+
+FetchResult BuildRenderedFetchResult(
+    const std::string& requested_url,
+    const CefRenderedDocument& rendered,
+    const BrowsingPolicy& policy,
+    const std::string& fetched_at) {
+  FetchResult result;
+  if (!rendered.html_source.empty()) {
+    result = BrowsingServer::SanitizeFetchedDocument(
+        requested_url,
+        rendered.final_url,
+        rendered.content_type,
+        rendered.html_source,
+        policy);
+  } else {
+    result.url = requested_url;
+    result.final_url = rendered.final_url.empty() ? requested_url : rendered.final_url;
+    result.content_type = rendered.content_type;
+    result.title = rendered.title;
+    result.visible_text =
+        TruncateText(rendered.visible_text, static_cast<std::size_t>(policy.max_fetch_bytes));
+    result.response_hash = HashText(rendered.visible_text);
+    result.injection_flags = BrowsingServer::DetectInjectionFlags(result.visible_text);
+    if (!result.visible_text.empty()) {
+      result.citations.push_back(
+          nlohmann::json{{"start", 0},
+                         {"end", std::min<int>(120, static_cast<int>(result.visible_text.size()))},
+                         {"url", result.final_url}});
+    }
+  }
+  if (!result.title.has_value() && rendered.title.has_value()) {
+    result.title = rendered.title;
+  }
+  result.fetched_at = fetched_at;
+  result.backend = "browser_render";
+  result.rendered = true;
+  if (rendered.screenshot_path.has_value()) {
+    result.screenshot_path = rendered.screenshot_path->string();
+  }
+  return result;
+}
+
 }  // namespace
 
-BrowsingServer::BrowsingServer(BrowsingRuntimeConfig config) : config_(std::move(config)) {}
+BrowsingServer::BrowsingServer(BrowsingRuntimeConfig config) : config_(std::move(config)) {
+  if (CefRuntimeEnabled()) {
+    cef_backend_ = std::make_unique<CefBrowserBackend>(config_.state_root);
+  }
+}
 
 BrowsingServer::~BrowsingServer() {
   RequestStop();
@@ -829,8 +836,13 @@ nlohmann::json BrowsingServer::BuildStatusPayload() const {
       {"plane_name", config_.plane_name},
       {"instance_name", config_.instance_name},
       {"ready", true},
+      {"cef_build_enabled", CefBuildEnabled()},
+      {"cef_runtime_enabled", CefRuntimeEnabled()},
+      {"cef_build_summary", CefBuildSummary()},
       {"search_enabled", true},
       {"fetch_enabled", true},
+      {"rendered_fetch_enabled", cef_backend_ != nullptr && cef_backend_->IsAvailable()},
+      {"session_backend", cef_backend_ != nullptr && cef_backend_->IsAvailable() ? "cef" : "broker_fallback"},
       {"browser_session_enabled", config_.policy.browser_session_enabled},
       {"active_session_count", sessions_.size()},
       {"policy",
@@ -853,20 +865,26 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
 
   const std::string search_url =
       "https://www.bing.com/search?format=rss&q=" + UrlEncode(query);
-  const auto command = RunCommandCapture(
-      {"/usr/bin/curl",
-       "-A",
-       "Mozilla/5.0",
-       "-fsSL",
-       "--proto",
-       "=https,http",
-       "--connect-timeout",
-       "5",
-       "--max-time",
-       "20",
-       "--max-redirs",
-       "5",
-       search_url});
+  const auto command = RunCommandCapture(CommandRequest{
+      .args =
+          {"/usr/bin/curl",
+           "-A",
+           "Mozilla/5.0",
+           "-fsSL",
+           "--proto",
+           "=https,http",
+           "--connect-timeout",
+           "5",
+           "--max-time",
+           "20",
+           "--max-redirs",
+           "5",
+           search_url},
+      .environment = {},
+      .working_directory = std::nullopt,
+      .clear_environment = false,
+      .merge_stderr_into_stdout = true,
+  });
   if (command.exit_code != 0) {
     throw ApiError(502, "search_upstream_failed", TrimCopy(command.output));
   }
@@ -911,7 +929,12 @@ nlohmann::json BrowsingServer::HandleFetchPayload(const nlohmann::json& payload)
       {"final_url", fetched->final_url},
       {"content_type", fetched->content_type},
       {"fetched_at", fetched->fetched_at},
+      {"backend", fetched->backend},
+      {"rendered", fetched->rendered},
       {"title", fetched->title.has_value() ? nlohmann::json(*fetched->title) : nlohmann::json(nullptr)},
+      {"screenshot_path",
+       fetched->screenshot_path.has_value() ? nlohmann::json(*fetched->screenshot_path)
+                                            : nlohmann::json(nullptr)},
       {"visible_text", fetched->visible_text},
       {"response_hash", fetched->response_hash},
       {"citations", fetched->citations},
@@ -937,26 +960,56 @@ nlohmann::json BrowsingServer::CreateSession(const nlohmann::json& payload) {
   const std::string url = TrimCopy(payload.value("url", std::string{}));
   nlohmann::json observation = nullptr;
   if (!url.empty()) {
-    std::string error_code;
-    std::string error_message;
-    const auto fetched = FetchUrl(url, &error_code, &error_message);
-    if (!fetched.has_value()) {
-      std::filesystem::remove_all(session.root);
-      throw ApiError(502, error_code.empty() ? "fetch_failed" : error_code, error_message);
+    if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+      std::string error_message;
+      const auto rendered = cef_backend_->OpenSession(session.id, session.root, url, &error_message);
+      if (!rendered.has_value()) {
+        std::filesystem::remove_all(session.root);
+        throw ApiError(502, "rendered_session_open_failed", error_message);
+      }
+      session.current_url = rendered->final_url;
+      if (const auto host = ExtractHost(rendered->final_url); host.has_value()) {
+        session.visited_domains.insert(*host);
+      }
+      FetchResult fetched =
+          BuildRenderedFetchResult(url, *rendered, config_.policy, UtcNow());
+      observation = nlohmann::json{
+          {"session_id", session.id},
+          {"url", fetched.final_url},
+          {"backend", fetched.backend},
+          {"rendered", fetched.rendered},
+          {"observation", "session opened in CEF-backed isolated browser"},
+          {"screenshot_path", fetched.screenshot_path.has_value() ? nlohmann::json(*fetched.screenshot_path)
+                                                                 : nlohmann::json(nullptr)},
+          {"dom_excerpt", fetched.visible_text},
+          {"injection_flags", fetched.injection_flags},
+          {"requires_confirmation", false},
+      };
+    } else {
+      std::string error_code;
+      std::string error_message;
+      const auto fetched = FetchUrl(url, &error_code, &error_message);
+      if (!fetched.has_value()) {
+        std::filesystem::remove_all(session.root);
+        throw ApiError(502, error_code.empty() ? "fetch_failed" : error_code, error_message);
+      }
+      session.current_url = fetched->final_url;
+      if (const auto host = ExtractHost(fetched->final_url); host.has_value()) {
+        session.visited_domains.insert(*host);
+      }
+      observation = nlohmann::json{
+          {"session_id", session.id},
+          {"url", fetched->final_url},
+          {"backend", fetched->backend},
+          {"rendered", fetched->rendered},
+          {"observation", "session opened using v1 brokered browser fallback"},
+          {"screenshot_path", fetched->screenshot_path.has_value() ? nlohmann::json(*fetched->screenshot_path)
+                                                                   : nlohmann::json(nullptr)},
+          {"dom_excerpt", fetched->visible_text},
+          {"injection_flags", fetched->injection_flags},
+          {"requires_confirmation", false},
+      };
     }
-    session.current_url = fetched->final_url;
-    if (const auto host = ExtractHost(fetched->final_url); host.has_value()) {
-      session.visited_domains.insert(*host);
-    }
-    observation = nlohmann::json{
-        {"session_id", session.id},
-        {"url", fetched->final_url},
-        {"observation", "session opened using v1 brokered browser fallback"},
-        {"screenshot_path", nullptr},
-        {"dom_excerpt", fetched->visible_text},
-        {"injection_flags", fetched->injection_flags},
-        {"requires_confirmation", false},
-    };
   }
 
   {
@@ -1019,9 +1072,32 @@ nlohmann::json BrowsingServer::ApplySessionAction(
       std::lock_guard<std::mutex> lock(sessions_mutex_);
       sessions_[session_id] = session;
     }
+    if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+      std::string error_message;
+      const auto rendered = cef_backend_->SnapshotSession(session_id, &error_message);
+      if (!rendered.has_value()) {
+        throw ApiError(502, "rendered_snapshot_failed", error_message);
+      }
+      FetchResult fetched =
+          BuildRenderedFetchResult(session.current_url, *rendered, config_.policy, session.updated_at);
+      return nlohmann::json{
+          {"session_id", session.id},
+          {"url", fetched.final_url},
+          {"backend", fetched.backend},
+          {"rendered", fetched.rendered},
+          {"observation", "rendered snapshot from active browser session"},
+          {"screenshot_path", fetched.screenshot_path.has_value() ? nlohmann::json(*fetched.screenshot_path)
+                                                                 : nlohmann::json(nullptr)},
+          {"dom_excerpt", fetched.visible_text},
+          {"injection_flags", fetched.injection_flags},
+          {"requires_confirmation", false},
+      };
+    }
     return nlohmann::json{
         {"session_id", session.id},
         {"url", session.current_url.empty() ? nlohmann::json(nullptr) : nlohmann::json(session.current_url)},
+        {"backend", "broker_fetch"},
+        {"rendered", false},
         {"observation", "snapshot is not available in v1 browser fallback"},
         {"screenshot_path", nullptr},
         {"dom_excerpt", nullptr},
@@ -1033,6 +1109,33 @@ nlohmann::json BrowsingServer::ApplySessionAction(
   if (action == "extract") {
     if (session.current_url.empty()) {
       throw ApiError(409, "session_url_missing", "session does not have an active URL");
+    }
+    if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+      std::string error_message;
+      const auto rendered = cef_backend_->ExtractSession(session_id, &error_message);
+      if (!rendered.has_value()) {
+        throw ApiError(502, "rendered_extract_failed", error_message);
+      }
+      session.current_url = rendered->final_url;
+      session.updated_at = UtcNow();
+      {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions_[session_id] = session;
+      }
+      FetchResult fetched =
+          BuildRenderedFetchResult(session.current_url, *rendered, config_.policy, session.updated_at);
+      return nlohmann::json{
+          {"session_id", session.id},
+          {"url", fetched.final_url},
+          {"backend", fetched.backend},
+          {"rendered", fetched.rendered},
+          {"observation", "sanitized extract from active rendered browser session"},
+          {"screenshot_path", fetched.screenshot_path.has_value() ? nlohmann::json(*fetched.screenshot_path)
+                                                                 : nlohmann::json(nullptr)},
+          {"dom_excerpt", fetched.visible_text},
+          {"injection_flags", fetched.injection_flags},
+          {"requires_confirmation", false},
+      };
     }
     std::string error_code;
     std::string error_message;
@@ -1048,8 +1151,12 @@ nlohmann::json BrowsingServer::ApplySessionAction(
     return nlohmann::json{
         {"session_id", session.id},
         {"url", fetched->final_url},
+        {"backend", fetched->backend},
+        {"rendered", fetched->rendered},
         {"observation", "sanitized extract from current session URL"},
-        {"screenshot_path", nullptr},
+        {"screenshot_path",
+         fetched->screenshot_path.has_value() ? nlohmann::json(*fetched->screenshot_path)
+                                              : nlohmann::json(nullptr)},
         {"dom_excerpt", fetched->visible_text},
         {"injection_flags", fetched->injection_flags},
         {"requires_confirmation", false},
@@ -1063,6 +1170,36 @@ nlohmann::json BrowsingServer::ApplySessionAction(
     const std::string next_url = TrimCopy(payload.value("url", std::string{}));
     if (next_url.empty()) {
       throw ApiError(400, "invalid_url", "url is required for open action");
+    }
+    if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+      std::string error_message;
+      const auto rendered = cef_backend_->OpenSession(session_id, session.root, next_url, &error_message);
+      if (!rendered.has_value()) {
+        throw ApiError(502, "rendered_open_failed", error_message);
+      }
+      session.current_url = rendered->final_url;
+      session.updated_at = UtcNow();
+      if (const auto host = ExtractHost(rendered->final_url); host.has_value()) {
+        session.visited_domains.insert(*host);
+      }
+      {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions_[session_id] = session;
+      }
+      FetchResult fetched =
+          BuildRenderedFetchResult(next_url, *rendered, config_.policy, session.updated_at);
+      return nlohmann::json{
+          {"session_id", session.id},
+          {"url", fetched.final_url},
+          {"backend", fetched.backend},
+          {"rendered", fetched.rendered},
+          {"observation", "session navigated in CEF-backed isolated browser"},
+          {"screenshot_path", fetched.screenshot_path.has_value() ? nlohmann::json(*fetched.screenshot_path)
+                                                                 : nlohmann::json(nullptr)},
+          {"dom_excerpt", fetched.visible_text},
+          {"injection_flags", fetched.injection_flags},
+          {"requires_confirmation", false},
+      };
     }
     std::string error_code;
     std::string error_message;
@@ -1082,8 +1219,12 @@ nlohmann::json BrowsingServer::ApplySessionAction(
     return nlohmann::json{
         {"session_id", session.id},
         {"url", fetched->final_url},
+        {"backend", fetched->backend},
+        {"rendered", fetched->rendered},
         {"observation", "session navigated using v1 brokered browser fallback"},
-        {"screenshot_path", nullptr},
+        {"screenshot_path",
+         fetched->screenshot_path.has_value() ? nlohmann::json(*fetched->screenshot_path)
+                                              : nlohmann::json(nullptr)},
         {"dom_excerpt", fetched->visible_text},
         {"injection_flags", fetched->injection_flags},
         {"requires_confirmation", false},
@@ -1111,6 +1252,9 @@ nlohmann::json BrowsingServer::DeleteSession(const std::string& session_id) {
     session = it->second;
     sessions_.erase(it);
   }
+  if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+    cef_backend_->DeleteSession(session_id);
+  }
   std::error_code error;
   std::filesystem::remove_all(session.root, error);
   AppendAuditLog(
@@ -1122,7 +1266,7 @@ std::string BrowsingServer::NewSessionId() const {
   return ShellSafeToken(comet::RandomTokenBase64(12));
 }
 
-std::optional<FetchResult> BrowsingServer::FetchUrl(
+std::optional<FetchResult> BrowsingServer::FetchUrlViaBroker(
     const std::string& url,
     std::string* error_code,
     std::string* error_message) const {
@@ -1145,24 +1289,30 @@ std::optional<FetchResult> BrowsingServer::FetchUrl(
 
   std::optional<FetchResult> result;
   try {
-    const auto command = RunCommandCapture(
-        {"/usr/bin/curl",
-         "-fsSL",
-         "--proto",
-         "=https,http",
-         "--connect-timeout",
-         "5",
-         "--max-time",
-         "20",
-         "--max-redirs",
-         "5",
-         "-D",
-         header_path.string(),
-         "-o",
-         body_path.string(),
-         "-w",
-         "%{url_effective}\n%{content_type}",
-         url});
+    const auto command = RunCommandCapture(CommandRequest{
+        .args =
+            {"/usr/bin/curl",
+             "-fsSL",
+             "--proto",
+             "=https,http",
+             "--connect-timeout",
+             "5",
+             "--max-time",
+             "20",
+             "--max-redirs",
+             "5",
+             "-D",
+             header_path.string(),
+             "-o",
+             body_path.string(),
+             "-w",
+             "%{url_effective}\n%{content_type}",
+             url},
+        .environment = {},
+        .working_directory = std::nullopt,
+        .clear_environment = false,
+        .merge_stderr_into_stdout = true,
+    });
     if (command.exit_code != 0) {
       if (error_code != nullptr) {
         *error_code = "fetch_upstream_failed";
@@ -1214,6 +1364,58 @@ std::optional<FetchResult> BrowsingServer::FetchUrl(
 
   std::filesystem::remove_all(temp_root);
   return result;
+}
+
+std::optional<FetchResult> BrowsingServer::FetchUrl(
+    const std::string& url,
+    std::string* error_code,
+    std::string* error_message) const {
+  std::string host;
+  std::string reason;
+  if (!IsSafeBrowsingUrl(url, config_.policy, &reason, &host)) {
+    if (error_code != nullptr) {
+      *error_code = "unsafe_url";
+    }
+    if (error_message != nullptr) {
+      *error_message = reason;
+    }
+    return std::nullopt;
+  }
+
+  const bool rendered_backend_ready = cef_backend_ != nullptr && cef_backend_->IsAvailable();
+  const bool prefer_rendered = rendered_backend_ready && IsJsHeavyDomain(host);
+
+  if (prefer_rendered) {
+    std::string rendered_error;
+    const auto rendered = cef_backend_->FetchPage(
+        url,
+        config_.state_root / ("rendered-fetch-" + ShellSafeToken(comet::RandomTokenBase64(8))),
+        &rendered_error);
+    if (rendered.has_value()) {
+      return BuildRenderedFetchResult(url, *rendered, config_.policy, UtcNow());
+    }
+    if (error_message != nullptr && !rendered_error.empty()) {
+      *error_message = rendered_error;
+    }
+  }
+
+  auto brokered = FetchUrlViaBroker(url, error_code, error_message);
+  if (!brokered.has_value()) {
+    return std::nullopt;
+  }
+
+  if (rendered_backend_ready && EvidenceLooksThin(*brokered)) {
+    std::string rendered_error;
+    const auto rendered = cef_backend_->FetchPage(
+        url,
+        config_.state_root / ("rendered-fetch-" + ShellSafeToken(comet::RandomTokenBase64(8))),
+        &rendered_error);
+    if (rendered.has_value()) {
+      return BuildRenderedFetchResult(url, *rendered, config_.policy, UtcNow());
+    }
+  }
+
+  return brokered;
 }
 
 }  // namespace comet::browsing

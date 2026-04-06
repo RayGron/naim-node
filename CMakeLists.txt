@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.22)
 option(COMET_SKIP_VCPKG_TOOLCHAIN "Skip automatic vcpkg toolchain detection" OFF)
 set(COMET_CUDA_NVCC_JOBS "2" CACHE STRING
     "Maximum number of concurrent nvcc compile jobs for ggml-cuda when using Ninja")
+option(COMET_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
+set(COMET_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
+set(COMET_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
 
 if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
   list(PREPEND CMAKE_PREFIX_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
@@ -65,6 +68,7 @@ function(comet_enable_strict_warnings target_name)
 endfunction()
 
 include(FetchContent)
+include(cmake/CometCEF.cmake)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -202,6 +206,7 @@ endif()
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
+comet_configure_cef_support()
 
 add_library(
   comet-common
@@ -429,18 +434,34 @@ target_link_libraries(
   comet-auth-http-tests PRIVATE comet-common Threads::Threads)
 comet_enable_strict_warnings(comet-auth-http-tests)
 
-add_executable(
-  comet-browsing-tests
+add_library(
+  comet-browsing-runtime
   controller/src/http/controller_http_server_support.cpp
   controller/src/infra/controller_network_manager.cpp
+  runtime/browsing/src/cef_browser_backend.cpp
+  runtime/browsing/src/cef_support.cpp
+  runtime/browsing/src/process_support.cpp
   runtime/browsing/src/browsing_server.cpp
+)
+target_include_directories(
+  comet-browsing-runtime PUBLIC common/include controller/include runtime/browsing/include)
+target_link_libraries(
+  comet-browsing-runtime PRIVATE comet-common Threads::Threads)
+if(COMET_WITH_CEF)
+  target_link_libraries(comet-browsing-runtime PRIVATE comet-cef comet-cef-wrapper)
+  target_compile_definitions(
+    comet-browsing-runtime PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
+endif()
+comet_enable_strict_warnings(comet-browsing-runtime)
+
+add_executable(
+  comet-browsing-tests
   runtime/browsing/src/browsing_server_tests.cpp
-  common/src/runtime/runtime_status.cpp
 )
 target_include_directories(
   comet-browsing-tests PRIVATE common/include controller/include runtime/browsing/include)
 target_link_libraries(
-  comet-browsing-tests PRIVATE comet-common Threads::Threads)
+  comet-browsing-tests PRIVATE comet-browsing-runtime comet-common Threads::Threads)
 comet_enable_strict_warnings(comet-browsing-tests)
 
 add_executable(
@@ -634,20 +655,21 @@ if(NOT WIN32)
 
   add_executable(
     comet-browsingd
-    controller/src/http/controller_http_server_support.cpp
-    controller/src/infra/controller_network_manager.cpp
-    runtime/browsing/src/browsing_server.cpp
     runtime/browsing/src/main.cpp
-    common/src/runtime/runtime_status.cpp
   )
   target_include_directories(
     comet-browsingd PRIVATE common/include controller/include runtime/browsing/include)
   target_link_libraries(
     comet-browsingd
     PRIVATE
+      comet-browsing-runtime
       comet-common
       Threads::Threads
   )
+  if(COMET_WITH_CEF)
+    target_compile_definitions(comet-browsingd PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
+    comet_stage_cef_runtime(comet-browsingd)
+  endif()
   comet_enable_strict_warnings(comet-browsingd)
 
   add_executable(
