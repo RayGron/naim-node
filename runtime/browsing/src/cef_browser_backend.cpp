@@ -495,7 +495,7 @@ class SessionClient final : public CefClient,
       int,
       const CefString&,
       const CefString&,
-      WindowOpenDisposition,
+      CefLifeSpanHandler::WindowOpenDisposition,
       bool,
       const CefPopupFeatures&,
       CefWindowInfo&,
@@ -601,9 +601,9 @@ class SessionClient final : public CefClient,
       CefRefPtr<CefBrowser>,
       CefRefPtr<CefFrame>,
       const CefString& target_url,
-      WindowOpenDisposition target_disposition,
+      CefRequestHandler::WindowOpenDisposition target_disposition,
       bool) override {
-    return target_disposition != WOD_CURRENT_TAB ||
+    return target_disposition != CEF_WOD_CURRENT_TAB ||
            !IsAllowedTopLevelNavigationTarget(target_url.ToString());
   }
 
