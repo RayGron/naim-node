@@ -455,7 +455,24 @@ FetchResult BuildRenderedFetchResult(
     const BrowsingPolicy& policy,
     const std::string& fetched_at) {
   FetchResult result;
-  if (!rendered.html_source.empty()) {
+  const std::string rendered_text = TrimCopy(rendered.visible_text);
+  if (!rendered_text.empty()) {
+    result.url = requested_url;
+    result.final_url = rendered.final_url.empty() ? requested_url : rendered.final_url;
+    result.content_type = rendered.content_type;
+    result.title = rendered.title;
+    result.visible_text =
+        TruncateText(rendered_text, static_cast<std::size_t>(policy.max_fetch_bytes));
+    result.response_hash =
+        HashText(rendered.html_source.empty() ? rendered.visible_text : rendered.html_source);
+    result.injection_flags = BrowsingServer::DetectInjectionFlags(result.visible_text);
+    if (!result.visible_text.empty()) {
+      result.citations.push_back(
+          nlohmann::json{{"start", 0},
+                         {"end", std::min<int>(120, static_cast<int>(result.visible_text.size()))},
+                         {"url", result.final_url}});
+    }
+  } else if (!rendered.html_source.empty()) {
     result = BrowsingServer::SanitizeFetchedDocument(
         requested_url,
         rendered.final_url,

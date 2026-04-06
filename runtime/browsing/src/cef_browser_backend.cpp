@@ -404,11 +404,12 @@ class SessionClient final : public CefClient,
           return std::make_tuple(frame, current_url);
         });
     CefRefPtr<CefFrame> frame = std::get<0>(page_data);
+    const std::string visible_text = frame ? AwaitFrameText(frame, false) : std::string();
     const std::string html_source = include_html && frame ? AwaitFrameText(frame, true) : std::string();
 
     SessionSnapshot snapshot;
     snapshot.final_url = std::get<1>(page_data);
-    snapshot.visible_text.clear();
+    snapshot.visible_text = visible_text;
     snapshot.html_source = html_source;
 
     if (capture_screenshot) {
