@@ -192,9 +192,7 @@ ComposeService BuildComposeService(
         PublishedPort{"0.0.0.0", rpc_port, rpc_port});
   }
   if (instance.role == InstanceRole::Browsing) {
-    service.security_opts.push_back("no-new-privileges:true");
-    service.security_opts.push_back("apparmor=unconfined");
-    service.security_opts.push_back("seccomp=unconfined");
+    service.privileged = true;
   }
   service.labels = instance.labels;
   const auto* worker_group_member =

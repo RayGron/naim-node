@@ -324,6 +324,7 @@ struct ComposeService {
   std::vector<PublishedPort> published_ports;
   std::vector<std::string> extra_hosts;
   std::vector<std::string> security_opts;
+  bool privileged = false;
   bool use_nvidia_runtime = false;
   std::optional<std::string> gpu_device;
   std::vector<std::string> gpu_devices;

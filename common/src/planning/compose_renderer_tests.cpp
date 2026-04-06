@@ -58,11 +58,22 @@ int main() {
     infer_service.healthcheck = "NONE";
     plan.services.push_back(std::move(infer_service));
 
+    comet::ComposeService browsing_service;
+    browsing_service.name = "browsing-a";
+    browsing_service.image = "example/browsing:dev";
+    browsing_service.command = "/runtime/bin/comet-browsingd";
+    browsing_service.privileged = true;
+    browsing_service.healthcheck = "NONE";
+    plan.services.push_back(std::move(browsing_service));
+
     const std::string yaml_with_infer = comet::RenderComposeYaml(plan);
     Expect(
         yaml_with_infer.find(R"(command: ["/runtime/bin/comet-inferctl", "container-boot"])") !=
             std::string::npos,
         "compose renderer should split command strings with arguments into compose array tokens");
+    Expect(
+        yaml_with_infer.find("privileged: true") != std::string::npos,
+        "compose renderer should emit privileged mode for services that require it");
 
 #if defined(_WIN32)
     _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "192.168.88.13");
