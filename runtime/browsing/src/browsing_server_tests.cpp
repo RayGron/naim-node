@@ -33,7 +33,7 @@ class TempDir final {
  public:
   TempDir() {
     path_ = std::filesystem::temp_directory_path() /
-            ("comet-browsing-tests-" + std::to_string(getpid()) + "-" +
+            ("comet-webgateway-tests-" + std::to_string(getpid()) + "-" +
              std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(path_);
   }
@@ -381,6 +381,73 @@ void TestUnsupportedBrowserActionFailsSafely() {
   Expect(threw, "unsupported browser action should fail explicitly");
 }
 
+void TestWebGatewayDisabledContextDefaults() {
+  const auto context = comet::browsing::BrowsingServer::BuildWebGatewayDisabledContext();
+  Expect(context.at("mode").get<std::string>() == "disabled",
+         "disabled WebGateway context should expose disabled mode");
+  Expect(context.at("decision").get<std::string>() == "disabled",
+         "disabled WebGateway context should expose disabled decision");
+  Expect(context.at("lookup_state").get<std::string>() == "disabled",
+         "disabled WebGateway context should expose disabled lookup state");
+}
+
+void TestWebGatewayResolveBlocksRestrictedTargets() {
+  TempDir temp_dir;
+
+  comet::browsing::BrowsingRuntimeConfig config;
+  config.state_root = temp_dir.path();
+  config.status_path = temp_dir.path() / "status.json";
+  config.ready_path = temp_dir.path() / "ready";
+  config.policy.browser_session_enabled = true;
+  config.policy.rendered_browser_enabled = false;
+
+  comet::browsing::BrowsingServer server(std::move(config));
+  const auto response = server.HandleWebGatewayResolvePayload(
+      nlohmann::json{
+          {"conversation_slice",
+           nlohmann::json::array(
+               {nlohmann::json{{"role", "user"},
+                               {"content", "Используй веб. Попробуй открыть http://127.0.0.1:18080/."}}})},
+          {"latest_user_message", "Используй веб. Попробуй открыть http://127.0.0.1:18080/."},
+          {"web_mode", "auto"},
+      });
+  Expect(response.at("decision").get<std::string>() == "blocked",
+         "restricted localhost target should be blocked by WebGateway resolve");
+  Expect(
+      response.at("context").at("lookup_state").get<std::string>() == "blocked",
+      "blocked WebGateway resolve should expose blocked lookup state");
+  Expect(
+      response.at("refusal").get<std::string>().find("local network addresses") != std::string::npos,
+      "blocked WebGateway resolve should provide a refusal");
+}
+
+void TestWebGatewayReviewBlocksLocalAccessSuggestions() {
+  TempDir temp_dir;
+
+  comet::browsing::BrowsingRuntimeConfig config;
+  config.state_root = temp_dir.path();
+  config.status_path = temp_dir.path() / "status.json";
+  config.ready_path = temp_dir.path() / "ready";
+  config.policy.browser_session_enabled = true;
+  config.policy.rendered_browser_enabled = false;
+
+  comet::browsing::BrowsingServer server(std::move(config));
+  const auto response = server.HandleWebGatewayReviewPayload(
+      nlohmann::json{
+          {"decision", "blocked"},
+          {"refusal", "I cannot access local resources."},
+          {"response_policy",
+           nlohmann::json{{"must_not_suggest_local_access", true}}},
+          {"draft_model_answer",
+           "Try curl http://127.0.0.1:18080/ to inspect the service."},
+      });
+  Expect(response.at("status").get<std::string>() == "blocked",
+         "blocked WebGateway review should force blocked status");
+  Expect(
+      response.at("corrected_answer").get<std::string>() == "I cannot access local resources.",
+      "blocked WebGateway review should return the provided refusal");
+}
+
 }  // namespace
 
 int main() {
@@ -398,6 +465,9 @@ int main() {
     TestFetchSanitization();
     TestSessionCleanupAndAuditLog();
     TestUnsupportedBrowserActionFailsSafely();
+    TestWebGatewayDisabledContextDefaults();
+    TestWebGatewayResolveBlocksRestrictedTargets();
+    TestWebGatewayReviewBlocksLocalAccessSuggestions();
     std::cout << "browsing server tests passed\n";
     return 0;
   } catch (const std::exception& error) {

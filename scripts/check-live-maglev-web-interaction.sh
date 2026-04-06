@@ -19,7 +19,7 @@ done
 
 if [[ "${skip_build}" -eq 0 ]]; then
   "${script_dir}/configure-build.sh" "${host_os}" "${host_arch}" Debug >/dev/null
-  cmake --build "${build_dir}" --target comet-controller comet-browsingd -j 8 >/dev/null
+  cmake --build "${build_dir}" --target comet-controller comet-webgatewayd -j 8 >/dev/null
 fi
 
 command -v curl >/dev/null 2>&1 || {
@@ -309,16 +309,16 @@ curl -fsS -X POST \
 
 echo "maglev-web-live: start browsing runtime"
 COMET_PLANE_NAME="${plane_name}" \
-COMET_INSTANCE_NAME="browsing-${plane_name}" \
-COMET_INSTANCE_ROLE="browsing" \
+COMET_INSTANCE_NAME="webgateway-${plane_name}" \
+COMET_INSTANCE_ROLE="webgateway" \
 COMET_NODE_NAME="local-hostd" \
 COMET_CONTROL_ROOT="/comet/shared/control/${plane_name}" \
 COMET_CONTROLLER_URL="http://127.0.0.1:${controller_port}" \
-COMET_BROWSING_RUNTIME_STATUS_PATH="${browsing_status_path}" \
-COMET_BROWSING_STATE_ROOT="${browsing_state_root}" \
-COMET_BROWSING_PORT="${browsing_port}" \
-COMET_BROWSING_POLICY_JSON='{"browser_session_enabled":true,"rendered_browser_enabled":true,"allowed_domains":["example.com","openai.com","reddit.com","old.reddit.com","x.com","twitter.com"],"blocked_domains":["localhost","internal"],"max_search_results":5,"max_fetch_bytes":16384}' \
-  "${build_dir}/comet-browsingd" >"${browsing_log}" 2>&1 &
+COMET_WEBGATEWAY_RUNTIME_STATUS_PATH="${browsing_status_path}" \
+COMET_WEBGATEWAY_STATE_ROOT="${browsing_state_root}" \
+COMET_WEBGATEWAY_PORT="${browsing_port}" \
+COMET_WEBGATEWAY_POLICY_JSON='{"browser_session_enabled":true,"rendered_browser_enabled":true,"allowed_domains":["example.com","openai.com","reddit.com","old.reddit.com","x.com","twitter.com"],"blocked_domains":["localhost","internal"],"max_search_results":5,"max_fetch_bytes":16384}' \
+  "${build_dir}/comet-webgatewayd" >"${browsing_log}" 2>&1 &
 browsing_pid="$!"
 wait_for_http "http://127.0.0.1:${browsing_port}/health"
 

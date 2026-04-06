@@ -265,6 +265,9 @@ std::string BuildInteractionUpstreamBodyPayload(
   payload.erase(PlaneSkillsService::kSkillsSessionIdPayloadKey);
   payload.erase(InteractionBrowsingService::kSystemInstructionPayloadKey);
   payload.erase(InteractionBrowsingService::kSummaryPayloadKey);
+  payload.erase(InteractionBrowsingService::kWebGatewayContextPayloadKey);
+  payload.erase(InteractionBrowsingService::kWebGatewayPolicyPayloadKey);
+  payload.erase(InteractionBrowsingService::kWebGatewayReviewPayloadKey);
   payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   comet::runtime::ModelAdapter::AdaptInteractionPayload(
       &payload,

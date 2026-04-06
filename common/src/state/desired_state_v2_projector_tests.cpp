@@ -118,34 +118,38 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
           name + ": skills.factory_skill_ids mismatch");
     }
   }
-  if (source.contains("browsing")) {
-    Expect(projected.contains("browsing"), name + ": browsing block missing after projection");
-    Expect(projected.at("browsing").value("enabled", false) ==
-               source.at("browsing").value("enabled", false),
-           name + ": browsing.enabled projection mismatch");
-    if (source.at("browsing").contains("node")) {
-      Expect(projected.at("browsing").at("node") == source.at("browsing").at("node"),
-             name + ": browsing.node mismatch");
+  const auto* webgateway_source =
+      source.contains("webgateway")
+          ? &source.at("webgateway")
+          : (source.contains("browsing") ? &source.at("browsing") : nullptr);
+  if (webgateway_source != nullptr) {
+    Expect(projected.contains("webgateway"), name + ": webgateway block missing after projection");
+    Expect(projected.at("webgateway").value("enabled", false) ==
+               webgateway_source->value("enabled", false),
+           name + ": webgateway.enabled projection mismatch");
+    if (webgateway_source->contains("node")) {
+      Expect(projected.at("webgateway").at("node") == webgateway_source->at("node"),
+             name + ": webgateway.node mismatch");
     }
-    if (source.at("browsing").contains("image")) {
-      Expect(projected.at("browsing").at("image") == source.at("browsing").at("image"),
-             name + ": browsing.image mismatch");
+    if (webgateway_source->contains("image")) {
+      Expect(projected.at("webgateway").at("image") == webgateway_source->at("image"),
+             name + ": webgateway.image mismatch");
     }
-    if (source.at("browsing").contains("env") && projected.at("browsing").contains("env")) {
-      Expect(projected.at("browsing").at("env") == source.at("browsing").at("env"),
-             name + ": browsing.env mismatch");
+    if (webgateway_source->contains("env") && projected.at("webgateway").contains("env")) {
+      Expect(projected.at("webgateway").at("env") == webgateway_source->at("env"),
+             name + ": webgateway.env mismatch");
     }
-    if (source.at("browsing").contains("publish")) {
-      Expect(projected.at("browsing").at("publish") == source.at("browsing").at("publish"),
-             name + ": browsing.publish mismatch");
+    if (webgateway_source->contains("publish")) {
+      Expect(projected.at("webgateway").at("publish") == webgateway_source->at("publish"),
+             name + ": webgateway.publish mismatch");
     }
-    if (source.at("browsing").contains("storage")) {
-      Expect(projected.at("browsing").at("storage") == source.at("browsing").at("storage"),
-             name + ": browsing.storage mismatch");
+    if (webgateway_source->contains("storage")) {
+      Expect(projected.at("webgateway").at("storage") == webgateway_source->at("storage"),
+             name + ": webgateway.storage mismatch");
     }
-    if (source.at("browsing").contains("policy")) {
-      Expect(projected.at("browsing").at("policy") == source.at("browsing").at("policy"),
-             name + ": browsing.policy mismatch");
+    if (webgateway_source->contains("policy")) {
+      Expect(projected.at("webgateway").at("policy") == webgateway_source->at("policy"),
+             name + ": webgateway.policy mismatch");
     }
   }
   std::cout << "ok-roundtrip: " << name << '\n';
@@ -361,8 +365,8 @@ int main() {
              {
                  {"enabled", true},
                  {"node", "browse-hostd"},
-                 {"image", "example/browsing:dev"},
-                 {"env", {{"COMET_BROWSING_DEBUG", "1"}}},
+                 {"image", "example/webgateway:dev"},
+                 {"env", {{"COMET_WEBGATEWAY_DEBUG", "1"}}},
                  {"policy",
                   {{"browser_session_enabled", true},
                    {"rendered_browser_enabled", false},

@@ -23,11 +23,15 @@ namespace comet::browsing {
 class CefBrowserBackend;
 
 struct BrowsingPolicy {
+  bool cef_enabled = true;
   bool browser_session_enabled = false;
   bool rendered_browser_enabled = true;
   bool login_enabled = false;
   std::vector<std::string> allowed_domains;
   std::vector<std::string> blocked_domains;
+  std::vector<std::string> blocked_targets;
+  bool response_review_enabled = true;
+  std::string policy_version = "webgateway-v1";
   int max_search_results = 8;
   int max_fetch_bytes = 262144;
 };
@@ -60,12 +64,12 @@ struct FetchResult {
 
 struct BrowsingRuntimeConfig {
   std::string plane_name = "unknown";
-  std::string instance_name = "browsing-unknown";
-  std::string instance_role = "browsing";
+  std::string instance_name = "webgateway-unknown";
+  std::string instance_role = "webgateway";
   std::string node_name = "unknown";
   std::string control_root;
   std::string controller_url = "http://controller.internal:18080";
-  std::filesystem::path status_path = "/comet/private/browsing-runtime-status.json";
+  std::filesystem::path status_path = "/comet/private/webgateway-runtime-status.json";
   std::filesystem::path state_root = "/comet/private/sessions";
   std::filesystem::path ready_path = "/tmp/comet-ready";
   std::string listen_host = "0.0.0.0";
@@ -109,6 +113,7 @@ class BrowsingServer final {
       const std::string& body,
       const BrowsingPolicy& policy);
   static std::vector<std::string> DetectInjectionFlags(const std::string& text);
+  static nlohmann::json BuildWebGatewayDisabledContext();
 
  private:
   struct SessionRecord {
@@ -137,6 +142,8 @@ class BrowsingServer final {
   nlohmann::json BuildStatusPayload() const;
   nlohmann::json HandleSearchPayload(const nlohmann::json& payload);
   nlohmann::json HandleFetchPayload(const nlohmann::json& payload);
+  nlohmann::json HandleWebGatewayResolvePayload(const nlohmann::json& payload);
+  nlohmann::json HandleWebGatewayReviewPayload(const nlohmann::json& payload);
   nlohmann::json CreateSession(const nlohmann::json& payload);
   nlohmann::json ReadSession(const std::string& session_id) const;
   nlohmann::json ApplySessionAction(const std::string& session_id, const nlohmann::json& payload);

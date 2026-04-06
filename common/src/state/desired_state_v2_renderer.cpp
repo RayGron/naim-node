@@ -20,13 +20,13 @@ constexpr int kDefaultInferPrivateDiskSizeGb = 12;
 constexpr int kDefaultWorkerPrivateDiskSizeGb = 2;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
 constexpr int kDefaultSkillsPrivateDiskSizeGb = 1;
-constexpr int kDefaultBrowsingPrivateDiskSizeGb = 1;
+constexpr int kDefaultWebGatewayPrivateDiskSizeGb = 1;
 constexpr int kSkillsContainerPort = 18120;
 constexpr int kSkillsPublishedPortBase = 24000;
 constexpr int kSkillsPublishedPortSpan = 10000;
-constexpr int kBrowsingContainerPort = 18130;
-constexpr int kBrowsingPublishedPortBase = 34000;
-constexpr int kBrowsingPublishedPortSpan = 10000;
+constexpr int kWebGatewayContainerPort = 18130;
+constexpr int kWebGatewayPublishedPortBase = 34000;
+constexpr int kWebGatewayPublishedPortSpan = 10000;
 
 bool HasExplicitPrivateStorage(
     const nlohmann::json& service_json,
@@ -66,8 +66,10 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
           value.contains("skills") && value.at("skills").is_object() ? value.at("skills")
                                                                       : nlohmann::json::object()),
       browsing_json_(
-          value.contains("browsing") && value.at("browsing").is_object() ? value.at("browsing")
-                                                                         : nlohmann::json::object()) {}
+          value.contains("webgateway") && value.at("webgateway").is_object()
+              ? value.at("webgateway")
+              : (value.contains("browsing") && value.at("browsing").is_object() ? value.at("browsing")
+                                                                                 : nlohmann::json::object())) {}
 
 DesiredState DesiredStateV2Renderer::RenderState() {
   RenderIdentity();
@@ -82,7 +84,7 @@ DesiredState DesiredStateV2Renderer::RenderState() {
   RenderWorkerInstances();
   RenderAppInstance();
   RenderSkillsInstance();
-  RenderBrowsingInstance();
+  RenderWebGatewayInstance();
   return state_;
 }
 
@@ -111,12 +113,18 @@ void DesiredStateV2Renderer::RenderIdentity() {
     if (browsing_json_.contains("policy") && browsing_json_.at("policy").is_object()) {
       BrowsingPolicySettings policy;
       const auto& policy_json = browsing_json_.at("policy");
+      policy.cef_enabled =
+          policy_json.value("cef_enabled", policy.cef_enabled);
       policy.browser_session_enabled =
           policy_json.value("browser_session_enabled", policy.browser_session_enabled);
       policy.rendered_browser_enabled =
           policy_json.value("rendered_browser_enabled", policy.rendered_browser_enabled);
       policy.login_enabled =
           policy_json.value("login_enabled", policy.login_enabled);
+      policy.response_review_enabled =
+          policy_json.value("response_review_enabled", policy.response_review_enabled);
+      policy.policy_version =
+          policy_json.value("policy_version", policy.policy_version);
       policy.max_search_results =
           policy_json.value("max_search_results", policy.max_search_results);
       policy.max_fetch_bytes =
@@ -132,6 +140,13 @@ void DesiredStateV2Renderer::RenderIdentity() {
         for (const auto& item : policy_json.at("blocked_domains")) {
           if (item.is_string()) {
             policy.blocked_domains.push_back(item.get<std::string>());
+          }
+        }
+      }
+      if (policy_json.contains("blocked_targets") && policy_json.at("blocked_targets").is_array()) {
+        for (const auto& item : policy_json.at("blocked_targets")) {
+          if (item.is_string()) {
+            policy.blocked_targets.push_back(item.get<std::string>());
           }
         }
       }
@@ -693,40 +708,41 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
   state_.disks.push_back(std::move(skills_private_disk));
 }
 
-void DesiredStateV2Renderer::RenderBrowsingInstance() {
+void DesiredStateV2Renderer::RenderWebGatewayInstance() {
   if (!browsing_json_.value("enabled", false)) {
     return;
   }
 
   InstanceSpec browsing;
-  browsing.name = BuildBrowsingInstanceName();
+  browsing.name = BuildWebGatewayInstanceName();
   browsing.role = InstanceRole::Browsing;
   browsing.plane_name = state_.plane_name;
   if (browsing_json_.contains("node") && browsing_json_.at("node").is_string()) {
     browsing.node_name =
-        RequireNode(browsing_json_.at("node").get<std::string>(), "browsing").name;
+        RequireNode(browsing_json_.at("node").get<std::string>(), "webgateway").name;
   } else {
     browsing.node_name = ResolveAppNodeName();
   }
-  browsing.image = browsing_json_.value("image", std::string("comet/browsing-runtime:dev"));
+  browsing.image =
+      browsing_json_.value("image", std::string("comet/webgateway-runtime:dev"));
   browsing.command =
       BuildCommandFromStartSpec(browsing_json_.value("start", nlohmann::json::object()),
-                                "/runtime/bin/comet-browsingd");
+                                "/runtime/bin/comet-webgatewayd");
   browsing.private_disk_name = browsing.name + "-private";
   browsing.shared_disk_name =
       InstanceNeedsSharedDiskMount(browsing.role) ? state_.plane_shared_disk_name : "";
   browsing.private_disk_size_gb =
-      ExtractPrivateDiskSizeGb(browsing_json_, kDefaultBrowsingPrivateDiskSizeGb, "storage");
+      ExtractPrivateDiskSizeGb(browsing_json_, kDefaultWebGatewayPrivateDiskSizeGb, "storage");
   browsing.environment = {
       {"COMET_PLANE_NAME", state_.plane_name},
       {"COMET_INSTANCE_NAME", browsing.name},
-      {"COMET_INSTANCE_ROLE", "browsing"},
+      {"COMET_INSTANCE_ROLE", "webgateway"},
       {"COMET_NODE_NAME", browsing.node_name},
       {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
-      {"COMET_BROWSING_PORT", std::to_string(kBrowsingContainerPort)},
-      {"COMET_BROWSING_RUNTIME_STATUS_PATH", "/comet/private/browsing-runtime-status.json"},
-      {"COMET_BROWSING_STATE_ROOT", "/comet/private/sessions"},
-      {"COMET_BROWSING_POLICY_JSON",
+      {"COMET_WEBGATEWAY_PORT", std::to_string(kWebGatewayContainerPort)},
+      {"COMET_WEBGATEWAY_RUNTIME_STATUS_PATH", "/comet/private/webgateway-runtime-status.json"},
+      {"COMET_WEBGATEWAY_STATE_ROOT", "/comet/private/sessions"},
+      {"COMET_WEBGATEWAY_POLICY_JSON",
        browsing_json_.contains("policy") && browsing_json_.at("policy").is_object()
            ? browsing_json_.at("policy").dump()
            : nlohmann::json::object().dump()},
@@ -741,7 +757,7 @@ void DesiredStateV2Renderer::RenderBrowsingInstance() {
   }
   browsing.labels = {
       {"comet.plane", state_.plane_name},
-      {"comet.role", "browsing"},
+      {"comet.role", "webgateway"},
       {"comet.node", browsing.node_name},
   };
   if (browsing_json_.contains("publish") && browsing_json_.at("publish").is_array()) {
@@ -756,8 +772,8 @@ void DesiredStateV2Renderer::RenderBrowsingInstance() {
   if (browsing.published_ports.empty()) {
     browsing.published_ports.push_back(PublishedPort{
         "127.0.0.1",
-        BuildBrowsingHostPort(),
-        kBrowsingContainerPort,
+        BuildWebGatewayHostPort(),
+        kWebGatewayContainerPort,
     });
   }
   state_.instances.push_back(browsing);
@@ -963,8 +979,8 @@ std::string DesiredStateV2Renderer::BuildSkillsInstanceName() const {
   return "skills-" + state_.plane_name;
 }
 
-std::string DesiredStateV2Renderer::BuildBrowsingInstanceName() const {
-  return "browsing-" + state_.plane_name;
+std::string DesiredStateV2Renderer::BuildWebGatewayInstanceName() const {
+  return "webgateway-" + state_.plane_name;
 }
 
 std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
@@ -1011,10 +1027,11 @@ int DesiredStateV2Renderer::BuildSkillsHostPort() const {
   return kSkillsPublishedPortBase + static_cast<int>(offset);
 }
 
-int DesiredStateV2Renderer::BuildBrowsingHostPort() const {
-  const uint32_t offset = StablePortHash(state_.plane_name + ":" + BuildBrowsingInstanceName()) %
-                          kBrowsingPublishedPortSpan;
-  return kBrowsingPublishedPortBase + static_cast<int>(offset);
+int DesiredStateV2Renderer::BuildWebGatewayHostPort() const {
+  const uint32_t offset =
+      StablePortHash(state_.plane_name + ":" + BuildWebGatewayInstanceName()) %
+      kWebGatewayPublishedPortSpan;
+  return kWebGatewayPublishedPortBase + static_cast<int>(offset);
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {

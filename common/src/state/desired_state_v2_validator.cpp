@@ -359,47 +359,66 @@ void DesiredStateV2Validator::ValidateSkills() const {
 }
 
 void DesiredStateV2Validator::ValidateBrowsing() const {
-  if (!value_.contains("browsing")) {
+  const auto* browsing =
+      value_.contains("webgateway") && value_.at("webgateway").is_object()
+          ? &value_.at("webgateway")
+          : (value_.contains("browsing") && value_.at("browsing").is_object()
+                 ? &value_.at("browsing")
+                 : nullptr);
+  if (browsing == nullptr) {
     return;
   }
-  RequireObject("browsing");
   const std::string plane_mode = value_.value("plane_mode", std::string("llm"));
   if (plane_mode != "llm") {
-    throw std::runtime_error("desired-state v2 browsing is supported only for plane_mode=llm");
+    throw std::runtime_error("desired-state v2 webgateway is supported only for plane_mode=llm");
   }
-  const auto& browsing = value_.at("browsing");
-  const bool browsing_enabled = FieldEnabledByDefault(browsing, false);
+  const bool browsing_enabled = FieldEnabledByDefault(*browsing, false);
   if (!browsing_enabled) {
     return;
   }
-  if (browsing.contains("node") && !browsing.at("node").is_string()) {
-    throw std::runtime_error("desired-state v2 browsing.node must be a string");
+  if (browsing->contains("node") && !browsing->at("node").is_string()) {
+    throw std::runtime_error("desired-state v2 webgateway.node must be a string");
   }
-  if (browsing.contains("node") && browsing.at("node").is_string()) {
+  if (browsing->contains("node") && browsing->at("node").is_string()) {
     ValidateNodeRoleCompatibility(
-        browsing.at("node").get<std::string>(),
-        "browsing",
-        "browsing");
+        browsing->at("node").get<std::string>(),
+        "webgateway",
+        "webgateway");
   }
-  if (browsing.contains("policy")) {
-    if (!browsing.at("policy").is_object()) {
-      throw std::runtime_error("desired-state v2 browsing.policy must be an object");
+  if (browsing->contains("policy")) {
+    if (!browsing->at("policy").is_object()) {
+      throw std::runtime_error("desired-state v2 webgateway.policy must be an object");
     }
-    const auto& policy = browsing.at("policy");
+    const auto& policy = browsing->at("policy");
+    if (policy.contains("cef_enabled") &&
+        !policy.at("cef_enabled").is_boolean()) {
+      throw std::runtime_error(
+          "desired-state v2 webgateway.policy.cef_enabled must be a boolean");
+    }
     if (policy.contains("browser_session_enabled") &&
         !policy.at("browser_session_enabled").is_boolean()) {
       throw std::runtime_error(
-          "desired-state v2 browsing.policy.browser_session_enabled must be a boolean");
+          "desired-state v2 webgateway.policy.browser_session_enabled must be a boolean");
     }
     if (policy.contains("rendered_browser_enabled") &&
         !policy.at("rendered_browser_enabled").is_boolean()) {
       throw std::runtime_error(
-          "desired-state v2 browsing.policy.rendered_browser_enabled must be a boolean");
+          "desired-state v2 webgateway.policy.rendered_browser_enabled must be a boolean");
     }
     if (policy.contains("login_enabled") &&
         !policy.at("login_enabled").is_boolean()) {
       throw std::runtime_error(
-          "desired-state v2 browsing.policy.login_enabled must be a boolean");
+          "desired-state v2 webgateway.policy.login_enabled must be a boolean");
+    }
+    if (policy.contains("response_review_enabled") &&
+        !policy.at("response_review_enabled").is_boolean()) {
+      throw std::runtime_error(
+          "desired-state v2 webgateway.policy.response_review_enabled must be a boolean");
+    }
+    if (policy.contains("policy_version") &&
+        !policy.at("policy_version").is_string()) {
+      throw std::runtime_error(
+          "desired-state v2 webgateway.policy.policy_version must be a string");
     }
     const auto validate_domain_list = [&](const char* field_name) {
       if (!policy.contains(field_name)) {
@@ -407,38 +426,39 @@ void DesiredStateV2Validator::ValidateBrowsing() const {
       }
       if (!policy.at(field_name).is_array()) {
         throw std::runtime_error(
-            std::string("desired-state v2 browsing.policy.") + field_name + " must be an array");
+            std::string("desired-state v2 webgateway.policy.") + field_name + " must be an array");
       }
       std::set<std::string> seen_domains;
       for (const auto& item : policy.at(field_name)) {
         if (!item.is_string() || item.get<std::string>().empty()) {
           throw std::runtime_error(
-              std::string("desired-state v2 browsing.policy.") + field_name +
+              std::string("desired-state v2 webgateway.policy.") + field_name +
               " items must be non-empty strings");
         }
         if (!seen_domains.insert(item.get<std::string>()).second) {
           throw std::runtime_error(
-              std::string("desired-state v2 browsing.policy.") + field_name +
+              std::string("desired-state v2 webgateway.policy.") + field_name +
               " items must be unique");
         }
       }
     };
     validate_domain_list("allowed_domains");
     validate_domain_list("blocked_domains");
+    validate_domain_list("blocked_targets");
     if (policy.contains("max_search_results") &&
         (!policy.at("max_search_results").is_number_integer() ||
          policy.at("max_search_results").get<int>() <= 0)) {
       throw std::runtime_error(
-          "desired-state v2 browsing.policy.max_search_results must be a positive integer");
+          "desired-state v2 webgateway.policy.max_search_results must be a positive integer");
     }
     if (policy.contains("max_fetch_bytes") &&
         (!policy.at("max_fetch_bytes").is_number_integer() ||
          policy.at("max_fetch_bytes").get<int>() <= 0)) {
       throw std::runtime_error(
-          "desired-state v2 browsing.policy.max_fetch_bytes must be a positive integer");
+          "desired-state v2 webgateway.policy.max_fetch_bytes must be a positive integer");
     }
   }
-  ValidateStartBlock(browsing, "browsing");
+  ValidateStartBlock(*browsing, "webgateway");
 }
 
 void DesiredStateV2Validator::ValidateHooks() const {
@@ -520,7 +540,7 @@ void DesiredStateV2Validator::ValidateNodeRoleCompatibility(
     }
     return;
   }
-  if (required == "browsing") {
+  if (required == "browsing" || required == "webgateway") {
     if (*mode == "worker-only") {
       throw std::runtime_error(
           std::string("desired-state v2 ") + service_name +

@@ -355,8 +355,13 @@ HttpResponse InteractionHttpService::BuildSessionResponse(
     const comet::controller::InteractionRequestContext& request_context,
     const comet::controller::InteractionSessionResult& result) const {
   const comet::controller::InteractionSessionPresenter presenter;
+  comet::controller::InteractionSessionResult reviewed_result = result;
+  comet::controller::InteractionBrowsingService().ReviewInteractionResponse(
+      resolution,
+      request_context,
+      &reviewed_result);
   const auto response_spec =
-      presenter.BuildResponseSpec(resolution, request_context, result);
+      presenter.BuildResponseSpec(resolution, request_context, reviewed_result);
   return support_.BuildJsonResponse(
       response_spec.status_code,
       response_spec.payload,

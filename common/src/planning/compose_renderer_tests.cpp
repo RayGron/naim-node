@@ -31,7 +31,7 @@ int main() {
     service.use_nvidia_runtime = true;
     service.gpu_devices = {"0", "2", "3", "0"};
     service.healthcheck = "CMD-SHELL test -f /tmp/comet-ready";
-    service.environment["COMET_BROWSING_POLICY_JSON"] =
+    service.environment["COMET_WEBGATEWAY_POLICY_JSON"] =
         R"({"blocked_domains":["localhost","127.0.0.1","internal"],"browser_session_enabled":true})";
     plan.services.push_back(std::move(service));
 
@@ -44,7 +44,7 @@ int main() {
         "compose renderer should not emit duplicate gpu device ids");
     Expect(
         yaml.find(
-            R"(COMET_BROWSING_POLICY_JSON: "{\"blocked_domains\":[\"localhost\",\"127.0.0.1\",\"internal\"],\"browser_session_enabled\":true}")") !=
+            R"(COMET_WEBGATEWAY_POLICY_JSON: "{\"blocked_domains\":[\"localhost\",\"127.0.0.1\",\"internal\"],\"browser_session_enabled\":true}")") !=
             std::string::npos,
         "compose renderer should escape JSON-valued env vars");
     Expect(
@@ -59,9 +59,9 @@ int main() {
     plan.services.push_back(std::move(infer_service));
 
     comet::ComposeService browsing_service;
-    browsing_service.name = "browsing-a";
-    browsing_service.image = "example/browsing:dev";
-    browsing_service.command = "/runtime/bin/comet-browsingd";
+    browsing_service.name = "webgateway-a";
+    browsing_service.image = "example/webgateway:dev";
+    browsing_service.command = "/runtime/bin/comet-webgatewayd";
     browsing_service.privileged = true;
     browsing_service.healthcheck = "NONE";
     plan.services.push_back(std::move(browsing_service));

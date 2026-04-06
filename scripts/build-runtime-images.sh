@@ -33,7 +33,7 @@ infer_tag="${2:-comet/infer-runtime:dev}"
 worker_tag="${3:-comet/worker-runtime:dev}"
 web_ui_tag="${4:-comet/web-ui:dev}"
 skills_tag="${5:-comet/skills-runtime:dev}"
-browsing_tag="${6:-comet/browsing-runtime:dev}"
+webgateway_tag="${6:-comet/webgateway-runtime:dev}"
 
 build_web_ui_image() {
   local temp_root
@@ -96,10 +96,10 @@ echo "building ${skills_tag}"
   -t "${skills_tag}" \
   "${repo_root}"
 
-echo "building ${browsing_tag}"
+echo "building ${webgateway_tag}"
 "${docker_cmd}" build \
   -f "${repo_root}/runtime/browsing/Dockerfile" \
-  -t "${browsing_tag}" \
+  -t "${webgateway_tag}" \
   "${repo_root}"
 
 if [[ "${skip_web_ui}" != "yes" ]]; then
@@ -112,7 +112,7 @@ echo "  base=${base_tag}"
 echo "  infer=${infer_tag}"
 echo "  worker=${worker_tag}"
 echo "  skills=${skills_tag}"
-echo "  browsing=${browsing_tag}"
+echo "  webgateway=${webgateway_tag}"
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "  web_ui=${web_ui_tag}"
 fi

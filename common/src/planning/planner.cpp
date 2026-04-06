@@ -329,7 +329,7 @@ std::string ToString(InstanceRole role) {
     case InstanceRole::Skills:
       return "skills";
     case InstanceRole::Browsing:
-      return "browsing";
+      return "webgateway";
   }
   return "unknown";
 }
@@ -347,7 +347,7 @@ std::string ToString(DiskKind kind) {
     case DiskKind::SkillsPrivate:
       return "skills-private";
     case DiskKind::BrowsingPrivate:
-      return "browsing-private";
+      return "webgateway-private";
   }
   return "unknown";
 }

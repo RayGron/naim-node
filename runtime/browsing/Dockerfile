@@ -34,7 +34,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY runtime/browsing /runtime/browsing
-COPY build/linux/x64/comet-browsingd /runtime/bin/comet-browsingd
+COPY build/linux/x64/comet-webgatewayd /runtime/bin/comet-webgatewayd
 COPY build/linux/x64/libcef.so /runtime/bin/libcef.so
 COPY build/linux/x64/chrome-sandbox /runtime/bin/chrome-sandbox
 COPY build/linux/x64/chrome_100_percent.pak /runtime/bin/chrome_100_percent.pak
@@ -49,7 +49,7 @@ COPY build/linux/x64/locales /runtime/bin/locales
 
 RUN chmod +x \
       /runtime/browsing/entrypoint.sh \
-      /runtime/bin/comet-browsingd \
+      /runtime/bin/comet-webgatewayd \
       /runtime/bin/chrome-sandbox
 
 WORKDIR /runtime

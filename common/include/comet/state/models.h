@@ -272,11 +272,15 @@ struct SkillsSettings {
 };
 
 struct BrowsingPolicySettings {
+  bool cef_enabled = true;
   bool browser_session_enabled = false;
   bool rendered_browser_enabled = true;
   bool login_enabled = false;
   std::vector<std::string> allowed_domains;
   std::vector<std::string> blocked_domains;
+  std::vector<std::string> blocked_targets;
+  bool response_review_enabled = true;
+  std::string policy_version = "webgateway-v1";
   int max_search_results = 8;
   int max_fetch_bytes = 262144;
 };
@@ -285,6 +289,9 @@ struct BrowsingSettings {
   bool enabled = false;
   std::optional<BrowsingPolicySettings> policy;
 };
+
+using WebGatewayPolicySettings = BrowsingPolicySettings;
+using WebGatewaySettings = BrowsingSettings;
 
 struct DesiredState {
   std::string plane_name;

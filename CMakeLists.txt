@@ -437,7 +437,7 @@ target_link_libraries(
 comet_enable_strict_warnings(comet-auth-http-tests)
 
 add_library(
-  comet-browsing-runtime
+  comet-webgateway-runtime
   controller/src/http/controller_http_server_support.cpp
   controller/src/infra/controller_network_manager.cpp
   runtime/browsing/src/cef_browser_backend.cpp
@@ -446,25 +446,25 @@ add_library(
   runtime/browsing/src/browsing_server.cpp
 )
 target_include_directories(
-  comet-browsing-runtime PUBLIC common/include controller/include runtime/browsing/include)
+  comet-webgateway-runtime PUBLIC common/include controller/include runtime/browsing/include)
 target_link_libraries(
-  comet-browsing-runtime PRIVATE comet-common Threads::Threads)
+  comet-webgateway-runtime PRIVATE comet-common Threads::Threads)
 if(COMET_WITH_CEF)
-  target_link_libraries(comet-browsing-runtime PRIVATE comet-cef comet-cef-wrapper)
+  target_link_libraries(comet-webgateway-runtime PRIVATE comet-cef comet-cef-wrapper)
   target_compile_definitions(
-    comet-browsing-runtime PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
+    comet-webgateway-runtime PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
 endif()
-comet_enable_strict_warnings(comet-browsing-runtime)
+comet_enable_strict_warnings(comet-webgateway-runtime)
 
 add_executable(
-  comet-browsing-tests
+  comet-webgateway-tests
   runtime/browsing/src/browsing_server_tests.cpp
 )
 target_include_directories(
-  comet-browsing-tests PRIVATE common/include controller/include runtime/browsing/include)
+  comet-webgateway-tests PRIVATE common/include controller/include runtime/browsing/include)
 target_link_libraries(
-  comet-browsing-tests PRIVATE comet-browsing-runtime comet-common Threads::Threads)
-comet_enable_strict_warnings(comet-browsing-tests)
+  comet-webgateway-tests PRIVATE comet-webgateway-runtime comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-webgateway-tests)
 
 add_executable(
   comet-hostd-local-state-tests
@@ -656,29 +656,29 @@ if(NOT WIN32)
   comet_enable_strict_warnings(comet-devtool)
 
   add_executable(
-    comet-browsingd
+    comet-webgatewayd
     runtime/browsing/src/main.cpp
   )
   target_include_directories(
-    comet-browsingd PRIVATE common/include controller/include runtime/browsing/include)
+    comet-webgatewayd PRIVATE common/include controller/include runtime/browsing/include)
   target_link_libraries(
-    comet-browsingd
+    comet-webgatewayd
     PRIVATE
-      comet-browsing-runtime
+      comet-webgateway-runtime
       comet-common
       Threads::Threads
   )
   if(COMET_WITH_CEF)
-    target_compile_definitions(comet-browsingd PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
+    target_compile_definitions(comet-webgatewayd PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
     set_target_properties(
-      comet-browsingd
+      comet-webgatewayd
       PROPERTIES
         BUILD_RPATH "$ORIGIN"
         INSTALL_RPATH "$ORIGIN"
     )
-    comet_stage_cef_runtime(comet-browsingd)
+    comet_stage_cef_runtime(comet-webgatewayd)
   endif()
-  comet_enable_strict_warnings(comet-browsingd)
+  comet_enable_strict_warnings(comet-webgatewayd)
 
   add_executable(
     comet-skillsd

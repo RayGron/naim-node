@@ -66,7 +66,7 @@ bool IsPlaneSkillsRequest(const std::string& path) {
 }
 
 bool IsPlaneBrowsingRequest(const std::string& path) {
-  return ExtractPlaneFeatureRequestName(path, "/browsing").has_value();
+  return ExtractPlaneFeatureRequestName(path, "/webgateway").has_value();
 }
 
 }  // namespace
@@ -472,7 +472,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
         store.Initialize();
         const auto plane_name = skills_request
                                     ? ExtractPlaneFeatureRequestName(request.path, "/skills")
-                                    : ExtractPlaneFeatureRequestName(request.path, "/browsing");
+                                    : ExtractPlaneFeatureRequestName(request.path, "/webgateway");
         if (plane_name.has_value()) {
           const auto desired_state = store.LoadDesiredState(*plane_name);
           if (desired_state.has_value() && desired_state->protected_plane &&

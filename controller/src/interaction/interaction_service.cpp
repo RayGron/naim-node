@@ -271,6 +271,13 @@ std::string RequestSkillResolutionMode(
 nlohmann::json RequestBrowsingSummary(
     const InteractionRequestContext& request_context) {
   if (request_context.payload.contains(
+          InteractionBrowsingService::kWebGatewayContextPayloadKey) &&
+      request_context.payload.at(
+          InteractionBrowsingService::kWebGatewayContextPayloadKey).is_object()) {
+    return request_context.payload.at(
+        InteractionBrowsingService::kWebGatewayContextPayloadKey);
+  }
+  if (request_context.payload.contains(
           InteractionBrowsingService::kSummaryPayloadKey) &&
       request_context.payload.at(
           InteractionBrowsingService::kSummaryPayloadKey).is_object()) {
@@ -1210,7 +1217,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
   session_payload["auto_applied_skills"] = RequestAutoAppliedSkills(request_context);
   session_payload["skill_resolution_mode"] =
       RequestSkillResolutionMode(request_context);
-  session_payload["browsing"] = RequestBrowsingSummary(request_context);
+  session_payload["webgateway"] = RequestBrowsingSummary(request_context);
   session_payload["skills_session_id"] =
       RequestSkillsSessionId(request_context).has_value()
           ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1276,7 +1283,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
             {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
             {"skill_resolution_mode",
              RequestSkillResolutionMode(request_context)},
-            {"browsing", RequestBrowsingSummary(request_context)},
+            {"webgateway", RequestBrowsingSummary(request_context)},
             {"skills_session_id",
              RequestSkillsSessionId(request_context).has_value()
                  ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1321,7 +1328,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
           {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
           {"skill_resolution_mode",
            RequestSkillResolutionMode(request_context)},
-          {"browsing", RequestBrowsingSummary(request_context)},
+          {"webgateway", RequestBrowsingSummary(request_context)},
           {"skills_session_id",
            RequestSkillsSessionId(request_context).has_value()
                ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1352,7 +1359,7 @@ nlohmann::json InteractionStreamPresenter::BuildSessionStartedEvent(
       {"applied_skills", RequestAppliedSkills(request_context)},
       {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
       {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
-      {"browsing", RequestBrowsingSummary(request_context)},
+      {"webgateway", RequestBrowsingSummary(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1468,7 +1475,7 @@ nlohmann::json InteractionStreamPresenter::BuildSessionCompleteEvent(
       {"applied_skills", RequestAppliedSkills(request_context)},
       {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
       {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
-      {"browsing", RequestBrowsingSummary(request_context)},
+      {"webgateway", RequestBrowsingSummary(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -1500,7 +1507,7 @@ nlohmann::json InteractionStreamPresenter::BuildCompleteEvent(
       {"applied_skills", RequestAppliedSkills(request_context)},
       {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
       {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
-      {"browsing", RequestBrowsingSummary(request_context)},
+      {"webgateway", RequestBrowsingSummary(request_context)},
       {"skills_session_id",
        RequestSkillsSessionId(request_context).has_value()
            ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -2099,7 +2106,7 @@ void InteractionStreamSessionExecutor::Execute(
     session_payload["auto_applied_skills"] = RequestAutoAppliedSkills(request_context);
     session_payload["skill_resolution_mode"] =
         RequestSkillResolutionMode(request_context);
-    session_payload["browsing"] = RequestBrowsingSummary(request_context);
+    session_payload["webgateway"] = RequestBrowsingSummary(request_context);
     session_payload["skills_session_id"] =
         RequestSkillsSessionId(request_context).has_value()
             ? nlohmann::json(*RequestSkillsSessionId(request_context))
@@ -2917,9 +2924,9 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
        skills_instance != desired_state->instances.end()
            ? nlohmann::json(skills_instance->name)
            : nlohmann::json(nullptr)},
-      {"browsing_enabled", browsing_enabled},
-      {"browsing_ready", browsing_ready},
-      {"browsing_container_name",
+      {"webgateway_enabled", browsing_enabled},
+      {"webgateway_ready", browsing_ready},
+      {"webgateway_container_name",
        browsing_instance != desired_state->instances.end()
            ? nlohmann::json(browsing_instance->name)
            : nlohmann::json(nullptr)},

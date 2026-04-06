@@ -1,6 +1,7 @@
 #include <filesystem>
 #include <iostream>
 #include <atomic>
+#include <cctype>
 #include <map>
 #include <mutex>
 #include <set>
@@ -30,6 +31,102 @@ void Expect(bool condition, const std::string& message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+std::string LowercaseAscii(std::string value) {
+  for (char& ch : value) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return value;
+}
+
+bool ContainsAscii(
+    const std::string& haystack,
+    const std::string& needle) {
+  return LowercaseAscii(haystack).find(LowercaseAscii(needle)) != std::string::npos;
+}
+
+[[maybe_unused]] bool ContainsAnyAscii(
+    const std::string& haystack,
+    const std::vector<std::string>& needles) {
+  return std::any_of(
+      needles.begin(),
+      needles.end(),
+      [&](const std::string& needle) { return ContainsAscii(haystack, needle); });
+}
+
+[[maybe_unused]] std::vector<std::string> ExtractUrls(const std::string& text) {
+  std::vector<std::string> urls;
+  std::size_t position = 0;
+  while (position < text.size()) {
+    const std::size_t http_pos = text.find("http://", position);
+    const std::size_t https_pos = text.find("https://", position);
+    const std::size_t start =
+        http_pos == std::string::npos ? https_pos
+                                      : (https_pos == std::string::npos ? http_pos
+                                                                        : std::min(http_pos, https_pos));
+    if (start == std::string::npos) {
+      break;
+    }
+    std::size_t end = start;
+    while (end < text.size() && !std::isspace(static_cast<unsigned char>(text[end]))) {
+      ++end;
+    }
+    urls.push_back(text.substr(start, end - start));
+    position = end;
+  }
+  return urls;
+}
+
+std::string TrimAscii(const std::string& value) {
+  std::size_t start = 0;
+  while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
+    ++start;
+  }
+  std::size_t end = value.size();
+  while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+    --end;
+  }
+  return value.substr(start, end - start);
+}
+
+[[maybe_unused]] std::string SanitizeSearchQuery(const std::string& raw) {
+  std::string query = raw;
+  const auto lower = LowercaseAscii(query);
+  const auto additional_details = lower.find("additional details:");
+  if (additional_details != std::string::npos) {
+    query = query.substr(0, additional_details);
+  }
+  const auto user_message = lower.find("user message:");
+  if (user_message != std::string::npos) {
+    query = query.substr(user_message + std::string("user message:").size());
+  }
+  const std::vector<std::string> removals = {
+      "reply to the user in chat mode.",
+      "reply to the user in chat mode",
+      "search the web for",
+      "search online for",
+      "use the web and check",
+      "use the web",
+      "enable web for this chat.",
+      "enable web for this chat",
+      "используй веб.",
+      "используй веб",
+  };
+  for (const auto& removal : removals) {
+    const auto lowered = LowercaseAscii(query);
+    const auto found = lowered.find(LowercaseAscii(removal));
+    if (found != std::string::npos) {
+      query.erase(found, removal.size());
+    }
+  }
+  query = TrimAscii(query);
+  while (!query.empty() &&
+         (query.front() == '.' || query.front() == ':' || query.front() == '-' ||
+          std::isspace(static_cast<unsigned char>(query.front())))) {
+    query.erase(query.begin());
+  }
+  return TrimAscii(query);
 }
 
 class SkillRuntimeTestServer {
@@ -273,15 +370,15 @@ class BrowsingRuntimeTestServer {
 
       if (request.rfind("GET /health ", 0) == 0) {
         WriteJsonResponse(client_fd, 200, json{{"status", "ok"}});
-      } else if (request.rfind("GET /v1/browsing/status ", 0) == 0) {
+      } else if (request.rfind("GET /v1/webgateway/status ", 0) == 0) {
         WriteJsonResponse(
             client_fd,
             200,
             json{{"status", "ok"},
-                 {"service", "comet-browsing"},
+                 {"service", "comet-webgateway"},
                  {"ready", true},
                  {"active_session_count", 0}});
-      } else if (request.rfind("POST /v1/browsing/search ", 0) == 0) {
+      } else if (request.rfind("POST /v1/webgateway/search ", 0) == 0) {
         WriteJsonResponse(
             client_fd,
             200,
@@ -304,7 +401,7 @@ class BrowsingRuntimeTestServer {
 
 json DefaultInteractionBrowsingStatusPayload() {
   return json{{"status", "ok"},
-              {"service", "comet-browsing"},
+              {"service", "comet-webgateway"},
               {"ready", true},
               {"search_enabled", true},
               {"fetch_enabled", true},
@@ -504,9 +601,9 @@ class InteractionBrowsingRuntimeTestServer {
 
       if (request.rfind("GET /health ", 0) == 0) {
         WriteJsonResponse(client_fd, 200, json{{"status", "ok"}});
-      } else if (request.rfind("GET /v1/browsing/status ", 0) == 0) {
+      } else if (request.rfind("GET /v1/webgateway/status ", 0) == 0) {
         WriteJsonResponse(client_fd, config_.status_code, config_.status_payload);
-      } else if (request.rfind("POST /v1/browsing/search ", 0) == 0) {
+      } else if (request.rfind("POST /v1/webgateway/search ", 0) == 0) {
         ++search_count_;
         const json search_payload =
             body.empty() ? json::object() : json::parse(body, nullptr, false);
@@ -539,7 +636,7 @@ class InteractionBrowsingRuntimeTestServer {
             json{{"query", search_payload.value("query", std::string{})},
                  {"backend", config_.search_backend},
                  {"results", config_.search_results}});
-      } else if (request.rfind("POST /v1/browsing/fetch ", 0) == 0) {
+      } else if (request.rfind("POST /v1/webgateway/fetch ", 0) == 0) {
         ++fetch_count_;
         const json fetch_payload =
             body.empty() ? json::object() : json::parse(body, nullptr, false);
@@ -648,7 +745,7 @@ comet::DesiredState BuildDesiredStateWithBrowsingPort(
   desired_state.browsing = settings;
 
   comet::InstanceSpec browsing;
-  browsing.name = "browsing-maglev";
+  browsing.name = "webgateway-maglev";
   browsing.plane_name = "maglev";
   browsing.node_name = "local-hostd";
   browsing.role = comet::InstanceRole::Browsing;
@@ -773,12 +870,12 @@ int main() {
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto payload =
           browsing_service.BuildStatusPayload(desired_state, std::optional<std::string>("running"));
-      Expect(payload.value("browsing_enabled", false),
-             "browsing status should mark browsing as enabled");
-      Expect(payload.value("browsing_ready", false),
-             "browsing status should probe runtime readiness");
-      Expect(payload.value("service", std::string{}) == "comet-browsing",
-             "browsing status should merge runtime payload");
+      Expect(payload.value("webgateway_enabled", false),
+             "webgateway status should mark webgateway as enabled");
+      Expect(payload.value("webgateway_ready", false),
+             "webgateway status should probe runtime readiness");
+      Expect(payload.value("service", std::string{}) == "comet-webgateway",
+             "webgateway status should merge runtime payload");
       Expect(payload.value("active_session_count", -1) == 0,
              "browsing status should expose runtime active_session_count");
       std::cout << "ok: browsing-status-merges-runtime-payload" << '\n';
@@ -2134,13 +2231,13 @@ int main() {
       const auto response =
           presenter.BuildResponseSpec(resolution, request_context, result);
       Expect(
-          response.payload.at("browsing").at("mode").get<std::string>() == "disabled",
-          "interaction response should expose browsing summary at top level");
+          response.payload.at("webgateway").at("mode").get<std::string>() == "disabled",
+          "interaction response should expose webgateway summary at top level");
       Expect(
-          response.payload.at("session").at("browsing").at("decision").get<std::string>() ==
+          response.payload.at("session").at("webgateway").at("decision").get<std::string>() ==
               "disabled",
-          "interaction session payload should expose browsing summary");
-      std::cout << "ok: interaction-response-includes-browsing-fields" << '\n';
+          "interaction session payload should expose webgateway summary");
+      std::cout << "ok: interaction-response-includes-webgateway-fields" << '\n';
     }
 
     {
