@@ -393,6 +393,55 @@ bool ContainsAnySubstring(
       });
 }
 
+std::vector<std::string> SuggestedDiscoveryDomains(const std::string& query) {
+  const std::string lowered = LowercaseCopy(query);
+  const bool crypto_query = ContainsAnySubstring(
+      lowered,
+      {"bitcoin", "ethereum", "solana", "xrp", "crypto", "cryptocurrency",
+       "биткоин", "эфириум", "эфир", "солана", "крипт"});
+  const bool finance_query = ContainsAnySubstring(
+      lowered,
+      {"price", "market", "trend", "momentum", "forecast", "etf", "fear",
+       "greed", "flows", "yield", "treasury", "dxy", "gold", "nasdaq",
+       "s&p", "цена", "рын", "тренд", "импульс", "прогноз", "поток",
+       "доходност", "индекс", "золото"});
+  if (!(crypto_query || finance_query)) {
+    return {};
+  }
+
+  std::vector<std::string> domains = {
+      "coingecko.com",
+      "coinmarketcap.com",
+      "coindesk.com",
+      "cointelegraph.com",
+      "tradingview.com",
+      "finance.yahoo.com",
+      "reuters.com",
+  };
+  if (ContainsAnySubstring(lowered, {"fear", "greed", "страх", "жадн"})) {
+    domains.insert(domains.begin(), "alternative.me");
+  }
+  if (ContainsAnySubstring(lowered, {"etf"})) {
+    domains.insert(domains.begin(), "farside.co.uk");
+  }
+  if (ContainsAnySubstring(lowered, {"dxy", "yield", "treasury", "gold", "nasdaq", "s&p"})) {
+    domains.insert(domains.begin(), "tradingeconomics.com");
+    domains.push_back("marketwatch.com");
+  }
+
+  std::vector<std::string> unique_domains;
+  std::unordered_set<std::string> seen;
+  for (const auto& domain : domains) {
+    if (!domain.empty() && seen.insert(domain).second) {
+      unique_domains.push_back(domain);
+    }
+    if (unique_domains.size() >= 6) {
+      break;
+    }
+  }
+  return unique_domains;
+}
+
 std::string AugmentSearchQuery(std::string query) {
   const std::string lowered = LowercaseCopy(query);
   std::vector<std::string> hints;
@@ -1308,8 +1357,11 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   }
   const int requested_limit = payload.value("limit", config_.policy.max_search_results);
   const int limit = std::max(1, std::min(config_.policy.max_search_results, requested_limit));
-  const auto requested_domains = ExpandDiscoveryDomains(RequestedDomainsFromPayload(payload));
+  auto requested_domains = ExpandDiscoveryDomains(RequestedDomainsFromPayload(payload));
   const std::string query_with_hints = AugmentSearchQuery(query);
+  if (requested_domains.empty()) {
+    requested_domains = SuggestedDiscoveryDomains(query_with_hints);
+  }
   const std::string effective_query = ComposeSearchQuery(query_with_hints, requested_domains);
   const bool rendered_browser_ready =
       config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable();
