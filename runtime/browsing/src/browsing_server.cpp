@@ -910,7 +910,7 @@ std::vector<SearchResult> BrowsingServer::ParseBingRssResults(
     const std::string href = TrimCopy(HtmlEntityDecode(*link));
     std::string host;
     std::string reason;
-    if (!IsSafeBrowsingUrl(href, policy, &reason, &host) ||
+    if (!BrowsingServer::IsSafeBrowsingUrl(href, policy, &reason, &host) ||
         !DomainAllowed(host, policy, requested_domains)) {
       continue;
     }
