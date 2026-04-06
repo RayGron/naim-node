@@ -1514,11 +1514,14 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   }
   const int requested_limit = payload.value("limit", config_.policy.max_search_results);
   const int limit = std::max(1, std::min(config_.policy.max_search_results, requested_limit));
-  auto requested_domains = ExpandDiscoveryDomains(RequestedDomainsFromPayload(payload));
+  const auto explicit_requested_domains = ExpandDiscoveryDomains(RequestedDomainsFromPayload(payload));
+  auto requested_domains = explicit_requested_domains;
   const std::string query_with_hints = AugmentSearchQuery(query);
   if (requested_domains.empty()) {
     requested_domains = SuggestedDiscoveryDomains(query_with_hints);
   }
+  const bool suggested_domains_only =
+      explicit_requested_domains.empty() && !requested_domains.empty();
   const std::string effective_query = ComposeSearchQuery(query_with_hints, requested_domains);
   const bool rendered_browser_ready =
       config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable();
@@ -1638,6 +1641,52 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
                            {"query", query},
                            {"requested_domains", requested_domains},
                            {"message", TrimCopy(ddg_html_command.output)}});
+      }
+    }
+
+    if (SearchResultsLookThin(results, limit) && suggested_domains_only) {
+      const std::string unconstrained_bing_html_search_url =
+          "https://www.bing.com/search?q=" + UrlEncode(query_with_hints);
+      const auto unconstrained_bing_html_command = RunCommandCapture(CommandRequest{
+          .args =
+              {"/usr/bin/curl",
+               "-A",
+               "Mozilla/5.0",
+               "-fsSL",
+               "--proto",
+               "=https,http",
+               "--connect-timeout",
+               "5",
+               "--max-time",
+               "20",
+               "--max-redirs",
+               "5",
+               unconstrained_bing_html_search_url},
+          .environment = {},
+          .working_directory = std::nullopt,
+          .clear_environment = false,
+          .merge_stderr_into_stdout = true,
+      });
+      if (unconstrained_bing_html_command.exit_code == 0) {
+        auto unconstrained_bing_results = ParseBingHtmlResults(
+            unconstrained_bing_html_command.output,
+            query_with_hints,
+            config_.policy,
+            {},
+            limit);
+        if (!unconstrained_bing_results.empty()) {
+          for (auto& result : unconstrained_bing_results) {
+            result.backend = "broker_search";
+            result.rendered = false;
+          }
+          results = std::move(unconstrained_bing_results);
+        }
+      } else {
+        AppendAuditLog(
+            nlohmann::json{{"ts", UtcNow()},
+                           {"kind", "search_broker_html_unconstrained_failed"},
+                           {"query", query},
+                           {"message", TrimCopy(unconstrained_bing_html_command.output)}});
       }
     }
   }
