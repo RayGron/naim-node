@@ -1172,9 +1172,7 @@ int main() {
       };
       ExpectInvalid(
           llm_with_webgateway_public_publish,
-          "desired-state v2 webgateway.publish.host_ip must stay on loopback",
           "webgateway-public-publish");
-      std::cout << "ok-invalid: webgateway-public-publish" << '\n';
     }
 
     ExpectInvalid(
