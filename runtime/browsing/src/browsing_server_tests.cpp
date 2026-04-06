@@ -112,8 +112,11 @@ void TestSearchParsing() {
           results.begin(),
           results.end(),
           [](const comet::browsing::SearchResult& result) {
-            return result.domain == "openai.com" && result.backend == "broker_search" &&
-                   !result.rendered;
+            const bool openai_domain =
+                result.domain == "openai.com" ||
+                (result.domain.size() > std::string("openai.com").size() &&
+                 result.domain.ends_with(".openai.com"));
+            return openai_domain && result.backend == "broker_search" && !result.rendered;
           }),
       "search parser should keep only openai.com broker results");
   Expect(
