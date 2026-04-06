@@ -447,7 +447,12 @@ class InteractionBrowsingRuntimeTestServer {
                  {"service", "comet-browsing"},
                  {"ready", true},
                  {"search_enabled", true},
-                 {"fetch_enabled", true}});
+                 {"fetch_enabled", true},
+                 {"session_backend", "cef"},
+                 {"rendered_browser_enabled", true},
+                 {"rendered_browser_ready", true},
+                 {"rendered_fetch_enabled", true},
+                 {"login_enabled", false}});
       } else if (request.rfind("POST /v1/browsing/search ", 0) == 0) {
         ++search_count_;
         const json search_payload =
@@ -456,6 +461,7 @@ class InteractionBrowsingRuntimeTestServer {
             client_fd,
             200,
             json{{"query", search_payload.value("query", std::string{})},
+                 {"backend", "broker_search"},
                  {"results", search_results_}});
       } else if (request.rfind("POST /v1/browsing/fetch ", 0) == 0) {
         ++fetch_count_;
@@ -479,6 +485,8 @@ class InteractionBrowsingRuntimeTestServer {
             200,
             json{{"url", requested_url},
                  {"final_url", requested_url},
+                 {"backend", "browser_render"},
+                 {"rendered", true},
                  {"content_type", "text/html"},
                  {"title", "Example Article"},
                  {"visible_text",
@@ -539,6 +547,8 @@ comet::DesiredState BuildDesiredStateWithBrowsingPort(
   settings.enabled = true;
   comet::BrowsingPolicySettings policy;
   policy.browser_session_enabled = true;
+  policy.rendered_browser_enabled = true;
+  policy.login_enabled = false;
   settings.policy = policy;
   desired_state.browsing = settings;
 
@@ -1755,11 +1765,27 @@ int main() {
              "successful web enrichment should mark lookup_attempted");
       Expect(summary.at("evidence_attached").get<bool>(),
              "successful web enrichment should mark evidence_attached");
+      Expect(summary.at("session_backend").get<std::string>() == "cef",
+             "successful web enrichment should expose rendered session backend");
+      Expect(summary.at("rendered_browser_ready").get<bool>(),
+             "successful web enrichment should expose rendered browser readiness");
       Expect(runtime.search_count() == 1, "search-and-fetch should call search once");
       Expect(runtime.fetch_count() >= 1, "search-and-fetch should fetch at least one result");
       Expect(
           summary.at("sources").is_array() && !summary.at("sources").empty(),
           "search-and-fetch should expose fetched sources");
+      Expect(
+          summary.at("sources").at(0).at("backend").get<std::string>() == "browser_render",
+          "search-and-fetch should preserve fetch backend provenance");
+      Expect(
+          summary.at("trace").is_array() &&
+              std::any_of(
+                  summary.at("trace").begin(),
+                  summary.at("trace").end(),
+                  [](const json& item) {
+                    return item.value("stage", std::string{}) == "browser_render";
+                  }),
+          "search-and-fetch should expose browser render trace stage");
       std::cout << "ok: interaction-browsing-search-and-fetch" << '\n';
     }
 
@@ -1930,6 +1956,12 @@ int main() {
       Expect(
           summary.at("indicator").at("compact").get<std::string>() == "web:fetch ok",
           "direct fetch should expose a compact fetch-ok indicator");
+      Expect(summary.at("sources").at(0).at("backend").get<std::string>() == "browser_render",
+             "direct fetch should preserve rendered backend provenance");
+      Expect(
+          summary.at("trace").is_array() &&
+              summary.at("trace").at(2).at("stage").get<std::string>() == "browsing_status",
+          "direct fetch trace should retain browsing status stage");
       Expect(runtime.search_count() == 0, "direct fetch should not call search");
       Expect(runtime.fetch_count() == 1, "direct fetch should fetch the referenced URL");
       std::cout << "ok: interaction-browsing-direct-fetch" << '\n';

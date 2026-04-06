@@ -273,6 +273,8 @@ struct SkillsSettings {
 
 struct BrowsingPolicySettings {
   bool browser_session_enabled = false;
+  bool rendered_browser_enabled = true;
+  bool login_enabled = false;
   std::vector<std::string> allowed_domains;
   std::vector<std::string> blocked_domains;
   int max_search_results = 8;

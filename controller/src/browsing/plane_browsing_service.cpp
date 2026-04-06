@@ -107,6 +107,14 @@ nlohmann::json PlaneBrowsingService::BuildStatusPayload(
        desired_state.browsing.has_value() && desired_state.browsing->policy.has_value()
            ? nlohmann::json(desired_state.browsing->policy->browser_session_enabled)
            : nlohmann::json(false)},
+      {"rendered_browser_enabled",
+       desired_state.browsing.has_value() && desired_state.browsing->policy.has_value()
+           ? nlohmann::json(desired_state.browsing->policy->rendered_browser_enabled)
+           : nlohmann::json(true)},
+      {"login_enabled",
+       desired_state.browsing.has_value() && desired_state.browsing->policy.has_value()
+           ? nlohmann::json(desired_state.browsing->policy->login_enabled)
+           : nlohmann::json(false)},
   };
 
   if (ready) {

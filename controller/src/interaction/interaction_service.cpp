@@ -271,6 +271,10 @@ nlohmann::json RequestBrowsingSummary(
       {"mode_source", "default_off"},
       {"plane_enabled", false},
       {"ready", false},
+      {"session_backend", "broker_fallback"},
+      {"rendered_browser_enabled", true},
+      {"rendered_browser_ready", false},
+      {"login_enabled", false},
       {"toggle_only", false},
       {"decision", "disabled"},
       {"reason", "web_mode_disabled"},
@@ -289,6 +293,8 @@ nlohmann::json RequestBrowsingSummary(
            {"ready", false},
            {"lookup_state", "disabled"},
            {"lookup_attempted", false},
+           {"session_backend", "broker_fallback"},
+           {"rendered_browser_ready", false},
            {"search_count", 0},
            {"source_count", 0},
            {"error_count", 0},
@@ -2909,6 +2915,14 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       {"browser_session_enabled",
        desired_state->browsing.has_value() && desired_state->browsing->policy.has_value()
            ? nlohmann::json(desired_state->browsing->policy->browser_session_enabled)
+           : nlohmann::json(false)},
+      {"rendered_browser_enabled",
+       desired_state->browsing.has_value() && desired_state->browsing->policy.has_value()
+           ? nlohmann::json(desired_state->browsing->policy->rendered_browser_enabled)
+           : nlohmann::json(true)},
+      {"login_enabled",
+       desired_state->browsing.has_value() && desired_state->browsing->policy.has_value()
+           ? nlohmann::json(desired_state->browsing->policy->login_enabled)
            : nlohmann::json(false)},
       {"ready", llm_plane && running_plane && observation_ready && runtime_ready &&
                     resolution.target.has_value()},

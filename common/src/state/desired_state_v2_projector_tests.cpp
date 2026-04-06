@@ -65,6 +65,14 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
               rendered.browsing->policy->browser_session_enabled,
           name + ": browsing.policy.browser_session_enabled mismatch");
       Expect(
+          rerendered.browsing->policy->rendered_browser_enabled ==
+              rendered.browsing->policy->rendered_browser_enabled,
+          name + ": browsing.policy.rendered_browser_enabled mismatch");
+      Expect(
+          rerendered.browsing->policy->login_enabled ==
+              rendered.browsing->policy->login_enabled,
+          name + ": browsing.policy.login_enabled mismatch");
+      Expect(
           rerendered.browsing->policy->allowed_domains ==
               rendered.browsing->policy->allowed_domains,
           name + ": browsing.policy.allowed_domains mismatch");
@@ -357,6 +365,8 @@ int main() {
                  {"env", {{"COMET_BROWSING_DEBUG", "1"}}},
                  {"policy",
                   {{"browser_session_enabled", true},
+                   {"rendered_browser_enabled", false},
+                   {"login_enabled", false},
                    {"allowed_domains", json::array({"example.com", "openai.com"})},
                    {"blocked_domains", json::array({"localhost", "internal"})},
                    {"max_search_results", 5},

@@ -39,6 +39,13 @@ struct BrowsingContextDecision {
   std::vector<std::string> urls;
 };
 
+struct BrowsingRuntimeCapabilities {
+  bool rendered_browser_enabled = true;
+  bool rendered_browser_ready = false;
+  bool login_enabled = false;
+  std::string session_backend = "broker_fallback";
+};
+
 struct SearchCandidate {
   std::string url;
   std::string title;
@@ -498,6 +505,7 @@ json BuildBrowsingFlags(
 
 json BuildBrowsingIndicator(
     const BrowsingContextDecision& context,
+    const BrowsingRuntimeCapabilities& runtime,
     bool ready,
     const json& searches,
     const json& sources,
@@ -544,6 +552,8 @@ json BuildBrowsingIndicator(
       {"ready", ready},
       {"lookup_state", lookup_state},
       {"lookup_attempted", lookup_attempted},
+      {"session_backend", runtime.session_backend},
+      {"rendered_browser_ready", runtime.rendered_browser_ready},
       {"search_count", search_count},
       {"source_count", source_count},
       {"error_count", error_count},
@@ -552,6 +562,7 @@ json BuildBrowsingIndicator(
 
 json BuildBrowsingTrace(
     const BrowsingContextDecision& context,
+    const BrowsingRuntimeCapabilities& runtime,
     bool ready,
     const json& searches,
     const json& sources,
@@ -596,6 +607,32 @@ json BuildBrowsingTrace(
   if (!ready) {
     return trace;
   }
+  const auto result_uses_rendered_backend = [](const json& item) {
+    const std::string backend = item.value("backend", std::string{});
+    return item.value("rendered", false) || backend == "browser_render";
+  };
+  const bool rendered_lookup_used =
+      (searches.is_array() &&
+       std::any_of(searches.begin(), searches.end(), result_uses_rendered_backend)) ||
+      (sources.is_array() &&
+       std::any_of(sources.begin(), sources.end(), result_uses_rendered_backend));
+  if (rendered_lookup_used) {
+    trace.push_back(json{
+        {"stage", "browser_start"},
+        {"status", runtime.rendered_browser_ready ? "done" : "skipped"},
+        {"compact", "browser:start"},
+    });
+    trace.push_back(json{
+        {"stage", "browser_open"},
+        {"status", "done"},
+        {"compact", "browser:open"},
+    });
+    trace.push_back(json{
+        {"stage", "browser_render"},
+        {"status", "done"},
+        {"compact", "browser:render"},
+    });
+  }
   if (searches.is_array() && !searches.empty()) {
     int total_results = 0;
     for (const auto& search : searches) {
@@ -618,6 +655,18 @@ json BuildBrowsingTrace(
          std::string("fetch:") + (evidence_attached ? std::to_string(sources.size()) : "0")},
     });
   }
+  if (rendered_lookup_used && sources.is_array() && !sources.empty()) {
+    trace.push_back(json{
+        {"stage", "browser_extract"},
+        {"status", "done"},
+        {"compact", "browser:extract"},
+    });
+    trace.push_back(json{
+        {"stage", "browser_cleanup"},
+        {"status", "done"},
+        {"compact", "browser:cleanup"},
+    });
+  }
   trace.push_back(json{
       {"stage", "evidence"},
       {"status", evidence_attached ? "attached" : "none"},
@@ -628,6 +677,7 @@ json BuildBrowsingTrace(
 
 json BuildBrowsingSummary(
     const BrowsingContextDecision& context,
+    const BrowsingRuntimeCapabilities& runtime,
     bool ready,
     const json& searches,
     const json& sources,
@@ -638,14 +688,18 @@ json BuildBrowsingSummary(
       {"mode_source", context.mode_source},
       {"plane_enabled", context.plane_enabled},
       {"ready", ready},
+      {"session_backend", runtime.session_backend},
+      {"rendered_browser_enabled", runtime.rendered_browser_enabled},
+      {"rendered_browser_ready", runtime.rendered_browser_ready},
+      {"login_enabled", runtime.login_enabled},
       {"toggle_only", context.toggle_only},
       {"decision", context.decision},
       {"reason", context.reason},
       {"searches", searches},
       {"sources", sources},
       {"errors", errors},
-      {"indicator", BuildBrowsingIndicator(context, ready, searches, sources, errors, flags)},
-      {"trace", BuildBrowsingTrace(context, ready, searches, sources, errors, flags)},
+      {"indicator", BuildBrowsingIndicator(context, runtime, ready, searches, sources, errors, flags)},
+      {"trace", BuildBrowsingTrace(context, runtime, ready, searches, sources, errors, flags)},
   };
   summary.update(flags);
   return summary;
@@ -655,6 +709,8 @@ json BuildSnippetOnlySource(const SearchCandidate& candidate) {
   return json{
       {"url", candidate.url},
       {"title", candidate.title},
+      {"backend", "search_result"},
+      {"rendered", false},
       {"content_type", "search-result"},
       {"excerpt", TruncateForInstruction(candidate.snippet, 1200)},
       {"citations", json::array({candidate.url})},
@@ -776,11 +832,19 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
   json sources = json::array();
   json errors = json::array();
   bool ready = false;
+  BrowsingRuntimeCapabilities runtime;
+  if (resolution.desired_state.browsing.has_value() &&
+      resolution.desired_state.browsing->policy.has_value()) {
+    runtime.rendered_browser_enabled =
+        resolution.desired_state.browsing->policy->rendered_browser_enabled;
+    runtime.login_enabled =
+        resolution.desired_state.browsing->policy->login_enabled;
+  }
 
   if (!decision.mode_enabled || !decision.plane_enabled ||
       decision.decision == "not_needed") {
     const json summary =
-        BuildBrowsingSummary(decision, ready, searches, sources, errors);
+        BuildBrowsingSummary(decision, runtime, ready, searches, sources, errors);
     const std::string instruction = BuildBrowsingInstruction(summary);
     if (!instruction.empty()) {
       context->payload[kSystemInstructionPayloadKey] = instruction;
@@ -798,6 +862,16 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
       status_response.has_value() && status_response->status_code == 200) {
     const json status_payload = ParseJsonBodyOrObject(status_response->body);
     ready = status_payload.value("ready", false);
+    runtime.session_backend =
+        status_payload.value("session_backend", runtime.session_backend);
+    runtime.rendered_browser_enabled =
+        status_payload.value("rendered_browser_enabled", runtime.rendered_browser_enabled);
+    runtime.rendered_browser_ready =
+        status_payload.value(
+            "rendered_browser_ready",
+            status_payload.value("rendered_fetch_enabled", runtime.rendered_browser_ready));
+    runtime.login_enabled =
+        status_payload.value("login_enabled", runtime.login_enabled);
   } else {
     errors.push_back(
         json{{"code", error_code.empty() ? "browsing_not_ready" : error_code},
@@ -811,7 +885,7 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
     unavailable.reason = errors.empty() ? "browsing_not_ready"
                                         : errors.front().value("code", std::string{"browsing_not_ready"});
     const json summary =
-        BuildBrowsingSummary(unavailable, ready, searches, sources, errors);
+        BuildBrowsingSummary(unavailable, runtime, ready, searches, sources, errors);
     const std::string instruction = BuildBrowsingInstruction(summary);
     if (!instruction.empty()) {
       context->payload[kSystemInstructionPayloadKey] = instruction;
@@ -846,6 +920,8 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
       const json results = search_result.value("results", json::array());
       searches.push_back(
           json{{"query", search_result.value("query", search_payload.value("query", std::string{}))},
+               {"backend", search_result.value("backend", std::string("broker_search"))},
+               {"rendered", search_result.value("backend", std::string{}) == "browser_render"},
                {"result_count", results.is_array() ? static_cast<int>(results.size()) : 0}});
       if (results.is_array()) {
         for (const auto& item : results) {
@@ -899,6 +975,8 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
     sources.push_back(
         json{{"url", fetch_result.value("final_url", url)},
              {"title", fetch_result.value("title", std::string{})},
+             {"backend", fetch_result.value("backend", std::string("broker_fetch"))},
+             {"rendered", fetch_result.value("rendered", false)},
              {"content_type", fetch_result.value("content_type", std::string{})},
              {"excerpt",
               TruncateForInstruction(fetch_result.value("visible_text", std::string{}), 1200)},
@@ -930,7 +1008,7 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
   }
 
   const json summary =
-      BuildBrowsingSummary(final_decision, ready, searches, sources, errors);
+      BuildBrowsingSummary(final_decision, runtime, ready, searches, sources, errors);
   const std::string instruction = BuildBrowsingInstruction(summary);
   if (!instruction.empty()) {
     context->payload[kSystemInstructionPayloadKey] = instruction;

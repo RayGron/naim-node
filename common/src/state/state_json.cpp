@@ -336,6 +336,8 @@ json ToJson(const SkillsSettings& skills) {
 json ToJson(const BrowsingPolicySettings& policy) {
   json result = {
       {"browser_session_enabled", policy.browser_session_enabled},
+      {"rendered_browser_enabled", policy.rendered_browser_enabled},
+      {"login_enabled", policy.login_enabled},
       {"max_search_results", policy.max_search_results},
       {"max_fetch_bytes", policy.max_fetch_bytes},
   };
@@ -896,6 +898,10 @@ DesiredState DesiredStateFromJson(const json& value) {
       const auto& policy_json = value.at("browsing").at("policy");
       policy.browser_session_enabled =
           policy_json.value("browser_session_enabled", policy.browser_session_enabled);
+      policy.rendered_browser_enabled =
+          policy_json.value("rendered_browser_enabled", policy.rendered_browser_enabled);
+      policy.login_enabled =
+          policy_json.value("login_enabled", policy.login_enabled);
       policy.max_search_results =
           policy_json.value("max_search_results", policy.max_search_results);
       policy.max_fetch_bytes =

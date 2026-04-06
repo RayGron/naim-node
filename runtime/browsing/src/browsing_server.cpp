@@ -539,6 +539,10 @@ BrowsingPolicy BrowsingServer::ParsePolicyJson(const std::string& json_text) {
   }
   policy.browser_session_enabled =
       payload.value("browser_session_enabled", policy.browser_session_enabled);
+  policy.rendered_browser_enabled =
+      payload.value("rendered_browser_enabled", policy.rendered_browser_enabled);
+  policy.login_enabled =
+      payload.value("login_enabled", policy.login_enabled);
   policy.max_search_results = payload.value("max_search_results", policy.max_search_results);
   policy.max_fetch_bytes = payload.value("max_fetch_bytes", policy.max_fetch_bytes);
   if (payload.contains("allowed_domains") && payload.at("allowed_domains").is_array()) {
@@ -1008,7 +1012,10 @@ void BrowsingServer::WriteRuntimeStatus(const std::string& phase, bool ready) co
   status.instance_name = config_.instance_name;
   status.instance_role = config_.instance_role;
   status.node_name = config_.node_name;
-  status.runtime_backend = "browsing-broker";
+  status.runtime_backend =
+      config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable()
+          ? "browsing-cef"
+          : "browsing-broker";
   status.runtime_phase = phase;
   status.started_at = UtcNow();
   status.last_activity_at = status.started_at;
@@ -1048,6 +1055,8 @@ void BrowsingServer::AppendAuditLog(const nlohmann::json& payload) const {
 
 nlohmann::json BrowsingServer::BuildStatusPayload() const {
   std::lock_guard<std::mutex> lock(sessions_mutex_);
+  const bool rendered_browser_ready =
+      config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable();
   return nlohmann::json{
       {"status", "ok"},
       {"service", "comet-browsing"},
@@ -1059,12 +1068,17 @@ nlohmann::json BrowsingServer::BuildStatusPayload() const {
       {"cef_build_summary", CefBuildSummary()},
       {"search_enabled", true},
       {"fetch_enabled", true},
-      {"rendered_fetch_enabled", cef_backend_ != nullptr && cef_backend_->IsAvailable()},
-      {"session_backend", cef_backend_ != nullptr && cef_backend_->IsAvailable() ? "cef" : "broker_fallback"},
+      {"rendered_browser_enabled", config_.policy.rendered_browser_enabled},
+      {"rendered_browser_ready", rendered_browser_ready},
+      {"rendered_fetch_enabled", rendered_browser_ready},
+      {"login_enabled", config_.policy.login_enabled},
+      {"session_backend", rendered_browser_ready ? "cef" : "broker_fallback"},
       {"browser_session_enabled", config_.policy.browser_session_enabled},
       {"active_session_count", sessions_.size()},
       {"policy",
        {{"browser_session_enabled", config_.policy.browser_session_enabled},
+        {"rendered_browser_enabled", config_.policy.rendered_browser_enabled},
+        {"login_enabled", config_.policy.login_enabled},
         {"allowed_domains", config_.policy.allowed_domains},
         {"blocked_domains", config_.policy.blocked_domains},
         {"max_search_results", config_.policy.max_search_results},
@@ -1081,6 +1095,8 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   const int limit = std::max(1, std::min(config_.policy.max_search_results, requested_limit));
   const auto requested_domains = ExpandDiscoveryDomains(RequestedDomainsFromPayload(payload));
   const std::string effective_query = ComposeSearchQuery(query, requested_domains);
+  const bool rendered_browser_ready =
+      config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable();
 
   const std::string search_url =
       "https://www.bing.com/search?format=rss&q=" + UrlEncode(effective_query);
@@ -1113,8 +1129,7 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
   bool rendered_discovery_used = false;
   if (!requested_domains.empty() &&
       SearchResultsLookThin(results, limit) &&
-      cef_backend_ != nullptr &&
-      cef_backend_->IsAvailable()) {
+      rendered_browser_ready) {
     std::unordered_set<std::string> seen_urls;
     std::vector<SearchResult> rendered_results;
     std::vector<SearchResult> fallback_rendered_results;
@@ -1276,7 +1291,7 @@ nlohmann::json BrowsingServer::CreateSession(const nlohmann::json& payload) {
   const std::string url = TrimCopy(payload.value("url", std::string{}));
   nlohmann::json observation = nullptr;
   if (!url.empty()) {
-    if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+    if (config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
       std::string error_message;
       const auto rendered = cef_backend_->OpenSession(session.id, session.root, url, &error_message);
       if (!rendered.has_value()) {
@@ -1388,7 +1403,7 @@ nlohmann::json BrowsingServer::ApplySessionAction(
       std::lock_guard<std::mutex> lock(sessions_mutex_);
       sessions_[session_id] = session;
     }
-    if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+    if (config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
       std::string error_message;
       const auto rendered = cef_backend_->SnapshotSession(session_id, &error_message);
       if (!rendered.has_value()) {
@@ -1426,7 +1441,7 @@ nlohmann::json BrowsingServer::ApplySessionAction(
     if (session.current_url.empty()) {
       throw ApiError(409, "session_url_missing", "session does not have an active URL");
     }
-    if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+    if (config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
       std::string error_message;
       const auto rendered = cef_backend_->ExtractSession(session_id, &error_message);
       if (!rendered.has_value()) {
@@ -1487,7 +1502,7 @@ nlohmann::json BrowsingServer::ApplySessionAction(
     if (next_url.empty()) {
       throw ApiError(400, "invalid_url", "url is required for open action");
     }
-    if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+    if (config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
       std::string error_message;
       const auto rendered = cef_backend_->OpenSession(session_id, session.root, next_url, &error_message);
       if (!rendered.has_value()) {
@@ -1568,7 +1583,7 @@ nlohmann::json BrowsingServer::DeleteSession(const std::string& session_id) {
     session = it->second;
     sessions_.erase(it);
   }
-  if (cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
+  if (config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable()) {
     cef_backend_->DeleteSession(session_id);
   }
   std::error_code error;
@@ -1698,7 +1713,8 @@ std::optional<FetchResult> BrowsingServer::FetchUrl(
     return std::nullopt;
   }
 
-  const bool rendered_backend_ready = cef_backend_ != nullptr && cef_backend_->IsAvailable();
+  const bool rendered_backend_ready =
+      config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable();
   const bool prefer_rendered = rendered_backend_ready && IsJsHeavyDomain(host);
 
   if (prefer_rendered) {

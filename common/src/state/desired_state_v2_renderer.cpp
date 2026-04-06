@@ -113,6 +113,10 @@ void DesiredStateV2Renderer::RenderIdentity() {
       const auto& policy_json = browsing_json_.at("policy");
       policy.browser_session_enabled =
           policy_json.value("browser_session_enabled", policy.browser_session_enabled);
+      policy.rendered_browser_enabled =
+          policy_json.value("rendered_browser_enabled", policy.rendered_browser_enabled);
+      policy.login_enabled =
+          policy_json.value("login_enabled", policy.login_enabled);
       policy.max_search_results =
           policy_json.value("max_search_results", policy.max_search_results);
       policy.max_fetch_bytes =

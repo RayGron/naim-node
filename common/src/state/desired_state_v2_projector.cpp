@@ -390,6 +390,8 @@ void DesiredStateV2Projector::ProjectBrowsing() {
     const auto& policy = *state_.browsing->policy;
     nlohmann::json policy_json = {
         {"browser_session_enabled", policy.browser_session_enabled},
+        {"rendered_browser_enabled", policy.rendered_browser_enabled},
+        {"login_enabled", policy.login_enabled},
         {"max_search_results", policy.max_search_results},
         {"max_fetch_bytes", policy.max_fetch_bytes},
     };

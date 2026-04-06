@@ -1046,6 +1046,8 @@ int main() {
                {"env", {{"COMET_BROWSING_DEBUG", "1"}}},
                {"policy",
                 {{"browser_session_enabled", true},
+                 {"rendered_browser_enabled", false},
+                 {"login_enabled", false},
                  {"allowed_domains", json::array({"example.com", "openai.com"})},
                  {"blocked_domains", json::array({"localhost", "internal"})},
                  {"max_search_results", 5},

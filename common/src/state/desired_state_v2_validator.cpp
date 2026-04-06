@@ -391,6 +391,16 @@ void DesiredStateV2Validator::ValidateBrowsing() const {
       throw std::runtime_error(
           "desired-state v2 browsing.policy.browser_session_enabled must be a boolean");
     }
+    if (policy.contains("rendered_browser_enabled") &&
+        !policy.at("rendered_browser_enabled").is_boolean()) {
+      throw std::runtime_error(
+          "desired-state v2 browsing.policy.rendered_browser_enabled must be a boolean");
+    }
+    if (policy.contains("login_enabled") &&
+        !policy.at("login_enabled").is_boolean()) {
+      throw std::runtime_error(
+          "desired-state v2 browsing.policy.login_enabled must be a boolean");
+    }
     const auto validate_domain_list = [&](const char* field_name) {
       if (!policy.contains(field_name)) {
         return;
