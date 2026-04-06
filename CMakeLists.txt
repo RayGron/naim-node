@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 
 option(COMET_SKIP_VCPKG_TOOLCHAIN "Skip automatic vcpkg toolchain detection" OFF)
+set(COMET_CUDA_NVCC_JOBS "2" CACHE STRING
+    "Maximum number of concurrent nvcc compile jobs for ggml-cuda when using Ninja")
 
 if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
   list(PREPEND CMAKE_PREFIX_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
@@ -93,7 +95,8 @@ set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER ON CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
 set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
-set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+option(COMET_CUDA_NATIVE "Prefer native CUDA architectures for ggml-cuda builds" ON)
+set(GGML_NATIVE ${COMET_CUDA_NATIVE} CACHE BOOL "" FORCE)
 set(GGML_RPC ON CACHE BOOL "" FORCE)
 
 if(NOT DEFINED CUDAToolkit_ROOT OR "${CUDAToolkit_ROOT}" STREQUAL "")
@@ -101,9 +104,9 @@ if(NOT DEFINED CUDAToolkit_ROOT OR "${CUDAToolkit_ROOT}" STREQUAL "")
       "$ENV{CUDA_TOOLKIT_ROOT_DIR}"
       "$ENV{CUDA_HOME}"
       "$ENV{CUDA_PATH}"
+      "/usr/local/cuda-13.1"
       "/usr/local/cuda"
       "/usr/local/cuda-13.2"
-      "/usr/local/cuda-13.1"
       "/usr/local/cuda-13.0"
       "/usr/local/cuda-12.9"
       "/usr/local/cuda-12.8"
@@ -160,6 +163,7 @@ if(NOT _comet_cuda_available)
     "Provide CUDAToolkit_ROOT or CMAKE_CUDA_COMPILER so GGML_CUDA can be enabled.")
 endif()
 set(GGML_CUDA ON CACHE BOOL "" FORCE)
+message(STATUS "Comet CUDA native architectures: ${COMET_CUDA_NATIVE}")
 
 if(COMET_LLAMA_CPP_SOURCE_DIR AND EXISTS "${COMET_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
   FetchContent_Declare(
@@ -176,6 +180,18 @@ else()
   )
 endif()
 FetchContent_MakeAvailable(llama_cpp)
+
+if(TARGET ggml-cuda AND CMAKE_GENERATOR STREQUAL "Ninja")
+  if(COMET_CUDA_NVCC_JOBS MATCHES "^[1-9][0-9]*$")
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS "comet_cuda_pool=${COMET_CUDA_NVCC_JOBS}")
+    set_property(TARGET ggml-cuda PROPERTY JOB_POOL_COMPILE comet_cuda_pool)
+    message(STATUS "Using ggml-cuda compile pool size: ${COMET_CUDA_NVCC_JOBS}")
+  else()
+    message(WARNING
+      "COMET_CUDA_NVCC_JOBS='${COMET_CUDA_NVCC_JOBS}' is not a positive integer; "
+      "ggml-cuda will use the default global compile pool")
+  endif()
+endif()
 
 if(_comet_restore_build_shared_libs)
   set(BUILD_SHARED_LIBS "${_comet_saved_build_shared_libs}" CACHE BOOL "Build shared libs" FORCE)

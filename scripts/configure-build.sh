@@ -38,9 +38,9 @@ detect_cuda_root() {
     "${CUDA_TOOLKIT_ROOT_DIR:-}" \
     "${CUDA_HOME:-}" \
     "${CUDA_PATH:-}" \
+    "/usr/local/cuda-13.1" \
     "/usr/local/cuda" \
     "/usr/local/cuda-13.2" \
-    "/usr/local/cuda-13.1" \
     "/usr/local/cuda-13.0" \
     "/usr/local/cuda-12.9" \
     "/usr/local/cuda-12.8" \
