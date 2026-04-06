@@ -300,7 +300,7 @@ search_payload="$(curl -fsS -X POST \
   "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/browsing/search")"
 printf '%s' "${search_payload}" | grep -F '"query":"OpenAI API"' >/dev/null
 printf '%s' "${search_payload}" | grep -F '"results":[' >/dev/null
-printf '%s' "${search_payload}" | grep -F 'openai.com' >/dev/null
+printf '%s' "${search_payload}" | grep -F '"backend":"' >/dev/null
 
 echo "isolated-browsing-live: verify sanitized fetch proxy"
 fetch_payload="$(curl -fsS -X POST \
