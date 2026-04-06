@@ -239,6 +239,26 @@ void TestCanonicalCryptoMarketDiscoveryResults() {
       "canonical crypto discovery should return broker search metadata");
 }
 
+void TestCanonicalCryptoComparisonQueryPrefersLeadAsset() {
+  const auto results = comet::browsing::BrowsingServer::BuildCanonicalSearchResults(
+      "проверь текущую цену eth и коротко сравни изменение eth и btc за последние 24 часа",
+      {"coingecko.com", "coinmarketcap.com", "tradingview.com", "finance.yahoo.com"},
+      4);
+  Expect(results.size() == 4, "ticker comparison prompt should synthesize canonical market results");
+  Expect(
+      results[0].url == "https://www.coingecko.com/en/coins/ethereum",
+      "comparison prompt should prefer the lead ETH asset from the user query");
+  Expect(
+      results[1].url == "https://coinmarketcap.com/currencies/ethereum/",
+      "comparison prompt should include CoinMarketCap for Ethereum");
+  Expect(
+      results[2].url == "https://www.tradingview.com/symbols/ETHUSD/",
+      "comparison prompt should include TradingView for Ethereum");
+  Expect(
+      results[3].url == "https://finance.yahoo.com/quote/ETH-USD/history/",
+      "comparison prompt should include Yahoo history for Ethereum");
+}
+
 void TestCanonicalFearGreedDiscoveryResult() {
   const auto results = comet::browsing::BrowsingServer::BuildCanonicalSearchResults(
       "fear and greed index crypto today",
@@ -372,6 +392,7 @@ int main() {
     TestSearchRelevanceFiltering();
     TestRenderedSearchRelevanceFiltering();
     TestCanonicalCryptoMarketDiscoveryResults();
+    TestCanonicalCryptoComparisonQueryPrefersLeadAsset();
     TestCanonicalFearGreedDiscoveryResult();
     TestTickerNormalizationAvoidsAmbiguousResults();
     TestFetchSanitization();

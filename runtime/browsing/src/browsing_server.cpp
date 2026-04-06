@@ -523,14 +523,15 @@ std::vector<std::string> SuggestedDiscoveryDomains(const std::string& query) {
   const std::string lowered = LowercaseCopy(query);
   const bool crypto_query = ContainsAnySubstring(
       lowered,
-      {"bitcoin", "ethereum", "solana", "xrp", "crypto", "cryptocurrency",
-       "биткоин", "эфириум", "эфир", "солана", "крипт"});
+      {"bitcoin", "btc", "ethereum", "eth", "solana", "sol", "xrp", "crypto",
+       "cryptocurrency", "биткоин", "эфириум", "эфир", "солана", "крипт"});
   const bool finance_query = ContainsAnySubstring(
       lowered,
       {"price", "market", "trend", "momentum", "forecast", "etf", "fear",
        "greed", "flows", "yield", "treasury", "dxy", "gold", "nasdaq",
-       "s&p", "цена", "рын", "тренд", "импульс", "прогноз", "поток",
-       "доходност", "индекс", "золото"});
+       "s&p", "change", "compare", "24h", "24 hour", "24 hours", "цена", "цен",
+       "рын", "тренд", "импульс", "прогноз", "поток", "измен", "сравн",
+       "24 час", "доходност", "индекс", "золото"});
   if (!(crypto_query || finance_query)) {
     return {};
   }
@@ -579,8 +580,9 @@ std::string AugmentSearchQuery(std::string query) {
   const bool market_query = ContainsAnySubstring(
       lowered,
       {"price", "current", "today", "market", "trend", "momentum", "forecast",
-       "цена", "текущ", "сегодня", "рын", "динам", "тренд", "импульс",
-       "прогноз", "поведен", "24h", "24 hour", "7 day", "7 дней"});
+       "change", "compare", "цена", "цен", "текущ", "сегодня", "рын", "динам",
+       "тренд", "импульс", "прогноз", "поведен", "измен", "сравн", "24h",
+       "24 hour", "24 hours", "24 часа", "7 day", "7 дней"});
   const bool macro_query = ContainsAnySubstring(
       lowered,
       {"dxy", "dollar index", "treasury", "yield", "10-year", "10 year", "gold",
@@ -679,45 +681,80 @@ struct CanonicalCryptoAsset {
   std::string tradingview_symbol;
 };
 
+std::size_t FirstAliasPosition(
+    const std::string& lowered,
+    const std::vector<std::string>& aliases) {
+  std::size_t best = std::string::npos;
+  for (const auto& alias : aliases) {
+    if (alias.empty()) {
+      continue;
+    }
+    const std::size_t pos = lowered.find(alias);
+    if (pos != std::string::npos &&
+        (best == std::string::npos || pos < best)) {
+      best = pos;
+    }
+  }
+  return best;
+}
+
 std::optional<CanonicalCryptoAsset> DetectCanonicalCryptoAsset(const std::string& query) {
   const std::string lowered = LowercaseCopy(query);
-  if (ContainsAnySubstring(lowered, {"bitcoin", "btc", "биткоин"})) {
-    return CanonicalCryptoAsset{
-        .name = "Bitcoin",
-        .coingecko_slug = "bitcoin",
-        .coinmarketcap_slug = "bitcoin",
-        .yahoo_symbol = "BTC-USD",
-        .tradingview_symbol = "BTCUSD",
-    };
+  struct AssetCandidate {
+    CanonicalCryptoAsset asset;
+    std::vector<std::string> aliases;
+  };
+
+  static const std::vector<AssetCandidate> candidates = {
+      {CanonicalCryptoAsset{
+           .name = "Bitcoin",
+           .coingecko_slug = "bitcoin",
+           .coinmarketcap_slug = "bitcoin",
+           .yahoo_symbol = "BTC-USD",
+           .tradingview_symbol = "BTCUSD",
+       },
+       {"bitcoin", "btc", "биткоин"}},
+      {CanonicalCryptoAsset{
+           .name = "Ethereum",
+           .coingecko_slug = "ethereum",
+           .coinmarketcap_slug = "ethereum",
+           .yahoo_symbol = "ETH-USD",
+           .tradingview_symbol = "ETHUSD",
+       },
+       {"ethereum", "eth", "эфир", "эфириум"}},
+      {CanonicalCryptoAsset{
+           .name = "Solana",
+           .coingecko_slug = "solana",
+           .coinmarketcap_slug = "solana",
+           .yahoo_symbol = "SOL-USD",
+           .tradingview_symbol = "SOLUSD",
+       },
+       {"solana", "sol", "солана"}},
+      {CanonicalCryptoAsset{
+           .name = "XRP",
+           .coingecko_slug = "ripple",
+           .coinmarketcap_slug = "xrp",
+           .yahoo_symbol = "XRP-USD",
+           .tradingview_symbol = "XRPUSD",
+       },
+       {"xrp"}},
+  };
+
+  const AssetCandidate* best = nullptr;
+  std::size_t best_pos = std::string::npos;
+  for (const auto& candidate : candidates) {
+    const std::size_t pos = FirstAliasPosition(lowered, candidate.aliases);
+    if (pos != std::string::npos &&
+        (best == nullptr || pos < best_pos)) {
+      best = &candidate;
+      best_pos = pos;
+    }
   }
-  if (ContainsAnySubstring(lowered, {"ethereum", "eth", "эфир", "эфириум"})) {
-    return CanonicalCryptoAsset{
-        .name = "Ethereum",
-        .coingecko_slug = "ethereum",
-        .coinmarketcap_slug = "ethereum",
-        .yahoo_symbol = "ETH-USD",
-        .tradingview_symbol = "ETHUSD",
-    };
+
+  if (best == nullptr) {
+    return std::nullopt;
   }
-  if (ContainsAnySubstring(lowered, {"solana", "sol", "солана"})) {
-    return CanonicalCryptoAsset{
-        .name = "Solana",
-        .coingecko_slug = "solana",
-        .coinmarketcap_slug = "solana",
-        .yahoo_symbol = "SOL-USD",
-        .tradingview_symbol = "SOLUSD",
-    };
-  }
-  if (ContainsAnySubstring(lowered, {"xrp"})) {
-    return CanonicalCryptoAsset{
-        .name = "XRP",
-        .coingecko_slug = "ripple",
-        .coinmarketcap_slug = "xrp",
-        .yahoo_symbol = "XRP-USD",
-        .tradingview_symbol = "XRPUSD",
-    };
-  }
-  return std::nullopt;
+  return best->asset;
 }
 
 bool IsCryptoMarketDiscoveryQuery(const std::string& query) {
@@ -727,9 +764,10 @@ bool IsCryptoMarketDiscoveryQuery(const std::string& query) {
   const bool market_query = ContainsAnySubstring(
       lowered,
       {"price", "chart", "market", "trend", "momentum", "history", "forecast",
-       "performance", "24h", "24 hour", "7 day", "7 days", "week", "volatility",
-       "цена", "график", "рын", "тренд", "импульс", "истор", "прогноз",
-       "динам", "недел", "сутк", "волатиль"});
+       "performance", "change", "compare", "24h", "24 hour", "24 hours", "7 day",
+       "7 days", "week", "volatility", "price action", "цена", "цен", "график",
+       "рын", "тренд", "импульс", "истор", "прогноз", "динам", "измен",
+       "сравн", "24 час", "недел", "сутк", "волатиль"});
   return asset_query && market_query;
 }
 
