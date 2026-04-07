@@ -267,6 +267,19 @@ std::optional<std::string> LatestHostHeartbeatAt(
   return latest;
 }
 
+std::optional<comet::RuntimeStatus> SelectPlaneRuntimeStatus(
+    const std::optional<comet::RuntimeStatus>& runtime_status,
+    const std::optional<std::string>& plane_name) {
+  if (!runtime_status.has_value() || !plane_name.has_value()) {
+    return runtime_status;
+  }
+  if (!runtime_status->plane_name.empty() &&
+      runtime_status->plane_name != *plane_name) {
+    return std::nullopt;
+  }
+  return runtime_status;
+}
+
 json BuildControllerSelfServicePayload() {
   const ControllerRuntimeSupportService runtime_support_service;
   const std::string checked_at = runtime_support_service.UtcNowSqlTimestamp();
@@ -1151,7 +1164,8 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
         observation_it->second.applied_generation.has_value()
             ? json(*observation_it->second.applied_generation)
             : json(nullptr);
-    if (const auto runtime_status = parse_runtime_status(observation_it->second);
+    if (const auto runtime_status = SelectPlaneRuntimeStatus(
+            parse_runtime_status(observation_it->second), plane_name);
         runtime_status.has_value()) {
       item["runtime_launch_ready"] = runtime_status->launch_ready;
       item["runtime_phase"] =
@@ -1312,7 +1326,8 @@ void DashboardService::BuildNodeAlerts(
           node_name);
     }
 
-    if (const auto runtime_status = parse_runtime_status(observation_it->second);
+    if (const auto runtime_status = SelectPlaneRuntimeStatus(
+            parse_runtime_status(observation_it->second), plane_name);
         runtime_status.has_value()) {
       if (!runtime_status->launch_ready) {
         alerts->Push(

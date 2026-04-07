@@ -121,6 +121,7 @@ comet::RuntimeStatus WorkerStatusService::BuildStatus(
   status.model_path = model_path;
   status.cached_local_model_path = model_path;
   status.gpu_device = config.gpu_device;
+  status.enabled_gpu_nodes = config.gpu_device.empty() ? 0 : 1;
   status.rpc_endpoint = config.rpc_endpoint;
   status.ready = ready;
   status.inference_ready = ready;

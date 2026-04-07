@@ -542,6 +542,76 @@ void TestRuntimePayloadIncludesKvCacheBytes() {
   std::cout << "ok: runtime-payload-includes-kv-cache-bytes" << '\n';
 }
 
+void TestPlaneScopedNodesIgnoreForeignRuntimeStatus() {
+  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+  const std::string now = runtime_support_service.UtcNowSqlTimestamp();
+
+  comet::NodeInventory node;
+  node.name = "node-a";
+  node.gpu_devices = {"0"};
+
+  comet::DesiredState desired_state;
+  desired_state.plane_name = "maglev";
+  desired_state.nodes.push_back(node);
+
+  comet::HostObservation observation;
+  observation.node_name = "node-a";
+  observation.status = comet::HostObservationStatus::Applied;
+  observation.heartbeat_at = now;
+
+  comet::RuntimeStatus foreign_runtime_status;
+  foreign_runtime_status.plane_name = "lt-cypher-ai";
+  foreign_runtime_status.instance_name = "infer-lt-cypher-ai";
+  foreign_runtime_status.runtime_backend = "llama-rpc-head";
+  foreign_runtime_status.runtime_phase = "running";
+  foreign_runtime_status.launch_ready = true;
+  observation.runtime_status_json =
+      comet::SerializeRuntimeStatusJson(foreign_runtime_status);
+
+  std::map<std::string, comet::NodeInventory> dashboard_nodes;
+  dashboard_nodes.emplace(node.name, node);
+  std::map<std::string, comet::HostObservation> observation_by_node;
+  observation_by_node.emplace(observation.node_name, observation);
+  const std::map<std::string, comet::NodeAvailabilityOverride> availability_override_map;
+
+  const auto nodes_payload = comet::controller::DashboardService::BuildNodesPayload(
+      dashboard_nodes,
+      observation_by_node,
+      availability_override_map,
+      desired_state,
+      {},
+      desired_state.plane_name,
+      std::string("running"),
+      1,
+      300,
+      [&](const std::string& heartbeat_at) {
+        return runtime_support_service.HeartbeatAgeSeconds(heartbeat_at);
+      },
+      [&](const std::optional<long long>& age_seconds, int stale_after_seconds) {
+        return runtime_support_service.HealthFromAge(age_seconds, stale_after_seconds);
+      },
+      [&](const std::map<std::string, comet::NodeAvailabilityOverride>& overrides,
+          const std::string& node_name) {
+        return runtime_support_service.ResolveNodeAvailability(overrides, node_name);
+      },
+      [&](const comet::HostObservation& value) {
+        return runtime_support_service.ParseRuntimeStatus(value);
+      },
+      [](const comet::HostObservation&) -> std::optional<comet::GpuTelemetrySnapshot> {
+        return std::nullopt;
+      });
+
+  Expect(nodes_payload.items.size() == 1, "expected a single node payload item");
+  Expect(
+      nodes_payload.ready_nodes == 0,
+      "foreign runtime status must not mark the selected plane as ready");
+  Expect(
+      nodes_payload.items.at(0).at("runtime_launch_ready").is_null(),
+      "foreign runtime status must not be exposed in plane-scoped node payload");
+
+  std::cout << "ok: plane-scoped-nodes-ignore-foreign-runtime-status" << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -551,6 +621,7 @@ int main() {
     TestWebUiMissingStateCritical();
     TestSkillsFactoryProbeFailureDoesNotBreakPayload();
     TestRuntimePayloadIncludesKvCacheBytes();
+    TestPlaneScopedNodesIgnoreForeignRuntimeStatus();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "dashboard service tests failed: " << error.what() << '\n';

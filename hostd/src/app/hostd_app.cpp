@@ -4,6 +4,7 @@
 #include "app/hostd_composition_root.h"
 #include "app/hostd_controller_transport_support.h"
 #include "app/hostd_local_state_support.h"
+#include "app/hostd_repo_root_support.h"
 #include "app/hostd_telemetry_support.h"
 #include "backend/hostd_backend.h"
 #include "backend/hostd_backend_factory.h"
@@ -853,72 +854,6 @@ void ValidateDesiredNodeStateForCurrentHost(
   }
 }
 
-std::optional<std::filesystem::path> FindRepoRootFromPath(std::filesystem::path current) {
-  while (!current.empty()) {
-    if (std::filesystem::exists(current / "scripts" / "build-runtime-images.sh") &&
-        std::filesystem::exists(current / "runtime" / "base" / "Dockerfile")) {
-      return current;
-    }
-    const auto parent = current.parent_path();
-    if (parent.empty() || parent == current) {
-      break;
-    }
-    current = parent;
-  }
-  return std::nullopt;
-}
-
-std::optional<std::filesystem::path> DetectCometRepoRoot() {
-  try {
-    if (const auto from_cwd = FindRepoRootFromPath(std::filesystem::current_path());
-        from_cwd.has_value()) {
-      return from_cwd;
-    }
-  } catch (...) {
-  }
-
-  const std::string executable_path = comet::platform::ExecutablePath();
-  if (executable_path.empty()) {
-    return std::nullopt;
-  }
-  return FindRepoRootFromPath(std::filesystem::path(executable_path).parent_path());
-}
-
-std::optional<std::filesystem::path> ResolvePlaneOwnedPath(
-    const comet::DesiredState& state,
-    const std::string& relative_path) {
-  if (relative_path.empty()) {
-    return std::nullopt;
-  }
-
-  const std::filesystem::path input(relative_path);
-  if (input.is_absolute()) {
-    if (std::filesystem::exists(input)) {
-      return input.lexically_normal();
-    }
-    return std::nullopt;
-  }
-
-  std::vector<std::filesystem::path> candidates;
-  try {
-    candidates.push_back(std::filesystem::current_path() / input);
-  } catch (...) {
-  }
-
-  if (const auto comet_repo_root = DetectCometRepoRoot(); comet_repo_root.has_value()) {
-    candidates.push_back(*comet_repo_root / input);
-    candidates.push_back(comet_repo_root->parent_path() / state.plane_name / input);
-  }
-
-  for (const auto& candidate : candidates) {
-    std::error_code error;
-    if (std::filesystem::exists(candidate, error) && !error) {
-      return candidate.lexically_normal();
-    }
-  }
-  return std::nullopt;
-}
-
 bool NodeHasAppInstance(
     const comet::DesiredState& desired_node_state,
     const std::string& node_name) {
@@ -990,7 +925,10 @@ void RunPostDeployScriptIfNeeded(
   }
 
   const auto script_path =
-      ResolvePlaneOwnedPath(desired_node_state, *desired_node_state.post_deploy_script);
+      comet::hostd::appsupport::ResolvePlaneOwnedPath(
+          desired_node_state,
+          *desired_node_state.post_deploy_script,
+          artifacts_root);
   if (!script_path.has_value()) {
     throw std::runtime_error(
         "post_deploy_script was configured but could not be resolved: " +
@@ -1159,7 +1097,8 @@ void EnsureRuntimeImageAvailable(const std::string& image) {
   }
 
   if (image.rfind("comet/", 0) == 0 && image.ends_with(":dev")) {
-    if (const auto repo_root = DetectCometRepoRoot(); repo_root.has_value()) {
+    if (const auto repo_root = comet::hostd::appsupport::DetectCometRepoRoot();
+        repo_root.has_value()) {
       BuildCometRuntimeImage(*repo_root, image);
       if (DockerImageExists(image)) {
         ensured_images.insert(image);

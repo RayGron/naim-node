@@ -2669,18 +2669,19 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   if (!primary_node.empty()) {
     resolution.observation = store.LoadHostObservation(primary_node);
     bool infer_runtime_present = false;
-    if (resolution.observation.has_value()) {
-      if (const auto infer_instance_name = find_infer_instance_name_(*desired_state);
-          infer_instance_name.has_value()) {
-        const auto instance_statuses =
-            parse_instance_runtime_statuses_(*resolution.observation);
-        infer_runtime_present = std::any_of(
-            instance_statuses.begin(),
-            instance_statuses.end(),
-            [&](const comet::RuntimeProcessStatus& status) {
-              return status.instance_name == *infer_instance_name;
-            });
-      }
+    const auto infer_instance_name_opt =
+        resolution.observation.has_value()
+            ? find_infer_instance_name_(*desired_state)
+            : std::optional<std::string>{};
+    if (resolution.observation.has_value() && infer_instance_name_opt.has_value()) {
+      const auto instance_statuses =
+          parse_instance_runtime_statuses_(*resolution.observation);
+      infer_runtime_present = std::any_of(
+          instance_statuses.begin(),
+          instance_statuses.end(),
+          [&](const comet::RuntimeProcessStatus& status) {
+            return status.instance_name == *infer_instance_name_opt;
+          });
     }
     if (resolution.observation.has_value()) {
       try {
@@ -2697,8 +2698,13 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     }
     if (!resolution.runtime_status.has_value() && observation_matches_plane &&
         !resolution.observation->runtime_status_json.empty()) {
-      resolution.runtime_status = comet::DeserializeRuntimeStatusJson(
+      const auto observed_runtime = comet::DeserializeRuntimeStatusJson(
           resolution.observation->runtime_status_json);
+      if (observed_runtime.plane_name == plane_name &&
+          (!infer_instance_name_opt.has_value() ||
+           observed_runtime.instance_name == *infer_instance_name_opt)) {
+        resolution.runtime_status = observed_runtime;
+      }
     }
     if (resolution.runtime_status.has_value()) {
       resolution.target = parse_interaction_target_(

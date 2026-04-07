@@ -421,6 +421,17 @@ target_link_libraries(
 comet_enable_strict_warnings(comet-dashboard-service-tests)
 
 add_executable(
+  comet-read-model-tests
+  controller/src/infra/controller_runtime_support_service.cpp
+  controller/src/read_model/read_model_service.cpp
+  controller/src/read_model/read_model_service_tests.cpp
+)
+target_include_directories(
+  comet-read-model-tests PRIVATE common/include controller/include)
+target_link_libraries(comet-read-model-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-read-model-tests)
+
+add_executable(
   comet-auth-http-tests
   controller/src/auth/auth_http_service.cpp
   controller/src/auth/auth_http_service_tests.cpp
@@ -476,6 +487,16 @@ add_executable(
 target_include_directories(comet-hostd-local-state-tests PRIVATE common/include hostd/include)
 target_link_libraries(comet-hostd-local-state-tests PRIVATE comet-common)
 comet_enable_strict_warnings(comet-hostd-local-state-tests)
+
+add_executable(
+  comet-hostd-repo-root-support-tests
+  hostd/src/app/hostd_repo_root_support.cpp
+  hostd/src/app/hostd_repo_root_support_tests.cpp
+)
+target_include_directories(
+  comet-hostd-repo-root-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(comet-hostd-repo-root-support-tests PRIVATE comet-common)
+comet_enable_strict_warnings(comet-hostd-repo-root-support-tests)
 
 add_executable(
   comet-hostd-assignment-lock-tests
@@ -602,6 +623,7 @@ add_executable(
   hostd/src/app/hostd_bootstrap_model_support.cpp
   hostd/src/app/hostd_controller_transport_support.cpp
   hostd/src/app/hostd_local_state_support.cpp
+  hostd/src/app/hostd_repo_root_support.cpp
   hostd/src/app/hostd_telemetry_support.cpp
   hostd/src/backend/default_http_hostd_backend_support.cpp
   hostd/src/backend/hostd_backend_factory.cpp

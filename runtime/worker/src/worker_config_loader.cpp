@@ -1,10 +1,73 @@
 #include "worker_config_loader.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
+#include <string>
+
+#include <cstdio>
 
 namespace comet::worker {
+
+namespace {
+
+std::string ResolveVisibleGpuDevice() {
+  const char* visible_devices = std::getenv("NVIDIA_VISIBLE_DEVICES");
+  if (visible_devices == nullptr || std::strlen(visible_devices) == 0) {
+    return "";
+  }
+
+  const std::string devices(visible_devices);
+  if (devices == "none" || devices == "void" || devices == "all") {
+    return "";
+  }
+
+  const auto comma = devices.find(',');
+  const std::string first = devices.substr(0, comma);
+  const auto begin = std::find_if_not(first.begin(), first.end(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  });
+  const auto end = std::find_if_not(first.rbegin(), first.rend(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  }).base();
+  if (begin >= end) {
+    return "";
+  }
+  return std::string(begin, end);
+}
+
+std::string ResolveGpuDeviceFromNvidiaSmi() {
+  std::unique_ptr<FILE, decltype(&pclose)> pipe(
+      popen("nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null", "r"),
+      pclose);
+  if (!pipe) {
+    return "";
+  }
+
+  char buffer[128];
+  if (fgets(buffer, sizeof(buffer), pipe.get()) == nullptr) {
+    return "";
+  }
+
+  std::string gpu_index(buffer);
+  gpu_index.erase(std::remove(gpu_index.begin(), gpu_index.end(), '\n'), gpu_index.end());
+  gpu_index.erase(std::remove(gpu_index.begin(), gpu_index.end(), '\r'), gpu_index.end());
+  const auto begin = std::find_if_not(gpu_index.begin(), gpu_index.end(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  });
+  const auto end = std::find_if_not(gpu_index.rbegin(), gpu_index.rend(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  }).base();
+  if (begin >= end) {
+    return "";
+  }
+  return std::string(begin, end);
+}
+
+}  // namespace
 
 WorkerConfig WorkerConfigLoader::Load() const {
   WorkerConfig config;
@@ -19,7 +82,11 @@ WorkerConfig WorkerConfigLoader::Load() const {
       "COMET_WORKER_RUNTIME_STATUS_PATH",
       (std::filesystem::path(config.private_disk_path) / "worker-runtime-status.json").string());
   config.model_path = GetEnvOr("COMET_WORKER_MODEL_PATH");
-  config.gpu_device = GetEnvOr("COMET_GPU_DEVICE", GetEnvOr("COMET_WORKER_GPU_DEVICE"));
+  config.gpu_device =
+      GetEnvOr("COMET_GPU_DEVICE", GetEnvOr("COMET_WORKER_GPU_DEVICE", ResolveVisibleGpuDevice()));
+  if (config.gpu_device.empty()) {
+    config.gpu_device = ResolveGpuDeviceFromNvidiaSmi();
+  }
   config.boot_mode = GetEnvOr("COMET_WORKER_BOOT_MODE", "llama-idle");
   config.distributed_backend = GetEnvOr("COMET_DISTRIBUTED_BACKEND", "local");
   config.rpc_host = GetEnvOr("COMET_WORKER_RPC_HOST", "0.0.0.0");
