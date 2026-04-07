@@ -231,6 +231,7 @@ add_library(
   common/src/state/desired_state_v2_validator.cpp
   common/src/state/disk_runtime_repository.cpp
   common/src/state/event_repository.cpp
+  common/src/state/interaction_repository.cpp
   common/src/state/node_availability_repository.cpp
   common/src/state/observation_repository.cpp
   common/src/state/plane_repository.cpp
@@ -532,6 +533,7 @@ add_executable(
   controller/src/host/host_registry_service.cpp
   controller/src/host/hostd_http_service.cpp
   controller/src/host/hostd_http_support.cpp
+  controller/src/interaction/interaction_conversation_service.cpp
   controller/src/interaction/interaction_http_service.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_payload_builder.cpp
@@ -574,6 +576,11 @@ add_executable(
 )
 target_include_directories(comet-controller PRIVATE controller/include)
 target_link_libraries(comet-controller PRIVATE comet-common)
+if(TARGET zstd::libzstd_shared)
+  target_link_libraries(comet-controller PRIVATE zstd::libzstd_shared)
+elseif(TARGET zstd::libzstd_static)
+  target_link_libraries(comet-controller PRIVATE zstd::libzstd_static)
+endif()
 target_compile_definitions(
   comet-controller
   PRIVATE
