@@ -3,7 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
-build_dir="$("${script_dir}/print-build-dir.sh")"
+read -r host_os host_arch < <("${script_dir}/detect-host-target.sh")
+build_dir="$("${script_dir}/print-build-dir.sh" "${host_os}" "${host_arch}")"
 
 skip_build=0
 for arg in "$@"; do
@@ -17,8 +18,8 @@ for arg in "$@"; do
 done
 
 if [[ "${skip_build}" -eq 0 ]]; then
-  "${script_dir}/configure-build.sh" Debug >/dev/null
-  cmake --build "${build_dir}" --target comet-controller comet-browsingd -j 8 >/dev/null
+  "${script_dir}/configure-build.sh" "${host_os}" "${host_arch}" Debug >/dev/null
+  cmake --build "${build_dir}" --target comet-controller comet-webgatewayd -j 8 >/dev/null
 fi
 
 command -v curl >/dev/null 2>&1 || {
@@ -52,6 +53,7 @@ wait_for_http() {
   return 1
 }
 
+mkdir -p "${repo_root}/var"
 work_root="$(mktemp -d "${repo_root}/var/live-maglev-web.XXXXXX")"
 db_path="${work_root}/controller.sqlite"
 controller_log="${work_root}/controller.log"
@@ -155,7 +157,7 @@ cat >"${desired_state_path}" <<EOF
     "enabled": true,
     "policy": {
       "browser_session_enabled": true,
-      "allowed_domains": ["example.com", "openai.com"],
+      "allowed_domains": ["example.com", "openai.com", "reddit.com", "old.reddit.com", "x.com", "twitter.com"],
       "blocked_domains": ["localhost", "internal"],
       "max_search_results": 5,
       "max_fetch_bytes": 16384
@@ -307,16 +309,16 @@ curl -fsS -X POST \
 
 echo "maglev-web-live: start browsing runtime"
 COMET_PLANE_NAME="${plane_name}" \
-COMET_INSTANCE_NAME="browsing-${plane_name}" \
-COMET_INSTANCE_ROLE="browsing" \
+COMET_INSTANCE_NAME="webgateway-${plane_name}" \
+COMET_INSTANCE_ROLE="webgateway" \
 COMET_NODE_NAME="local-hostd" \
 COMET_CONTROL_ROOT="/comet/shared/control/${plane_name}" \
 COMET_CONTROLLER_URL="http://127.0.0.1:${controller_port}" \
-COMET_BROWSING_RUNTIME_STATUS_PATH="${browsing_status_path}" \
-COMET_BROWSING_STATE_ROOT="${browsing_state_root}" \
-COMET_BROWSING_PORT="${browsing_port}" \
-COMET_BROWSING_POLICY_JSON='{"browser_session_enabled":true,"allowed_domains":["example.com","openai.com"],"blocked_domains":["localhost","internal"],"max_search_results":5,"max_fetch_bytes":16384}' \
-  "${build_dir}/comet-browsingd" >"${browsing_log}" 2>&1 &
+COMET_WEBGATEWAY_RUNTIME_STATUS_PATH="${browsing_status_path}" \
+COMET_WEBGATEWAY_STATE_ROOT="${browsing_state_root}" \
+COMET_WEBGATEWAY_PORT="${browsing_port}" \
+COMET_WEBGATEWAY_POLICY_JSON='{"browser_session_enabled":true,"rendered_browser_enabled":true,"allowed_domains":["example.com","openai.com","reddit.com","old.reddit.com","x.com","twitter.com"],"blocked_domains":["localhost","internal"],"max_search_results":5,"max_fetch_bytes":16384}' \
+  "${build_dir}/comet-webgatewayd" >"${browsing_log}" 2>&1 &
 browsing_pid="$!"
 wait_for_http "http://127.0.0.1:${browsing_port}/health"
 
@@ -469,12 +471,19 @@ invoke_interaction() {
   local name="$1"
   local request_file="$2"
   local response_file="${work_root}/${name}.response.json"
-  curl -fsS -X POST \
+  local status_code
+  status_code="$(
+    curl -sS -o "${response_file}" -w '%{http_code}' -X POST \
     -H "X-Comet-Session-Token: ${auth_token}" \
     -H 'Content-Type: application/json' \
     --data-binary "@${request_file}" \
-    "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/interaction/chat/completions" \
-    >"${response_file}"
+    "http://127.0.0.1:${controller_port}/api/v1/planes/${plane_name}/interaction/chat/completions"
+  )"
+  if [[ "${status_code}" != "200" ]]; then
+    echo "maglev-web-live: interaction request ${name} failed with HTTP ${status_code}" >&2
+    cat "${response_file}" >&2
+    exit 1
+  fi
   printf '%s\n' "${response_file}"
 }
 
@@ -562,6 +571,38 @@ else:
 PY
 }
 
+assert_direct_fetch_domain() {
+  local response_file="$1"
+  local expected_fragment="$2"
+  python3 - "${response_file}" "${expected_fragment}" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+expected = sys.argv[2]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+
+browsing = payload.get("browsing", {})
+sources = browsing.get("sources", [])
+
+if browsing.get("decision") != "direct_fetch":
+    raise SystemExit(f"expected direct_fetch decision, got {browsing.get('decision')!r}")
+if browsing.get("lookup_state") != "evidence_attached":
+    raise SystemExit(f"expected evidence_attached, got {browsing.get('lookup_state')!r}")
+if browsing.get("session_backend") != "cef":
+    raise SystemExit(f"expected session_backend=cef, got {browsing.get('session_backend')!r}")
+if not browsing.get("rendered_browser_ready"):
+    raise SystemExit("expected rendered_browser_ready=true")
+if not sources:
+    raise SystemExit("expected at least one attached source")
+if sources[0].get("backend") != "browser_render":
+    raise SystemExit(f"expected browser_render backend, got {sources[0].get('backend')!r}")
+if expected not in sources[0].get("url", ""):
+    raise SystemExit(f"expected {expected!r} in source url {sources[0].get('url', '')!r}")
+PY
+}
+
 echo "maglev-web-live: test natural-language web enable"
 toggle_request="${work_root}/toggle-enable.json"
 cat >"${toggle_request}" <<'EOF'
@@ -591,6 +632,28 @@ cat >"${fetch_request}" <<'EOF'
 EOF
 fetch_response="$(invoke_interaction "direct-fetch" "${fetch_request}")"
 assert_json "${fetch_response}" "direct_fetch"
+
+echo "maglev-web-live: test direct JS-heavy old.reddit fetch"
+reddit_request="${work_root}/direct-fetch-old-reddit.json"
+cat >"${reddit_request}" <<'EOF'
+{"messages":[
+  {"role":"user","content":"Enable web for this chat."},
+  {"role":"user","content":"Use the web and check https://old.reddit.com/r/OpenAI/ for me."}
+]}
+EOF
+reddit_response="$(invoke_interaction "direct-fetch-old-reddit" "${reddit_request}")"
+assert_direct_fetch_domain "${reddit_response}" "old.reddit.com"
+
+echo "maglev-web-live: test direct JS-heavy x fetch"
+x_request="${work_root}/direct-fetch-x.json"
+cat >"${x_request}" <<'EOF'
+{"messages":[
+  {"role":"user","content":"Enable web for this chat."},
+  {"role":"user","content":"Use the web and check https://x.com/OpenAI for me."}
+]}
+EOF
+x_response="$(invoke_interaction "direct-fetch-x" "${x_request}")"
+assert_direct_fetch_domain "${x_response}" "x.com"
 
 echo "maglev-web-live: test enabled web with no lookup needed"
 offline_request="${work_root}/enabled-not-needed.json"

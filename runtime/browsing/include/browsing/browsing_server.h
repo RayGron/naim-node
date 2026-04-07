@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -19,10 +20,18 @@
 
 namespace comet::browsing {
 
+class CefBrowserBackend;
+
 struct BrowsingPolicy {
+  bool cef_enabled = true;
   bool browser_session_enabled = false;
+  bool rendered_browser_enabled = true;
+  bool login_enabled = false;
   std::vector<std::string> allowed_domains;
   std::vector<std::string> blocked_domains;
+  std::vector<std::string> blocked_targets;
+  bool response_review_enabled = true;
+  std::string policy_version = "webgateway-v1";
   int max_search_results = 8;
   int max_fetch_bytes = 262144;
 };
@@ -33,6 +42,8 @@ struct SearchResult {
   std::string title;
   std::string snippet;
   std::optional<std::string> published_at;
+  std::string backend = "broker_search";
+  bool rendered = false;
   double score = 0.0;
 };
 
@@ -41,7 +52,10 @@ struct FetchResult {
   std::string final_url;
   std::string content_type;
   std::string fetched_at;
+  std::string backend = "broker_fetch";
+  bool rendered = false;
   std::optional<std::string> title;
+  std::optional<std::string> screenshot_path;
   std::string visible_text;
   std::string response_hash;
   nlohmann::json citations = nlohmann::json::array();
@@ -50,12 +64,12 @@ struct FetchResult {
 
 struct BrowsingRuntimeConfig {
   std::string plane_name = "unknown";
-  std::string instance_name = "browsing-unknown";
-  std::string instance_role = "browsing";
+  std::string instance_name = "webgateway-unknown";
+  std::string instance_role = "webgateway";
   std::string node_name = "unknown";
   std::string control_root;
   std::string controller_url = "http://controller.internal:18080";
-  std::filesystem::path status_path = "/comet/private/browsing-runtime-status.json";
+  std::filesystem::path status_path = "/comet/private/webgateway-runtime-status.json";
   std::filesystem::path state_root = "/comet/private/sessions";
   std::filesystem::path ready_path = "/tmp/comet-ready";
   std::string listen_host = "0.0.0.0";
@@ -82,6 +96,13 @@ class BrowsingServer final {
       std::string* normalized_host = nullptr);
   static std::vector<SearchResult> ParseBingRssResults(
       const std::string& rss_xml,
+      const std::string& query,
+      const BrowsingPolicy& policy,
+      const std::vector<std::string>& requested_domains,
+      int limit);
+  static std::vector<SearchResult> ParseBingHtmlResults(
+      const std::string& html,
+      const std::string& query,
       const BrowsingPolicy& policy,
       const std::vector<std::string>& requested_domains,
       int limit);
@@ -92,6 +113,7 @@ class BrowsingServer final {
       const std::string& body,
       const BrowsingPolicy& policy);
   static std::vector<std::string> DetectInjectionFlags(const std::string& text);
+  static nlohmann::json BuildWebGatewayDisabledContext();
 
  private:
   struct SessionRecord {
@@ -120,20 +142,31 @@ class BrowsingServer final {
   nlohmann::json BuildStatusPayload() const;
   nlohmann::json HandleSearchPayload(const nlohmann::json& payload);
   nlohmann::json HandleFetchPayload(const nlohmann::json& payload);
+  nlohmann::json HandleWebGatewayResolvePayload(const nlohmann::json& payload);
+  nlohmann::json HandleWebGatewayReviewPayload(const nlohmann::json& payload);
   nlohmann::json CreateSession(const nlohmann::json& payload);
   nlohmann::json ReadSession(const std::string& session_id) const;
   nlohmann::json ApplySessionAction(const std::string& session_id, const nlohmann::json& payload);
   nlohmann::json DeleteSession(const std::string& session_id);
 
   std::string NewSessionId() const;
+  std::optional<FetchResult> FetchUrlViaBroker(
+      const std::string& url,
+      std::string* error_code,
+      std::string* error_message) const;
   std::optional<FetchResult> FetchUrl(
       const std::string& url,
       std::string* error_code,
       std::string* error_message) const;
+  static std::vector<SearchResult> BuildCanonicalSearchResults(
+      const std::string& query,
+      const std::vector<std::string>& requested_domains,
+      int limit);
 
   BrowsingRuntimeConfig config_;
   std::atomic<bool> stop_requested_{false};
   comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  std::unique_ptr<CefBrowserBackend> cef_backend_;
   mutable std::mutex sessions_mutex_;
   std::unordered_map<std::string, SessionRecord> sessions_;
 };

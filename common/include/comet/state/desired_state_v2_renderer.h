@@ -27,7 +27,7 @@ class DesiredStateV2Renderer final {
   void RenderWorkerInstances();
   void RenderAppInstance();
   void RenderSkillsInstance();
-  void RenderBrowsingInstance();
+  void RenderWebGatewayInstance();
 
   bool InferEnabled() const;
   int InferReplicaCount() const;
@@ -48,12 +48,12 @@ class DesiredStateV2Renderer final {
   std::string BuildInferInstanceName(int infer_index = 0) const;
   std::string BuildAppInstanceName() const;
   std::string BuildSkillsInstanceName() const;
-  std::string BuildBrowsingInstanceName() const;
+  std::string BuildWebGatewayInstanceName() const;
   int BuildInferApiPort(int infer_index) const;
   int BuildInferGatewayPort(int infer_index) const;
   int BuildInferLlamaPort(int infer_index) const;
   int BuildSkillsHostPort() const;
-  int BuildBrowsingHostPort() const;
+  int BuildWebGatewayHostPort() const;
   std::string BuildReplicaUpstreams(const std::vector<InstanceSpec>& infer_instances) const;
   std::string InferInstanceNameForWorker(int worker_index) const;
   std::string BuildPlaneSharedHostPath() const;

@@ -114,6 +114,13 @@ vcpkg_root="$("${script_dir}/find-vcpkg.sh" --root)"
 vcpkg_toolchain="${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
 ninja_exe="$("${script_dir}/find-ninja.sh")"
 cmake_exe="$("${script_dir}/find-cmake.sh")"
+extra_cmake_args=()
+
+if [[ -n "${COMET_CMAKE_ARGS:-}" ]]; then
+  # COMET_CMAKE_ARGS uses shell-style tokenization so callers can pass multiple -D flags.
+  # shellcheck disable=SC2206
+  extra_cmake_args=( ${COMET_CMAKE_ARGS} )
+fi
 
 if [[ ! -f "${vcpkg_toolchain}" ]]; then
   echo "error: vcpkg toolchain file was not found under '${vcpkg_root}'" >&2

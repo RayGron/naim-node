@@ -67,7 +67,7 @@ bool IsPlaneSkillsRequest(const std::string& path) {
 }
 
 bool IsPlaneBrowsingRequest(const std::string& path) {
-  return ExtractPlaneFeatureRequestName(path, "/browsing").has_value();
+  return ExtractPlaneFeatureRequestName(path, "/webgateway").has_value();
 }
 
 int InteractionErrorStatusCode(const InteractionValidationError& error) {
@@ -96,6 +96,7 @@ ControllerHttpRouter::ControllerHttpRouter(
     std::string db_path,
     std::string default_artifacts_root,
     std::optional<std::filesystem::path> ui_root,
+    bool webgateway_routes_enabled,
     AuthSupportService& auth_support,
     InteractionHttpService& interaction_service,
     ControllerHealthService& health_service,
@@ -105,6 +106,7 @@ ControllerHttpRouter::ControllerHttpRouter(
     : db_path_(std::move(db_path)),
       default_artifacts_root_(std::move(default_artifacts_root)),
       ui_root_(std::move(ui_root)),
+      webgateway_routes_enabled_(webgateway_routes_enabled),
       auth_support_(auth_support),
       interaction_service_(interaction_service),
       health_service_(health_service),
@@ -652,6 +654,14 @@ HttpResponse ControllerHttpRouter::HandleRequest(
     const bool interaction_request = IsPlaneInteractionRequest(request.path);
     const bool skills_request = IsPlaneSkillsRequest(request.path);
     const bool browsing_request = IsPlaneBrowsingRequest(request.path);
+    if (browsing_request && !webgateway_routes_enabled_) {
+      return deps_.build_json_response(
+          404,
+          json{{"status", "not_found"},
+               {"path", request.path},
+               {"method", request.method}},
+          {});
+    }
     if (!interaction_request && !skills_request && !browsing_request) {
       try {
         comet::ControllerStore store(db_path_);
@@ -680,7 +690,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
         store.Initialize();
         const auto plane_name = skills_request
                                     ? ExtractPlaneFeatureRequestName(request.path, "/skills")
-                                    : ExtractPlaneFeatureRequestName(request.path, "/browsing");
+                                    : ExtractPlaneFeatureRequestName(request.path, "/webgateway");
         if (plane_name.has_value()) {
           const auto desired_state = store.LoadDesiredState(*plane_name);
           if (desired_state.has_value() && desired_state->protected_plane &&

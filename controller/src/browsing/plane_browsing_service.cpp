@@ -28,17 +28,17 @@ const InstanceSpec* FindBrowsingInstance(const DesiredState& desired_state) {
   return &*it;
 }
 
-std::string NormalizeBrowsingPathSuffix(const std::string& path_suffix) {
+std::string NormalizeWebGatewayPathSuffix(const std::string& path_suffix) {
   if (path_suffix.empty() || path_suffix == "/") {
-    return "/v1/browsing";
+    return "/v1/webgateway";
   }
   if (path_suffix.front() == '/') {
-    return "/v1/browsing" + path_suffix;
+    return "/v1/webgateway" + path_suffix;
   }
-  return "/v1/browsing/" + path_suffix;
+  return "/v1/webgateway/" + path_suffix;
 }
 
-bool ProbeBrowsingTargetOk(const ControllerEndpointTarget& target) {
+bool ProbeWebGatewayTargetOk(const ControllerEndpointTarget& target) {
   try {
     const auto response = SendControllerHttpRequest(target, "GET", "/health");
     return response.status_code >= 200 && response.status_code < 300;
@@ -80,11 +80,12 @@ nlohmann::json PlaneBrowsingService::BuildStatusPayload(
   const auto* browsing_instance = FindBrowsingInstance(desired_state);
   const auto target = ResolveTarget(desired_state);
   const bool running_plane = plane_state.has_value() && *plane_state == "running";
-  const bool ready = enabled && running_plane && target.has_value() && ProbeBrowsingTargetOk(*target);
+  const bool ready =
+      enabled && running_plane && target.has_value() && ProbeWebGatewayTargetOk(*target);
 
   std::string reason = "ready";
   if (!enabled) {
-    reason = "browsing_disabled";
+    reason = "webgateway_disabled";
   } else if (!running_plane) {
     reason = "plane_not_running";
   } else if (!target.has_value()) {
@@ -95,23 +96,31 @@ nlohmann::json PlaneBrowsingService::BuildStatusPayload(
 
   nlohmann::json payload = {
       {"status", "ok"},
-      {"browsing_enabled", enabled},
-      {"browsing_ready", ready},
+      {"webgateway_enabled", enabled},
+      {"webgateway_ready", ready},
       {"reason", reason},
       {"plane_name", desired_state.plane_name},
       {"plane_state", plane_state.has_value() ? nlohmann::json(*plane_state) : nlohmann::json(nullptr)},
-      {"browsing_container_name",
+      {"webgateway_container_name",
        browsing_instance != nullptr ? nlohmann::json(browsing_instance->name) : nlohmann::json(nullptr)},
-      {"browsing_target", target.has_value() ? nlohmann::json(target->raw) : nlohmann::json(nullptr)},
+      {"webgateway_target", target.has_value() ? nlohmann::json(target->raw) : nlohmann::json(nullptr)},
       {"browser_session_enabled",
        desired_state.browsing.has_value() && desired_state.browsing->policy.has_value()
            ? nlohmann::json(desired_state.browsing->policy->browser_session_enabled)
+           : nlohmann::json(false)},
+      {"rendered_browser_enabled",
+       desired_state.browsing.has_value() && desired_state.browsing->policy.has_value()
+           ? nlohmann::json(desired_state.browsing->policy->rendered_browser_enabled)
+           : nlohmann::json(true)},
+      {"login_enabled",
+       desired_state.browsing.has_value() && desired_state.browsing->policy.has_value()
+           ? nlohmann::json(desired_state.browsing->policy->login_enabled)
            : nlohmann::json(false)},
   };
 
   if (ready) {
     try {
-      const auto response = SendControllerHttpRequest(*target, "GET", "/v1/browsing/status");
+      const auto response = SendControllerHttpRequest(*target, "GET", "/v1/webgateway/status");
       if (!response.body.empty()) {
         const auto runtime_status = nlohmann::json::parse(response.body, nullptr, false);
         if (runtime_status.is_object()) {
@@ -135,20 +144,20 @@ std::optional<HttpResponse> PlaneBrowsingService::ProxyPlaneBrowsingRequest(
     std::string* error_message) const {
   if (!IsEnabled(desired_state)) {
     if (error_code != nullptr) {
-      *error_code = "browsing_disabled";
+      *error_code = "webgateway_disabled";
     }
     if (error_message != nullptr) {
-      *error_message = "isolated browsing is not enabled for this plane";
+      *error_message = "webgateway is not enabled for this plane";
     }
     return std::nullopt;
   }
   const auto target = ResolveTarget(desired_state);
   if (!target.has_value()) {
     if (error_code != nullptr) {
-      *error_code = "browsing_target_missing";
+      *error_code = "webgateway_target_missing";
     }
     if (error_message != nullptr) {
-      *error_message = "browsing service target is not available";
+      *error_message = "webgateway service target is not available";
     }
     return std::nullopt;
   }
@@ -157,12 +166,12 @@ std::optional<HttpResponse> PlaneBrowsingService::ProxyPlaneBrowsingRequest(
     return SendControllerHttpRequest(
         *target,
         method,
-        NormalizeBrowsingPathSuffix(path_suffix),
+        NormalizeWebGatewayPathSuffix(path_suffix),
         body,
         DefaultJsonHeaders());
   } catch (const std::exception& error) {
     if (error_code != nullptr) {
-      *error_code = "browsing_upstream_failed";
+      *error_code = "webgateway_upstream_failed";
     }
     if (error_message != nullptr) {
       *error_message = error.what();

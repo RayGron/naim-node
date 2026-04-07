@@ -308,15 +308,15 @@ HttpResponse PlaneHttpService::HandlePlanePath(
     }
   }
 
-  const auto browsing_pos = remainder.find("/browsing");
-  if (browsing_pos != std::string::npos) {
-    const bool browsing_suffix_valid =
-        browsing_pos + std::string("/browsing").size() == remainder.size() ||
-        remainder.at(browsing_pos + std::string("/browsing").size()) == '/';
-    if (browsing_suffix_valid) {
-      const std::string plane_name = remainder.substr(0, browsing_pos);
+  const auto webgateway_pos = remainder.find("/webgateway");
+  if (webgateway_pos != std::string::npos) {
+    const bool webgateway_suffix_valid =
+        webgateway_pos + std::string("/webgateway").size() == remainder.size() ||
+        remainder.at(webgateway_pos + std::string("/webgateway").size()) == '/';
+    if (webgateway_suffix_valid) {
+      const std::string plane_name = remainder.substr(0, webgateway_pos);
       const std::string path_suffix =
-          remainder.substr(browsing_pos + std::string("/browsing").size());
+          remainder.substr(webgateway_pos + std::string("/webgateway").size());
       try {
         comet::ControllerStore store(db_path);
         store.Initialize();
@@ -354,7 +354,7 @@ HttpResponse PlaneHttpService::HandlePlanePath(
             &error_code,
             &error_message);
         if (!proxied.has_value()) {
-          const int status_code = error_code == "browsing_disabled" ? 409 : 503;
+          const int status_code = error_code == "webgateway_disabled" ? 409 : 503;
           return support_.build_json_response(
               status_code,
               json{{"status", "error"},

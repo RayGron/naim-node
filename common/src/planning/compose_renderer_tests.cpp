@@ -31,6 +31,8 @@ int main() {
     service.use_nvidia_runtime = true;
     service.gpu_devices = {"0", "2", "3", "0"};
     service.healthcheck = "CMD-SHELL test -f /tmp/comet-ready";
+    service.environment["COMET_WEBGATEWAY_POLICY_JSON"] =
+        R"({"blocked_domains":["localhost","127.0.0.1","internal"],"browser_session_enabled":true})";
     plan.services.push_back(std::move(service));
 
     const std::string yaml = comet::RenderComposeYaml(plan);
@@ -41,22 +43,38 @@ int main() {
         yaml.find("device_ids: [\"0\", \"2\", \"3\", \"0\"]") == std::string::npos,
         "compose renderer should not emit duplicate gpu device ids");
     Expect(
-        yaml.find("command: [\"/runtime/bin/comet-workerd\"]") != std::string::npos,
-        "compose renderer should keep single-token commands as a one-element argv array");
+        yaml.find(
+            R"(COMET_WEBGATEWAY_POLICY_JSON: "{\"blocked_domains\":[\"localhost\",\"127.0.0.1\",\"internal\"],\"browser_session_enabled\":true}")") !=
+            std::string::npos,
+        "compose renderer should escape JSON-valued env vars");
+    Expect(
+        yaml.find(R"(command: ["/runtime/bin/comet-workerd"])") != std::string::npos,
+        "compose renderer should keep single-token commands as a single array element");
 
     comet::ComposeService infer_service;
     infer_service.name = "infer-a";
     infer_service.image = "example/infer:dev";
     infer_service.command = "/runtime/bin/comet-inferctl container-boot --backend llama-rpc-head";
-    infer_service.healthcheck = "CMD-SHELL test -f /tmp/comet-ready";
-    plan.services.clear();
+    infer_service.healthcheck = "NONE";
     plan.services.push_back(std::move(infer_service));
-    const std::string infer_yaml = comet::RenderComposeYaml(plan);
+
+    comet::ComposeService browsing_service;
+    browsing_service.name = "webgateway-a";
+    browsing_service.image = "example/webgateway:dev";
+    browsing_service.command = "/runtime/bin/comet-webgatewayd";
+    browsing_service.privileged = true;
+    browsing_service.healthcheck = "NONE";
+    plan.services.push_back(std::move(browsing_service));
+
+    const std::string yaml_with_infer = comet::RenderComposeYaml(plan);
     Expect(
-        infer_yaml.find(
-            "command: [\"/runtime/bin/comet-inferctl\", \"container-boot\", \"--backend\", "
-            "\"llama-rpc-head\"]") != std::string::npos,
-        "compose renderer should split multi-token commands into argv entries");
+        yaml_with_infer.find(
+            R"(command: ["/runtime/bin/comet-inferctl", "container-boot", "--backend", "llama-rpc-head"])") !=
+            std::string::npos,
+        "compose renderer should split command strings with arguments into compose array tokens");
+    Expect(
+        yaml_with_infer.find("privileged: true") != std::string::npos,
+        "compose renderer should emit privileged mode for services that require it");
 
 #if defined(_WIN32)
     _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "192.168.88.13");
@@ -92,6 +110,7 @@ int main() {
     Expect(
         visible_devices != infer_it->environment.end() && visible_devices->second == "0",
         "planner should expose inherited gpu devices through NVIDIA_VISIBLE_DEVICES");
+
 #if defined(_WIN32)
     _putenv_s("COMET_CONTROLLER_INTERNAL_HOST", "");
 #else

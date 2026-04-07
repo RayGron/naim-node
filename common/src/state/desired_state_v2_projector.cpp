@@ -17,15 +17,15 @@ constexpr int kDefaultInferPrivateDiskSizeGb = 12;
 constexpr int kDefaultWorkerPrivateDiskSizeGb = 2;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
 constexpr int kDefaultSkillsPrivateDiskSizeGb = 1;
-constexpr int kDefaultBrowsingPrivateDiskSizeGb = 1;
+constexpr int kDefaultWebGatewayPrivateDiskSizeGb = 1;
 constexpr std::string_view kDefaultInferImage = "comet/infer-runtime:dev";
 constexpr std::string_view kDefaultWorkerImage = "comet/worker-runtime:dev";
 constexpr std::string_view kDefaultSkillsImage = "comet/skills-runtime:dev";
-constexpr std::string_view kDefaultBrowsingImage = "comet/browsing-runtime:dev";
+constexpr std::string_view kDefaultWebGatewayImage = "comet/webgateway-runtime:dev";
 constexpr std::string_view kDefaultInferCommand = "/runtime/bin/comet-inferctl container-boot";
 constexpr std::string_view kDefaultWorkerCommand = "/runtime/bin/comet-workerd";
 constexpr std::string_view kDefaultSkillsCommand = "/runtime/bin/comet-skillsd";
-constexpr std::string_view kDefaultBrowsingCommand = "/runtime/bin/comet-browsingd";
+constexpr std::string_view kDefaultWebGatewayCommand = "/runtime/bin/comet-webgatewayd";
 
 }  // namespace
 
@@ -379,7 +379,7 @@ void DesiredStateV2Projector::ProjectBrowsing() {
   }
 
   if (browsing_instance_ == nullptr) {
-    value_["browsing"] = {{"enabled", false}};
+    value_["webgateway"] = {{"enabled", false}};
     return;
   }
 
@@ -390,22 +390,36 @@ void DesiredStateV2Projector::ProjectBrowsing() {
     const auto& policy = *state_.browsing->policy;
     nlohmann::json policy_json = {
         {"browser_session_enabled", policy.browser_session_enabled},
+        {"rendered_browser_enabled", policy.rendered_browser_enabled},
+        {"login_enabled", policy.login_enabled},
         {"max_search_results", policy.max_search_results},
         {"max_fetch_bytes", policy.max_fetch_bytes},
     };
+    if (!policy.cef_enabled) {
+      policy_json["cef_enabled"] = policy.cef_enabled;
+    }
     if (!policy.allowed_domains.empty()) {
       policy_json["allowed_domains"] = policy.allowed_domains;
     }
     if (!policy.blocked_domains.empty()) {
       policy_json["blocked_domains"] = policy.blocked_domains;
     }
+    if (!policy.blocked_targets.empty()) {
+      policy_json["blocked_targets"] = policy.blocked_targets;
+    }
+    if (!policy.response_review_enabled) {
+      policy_json["response_review_enabled"] = policy.response_review_enabled;
+    }
+    if (policy.policy_version != "webgateway-v1") {
+      policy_json["policy_version"] = policy.policy_version;
+    }
     browsing["policy"] = std::move(policy_json);
   }
-  if (browsing_instance_->image != kDefaultBrowsingImage) {
+  if (browsing_instance_->image != kDefaultWebGatewayImage) {
     browsing["image"] = browsing_instance_->image;
   }
   const auto start =
-      ProjectServiceStart(*browsing_instance_, std::string(kDefaultBrowsingCommand));
+      ProjectServiceStart(*browsing_instance_, std::string(kDefaultWebGatewayCommand));
   if (!start.is_null()) {
     browsing["start"] = start;
   }
@@ -425,7 +439,7 @@ void DesiredStateV2Projector::ProjectBrowsing() {
   if (!storage.is_null()) {
     browsing["storage"] = storage;
   }
-  value_["browsing"] = std::move(browsing);
+  value_["webgateway"] = std::move(browsing);
 }
 
 void DesiredStateV2Projector::ProjectResources() {
@@ -585,7 +599,7 @@ nlohmann::json DesiredStateV2Projector::ProjectServiceStorage(const DiskSpec* di
               : disk->kind == DiskKind::SkillsPrivate
                   ? disk->size_gb == kDefaultSkillsPrivateDiskSizeGb
                   : disk->kind == DiskKind::BrowsingPrivate
-                      ? disk->size_gb == kDefaultBrowsingPrivateDiskSizeGb
+                      ? disk->size_gb == kDefaultWebGatewayPrivateDiskSizeGb
                   : disk->size_gb == kDefaultAppPrivateDiskSizeGb;
   const bool default_mount = disk->container_path == "/comet/private";
   if (default_size && default_mount) {

@@ -45,6 +45,7 @@ class ControllerHttpRouter {
       std::string db_path,
       std::string default_artifacts_root,
       std::optional<std::filesystem::path> ui_root,
+      bool webgateway_routes_enabled,
       AuthSupportService& auth_support,
       InteractionHttpService& interaction_service,
       ControllerHealthService& health_service,
@@ -61,6 +62,7 @@ class ControllerHttpRouter {
   std::string db_path_;
   std::string default_artifacts_root_;
   std::optional<std::filesystem::path> ui_root_;
+  bool webgateway_routes_enabled_ = false;
   AuthSupportService& auth_support_;
   InteractionHttpService& interaction_service_;
   ControllerHealthService& health_service_;

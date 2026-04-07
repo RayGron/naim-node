@@ -72,8 +72,41 @@
     ],
     "thinking_enabled": false
   },
+  "skills": {
+    "enabled": true,
+    "factory_skill_ids": [
+      "code-agent-root-cause-debug",
+      "code-agent-repo-map",
+      "code-agent-safe-change",
+      "skill-1775349375638-5",
+      "skill-1775349890476-6",
+      "skill-1775349890482-7",
+      "skill-1775349890489-8"
+    ],
+    "publish": [
+      {
+        "host_ip": "127.0.0.1",
+        "host_port": 32146,
+        "container_port": 18120
+      }
+    ]
+  },
   "app": {
     "enabled": false
+  },
+  "browsing": {
+    "enabled": true,
+    "policy": {
+      "browser_session_enabled": true,
+      "rendered_browser_enabled": true,
+      "blocked_domains": [
+        "localhost",
+        "127.0.0.1",
+        "internal"
+      ],
+      "max_search_results": 6,
+      "max_fetch_bytes": 65536
+    }
   },
   "resources": {
     "worker": {

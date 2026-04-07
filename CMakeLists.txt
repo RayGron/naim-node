@@ -1,13 +1,24 @@
 cmake_minimum_required(VERSION 3.22)
 
+option(COMET_SKIP_VCPKG_TOOLCHAIN "Skip automatic vcpkg toolchain detection" OFF)
 set(COMET_CUDA_NVCC_JOBS "2" CACHE STRING
     "Maximum number of concurrent nvcc compile jobs for ggml-cuda when using Ninja")
+option(COMET_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
+set(COMET_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
+set(COMET_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
+
+if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+  list(PREPEND CMAKE_PREFIX_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+  if(NOT DEFINED _VCPKG_INSTALLED_DIR)
+    set(_VCPKG_INSTALLED_DIR "${VCPKG_INSTALLED_DIR}")
+  endif()
+endif()
 
 if(NOT DEFINED CMAKE_DISABLE_FIND_PACKAGE_ICU)
   set(CMAKE_DISABLE_FIND_PACKAGE_ICU TRUE)
 endif()
 
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+if(NOT COMET_SKIP_VCPKG_TOOLCHAIN AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
   set(_comet_vcpkg_candidates
       "$ENV{VCPKG_ROOT}"
       "${CMAKE_CURRENT_SOURCE_DIR}/.tools/vcpkg"
@@ -57,6 +68,7 @@ function(comet_enable_strict_warnings target_name)
 endfunction()
 
 include(FetchContent)
+include(cmake/CometCEF.cmake)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -157,16 +169,11 @@ endif()
 set(GGML_CUDA ON CACHE BOOL "" FORCE)
 message(STATUS "Comet CUDA native architectures: ${COMET_CUDA_NATIVE}")
 
-if(COMET_LLAMA_CPP_SOURCE_DIR)
-  if(EXISTS "${COMET_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
-    FetchContent_Declare(
-      llama_cpp
-      SOURCE_DIR "${COMET_LLAMA_CPP_SOURCE_DIR}"
-    )
-  else()
-    message(FATAL_ERROR
-      "COMET_LLAMA_CPP_SOURCE_DIR='${COMET_LLAMA_CPP_SOURCE_DIR}' does not contain CMakeLists.txt")
-  endif()
+if(COMET_LLAMA_CPP_SOURCE_DIR AND EXISTS "${COMET_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
+  FetchContent_Declare(
+    llama_cpp
+    SOURCE_DIR "${COMET_LLAMA_CPP_SOURCE_DIR}"
+  )
 else()
   FetchContent_Declare(
     llama_cpp
@@ -175,11 +182,6 @@ else()
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
   )
-endif()
-if(COMET_LLAMA_CPP_SOURCE_DIR)
-  message(STATUS "Comet llama.cpp source dir: ${COMET_LLAMA_CPP_SOURCE_DIR}")
-else()
-  message(STATUS "Comet llama.cpp git tag: ${COMET_LLAMA_CPP_GIT_TAG}")
 endif()
 FetchContent_MakeAvailable(llama_cpp)
 
@@ -205,6 +207,7 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
+comet_configure_cef_support()
 
 add_library(
   comet-common
@@ -227,7 +230,6 @@ add_library(
   common/src/state/desired_state_v2_renderer.cpp
   common/src/state/desired_state_v2_validator.cpp
   common/src/state/disk_runtime_repository.cpp
-  common/src/state/interaction_repository.cpp
   common/src/state/event_repository.cpp
   common/src/state/node_availability_repository.cpp
   common/src/state/observation_repository.cpp
@@ -251,7 +253,6 @@ target_link_libraries(
     nlohmann_json::nlohmann_json
     unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3
-    zstd::libzstd_static
 )
 comet_enable_strict_warnings(comet-common)
 
@@ -356,10 +357,12 @@ comet_enable_strict_warnings(comet-controller-plane-deletion-tests)
 
 add_executable(
   comet-plane-skills-tests
+  controller/src/app/controller_language_support.cpp
   controller/src/browsing/interaction_browsing_service.cpp
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/infra/controller_network_manager.cpp
   controller/src/http/controller_http_transport.cpp
+  controller/src/interaction/interaction_payload_builder.cpp
   controller/src/interaction/interaction_service.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
@@ -434,19 +437,35 @@ target_link_libraries(
   comet-auth-http-tests PRIVATE comet-common Threads::Threads)
 comet_enable_strict_warnings(comet-auth-http-tests)
 
-add_executable(
-  comet-browsing-tests
+add_library(
+  comet-webgateway-runtime
   controller/src/http/controller_http_server_support.cpp
   controller/src/infra/controller_network_manager.cpp
+  runtime/browsing/src/cef_browser_backend.cpp
+  runtime/browsing/src/cef_support.cpp
+  runtime/browsing/src/process_support.cpp
   runtime/browsing/src/browsing_server.cpp
-  runtime/browsing/src/browsing_server_tests.cpp
-  common/src/runtime/runtime_status.cpp
 )
 target_include_directories(
-  comet-browsing-tests PRIVATE common/include controller/include runtime/browsing/include)
+  comet-webgateway-runtime PUBLIC common/include controller/include runtime/browsing/include)
 target_link_libraries(
-  comet-browsing-tests PRIVATE comet-common Threads::Threads)
-comet_enable_strict_warnings(comet-browsing-tests)
+  comet-webgateway-runtime PRIVATE comet-common Threads::Threads)
+if(COMET_WITH_CEF)
+  target_link_libraries(comet-webgateway-runtime PRIVATE comet-cef comet-cef-wrapper)
+  target_compile_definitions(
+    comet-webgateway-runtime PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
+endif()
+comet_enable_strict_warnings(comet-webgateway-runtime)
+
+add_executable(
+  comet-webgateway-tests
+  runtime/browsing/src/browsing_server_tests.cpp
+)
+target_include_directories(
+  comet-webgateway-tests PRIVATE common/include controller/include runtime/browsing/include)
+target_link_libraries(
+  comet-webgateway-tests PRIVATE comet-webgateway-runtime comet-common Threads::Threads)
+comet_enable_strict_warnings(comet-webgateway-tests)
 
 add_executable(
   comet-hostd-local-state-tests
@@ -513,7 +532,6 @@ add_executable(
   controller/src/host/host_registry_service.cpp
   controller/src/host/hostd_http_service.cpp
   controller/src/host/hostd_http_support.cpp
-  controller/src/interaction/interaction_conversation_service.cpp
   controller/src/interaction/interaction_http_service.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_payload_builder.cpp
@@ -639,22 +657,29 @@ if(NOT WIN32)
   comet_enable_strict_warnings(comet-devtool)
 
   add_executable(
-    comet-browsingd
-    controller/src/http/controller_http_server_support.cpp
-    controller/src/infra/controller_network_manager.cpp
-    runtime/browsing/src/browsing_server.cpp
+    comet-webgatewayd
     runtime/browsing/src/main.cpp
-    common/src/runtime/runtime_status.cpp
   )
   target_include_directories(
-    comet-browsingd PRIVATE common/include controller/include runtime/browsing/include)
+    comet-webgatewayd PRIVATE common/include controller/include runtime/browsing/include)
   target_link_libraries(
-    comet-browsingd
+    comet-webgatewayd
     PRIVATE
+      comet-webgateway-runtime
       comet-common
       Threads::Threads
   )
-  comet_enable_strict_warnings(comet-browsingd)
+  if(COMET_WITH_CEF)
+    target_compile_definitions(comet-webgatewayd PRIVATE COMET_WITH_CEF=1 USING_CEF_SHARED=1)
+    set_target_properties(
+      comet-webgatewayd
+      PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+    )
+    comet_stage_cef_runtime(comet-webgatewayd)
+  endif()
+  comet_enable_strict_warnings(comet-webgatewayd)
 
   add_executable(
     comet-skillsd

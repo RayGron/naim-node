@@ -90,6 +90,9 @@ DiskKind ParseDiskKind(const std::string& value) {
   if (value == "browsing-private") {
     return DiskKind::BrowsingPrivate;
   }
+  if (value == "webgateway-private") {
+    return DiskKind::BrowsingPrivate;
+  }
   throw std::runtime_error("unknown disk kind '" + value + "'");
 }
 
@@ -107,6 +110,9 @@ InstanceRole ParseInstanceRole(const std::string& value) {
     return InstanceRole::Skills;
   }
   if (value == "browsing") {
+    return InstanceRole::Browsing;
+  }
+  if (value == "webgateway") {
     return InstanceRole::Browsing;
   }
   throw std::runtime_error("unknown instance role '" + value + "'");
@@ -336,14 +342,28 @@ json ToJson(const SkillsSettings& skills) {
 json ToJson(const BrowsingPolicySettings& policy) {
   json result = {
       {"browser_session_enabled", policy.browser_session_enabled},
+      {"rendered_browser_enabled", policy.rendered_browser_enabled},
+      {"login_enabled", policy.login_enabled},
       {"max_search_results", policy.max_search_results},
       {"max_fetch_bytes", policy.max_fetch_bytes},
   };
+  if (!policy.cef_enabled) {
+    result["cef_enabled"] = policy.cef_enabled;
+  }
   if (!policy.allowed_domains.empty()) {
     result["allowed_domains"] = policy.allowed_domains;
   }
   if (!policy.blocked_domains.empty()) {
     result["blocked_domains"] = policy.blocked_domains;
+  }
+  if (!policy.blocked_targets.empty()) {
+    result["blocked_targets"] = policy.blocked_targets;
+  }
+  if (!policy.response_review_enabled) {
+    result["response_review_enabled"] = policy.response_review_enabled;
+  }
+  if (policy.policy_version != "webgateway-v1") {
+    result["policy_version"] = policy.policy_version;
   }
   return result;
 }
@@ -832,7 +852,7 @@ json DesiredStateToJson(const DesiredState& state) {
     result["skills"] = ToJson(*state.skills);
   }
   if (state.browsing.has_value()) {
-    result["browsing"] = ToJson(*state.browsing);
+    result["webgateway"] = ToJson(*state.browsing);
   }
 
   for (const auto& gpu_node : state.runtime_gpu_nodes) {
@@ -887,15 +907,31 @@ DesiredState DesiredStateFromJson(const json& value) {
     }
     state.skills = std::move(skills);
   }
-  if (value.contains("browsing") && value.at("browsing").is_object()) {
+  const auto* browsing_block =
+      value.contains("webgateway") && value.at("webgateway").is_object()
+          ? &value.at("webgateway")
+          : (value.contains("browsing") && value.at("browsing").is_object()
+                 ? &value.at("browsing")
+                 : nullptr);
+  if (browsing_block != nullptr) {
     BrowsingSettings browsing;
-    browsing.enabled = value.at("browsing").value("enabled", browsing.enabled);
-    if (value.at("browsing").contains("policy") &&
-        value.at("browsing").at("policy").is_object()) {
+    browsing.enabled = browsing_block->value("enabled", browsing.enabled);
+    if (browsing_block->contains("policy") &&
+        browsing_block->at("policy").is_object()) {
       BrowsingPolicySettings policy;
-      const auto& policy_json = value.at("browsing").at("policy");
+      const auto& policy_json = browsing_block->at("policy");
+      policy.cef_enabled =
+          policy_json.value("cef_enabled", policy.cef_enabled);
       policy.browser_session_enabled =
           policy_json.value("browser_session_enabled", policy.browser_session_enabled);
+      policy.rendered_browser_enabled =
+          policy_json.value("rendered_browser_enabled", policy.rendered_browser_enabled);
+      policy.login_enabled =
+          policy_json.value("login_enabled", policy.login_enabled);
+      policy.response_review_enabled =
+          policy_json.value("response_review_enabled", policy.response_review_enabled);
+      policy.policy_version =
+          policy_json.value("policy_version", policy.policy_version);
       policy.max_search_results =
           policy_json.value("max_search_results", policy.max_search_results);
       policy.max_fetch_bytes =
@@ -913,6 +949,14 @@ DesiredState DesiredStateFromJson(const json& value) {
         for (const auto& item : policy_json.at("blocked_domains")) {
           if (item.is_string()) {
             policy.blocked_domains.push_back(item.get<std::string>());
+          }
+        }
+      }
+      if (policy_json.contains("blocked_targets") &&
+          policy_json.at("blocked_targets").is_array()) {
+        for (const auto& item : policy_json.at("blocked_targets")) {
+          if (item.is_string()) {
+            policy.blocked_targets.push_back(item.get<std::string>());
           }
         }
       }

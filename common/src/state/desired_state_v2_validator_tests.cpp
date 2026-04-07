@@ -1042,10 +1042,12 @@ int main() {
            {
                {"enabled", true},
                {"node", "browse-hostd"},
-               {"image", "example/browsing:dev"},
-               {"env", {{"COMET_BROWSING_DEBUG", "1"}}},
+               {"image", "example/webgateway:dev"},
+               {"env", {{"COMET_WEBGATEWAY_DEBUG", "1"}}},
                {"policy",
                 {{"browser_session_enabled", true},
+                 {"rendered_browser_enabled", false},
+                 {"login_enabled", false},
                  {"allowed_domains", json::array({"example.com", "openai.com"})},
                  {"blocked_domains", json::array({"localhost", "internal"})},
                  {"max_search_results", 5},
@@ -1071,21 +1073,21 @@ int main() {
              "llm-with-browsing: state.browsing.enabled should be true");
       Expect(state.instances.size() == 4,
              "llm-with-browsing: expected aggregator + leaf infer + worker + browsing");
-      const auto browsing = FindInstance(state, "browsing-llm-with-browsing");
+      const auto browsing = FindInstance(state, "webgateway-llm-with-browsing");
       Expect(browsing.role == comet::InstanceRole::Browsing,
              "llm-with-browsing: browsing instance role mismatch");
-      Expect(browsing.image == "example/browsing:dev",
+      Expect(browsing.image == "example/webgateway:dev",
              "llm-with-browsing: custom browsing image mismatch");
-      Expect(browsing.environment.count("COMET_BROWSING_DEBUG") == 1 &&
-                 browsing.environment.at("COMET_BROWSING_DEBUG") == "1",
+      Expect(browsing.environment.count("COMET_WEBGATEWAY_DEBUG") == 1 &&
+                 browsing.environment.at("COMET_WEBGATEWAY_DEBUG") == "1",
              "llm-with-browsing: custom browsing env mismatch");
-      Expect(browsing.environment.count("COMET_BROWSING_POLICY_JSON") == 1,
+      Expect(browsing.environment.count("COMET_WEBGATEWAY_POLICY_JSON") == 1,
              "llm-with-browsing: browsing policy env should be rendered");
       Expect(!browsing.published_ports.empty() &&
                  browsing.published_ports.front().host_port == 19130 &&
                  browsing.published_ports.front().container_port == 18130,
              "llm-with-browsing: published port mismatch");
-      const auto browsing_disk = FindDisk(state, "browsing-llm-with-browsing-private");
+      const auto browsing_disk = FindDisk(state, "webgateway-llm-with-browsing-private");
       Expect(browsing_disk.kind == comet::DiskKind::BrowsingPrivate,
              "llm-with-browsing: browsing disk kind mismatch");
       Expect(browsing_disk.container_path == "/srv/browsing",
@@ -1106,7 +1108,7 @@ int main() {
           browse_plan_it->services.begin(),
           browse_plan_it->services.end(),
           [](const comet::ComposeService& service) {
-            return service.name == "browsing-llm-with-browsing";
+            return service.name == "webgateway-llm-with-browsing";
           });
       Expect(service_it != browse_plan_it->services.end(),
              "llm-with-browsing: browsing service missing from compose plan");
@@ -1119,12 +1121,58 @@ int main() {
               "no-new-privileges:true") != service_it->security_opts.end(),
           "llm-with-browsing: compose service should enable no-new-privileges");
       Expect(
+          std::find(
+              service_it->security_opts.begin(),
+              service_it->security_opts.end(),
+              "apparmor=unconfined") != service_it->security_opts.end(),
+          "llm-with-browsing: compose service should relax apparmor for CEF");
+      Expect(
+          std::find(
+              service_it->security_opts.begin(),
+              service_it->security_opts.end(),
+              "seccomp=unconfined") != service_it->security_opts.end(),
+          "llm-with-browsing: compose service should relax seccomp for CEF");
+      Expect(
           std::none_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),
               [](const comet::ComposeVolume& volume) { return volume.target == "/comet/shared"; }),
           "llm-with-browsing: browsing service should not mount shared disk by default");
       std::cout << "ok: llm-with-browsing" << '\n';
+    }
+
+    {
+      const json llm_with_webgateway_public_publish{
+          {"version", 2},
+          {"plane_name", "webgateway-public-publish"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-webgateway-public"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"webgateway",
+           {
+               {"enabled", true},
+               {"publish",
+                json::array(
+                    {{{"host_ip", "0.0.0.0"}, {"host_port", 19130}, {"container_port", 18130}}})},
+           }},
+          {"topology",
+           {{"nodes",
+             json::array(
+                 {{{"name", "infer-hostd"},
+                   {"execution_mode", "mixed"},
+                   {"gpu_memory_mb", {{"0", 24576}}}}})}}},
+          {"app", {{"enabled", false}}},
+      };
+      ExpectInvalid(
+          llm_with_webgateway_public_publish,
+          "webgateway-public-publish");
     }
 
     ExpectInvalid(

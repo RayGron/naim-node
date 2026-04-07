@@ -4,60 +4,11 @@
 #include <cctype>
 #include <sstream>
 #include <string_view>
+#include <vector>
 
 namespace comet {
 
 namespace {
-
-void RenderKeyValueMap(
-    std::ostringstream& out,
-    const std::string& indent,
-    const std::map<std::string, std::string>& values) {
-  for (const auto& [key, value] : values) {
-    out << indent << key << ": \"" << value << "\"\n";
-  }
-}
-
-void RenderHealthcheckTest(
-    std::ostringstream& out,
-    const std::string& indent,
-    const std::string& healthcheck) {
-  constexpr std::string_view kCmdShellPrefix = "CMD-SHELL ";
-  constexpr std::string_view kCmdPrefix = "CMD ";
-  constexpr std::string_view kNone = "NONE";
-
-  if (healthcheck == kNone) {
-    out << indent << "test: [\"NONE\"]\n";
-    return;
-  }
-
-  if (healthcheck.rfind(std::string(kCmdShellPrefix), 0) == 0) {
-    out << indent << "test: [\"CMD-SHELL\", \""
-        << healthcheck.substr(kCmdShellPrefix.size()) << "\"]\n";
-    return;
-  }
-
-  if (healthcheck.rfind(std::string(kCmdPrefix), 0) == 0) {
-    out << indent << "test: [\"CMD\", \"" << healthcheck.substr(kCmdPrefix.size())
-        << "\"]\n";
-    return;
-  }
-
-  out << indent << "test: [\"CMD-SHELL\", \"" << healthcheck << "\"]\n";
-}
-
-std::vector<std::string> UniqueGpuDevices(
-    const std::vector<std::string>& gpu_devices) {
-  std::vector<std::string> result;
-  result.reserve(gpu_devices.size());
-  for (const auto& gpu_device : gpu_devices) {
-    if (std::find(result.begin(), result.end(), gpu_device) != result.end()) {
-      continue;
-    }
-    result.push_back(gpu_device);
-  }
-  return result;
-}
 
 std::string EscapeYamlDoubleQuoted(const std::string& value) {
   std::string escaped;
@@ -87,8 +38,58 @@ std::string EscapeYamlDoubleQuoted(const std::string& value) {
   return escaped;
 }
 
-std::vector<std::string> SplitCommandArguments(const std::string& command) {
-  std::vector<std::string> arguments;
+void RenderKeyValueMap(
+    std::ostringstream& out,
+    const std::string& indent,
+    const std::map<std::string, std::string>& values) {
+  for (const auto& [key, value] : values) {
+    out << indent << key << ": \"" << EscapeYamlDoubleQuoted(value) << "\"\n";
+  }
+}
+
+void RenderHealthcheckTest(
+    std::ostringstream& out,
+    const std::string& indent,
+    const std::string& healthcheck) {
+  constexpr std::string_view kCmdShellPrefix = "CMD-SHELL ";
+  constexpr std::string_view kCmdPrefix = "CMD ";
+  constexpr std::string_view kNone = "NONE";
+
+  if (healthcheck == kNone) {
+    out << indent << "test: [\"NONE\"]\n";
+    return;
+  }
+
+  if (healthcheck.rfind(std::string(kCmdShellPrefix), 0) == 0) {
+    out << indent << "test: [\"CMD-SHELL\", \""
+        << EscapeYamlDoubleQuoted(healthcheck.substr(kCmdShellPrefix.size())) << "\"]\n";
+    return;
+  }
+
+  if (healthcheck.rfind(std::string(kCmdPrefix), 0) == 0) {
+    out << indent << "test: [\"CMD\", \"" << EscapeYamlDoubleQuoted(healthcheck.substr(kCmdPrefix.size()))
+        << "\"]\n";
+    return;
+  }
+
+  out << indent << "test: [\"CMD-SHELL\", \"" << EscapeYamlDoubleQuoted(healthcheck) << "\"]\n";
+}
+
+std::vector<std::string> UniqueGpuDevices(
+    const std::vector<std::string>& gpu_devices) {
+  std::vector<std::string> result;
+  result.reserve(gpu_devices.size());
+  for (const auto& gpu_device : gpu_devices) {
+    if (std::find(result.begin(), result.end(), gpu_device) != result.end()) {
+      continue;
+    }
+    result.push_back(gpu_device);
+  }
+  return result;
+}
+
+std::vector<std::string> SplitCommandTokens(const std::string& command) {
+  std::vector<std::string> tokens;
   std::string current;
   bool in_single_quotes = false;
   bool in_double_quotes = false;
@@ -117,9 +118,9 @@ std::vector<std::string> SplitCommandArguments(const std::string& command) {
     }
 
     if (!in_single_quotes && !in_double_quotes &&
-        std::isspace(static_cast<unsigned char>(ch))) {
+        std::isspace(static_cast<unsigned char>(ch)) != 0) {
       if (!current.empty()) {
-        arguments.push_back(std::move(current));
+        tokens.push_back(current);
         current.clear();
       }
       continue;
@@ -132,22 +133,25 @@ std::vector<std::string> SplitCommandArguments(const std::string& command) {
     current.push_back('\\');
   }
   if (!current.empty()) {
-    arguments.push_back(std::move(current));
+    tokens.push_back(std::move(current));
   }
-  if (arguments.empty() && !command.empty()) {
-    arguments.push_back(command);
+  if (tokens.empty() && !command.empty()) {
+    tokens.push_back(command);
   }
-  return arguments;
+  return tokens;
 }
 
-void RenderCommand(std::ostringstream& out, const std::string& indent, const std::string& command) {
-  const auto arguments = SplitCommandArguments(command);
+void RenderCommand(
+    std::ostringstream& out,
+    const std::string& indent,
+    const std::string& command) {
+  const auto tokens = SplitCommandTokens(command);
   out << indent << "command: [";
-  for (std::size_t index = 0; index < arguments.size(); ++index) {
+  for (std::size_t index = 0; index < tokens.size(); ++index) {
     if (index > 0) {
       out << ", ";
     }
-    out << "\"" << EscapeYamlDoubleQuoted(arguments[index]) << "\"";
+    out << "\"" << EscapeYamlDoubleQuoted(tokens[index]) << "\"";
   }
   out << "]\n";
 }
@@ -190,6 +194,10 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
       for (const auto& security_opt : service.security_opts) {
         out << "      - " << security_opt << "\n";
       }
+    }
+
+    if (service.privileged) {
+      out << "    privileged: true\n";
     }
 
     if (!service.extra_hosts.empty()) {
