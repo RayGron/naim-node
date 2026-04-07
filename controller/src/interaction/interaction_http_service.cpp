@@ -2,10 +2,20 @@
 
 #include <sstream>
 
+#include "auth/auth_support_service.h"
 #include "browsing/interaction_browsing_service.h"
+#include "interaction/interaction_conversation_service.h"
 #include "skills/plane_skills_service.h"
 
 using nlohmann::json;
+using comet::controller::InteractionContractResponder;
+using comet::controller::InteractionConversationPrincipal;
+using comet::controller::InteractionConversationService;
+using comet::controller::InteractionRequestContext;
+using comet::controller::InteractionRequestValidator;
+using comet::controller::PlaneInteractionResolution;
+using comet::controller::ResolvedInteractionPolicy;
+using comet::controller::ResolveInteractionCompletionPolicy;
 
 InteractionHttpService::InteractionHttpService(InteractionHttpSupport support)
     : support_(std::move(support)) {}
@@ -389,25 +399,202 @@ HttpResponse InteractionHttpService::ProxyJson(
 void InteractionHttpService::StreamPlaneInteractionSse(
     comet::platform::SocketHandle client_fd,
     const std::string& db_path,
-    const HttpRequest& request) const {
+    const HttpRequest& request,
+    AuthSupportService& auth_support) const {
   const std::string request_id =
       comet::controller::GenerateInteractionRequestId();
-  const auto stream_resolution = MakeStreamRequestResolver().Resolve(
-      db_path, request.method, request.path, request.body, request_id);
-  if (stream_resolution.error_response.has_value()) {
+  const InteractionContractResponder responder;
+  const auto build_error_response =
+      [&](int status_code,
+          const std::string& code,
+          const std::string& message,
+          bool retryable,
+          const std::optional<std::string>& plane_name = std::nullopt,
+          const std::optional<comet::controller::PlaneInteractionResolution>& resolution =
+              std::nullopt,
+          const json& details = json::object()) {
+        return support_.BuildJsonResponse(
+            status_code,
+            resolution.has_value()
+                ? responder.BuildPlaneErrorPayload(
+                      *resolution, request_id, code, message, retryable, details)
+                : responder.BuildStandaloneErrorPayload(
+                      request_id,
+                      code,
+                      message,
+                      retryable,
+                      plane_name),
+            comet::controller::BuildInteractionResponseHeaders(request_id));
+      };
+
+  const auto plane_name =
+      comet::controller::ParseInteractionStreamPlaneName(request.method, request.path);
+  if (!plane_name.has_value()) {
     support_.SendHttpResponse(
         client_fd,
-        support_.BuildJsonResponse(
-            stream_resolution.error_response->status_code,
-            stream_resolution.error_response->payload,
-            comet::controller::BuildInteractionResponseHeaders(request_id)));
+        build_error_response(
+            404,
+            "plane_not_found",
+            "plane not found for interaction stream path",
+            false));
     support_.ShutdownAndCloseSocket(client_fd);
     return;
   }
 
-  const auto& setup = *stream_resolution.setup;
+  PlaneInteractionResolution resolution;
+  InteractionRequestContext request_context;
+  ResolvedInteractionPolicy resolved_policy;
+  InteractionConversationPrincipal principal;
+  try {
+    resolution = ResolvePlane(db_path, *plane_name);
+    comet::ControllerStore store(db_path);
+    store.Initialize();
+    const auto authenticated =
+        resolution.desired_state.protected_plane
+            ? auth_support.AuthenticateProtectedPlaneRequest(
+                  store, request, *plane_name)
+            : auth_support.AuthenticateControllerUserSession(
+                  store, request, std::nullopt);
+    if (resolution.desired_state.protected_plane && !authenticated.has_value()) {
+      support_.SendHttpResponse(
+          client_fd,
+          build_error_response(
+              401,
+              "unauthorized",
+              "protected plane requires an authenticated WebAuthn session or SSH API session",
+              false,
+              *plane_name));
+      support_.ShutdownAndCloseSocket(client_fd);
+      return;
+    }
+    if (authenticated.has_value()) {
+      principal.owner_kind = "user";
+      principal.owner_user_id = authenticated->first.id;
+      principal.auth_session_kind = authenticated->second.session_kind;
+      principal.authenticated = true;
+    }
+    if (!resolution.status_payload.value("interaction_enabled", false)) {
+      support_.SendHttpResponse(
+          client_fd,
+          build_error_response(
+              409,
+              "interaction_disabled",
+              "interaction is available only for plane_mode=llm",
+              false,
+              *plane_name,
+              resolution));
+      support_.ShutdownAndCloseSocket(client_fd);
+      return;
+    }
+    if (!resolution.status_payload.value("ready", false) ||
+        !resolution.target.has_value()) {
+      support_.SendHttpResponse(
+          client_fd,
+          build_error_response(
+              409,
+              "plane_not_ready",
+              "plane interaction target is not ready",
+              true,
+              *plane_name,
+              resolution));
+      support_.ShutdownAndCloseSocket(client_fd);
+      return;
+    }
+    const InteractionRequestValidator validator;
+    request_context.request_id = request_id;
+    if (const auto validation_error = validator.ValidateAndNormalizeRequest(
+            resolution,
+            validator.ParsePayload(request.body),
+            &request_context)) {
+      support_.SendHttpResponse(
+          client_fd,
+          build_error_response(
+              validation_error->code == "model_mismatch" ? 409 : 400,
+              validation_error->code,
+              validation_error->message,
+              validation_error->retryable,
+              *plane_name,
+              resolution,
+              validation_error->details));
+      support_.ShutdownAndCloseSocket(client_fd);
+      return;
+    }
+    if (const auto validation_error = InteractionConversationService().PrepareRequest(
+            db_path, resolution, principal, &request_context)) {
+      const int status_code =
+          validation_error->code == "session_not_found"
+              ? 404
+              : validation_error->code == "session_delta_invalid"
+                    ? 422
+                    : validation_error->code == "session_restore_failed"
+                          ? 500
+                          : 409;
+      support_.SendHttpResponse(
+          client_fd,
+          build_error_response(
+              status_code,
+              validation_error->code,
+              validation_error->message,
+              validation_error->retryable,
+              *plane_name,
+              resolution,
+              validation_error->details));
+      support_.ShutdownAndCloseSocket(client_fd);
+      return;
+    }
+    if (const auto validation_error =
+            ResolveRequestContext(resolution, &request_context)) {
+      const int status_code =
+          validation_error->code == "model_mismatch" ||
+                  validation_error->code == "skills_disabled" ||
+                  validation_error->code == "skills_not_ready" ||
+                  validation_error->code == "session_conflict" ||
+                  validation_error->code == "session_plane_mismatch"
+              ? 409
+              : 400;
+      support_.SendHttpResponse(
+          client_fd,
+          build_error_response(
+              status_code,
+              validation_error->code,
+              validation_error->message,
+              validation_error->retryable,
+              *plane_name,
+              resolution,
+              validation_error->details));
+      support_.ShutdownAndCloseSocket(client_fd);
+      return;
+    }
+    resolved_policy = ResolveInteractionCompletionPolicy(
+        resolution.desired_state, request_context.payload);
+  } catch (const nlohmann::json::exception& error) {
+    support_.SendHttpResponse(
+        client_fd,
+        build_error_response(
+            400,
+            "malformed_request",
+            error.what(),
+            false,
+            *plane_name));
+    support_.ShutdownAndCloseSocket(client_fd);
+    return;
+  } catch (const std::exception& error) {
+    support_.SendHttpResponse(
+        client_fd,
+        build_error_response(
+            404,
+            "plane_not_found",
+            error.what(),
+            false,
+            *plane_name));
+    support_.ShutdownAndCloseSocket(client_fd);
+    return;
+  }
+
   const std::string stream_session_id =
-      comet::controller::GenerateInteractionSessionId();
+      request_context.conversation_session_id.empty()
+          ? comet::controller::GenerateInteractionSessionId()
+          : request_context.conversation_session_id;
 
   if (!support_.SendSseHeaders(
           client_fd,
@@ -418,18 +605,18 @@ void InteractionHttpService::StreamPlaneInteractionSse(
 
   const auto stream_session_executor = MakeStreamSessionExecutor();
   const auto stream_segment_executor = MakeStreamSegmentExecutor();
-  stream_session_executor.Execute(
+  const auto result = stream_session_executor.Execute(
       request_id,
       stream_session_id,
-      setup.plane_name,
-      setup.resolution,
-      setup.request_context,
-      setup.resolved_policy,
+      *plane_name,
+      resolution,
+      request_context,
+      resolved_policy,
       [&](const json& payload, int segment_index) {
         return stream_segment_executor.Execute(
-            setup.resolution,
-            setup.request_context,
-            setup.resolved_policy,
+            resolution,
+            request_context,
+            resolved_policy,
             request_id,
             payload,
             segment_index,
@@ -444,13 +631,15 @@ void InteractionHttpService::StreamPlaneInteractionSse(
                       {"continuation_index", segment_index},
                       {"model", model},
                       {"delta", delta},
-                  });
+                    });
             });
       },
       [&](const std::string& event_name, const json& payload) {
         return SendInteractionSseEvent(client_fd, event_name, payload);
       },
       [&]() { return SendInteractionSseDone(client_fd); });
+  (void)InteractionConversationService().PersistResponse(
+      db_path, resolution, &request_context, result);
 
   support_.ShutdownAndCloseSocket(client_fd);
 }

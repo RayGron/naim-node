@@ -4,6 +4,7 @@
 
 #include "infra/controller_action.h"
 #include "http/controller_http_server_support.h"
+#include "interaction/interaction_conversation_service.h"
 #include "interaction/interaction_service.h"
 #include "comet/state/sqlite_store.h"
 
@@ -67,6 +68,26 @@ bool IsPlaneSkillsRequest(const std::string& path) {
 
 bool IsPlaneBrowsingRequest(const std::string& path) {
   return ExtractPlaneFeatureRequestName(path, "/browsing").has_value();
+}
+
+int InteractionErrorStatusCode(const InteractionValidationError& error) {
+  if (error.code == "model_mismatch" ||
+      error.code == "skills_disabled" ||
+      error.code == "skills_not_ready" ||
+      error.code == "session_conflict" ||
+      error.code == "session_plane_mismatch") {
+    return 409;
+  }
+  if (error.code == "session_not_found") {
+    return 404;
+  }
+  if (error.code == "session_delta_invalid") {
+    return 422;
+  }
+  if (error.code == "session_restore_failed") {
+    return 500;
+  }
+  return 400;
 }
 
 }  // namespace
@@ -243,6 +264,168 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
 
   const auto interaction_chat_pos =
       remainder.find("/interaction/chat/completions");
+  const auto interaction_sessions_pos = remainder.find("/interaction/sessions");
+  if (interaction_sessions_pos != std::string::npos &&
+      interaction_sessions_pos +
+              std::string("/interaction/sessions").size() ==
+          remainder.size()) {
+    const std::string request_id = GenerateInteractionRequestId();
+    const std::string plane_name = remainder.substr(0, interaction_sessions_pos);
+    const auto build_standalone_error =
+        [&](int status_code,
+            const std::string& code,
+            const std::string& message,
+            bool retryable) {
+          return deps_.build_json_response(
+              status_code,
+              interaction_responder.BuildStandaloneErrorPayload(
+                  request_id,
+                  code,
+                  message,
+                  retryable,
+                  plane_name),
+              BuildInteractionResponseHeaders(request_id));
+        };
+    if (request.method != "GET") {
+      return build_standalone_error(
+          405,
+          "method_not_allowed",
+          "interaction sessions endpoint accepts GET only",
+          false);
+    }
+    try {
+      const PlaneInteractionResolution resolution =
+          interaction_service_.ResolvePlane(db_path_, plane_name);
+      comet::ControllerStore store(db_path_);
+      store.Initialize();
+      const auto authenticated =
+          resolution.desired_state.protected_plane
+              ? auth_support_.AuthenticateProtectedPlaneRequest(
+                    store, request, plane_name)
+              : auth_support_.AuthenticateControllerUserSession(
+                    store, request, std::nullopt);
+      if (!authenticated.has_value()) {
+        return build_standalone_error(
+            401,
+            "unauthorized",
+            "authenticated user session is required",
+            false);
+      }
+      const json payload = InteractionConversationService().BuildSessionsListPayload(
+          db_path_, plane_name, authenticated->first.id);
+      json response = payload;
+      response["request_id"] = request_id;
+      response["comet"] = BuildInteractionContractMetadata(resolution, request_id);
+      return deps_.build_json_response(
+          200,
+          response,
+          BuildInteractionResponseHeaders(request_id));
+    } catch (const std::exception& error) {
+      return build_standalone_error(
+          404,
+          "plane_not_found",
+          error.what(),
+          false);
+    }
+  }
+
+  if (interaction_sessions_pos != std::string::npos &&
+      interaction_sessions_pos +
+              std::string("/interaction/sessions/").size() <
+          remainder.size() &&
+      remainder.rfind("/interaction/sessions/", interaction_sessions_pos) ==
+          interaction_sessions_pos) {
+    const std::string request_id = GenerateInteractionRequestId();
+    const std::string plane_name = remainder.substr(0, interaction_sessions_pos);
+    const std::string session_id = remainder.substr(
+        interaction_sessions_pos + std::string("/interaction/sessions/").size());
+    const auto build_standalone_error =
+        [&](int status_code,
+            const std::string& code,
+            const std::string& message,
+            bool retryable) {
+          return deps_.build_json_response(
+              status_code,
+              interaction_responder.BuildStandaloneErrorPayload(
+                  request_id,
+                  code,
+                  message,
+                  retryable,
+                  plane_name),
+              BuildInteractionResponseHeaders(request_id));
+        };
+    if (request.method != "GET" && request.method != "DELETE") {
+      return build_standalone_error(
+          405,
+          "method_not_allowed",
+          "interaction session endpoint accepts GET and DELETE only",
+          false);
+    }
+    try {
+      const PlaneInteractionResolution resolution =
+          interaction_service_.ResolvePlane(db_path_, plane_name);
+      comet::ControllerStore store(db_path_);
+      store.Initialize();
+      const auto authenticated =
+          resolution.desired_state.protected_plane
+              ? auth_support_.AuthenticateProtectedPlaneRequest(
+                    store, request, plane_name)
+              : auth_support_.AuthenticateControllerUserSession(
+                    store, request, std::nullopt);
+      if (!authenticated.has_value()) {
+        return build_standalone_error(
+            401,
+            "unauthorized",
+            "authenticated user session is required",
+            false);
+      }
+      InteractionConversationService conversation_service;
+      if (request.method == "DELETE") {
+        if (!conversation_service.DeleteSession(
+                db_path_, plane_name, authenticated->first.id, session_id)) {
+          return build_standalone_error(
+              404,
+              "session_not_found",
+              "conversation session was not found",
+              false);
+        }
+        return deps_.build_json_response(
+            200,
+            json{
+                {"request_id", request_id},
+                {"plane_name", plane_name},
+                {"session_id", session_id},
+                {"status", "deleted"},
+                {"comet", BuildInteractionContractMetadata(resolution, request_id)},
+            },
+            BuildInteractionResponseHeaders(request_id));
+      }
+      const auto payload = conversation_service.BuildSessionDetailPayload(
+          db_path_, plane_name, authenticated->first.id, session_id);
+      if (!payload.has_value()) {
+        return build_standalone_error(
+            404,
+            "session_not_found",
+            "conversation session was not found",
+            false);
+      }
+      json response = *payload;
+      response["request_id"] = request_id;
+      response["comet"] = BuildInteractionContractMetadata(
+          resolution, request_id, session_id);
+      return deps_.build_json_response(
+          200,
+          response,
+          BuildInteractionResponseHeaders(request_id));
+    } catch (const std::exception& error) {
+      return build_standalone_error(
+          404,
+          "plane_not_found",
+          error.what(),
+          false);
+    }
+  }
+
   if (interaction_chat_pos != std::string::npos &&
       interaction_chat_pos +
               std::string("/interaction/chat/completions").size() ==
@@ -284,6 +467,8 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
     try {
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
+      comet::ControllerStore store(db_path_);
+      store.Initialize();
       const auto build_plane_error =
           [&](int status_code,
               const std::string& code,
@@ -301,18 +486,18 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                     details),
                 BuildInteractionResponseHeaders(request_id));
           };
-      if (resolution.desired_state.protected_plane) {
-        comet::ControllerStore store(db_path_);
-        store.Initialize();
-        if (!auth_support_
-                 .AuthenticateProtectedPlaneRequest(store, request, plane_name)
-                 .has_value()) {
+      const auto authenticated =
+          resolution.desired_state.protected_plane
+              ? auth_support_.AuthenticateProtectedPlaneRequest(
+                    store, request, plane_name)
+              : auth_support_.AuthenticateControllerUserSession(
+                    store, request, std::nullopt);
+      if (resolution.desired_state.protected_plane && !authenticated.has_value()) {
           return build_standalone_error(
               401,
               "unauthorized",
               "protected plane requires an authenticated WebAuthn session or SSH API session",
               false);
-        }
       }
       if (!resolution.status_payload.value("interaction_enabled", false)) {
         return build_plane_error(
@@ -343,24 +528,47 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
             validation_error->retryable,
             validation_error->details);
       }
+      InteractionConversationPrincipal principal;
+      if (authenticated.has_value()) {
+        principal.owner_kind = "user";
+        principal.owner_user_id = authenticated->first.id;
+        principal.auth_session_kind = authenticated->second.session_kind;
+        principal.authenticated = true;
+      }
+      if (const auto validation_error = InteractionConversationService().PrepareRequest(
+              db_path_, resolution, principal, &request_context)) {
+        return build_plane_error(
+            InteractionErrorStatusCode(*validation_error),
+            validation_error->code,
+            validation_error->message,
+            validation_error->retryable,
+            validation_error->details);
+      }
       if (const auto validation_error =
               interaction_service_.ResolveRequestContext(resolution, &request_context)) {
         return build_plane_error(
-            validation_error->code == "model_mismatch" ||
-                    validation_error->code == "skills_disabled" ||
-                    validation_error->code == "skills_not_ready"
-                ? 409
-                : 400,
+            InteractionErrorStatusCode(*validation_error),
             validation_error->code,
             validation_error->message,
             validation_error->retryable,
             validation_error->details);
       }
       try {
+        const auto result =
+            interaction_service_.ExecuteSession(resolution, request_context);
+        if (const auto persist_error = InteractionConversationService().PersistResponse(
+                db_path_, resolution, &request_context, result)) {
+          return build_plane_error(
+              InteractionErrorStatusCode(*persist_error),
+              persist_error->code,
+              persist_error->message,
+              persist_error->retryable,
+              persist_error->details);
+        }
         return interaction_service_.BuildSessionResponse(
             resolution,
             request_context,
-            interaction_service_.ExecuteSession(resolution, request_context));
+            result);
       } catch (const std::exception& error) {
         const std::string lowered = LowercaseCopy(error.what());
         const bool timeout_like =

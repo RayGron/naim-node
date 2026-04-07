@@ -77,8 +77,20 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 set(COMET_LLAMA_CPP_GIT_TAG "7c7d6ce5c7caad3714ad1cd37ef057dfe0f317d0" CACHE STRING
     "Pinned ggml-org/llama.cpp revision used for comet runtime binaries")
+set(COMET_LLAMA_CPP_VARIANT "auto" CACHE STRING
+    "llama.cpp toolchain selection: auto, upstream, or turboquant")
+set_property(
+  CACHE COMET_LLAMA_CPP_VARIANT
+  PROPERTY STRINGS auto upstream turboquant
+)
 set(COMET_LLAMA_CPP_SOURCE_DIR "" CACHE PATH
     "Optional local llama.cpp source directory override for comet runtime binaries")
+set(
+  COMET_LLAMA_CPP_TURBOQUANT_SOURCE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/../llama-cpp-turboquant"
+  CACHE PATH
+  "Optional local llama-cpp-turboquant source directory used when COMET_LLAMA_CPP_VARIANT prefers turboquant"
+)
 
 if(DEFINED BUILD_SHARED_LIBS)
   set(_comet_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
@@ -165,10 +177,38 @@ endif()
 set(GGML_CUDA ON CACHE BOOL "" FORCE)
 message(STATUS "Comet CUDA native architectures: ${COMET_CUDA_NATIVE}")
 
-if(COMET_LLAMA_CPP_SOURCE_DIR AND EXISTS "${COMET_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
+set(_comet_llama_cpp_effective_source_dir "")
+set(_comet_llama_cpp_selected_variant "upstream")
+string(TOLOWER "${COMET_LLAMA_CPP_VARIANT}" _comet_llama_cpp_variant_normalized)
+
+if(COMET_LLAMA_CPP_SOURCE_DIR)
+  if(EXISTS "${COMET_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
+    set(_comet_llama_cpp_effective_source_dir "${COMET_LLAMA_CPP_SOURCE_DIR}")
+    set(_comet_llama_cpp_selected_variant "source-dir-override")
+  else()
+    message(FATAL_ERROR
+      "COMET_LLAMA_CPP_SOURCE_DIR='${COMET_LLAMA_CPP_SOURCE_DIR}' does not contain CMakeLists.txt")
+  endif()
+elseif(_comet_llama_cpp_variant_normalized STREQUAL "auto" OR
+       _comet_llama_cpp_variant_normalized STREQUAL "turboquant")
+  if(COMET_LLAMA_CPP_TURBOQUANT_SOURCE_DIR AND
+     EXISTS "${COMET_LLAMA_CPP_TURBOQUANT_SOURCE_DIR}/CMakeLists.txt")
+    set(_comet_llama_cpp_effective_source_dir "${COMET_LLAMA_CPP_TURBOQUANT_SOURCE_DIR}")
+    set(_comet_llama_cpp_selected_variant "turboquant")
+  elseif(_comet_llama_cpp_variant_normalized STREQUAL "turboquant")
+    message(FATAL_ERROR
+      "COMET_LLAMA_CPP_VARIANT=turboquant requires a valid "
+      "COMET_LLAMA_CPP_TURBOQUANT_SOURCE_DIR (current: '${COMET_LLAMA_CPP_TURBOQUANT_SOURCE_DIR}')")
+  endif()
+elseif(NOT _comet_llama_cpp_variant_normalized STREQUAL "upstream")
+  message(FATAL_ERROR
+    "COMET_LLAMA_CPP_VARIANT must be one of: auto, upstream, turboquant")
+endif()
+
+if(_comet_llama_cpp_effective_source_dir)
   FetchContent_Declare(
     llama_cpp
-    SOURCE_DIR "${COMET_LLAMA_CPP_SOURCE_DIR}"
+    SOURCE_DIR "${_comet_llama_cpp_effective_source_dir}"
   )
 else()
   FetchContent_Declare(
@@ -178,6 +218,12 @@ else()
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
   )
+endif()
+message(STATUS "Comet llama.cpp variant: ${_comet_llama_cpp_selected_variant}")
+if(_comet_llama_cpp_effective_source_dir)
+  message(STATUS "Comet llama.cpp source dir: ${_comet_llama_cpp_effective_source_dir}")
+else()
+  message(STATUS "Comet llama.cpp git tag: ${COMET_LLAMA_CPP_GIT_TAG}")
 endif()
 FetchContent_MakeAvailable(llama_cpp)
 
@@ -202,6 +248,7 @@ endif()
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 
 add_library(
   comet-common
@@ -224,6 +271,7 @@ add_library(
   common/src/state/desired_state_v2_renderer.cpp
   common/src/state/desired_state_v2_validator.cpp
   common/src/state/disk_runtime_repository.cpp
+  common/src/state/interaction_repository.cpp
   common/src/state/event_repository.cpp
   common/src/state/node_availability_repository.cpp
   common/src/state/observation_repository.cpp
@@ -247,6 +295,7 @@ target_link_libraries(
     nlohmann_json::nlohmann_json
     unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3
+    zstd::libzstd_static
 )
 comet_enable_strict_warnings(comet-common)
 
@@ -508,6 +557,7 @@ add_executable(
   controller/src/host/host_registry_service.cpp
   controller/src/host/hostd_http_service.cpp
   controller/src/host/hostd_http_support.cpp
+  controller/src/interaction/interaction_conversation_service.cpp
   controller/src/interaction/interaction_http_service.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_payload_builder.cpp

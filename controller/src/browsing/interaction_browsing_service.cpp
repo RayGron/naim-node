@@ -139,6 +139,14 @@ std::vector<UserMessageView> CollectUserMessages(const json& payload) {
   return messages;
 }
 
+json ParseSessionContextState(const json& payload) {
+  if (!payload.contains(kInteractionSessionContextStatePayloadKey) ||
+      !payload.at(kInteractionSessionContextStatePayloadKey).is_object()) {
+    return json::object();
+  }
+  return payload.at(kInteractionSessionContextStatePayloadKey);
+}
+
 std::vector<std::string> ExtractUrls(const std::string& text) {
   std::vector<std::string> urls;
   static const std::regex pattern(R"(https?://[^\s<>()\"\']+)");
@@ -367,6 +375,14 @@ BrowsingContextDecision AnalyzeBrowsingRequest(
   }
 
   WebDirective persisted_directive = WebDirective::None;
+  const json session_context = ParseSessionContextState(payload);
+  const std::string persisted_browsing_mode =
+      session_context.value("browsing_mode", std::string{});
+  if (persisted_browsing_mode == "enabled") {
+    persisted_directive = WebDirective::Enable;
+  } else if (persisted_browsing_mode == "disabled") {
+    persisted_directive = WebDirective::Disable;
+  }
   for (const auto& message : messages) {
     const std::string lowered = LowercaseCopy(message.content);
     const WebDirective directive = DetectDirective(lowered);
@@ -786,6 +802,8 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
       context->payload[kSystemInstructionPayloadKey] = instruction;
     }
     context->payload[kSummaryPayloadKey] = summary;
+    context->payload[kInteractionSessionContextStatePayloadKey]["browsing_mode"] =
+        decision.mode_enabled ? "enabled" : "disabled";
     return std::nullopt;
   }
 
@@ -817,6 +835,8 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
       context->payload[kSystemInstructionPayloadKey] = instruction;
     }
     context->payload[kSummaryPayloadKey] = summary;
+    context->payload[kInteractionSessionContextStatePayloadKey]["browsing_mode"] =
+        unavailable.mode_enabled ? "enabled" : "disabled";
     return std::nullopt;
   }
 
@@ -936,6 +956,8 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
     context->payload[kSystemInstructionPayloadKey] = instruction;
   }
   context->payload[kSummaryPayloadKey] = summary;
+  context->payload[kInteractionSessionContextStatePayloadKey]["browsing_mode"] =
+      final_decision.mode_enabled ? "enabled" : "disabled";
   return std::nullopt;
 }
 

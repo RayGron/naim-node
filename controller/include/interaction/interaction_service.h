@@ -97,10 +97,24 @@ struct InteractionSessionResult {
 
 struct InteractionRequestContext {
   std::string request_id;
+  nlohmann::json original_payload = nlohmann::json::object();
   nlohmann::json payload = nlohmann::json::object();
+  nlohmann::json client_messages = nlohmann::json::array();
+  nlohmann::json delta_messages = nlohmann::json::array();
   bool structured_output_json = false;
   std::string normalized_model;
+  std::optional<std::string> requested_session_id;
+  std::string conversation_session_id;
+  std::string owner_kind = "anonymous";
+  std::optional<int> owner_user_id;
+  std::string auth_session_kind;
+  int expected_session_version = 0;
+  nlohmann::json session_context_state = nlohmann::json::object();
+  bool session_restored_from_archive = false;
 };
+
+inline constexpr const char* kInteractionSessionContextStatePayloadKey =
+    "_comet_session_context_state";
 
 struct InteractionValidationError {
   std::string code;
@@ -458,7 +472,7 @@ class InteractionStreamSessionExecutor {
       CanCompleteOnNaturalStopFn can_complete_on_natural_stop,
       BuildContinuationPayloadFn build_continuation_payload);
 
-  void Execute(
+  InteractionSessionResult Execute(
       const std::string& request_id,
       const std::string& session_id,
       const std::string& plane_name,

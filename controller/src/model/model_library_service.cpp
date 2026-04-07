@@ -28,12 +28,16 @@ namespace {
 
 constexpr std::string_view kJobMetadataPrefix = ".comet-model-job-";
 constexpr std::string_view kJobMetadataSuffix = ".json";
-constexpr std::array<std::string_view, 4> kKnownGgufQuantizations = {
+constexpr std::array<std::string_view, 7> kKnownGgufQuantizations = {
+    "FP16",
+    "TQ2_0",
+    "TQ1_0",
     "Q8_0",
     "Q5_K_M",
     "Q4_K_M",
     "IQ4_NL",
 };
+constexpr std::string_view kDefaultGgufQuantization = "TQ2_0";
 
 struct MultipartGroup {
   std::string root;
@@ -431,7 +435,8 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
     const HttpRequest& request) const {
   const json body = support_.parse_json_request_body(request);
   const std::string source_path_value = body.value("source_path", std::string{});
-  const std::string quantization = Trim(body.value("quantization", std::string{}));
+  const std::string quantization = Trim(
+      body.value("quantization", std::string(kDefaultGgufQuantization)));
   const bool replace_existing = body.value("replace_existing", true);
   if (source_path_value.empty() || !IsUsableAbsoluteHostPath(source_path_value)) {
     return support_.build_json_response(
@@ -444,7 +449,7 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
-             {"message", "quantization is required"}},
+             {"message", "quantization must not be empty"}},
         {});
   }
   const auto normalized_quantizations = NormalizeQuantizationValues({quantization});

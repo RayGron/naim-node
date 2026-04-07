@@ -1581,6 +1581,29 @@ int main() {
     }
 
     {
+      comet::controller::PlaneSkillsService skills_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"session_id", "sess-continue-1"},
+          {"messages",
+           json::array({json{{"role", "user"}, {"content", "Continue the chat."}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = BuildDesiredState("interaction-plane", {}, false);
+      const auto error =
+          skills_service.ResolveInteractionSkills(resolution, &request_context);
+      Expect(
+          !error.has_value(),
+          "public conversation session_id should not require skills to be enabled");
+      Expect(
+          request_context.payload.at(
+              comet::controller::PlaneSkillsService::kAppliedSkillsPayloadKey)
+              .empty(),
+          "conversation session_id alone should not resolve skills");
+      std::cout << "ok: interaction-session-id-does-not-force-skills" << '\n';
+    }
+
+    {
       comet::controller::InteractionSessionPresenter presenter;
       comet::controller::InteractionRequestContext request_context;
       request_context.request_id = "req-1";
@@ -1717,6 +1740,33 @@ int main() {
               std::string::npos,
           "enabled offline prompts should tell the model that web stayed available but unused");
       std::cout << "ok: interaction-browsing-enabled-not-needed" << '\n';
+    }
+
+    {
+      comet::controller::InteractionBrowsingService browsing_service;
+      comet::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {comet::controller::kInteractionSessionContextStatePayloadKey,
+           json{{"browsing_mode", "enabled"}}},
+          {"messages",
+           json::array(
+               {json{{"role", "user"}, {"content", "Explain TCP handshakes."}}})},
+      };
+      comet::controller::PlaneInteractionResolution resolution;
+      resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", 18130);
+      const auto error =
+          browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
+      Expect(!error.has_value(), "persisted browsing mode should be reusable across turns");
+      const auto summary =
+          request_context.payload.at(
+              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      Expect(
+          summary.at("mode").get<std::string>() == "enabled",
+          "persisted browsing mode should keep web enabled without a fresh toggle");
+      Expect(
+          summary.at("lookup_state").get<std::string>() == "enabled_not_needed",
+          "persisted browsing mode should behave like an enabled idle session");
+      std::cout << "ok: interaction-browsing-persists-session-mode" << '\n';
     }
 
     {

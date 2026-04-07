@@ -303,6 +303,60 @@ struct PlaneSkillBindingRecord {
   std::string updated_at;
 };
 
+struct InteractionSessionRecord {
+  std::string session_id;
+  std::string plane_name;
+  std::string owner_kind = "anonymous";
+  std::optional<int> owner_user_id;
+  std::string auth_session_kind;
+  std::string state = "active";
+  std::string last_used_at;
+  std::string archived_at;
+  std::string archive_path;
+  std::string archive_codec;
+  std::string archive_sha256;
+  std::string context_state_json = "{}";
+  int latest_prompt_tokens = 0;
+  int estimated_context_tokens = 0;
+  std::string compression_state = "none";
+  int version = 1;
+  std::string created_at;
+  std::string updated_at;
+};
+
+struct InteractionMessageRecord {
+  std::string session_id;
+  int seq = 0;
+  std::string role;
+  std::string kind;
+  std::string content_json = "null";
+  std::string usage_json = "{}";
+  std::string created_at;
+};
+
+struct InteractionSummaryRecord {
+  int id = 0;
+  std::string session_id;
+  int turn_range_start = 0;
+  int turn_range_end = 0;
+  std::string summary_json = "{}";
+  std::string created_at;
+};
+
+struct InteractionArchiveRecord {
+  std::string session_id;
+  std::string plane_name;
+  std::string owner_kind = "anonymous";
+  std::optional<int> owner_user_id;
+  std::string archive_path;
+  std::string archive_codec;
+  std::string archive_sha256;
+  std::string archived_at;
+  std::string restore_state = "archived";
+  std::string created_at;
+  std::string updated_at;
+};
+
 class ControllerStore {
  public:
   explicit ControllerStore(std::string db_path);
@@ -413,6 +467,46 @@ class ControllerStore {
       const std::string& plane_name,
       const std::string& skill_id);
   int DeletePlaneSkillBindingsForSkill(const std::string& skill_id);
+  void UpsertInteractionSession(const InteractionSessionRecord& session);
+  bool UpdateInteractionSessionVersioned(
+      const InteractionSessionRecord& session,
+      int expected_version);
+  std::optional<InteractionSessionRecord> LoadInteractionSessionForOwner(
+      const std::string& plane_name,
+      const std::string& session_id,
+      const std::string& owner_kind,
+      const std::optional<int>& owner_user_id) const;
+  std::optional<InteractionSessionRecord> LoadInteractionSessionForOwnerAnyPlane(
+      const std::string& session_id,
+      const std::string& owner_kind,
+      const std::optional<int>& owner_user_id) const;
+  std::vector<InteractionSessionRecord> LoadInteractionSessionsForUser(
+      const std::string& plane_name,
+      int user_id) const;
+  std::vector<InteractionSessionRecord> LoadArchiveEligibleInteractionSessions(
+      const std::string& cutoff_timestamp,
+      int limit) const;
+  void ReplaceInteractionMessages(
+      const std::string& session_id,
+      const std::vector<InteractionMessageRecord>& messages);
+  std::vector<InteractionMessageRecord> LoadInteractionMessages(
+      const std::string& session_id) const;
+  void ReplaceInteractionSummaries(
+      const std::string& session_id,
+      const std::vector<InteractionSummaryRecord>& summaries);
+  std::vector<InteractionSummaryRecord> LoadInteractionSummaries(
+      const std::string& session_id) const;
+  void UpsertInteractionArchive(const InteractionArchiveRecord& archive);
+  std::optional<InteractionArchiveRecord> LoadInteractionArchiveForOwner(
+      const std::string& plane_name,
+      const std::string& session_id,
+      const std::string& owner_kind,
+      const std::optional<int>& owner_user_id) const;
+  bool DeleteInteractionSessionForOwner(
+      const std::string& plane_name,
+      const std::string& session_id,
+      const std::string& owner_kind,
+      const std::optional<int>& owner_user_id);
   std::optional<std::string> LoadControllerSetting(const std::string& setting_key) const;
   void UpsertControllerSetting(
       const std::string& setting_key,

@@ -136,6 +136,16 @@ std::string RandomTokenBase64(int byte_count) {
   return EncodeBase64(bytes.data(), bytes.size());
 }
 
+std::string ComputeSha256Hex(const std::string& value) {
+  EnsureCrypto();
+  std::array<unsigned char, crypto_hash_sha256_BYTES> digest{};
+  crypto_hash_sha256(
+      digest.data(),
+      DataOrNull(value),
+      value.size());
+  return ToHex(digest.data(), digest.size());
+}
+
 std::string HashPassword(const std::string& password) {
   EnsureCrypto();
   if (password.empty()) {

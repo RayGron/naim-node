@@ -256,6 +256,142 @@ void InitializeSchema(
       "registered_hosts",
       "public_key_base64",
       "public_key_base64 TEXT NOT NULL DEFAULT ''");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS interaction_sessions("
+      "session_id TEXT PRIMARY KEY,"
+      "plane_name TEXT NOT NULL,"
+      "owner_kind TEXT NOT NULL DEFAULT 'anonymous',"
+      "owner_user_id INTEGER,"
+      "auth_session_kind TEXT NOT NULL DEFAULT '',"
+      "state TEXT NOT NULL DEFAULT 'active',"
+      "last_used_at TEXT NOT NULL DEFAULT '',"
+      "archived_at TEXT NOT NULL DEFAULT '',"
+      "archive_path TEXT NOT NULL DEFAULT '',"
+      "archive_codec TEXT NOT NULL DEFAULT '',"
+      "archive_sha256 TEXT NOT NULL DEFAULT '',"
+      "context_state_json TEXT NOT NULL DEFAULT '{}',"
+      "latest_prompt_tokens INTEGER NOT NULL DEFAULT 0,"
+      "estimated_context_tokens INTEGER NOT NULL DEFAULT 0,"
+      "compression_state TEXT NOT NULL DEFAULT 'none',"
+      "version INTEGER NOT NULL DEFAULT 1,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "FOREIGN KEY (plane_name) REFERENCES planes(name) ON DELETE CASCADE,"
+      "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE"
+      ");");
+  Exec(
+      db,
+      "CREATE INDEX IF NOT EXISTS idx_interaction_sessions_owner "
+      "ON interaction_sessions(plane_name, owner_kind, owner_user_id, updated_at DESC);");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS interaction_messages("
+      "session_id TEXT NOT NULL,"
+      "seq INTEGER NOT NULL,"
+      "role TEXT NOT NULL,"
+      "kind TEXT NOT NULL,"
+      "content_json TEXT NOT NULL DEFAULT 'null',"
+      "usage_json TEXT NOT NULL DEFAULT '{}',"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "PRIMARY KEY (session_id, seq),"
+      "FOREIGN KEY (session_id) REFERENCES interaction_sessions(session_id) ON DELETE CASCADE"
+      ");");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS interaction_summaries("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "session_id TEXT NOT NULL,"
+      "turn_range_start INTEGER NOT NULL DEFAULT 0,"
+      "turn_range_end INTEGER NOT NULL DEFAULT 0,"
+      "summary_json TEXT NOT NULL DEFAULT '{}',"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "FOREIGN KEY (session_id) REFERENCES interaction_sessions(session_id) ON DELETE CASCADE"
+      ");");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS interaction_archives("
+      "session_id TEXT PRIMARY KEY,"
+      "plane_name TEXT NOT NULL,"
+      "owner_kind TEXT NOT NULL DEFAULT 'anonymous',"
+      "owner_user_id INTEGER,"
+      "archive_path TEXT NOT NULL DEFAULT '',"
+      "archive_codec TEXT NOT NULL DEFAULT '',"
+      "archive_sha256 TEXT NOT NULL DEFAULT '',"
+      "archived_at TEXT NOT NULL DEFAULT '',"
+      "restore_state TEXT NOT NULL DEFAULT 'archived',"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "FOREIGN KEY (session_id) REFERENCES interaction_sessions(session_id) ON DELETE CASCADE,"
+      "FOREIGN KEY (plane_name) REFERENCES planes(name) ON DELETE CASCADE,"
+      "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE"
+      ");");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "owner_kind",
+      "owner_kind TEXT NOT NULL DEFAULT 'anonymous'");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "owner_user_id",
+      "owner_user_id INTEGER");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "auth_session_kind",
+      "auth_session_kind TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(db, "interaction_sessions", "state", "state TEXT NOT NULL DEFAULT 'active'");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "last_used_at",
+      "last_used_at TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "archived_at",
+      "archived_at TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "archive_path",
+      "archive_path TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "archive_codec",
+      "archive_codec TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "archive_sha256",
+      "archive_sha256 TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "context_state_json",
+      "context_state_json TEXT NOT NULL DEFAULT '{}'");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "latest_prompt_tokens",
+      "latest_prompt_tokens INTEGER NOT NULL DEFAULT 0");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "estimated_context_tokens",
+      "estimated_context_tokens INTEGER NOT NULL DEFAULT 0");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "compression_state",
+      "compression_state TEXT NOT NULL DEFAULT 'none'");
+  EnsureColumn(
+      db,
+      "interaction_sessions",
+      "version",
+      "version INTEGER NOT NULL DEFAULT 1");
   EnsureColumn(
       db,
       "registered_hosts",

@@ -153,6 +153,71 @@ CREATE TABLE instance_published_ports (
     FOREIGN KEY (instance_name) REFERENCES instances(name) ON DELETE CASCADE
 );
 
+CREATE TABLE interaction_sessions (
+    session_id TEXT PRIMARY KEY,
+    plane_name TEXT NOT NULL,
+    owner_kind TEXT NOT NULL DEFAULT 'anonymous',
+    owner_user_id INTEGER,
+    auth_session_kind TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'active',
+    last_used_at TEXT NOT NULL DEFAULT '',
+    archived_at TEXT NOT NULL DEFAULT '',
+    archive_path TEXT NOT NULL DEFAULT '',
+    archive_codec TEXT NOT NULL DEFAULT '',
+    archive_sha256 TEXT NOT NULL DEFAULT '',
+    context_state_json TEXT NOT NULL DEFAULT '{}',
+    latest_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_context_tokens INTEGER NOT NULL DEFAULT 0,
+    compression_state TEXT NOT NULL DEFAULT 'none',
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (plane_name) REFERENCES planes(name) ON DELETE CASCADE,
+    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_interaction_sessions_owner
+    ON interaction_sessions(plane_name, owner_kind, owner_user_id, updated_at DESC);
+
+CREATE TABLE interaction_messages (
+    session_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    content_json TEXT NOT NULL DEFAULT 'null',
+    usage_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (session_id, seq),
+    FOREIGN KEY (session_id) REFERENCES interaction_sessions(session_id) ON DELETE CASCADE
+);
+
+CREATE TABLE interaction_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    turn_range_start INTEGER NOT NULL DEFAULT 0,
+    turn_range_end INTEGER NOT NULL DEFAULT 0,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES interaction_sessions(session_id) ON DELETE CASCADE
+);
+
+CREATE TABLE interaction_archives (
+    session_id TEXT PRIMARY KEY,
+    plane_name TEXT NOT NULL,
+    owner_kind TEXT NOT NULL DEFAULT 'anonymous',
+    owner_user_id INTEGER,
+    archive_path TEXT NOT NULL DEFAULT '',
+    archive_codec TEXT NOT NULL DEFAULT '',
+    archive_sha256 TEXT NOT NULL DEFAULT '',
+    archived_at TEXT NOT NULL DEFAULT '',
+    restore_state TEXT NOT NULL DEFAULT 'archived',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES interaction_sessions(session_id) ON DELETE CASCADE,
+    FOREIGN KEY (plane_name) REFERENCES planes(name) ON DELETE CASCADE,
+    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE host_assignments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_name TEXT NOT NULL,

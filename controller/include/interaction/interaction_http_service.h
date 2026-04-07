@@ -12,6 +12,8 @@
 #include "interaction/interaction_service.h"
 #include "comet/core/platform_compat.h"
 
+class AuthSupportService;
+
 class InteractionHttpService {
  public:
   explicit InteractionHttpService(InteractionHttpSupport support);
@@ -51,7 +53,8 @@ class InteractionHttpService {
   void StreamPlaneInteractionSse(
       comet::platform::SocketHandle client_fd,
       const std::string& db_path,
-      const HttpRequest& request) const;
+      const HttpRequest& request,
+      AuthSupportService& auth_support) const;
 
  private:
   static nlohmann::json BuildContinuationPayload(

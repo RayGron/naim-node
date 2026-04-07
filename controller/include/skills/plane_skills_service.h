@@ -56,7 +56,7 @@ class PlaneSkillsService final {
     }
 
     bool HasExplicitSelection() const {
-      return session_id.has_value() || HasExplicitSkillIds();
+      return HasExplicitSkillIds();
     }
   };
 

@@ -601,12 +601,11 @@ int main() {
             "/api/v1/model-library/quantize",
             nlohmann::json{
                 {"source_path", converted_base_path.string()},
-                {"quantization", "Q4_K_M"},
                 {"replace_existing", true},
             }));
     Expect(
         quantized_response.status_code == 202,
-        "dedicated quantization job should be accepted");
+        "dedicated quantization job should accept the default TurboQuant preset");
     const auto quantized_job_id =
         nlohmann::json::parse(quantized_response.body).at("job").at("id").get<std::string>();
     const auto completed_quantized_job = WaitForJobStatus(store, quantized_job_id, "completed");
@@ -614,13 +613,13 @@ int main() {
         completed_quantized_job.job_kind == "quantization",
         "quantization endpoint should persist job_kind=quantization");
     Expect(
-        fs::exists(dst_root / "converted-base" / "gemma-4-E2B-Q4_K_M.gguf"),
-        "Q4_K_M output should exist after dedicated quantization");
+        fs::exists(dst_root / "converted-base" / "gemma-4-E2B-TQ2_0.gguf"),
+        "TQ2_0 output should exist after dedicated quantization");
     Expect(
         completed_quantized_job.retained_output_paths.size() == 1,
         "quantization job should persist one retained output path");
     {
-      std::ofstream out(dst_root / "converted-base" / "gemma-4-E2B-Q4_K_M.gguf", std::ios::trunc);
+      std::ofstream out(dst_root / "converted-base" / "gemma-4-E2B-TQ2_0.gguf", std::ios::trunc);
       out << "stale-quantized-output";
     }
     const auto replaced_quantized_response = service.EnqueueQuantization(
@@ -630,7 +629,6 @@ int main() {
             "/api/v1/model-library/quantize",
             nlohmann::json{
                 {"source_path", converted_base_path.string()},
-                {"quantization", "Q4_K_M"},
                 {"replace_existing", true},
             }));
     Expect(
@@ -641,12 +639,70 @@ int main() {
     const auto replaced_quantized_job =
         WaitForJobStatus(store, replaced_quantized_job_id, "completed");
     Expect(
-        ReadFile(dst_root / "converted-base" / "gemma-4-E2B-Q4_K_M.gguf") ==
-            "Q4_K_M:GGUF:safetensors-payload",
+        ReadFile(dst_root / "converted-base" / "gemma-4-E2B-TQ2_0.gguf") ==
+            "TQ2_0:GGUF:safetensors-payload",
         "re-quantization should replace the previous quantized variant contents");
     Expect(
         replaced_quantized_job.job_kind == "quantization",
         "replacement quantization should remain a quantization job");
+
+    const auto normalized_turboquant_response = service.EnqueueQuantization(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/quantize",
+            nlohmann::json{
+                {"source_path", converted_base_path.string()},
+                {"quantization", "tq1_0"},
+                {"replace_existing", true},
+            }));
+    Expect(
+        normalized_turboquant_response.status_code == 202,
+        "TurboQuant aliases should be normalized and accepted");
+    const auto normalized_turboquant_job_id =
+        nlohmann::json::parse(normalized_turboquant_response.body).at("job").at("id").get<std::string>();
+    const auto normalized_turboquant_job =
+        WaitForJobStatus(store, normalized_turboquant_job_id, "completed");
+    Expect(
+        fs::exists(dst_root / "converted-base" / "gemma-4-E2B-TQ1_0.gguf"),
+        "TQ1_0 output should exist after explicit TurboQuant quantization");
+    Expect(
+        ReadFile(dst_root / "converted-base" / "gemma-4-E2B-TQ1_0.gguf") ==
+            "TQ1_0:GGUF:safetensors-payload",
+        "explicit TurboQuant quantization should preserve normalized output naming");
+    Expect(
+        normalized_turboquant_job.quantizations ==
+            std::vector<std::string>{"TQ1_0"},
+        "TurboQuant quantization jobs should persist canonical quantization names");
+
+    const auto normalized_fp16_response = service.EnqueueQuantization(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/quantize",
+            nlohmann::json{
+                {"source_path", converted_base_path.string()},
+                {"quantization", "fp16"},
+                {"replace_existing", true},
+            }));
+    Expect(
+        normalized_fp16_response.status_code == 202,
+        "FP16 should be accepted as a supported quantization alias");
+    const auto normalized_fp16_job_id =
+        nlohmann::json::parse(normalized_fp16_response.body).at("job").at("id").get<std::string>();
+    const auto normalized_fp16_job =
+        WaitForJobStatus(store, normalized_fp16_job_id, "completed");
+    Expect(
+        fs::exists(dst_root / "converted-base" / "gemma-4-E2B-FP16.gguf"),
+        "FP16 output should exist after explicit FP16 quantization");
+    Expect(
+        ReadFile(dst_root / "converted-base" / "gemma-4-E2B-FP16.gguf") ==
+            "FP16:GGUF:safetensors-payload",
+        "explicit FP16 quantization should preserve normalized output naming");
+    Expect(
+        normalized_fp16_job.quantizations ==
+            std::vector<std::string>{"FP16"},
+        "FP16 quantization jobs should persist canonical quantization names");
 
     const fs::path mixed_config_path = src_root / "config.json";
     const fs::path mixed_tokenizer_path = src_root / "tokenizer.json";

@@ -4,6 +4,7 @@
   "dependencies": [
     "libsodium",
     "nlohmann-json",
-    "sqlite3"
+    "sqlite3",
+    "zstd"
   ]
 }

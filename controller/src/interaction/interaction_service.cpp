@@ -214,6 +214,20 @@ bool PayloadContainsUnsupportedInteractionField(
   return false;
 }
 
+std::optional<std::string> ParsePublicSessionId(const nlohmann::json& payload) {
+  if (!payload.contains("session_id") || payload.at("session_id").is_null()) {
+    return std::nullopt;
+  }
+  if (!payload.at("session_id").is_string()) {
+    throw std::runtime_error("session_id must be a string");
+  }
+  const std::string session_id = TrimCopy(payload.at("session_id").get<std::string>());
+  if (session_id.empty()) {
+    throw std::runtime_error("session_id must not be empty");
+  }
+  return session_id;
+}
+
 nlohmann::json RequestAppliedSkills(const InteractionRequestContext& request_context) {
   if (request_context.payload.contains(PlaneSkillsService::kAppliedSkillsPayloadKey) &&
       request_context.payload.at(PlaneSkillsService::kAppliedSkillsPayloadKey).is_array()) {
@@ -971,6 +985,7 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
   }
 
   nlohmann::json payload = original_payload;
+  context->original_payload = original_payload;
   std::string unsupported_field;
   if (PayloadContainsUnsupportedInteractionField(payload, &unsupported_field)) {
     return InteractionValidationError{
@@ -1016,6 +1031,18 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
         nlohmann::json{{"field", "messages"}},
     };
   }
+
+  try {
+    context->requested_session_id = ParsePublicSessionId(payload);
+  } catch (const std::exception& error) {
+    return InteractionValidationError{
+        "malformed_request",
+        error.what(),
+        false,
+        nlohmann::json{{"field", "session_id"}},
+    };
+  }
+  context->client_messages = payload.at("messages");
 
   const std::string served_model_name = ResolveInteractionServedModelName(resolution);
   const std::string active_model_id = ResolveInteractionActiveModelId(resolution);
@@ -1541,7 +1568,9 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
   const comet::runtime::ModelIdentity model_identity =
       BuildResolutionModelIdentity(resolution);
   InteractionSessionResult result;
-  result.session_id = GenerateInteractionSessionId();
+  result.session_id = request_context.conversation_session_id.empty()
+                          ? GenerateInteractionSessionId()
+                          : request_context.conversation_session_id;
   const auto session_started_at = std::chrono::steady_clock::now();
 
   nlohmann::json current_payload = original_payload;
@@ -1962,7 +1991,7 @@ InteractionStreamSessionExecutor::InteractionStreamSessionExecutor(
       can_complete_on_natural_stop_(std::move(can_complete_on_natural_stop)),
       build_continuation_payload_(std::move(build_continuation_payload)) {}
 
-void InteractionStreamSessionExecutor::Execute(
+InteractionSessionResult InteractionStreamSessionExecutor::Execute(
     const std::string& request_id,
     const std::string& session_id,
     const std::string& plane_name,
@@ -2109,7 +2138,7 @@ void InteractionStreamSessionExecutor::Execute(
                 true,
                 plane_name));
         send_done();
-        return;
+        return session;
       }
       parsed_structured_output =
           session_presenter.ParseStructuredOutputObject(session.content);
@@ -2133,7 +2162,7 @@ void InteractionStreamSessionExecutor::Execute(
                 true,
                 plane_name));
         send_done();
-        return;
+        return session;
       }
     }
 
@@ -2151,6 +2180,7 @@ void InteractionStreamSessionExecutor::Execute(
             session_payload,
             parsed_structured_output));
     send_done();
+    return session;
   } catch (const std::exception& error) {
     const std::string lowered = LowercaseCopy(error.what());
     const bool timeout_like =
@@ -2174,6 +2204,7 @@ void InteractionStreamSessionExecutor::Execute(
             true,
             plane_name));
     send_done();
+    return session;
   }
 }
 

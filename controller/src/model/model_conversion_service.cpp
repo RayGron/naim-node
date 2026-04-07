@@ -24,7 +24,10 @@ namespace {
 constexpr std::string_view kFormatGguf = "gguf";
 constexpr std::string_view kFormatSafetensors = "safetensors";
 constexpr std::string_view kFormatUnknown = "unknown";
-constexpr std::array<std::string_view, 4> kKnownQuantizations = {
+constexpr std::array<std::string_view, 7> kKnownQuantizations = {
+    "FP16",
+    "TQ2_0",
+    "TQ1_0",
     "Q8_0",
     "Q5_K_M",
     "Q4_K_M",
@@ -141,7 +144,13 @@ std::vector<std::string> ModelConversionService::NormalizeQuantizations(
     if (trimmed.empty()) {
       continue;
     }
-    normalized.push_back(trimmed);
+    std::string canonical = trimmed;
+    std::transform(
+        canonical.begin(),
+        canonical.end(),
+        canonical.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+    normalized.push_back(std::move(canonical));
   }
   std::sort(normalized.begin(), normalized.end());
   normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
