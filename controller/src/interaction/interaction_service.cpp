@@ -20,6 +20,9 @@ namespace comet::controller {
 
 namespace {
 
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
+
 std::string ReadJsonStringOrEmpty(
     const nlohmann::json& payload,
     std::string_view key) {
@@ -2820,6 +2823,13 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       runtime.model_path = runtime.cached_local_model_path;
       runtime.active_model_ready = !runtime.active_model_id.empty();
     }
+    if (desired_state->turboquant.has_value() && desired_state->turboquant->enabled) {
+      runtime.turboquant_enabled = true;
+      runtime.active_cache_type_k = desired_state->turboquant->cache_type_k.value_or(
+          std::string(kTurboQuantDefaultCacheTypeK));
+      runtime.active_cache_type_v = desired_state->turboquant->cache_type_v.value_or(
+          std::string(kTurboQuantDefaultCacheTypeV));
+    }
     runtime.gateway_listen =
         desired_state->gateway.listen_host + ":" +
         std::to_string(desired_state->gateway.listen_port);
@@ -2923,6 +2933,8 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     reason = "runtime_start_failed";
   } else if (!resolution.runtime_status.has_value()) {
     reason = "runtime_status_missing";
+  } else if (resolution.runtime_status->status_reason == "turboquant_unsupported") {
+    reason = "turboquant_unsupported";
   } else if (!resolution.runtime_status->active_model_ready) {
     reason = "active_model_missing";
   } else if (data_parallel && expected_replica_groups > 0 && ready_replica_groups == 0) {
@@ -3015,6 +3027,20 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
        resolution.runtime_status.has_value() &&
                resolution.runtime_status->kv_cache_bytes.has_value()
            ? nlohmann::json(*resolution.runtime_status->kv_cache_bytes)
+           : nlohmann::json(nullptr)},
+      {"turboquant_enabled",
+       resolution.runtime_status.has_value()
+           ? nlohmann::json(resolution.runtime_status->turboquant_enabled)
+           : nlohmann::json(false)},
+      {"active_cache_type_k",
+       resolution.runtime_status.has_value() &&
+               !resolution.runtime_status->active_cache_type_k.empty()
+           ? nlohmann::json(resolution.runtime_status->active_cache_type_k)
+           : nlohmann::json(nullptr)},
+      {"active_cache_type_v",
+       resolution.runtime_status.has_value() &&
+               !resolution.runtime_status->active_cache_type_v.empty()
+           ? nlohmann::json(resolution.runtime_status->active_cache_type_v)
            : nlohmann::json(nullptr)},
       {"default_response_language",
        resolution.desired_state.interaction.has_value()
@@ -3201,10 +3227,13 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       {"failure_detail",
        reason == "unsupported_local_runtime"
            ? nlohmann::json(*local_runtime_blocker)
-           : (reason == "runtime_start_failed" && resolution.observation.has_value() &&
-                      !resolution.observation->status_message.empty()
-                  ? nlohmann::json(resolution.observation->status_message)
-                  : nlohmann::json(nullptr))},
+           : (reason == "turboquant_unsupported" && resolution.runtime_status.has_value() &&
+                      !resolution.runtime_status->failure_detail.empty()
+                  ? nlohmann::json(resolution.runtime_status->failure_detail)
+                  : (reason == "runtime_start_failed" && resolution.observation.has_value() &&
+                             !resolution.observation->status_message.empty()
+                         ? nlohmann::json(resolution.observation->status_message)
+                         : nlohmann::json(nullptr)))},
   };
   return resolution;
 }

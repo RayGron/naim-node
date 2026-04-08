@@ -27,6 +27,8 @@ constexpr int kSkillsPublishedPortSpan = 10000;
 constexpr int kWebGatewayContainerPort = 18130;
 constexpr int kWebGatewayPublishedPortBase = 34000;
 constexpr int kWebGatewayPublishedPortSpan = 10000;
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
 
 bool HasExplicitPrivateStorage(
     const nlohmann::json& service_json,
@@ -69,10 +71,14 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
           value.contains("webgateway") && value.at("webgateway").is_object()
               ? value.at("webgateway")
               : (value.contains("browsing") && value.at("browsing").is_object() ? value.at("browsing")
-                                                                                 : nlohmann::json::object())) {}
+                                                                                 : nlohmann::json::object())),
+      features_json_(
+          value.contains("features") && value.at("features").is_object() ? value.at("features")
+                                                                          : nlohmann::json::object()) {}
 
 DesiredState DesiredStateV2Renderer::RenderState() {
   RenderIdentity();
+  RenderFeatures();
   RenderHooks();
   RenderModel();
   RenderInteraction();
@@ -154,6 +160,26 @@ void DesiredStateV2Renderer::RenderIdentity() {
     }
     state_.browsing = std::move(browsing_settings);
   }
+}
+
+void DesiredStateV2Renderer::RenderFeatures() {
+  if (!features_json_.contains("turboquant") ||
+      !features_json_.at("turboquant").is_object()) {
+    return;
+  }
+  const auto& turboquant_json = features_json_.at("turboquant");
+  if (!turboquant_json.value("enabled", false)) {
+    return;
+  }
+  TurboQuantFeatureSpec turboquant;
+  turboquant.enabled = true;
+  turboquant.cache_type_k = turboquant_json.value(
+      "cache_type_k",
+      std::string(kTurboQuantDefaultCacheTypeK));
+  turboquant.cache_type_v = turboquant_json.value(
+      "cache_type_v",
+      std::string(kTurboQuantDefaultCacheTypeV));
+  state_.turboquant = std::move(turboquant);
 }
 
 void DesiredStateV2Renderer::RenderHooks() {

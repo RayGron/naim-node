@@ -484,6 +484,9 @@ void TestRuntimePayloadIncludesKvCacheBytes() {
   runtime_status.runtime_phase = "running";
   runtime_status.launch_ready = true;
   runtime_status.kv_cache_bytes = 3ULL * 1024ULL * 1024ULL * 1024ULL;
+  runtime_status.turboquant_enabled = true;
+  runtime_status.active_cache_type_k = "planar3";
+  runtime_status.active_cache_type_v = "f16";
   observation.runtime_status_json = comet::SerializeRuntimeStatusJson(runtime_status);
 
   std::map<std::string, comet::NodeInventory> dashboard_nodes;
@@ -534,10 +537,19 @@ void TestRuntimePayloadIncludesKvCacheBytes() {
       nodes_payload.ready_nodes,
       nodes_payload.not_ready_nodes,
       nodes_payload.degraded_gpu_nodes,
-      nodes_payload.kv_cache_bytes);
+      nodes_payload.kv_cache_bytes,
+      nodes_payload.turboquant_enabled,
+      nodes_payload.active_cache_type_k,
+      nodes_payload.active_cache_type_v);
   Expect(
       runtime_payload.at("kv_cache_bytes").get<std::uint64_t>() == *runtime_status.kv_cache_bytes,
       "runtime payload should expose aggregated kv_cache_bytes");
+  Expect(runtime_payload.at("turboquant_enabled").get<bool>(),
+         "runtime payload should expose turboquant_enabled");
+  Expect(runtime_payload.at("active_cache_type_k").get<std::string>() == "planar3",
+         "runtime payload should expose active_cache_type_k");
+  Expect(runtime_payload.at("active_cache_type_v").get<std::string>() == "f16",
+         "runtime payload should expose active_cache_type_v");
 
   std::cout << "ok: runtime-payload-includes-kv-cache-bytes" << '\n';
 }

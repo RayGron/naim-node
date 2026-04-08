@@ -341,6 +341,11 @@ json ToJson(const RuntimeStatus& status) {
       {"active_model_id", status.active_model_id},
       {"active_served_model_name", status.active_served_model_name},
       {"active_runtime_profile", status.active_runtime_profile},
+      {"turboquant_enabled", status.turboquant_enabled},
+      {"active_cache_type_k", status.active_cache_type_k},
+      {"active_cache_type_v", status.active_cache_type_v},
+      {"status_reason", status.status_reason},
+      {"failure_detail", status.failure_detail},
       {"cached_local_model_path", status.cached_local_model_path},
       {"model_path", status.model_path},
       {"gpu_device", status.gpu_device},
@@ -392,6 +397,11 @@ RuntimeStatus RuntimeStatusFromJson(const json& value) {
   status.active_model_id = value.value("active_model_id", std::string{});
   status.active_served_model_name = value.value("active_served_model_name", std::string{});
   status.active_runtime_profile = value.value("active_runtime_profile", std::string{});
+  status.turboquant_enabled = value.value("turboquant_enabled", false);
+  status.active_cache_type_k = value.value("active_cache_type_k", std::string{});
+  status.active_cache_type_v = value.value("active_cache_type_v", std::string{});
+  status.status_reason = value.value("status_reason", std::string{});
+  status.failure_detail = value.value("failure_detail", std::string{});
   status.cached_local_model_path = value.value("cached_local_model_path", std::string{});
   status.model_path = value.value("model_path", std::string{});
   status.gpu_device = value.value("gpu_device", std::string{});

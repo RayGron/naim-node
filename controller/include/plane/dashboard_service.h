@@ -76,6 +76,9 @@ class DashboardService {
     int not_ready_nodes = 0;
     int degraded_gpu_nodes = 0;
     std::optional<std::uint64_t> kv_cache_bytes;
+    bool turboquant_enabled = false;
+    std::string active_cache_type_k;
+    std::string active_cache_type_v;
   };
 
   struct Deps {
@@ -141,7 +144,10 @@ class DashboardService {
       int ready_nodes,
       int not_ready_nodes,
       int degraded_gpu_nodes,
-      const std::optional<std::uint64_t>& kv_cache_bytes);
+      const std::optional<std::uint64_t>& kv_cache_bytes,
+      bool turboquant_enabled,
+      const std::string& active_cache_type_k,
+      const std::string& active_cache_type_v);
 
   static nlohmann::json BuildRecentEventsPayload(
       const std::vector<comet::EventRecord>& recent_events,

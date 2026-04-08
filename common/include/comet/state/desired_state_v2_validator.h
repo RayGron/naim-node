@@ -14,6 +14,7 @@ class DesiredStateV2Validator final {
   void Validate();
   void ValidateTopLevel() const;
   void ValidateModel() const;
+  void ValidateFeatures() const;
   void ValidateRuntime() const;
   void ValidateTopology() const;
   void ValidateInfer() const;

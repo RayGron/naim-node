@@ -13,6 +13,22 @@ bool FieldEnabledByDefault(const nlohmann::json& service_json, bool default_valu
   return service_json.value("enabled", default_value);
 }
 
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
+
+bool IsSupportedTurboQuantCacheType(const std::string& value) {
+  static const std::set<std::string> kSupportedTypes = {
+      "f16",
+      "turbo3",
+      "turbo4",
+      "planar3",
+      "planar4",
+      "iso3",
+      "iso4",
+  };
+  return kSupportedTypes.find(value) != kSupportedTypes.end();
+}
+
 }  // namespace
 
 void DesiredStateV2Validator::ValidateOrThrow(const nlohmann::json& value) {
@@ -24,6 +40,7 @@ DesiredStateV2Validator::DesiredStateV2Validator(const nlohmann::json& value) : 
 void DesiredStateV2Validator::Validate() {
   ValidateTopLevel();
   ValidateModel();
+  ValidateFeatures();
   ValidateRuntime();
   ValidateTopology();
   ValidateInfer();
@@ -97,6 +114,60 @@ void DesiredStateV2Validator::ValidateModel() const {
       throw std::runtime_error(
           "desired-state v2 reference materialization requires local_path or source.path");
     }
+  }
+}
+
+void DesiredStateV2Validator::ValidateFeatures() const {
+  if (!value_.contains("features")) {
+    return;
+  }
+  RequireObject("features");
+  const auto& features = value_.at("features");
+  if (!features.contains("turboquant")) {
+    return;
+  }
+  if (!features.at("turboquant").is_object()) {
+    throw std::runtime_error("desired-state v2 features.turboquant must be an object");
+  }
+  const auto& turboquant = features.at("turboquant");
+  const bool enabled = turboquant.value("enabled", false);
+  if (turboquant.contains("cache_type_k") && !turboquant.at("cache_type_k").is_string() &&
+      !turboquant.at("cache_type_k").is_null()) {
+    throw std::runtime_error(
+        "desired-state v2 features.turboquant.cache_type_k must be a string");
+  }
+  if (turboquant.contains("cache_type_v") && !turboquant.at("cache_type_v").is_string() &&
+      !turboquant.at("cache_type_v").is_null()) {
+    throw std::runtime_error(
+        "desired-state v2 features.turboquant.cache_type_v must be a string");
+  }
+  if (!enabled) {
+    return;
+  }
+  const std::string plane_mode = value_.value("plane_mode", std::string("llm"));
+  const auto& runtime = value_.at("runtime");
+  const std::string engine = runtime.value("engine", std::string{});
+  const std::string distributed_backend =
+      runtime.value("distributed_backend", engine == "llama.cpp" ? std::string("llama_rpc")
+                                                                  : std::string("local"));
+  if (plane_mode != "llm" || engine != "llama.cpp" || distributed_backend != "llama_rpc") {
+    throw std::runtime_error(
+        "desired-state v2 features.turboquant requires plane_mode=llm with "
+        "runtime.engine=llama.cpp and runtime.distributed_backend=llama_rpc");
+  }
+  const std::string cache_type_k = turboquant.value(
+      "cache_type_k",
+      std::string(kTurboQuantDefaultCacheTypeK));
+  const std::string cache_type_v = turboquant.value(
+      "cache_type_v",
+      std::string(kTurboQuantDefaultCacheTypeV));
+  if (!IsSupportedTurboQuantCacheType(cache_type_k)) {
+    throw std::runtime_error(
+        "desired-state v2 features.turboquant.cache_type_k has unsupported value");
+  }
+  if (!IsSupportedTurboQuantCacheType(cache_type_v)) {
+    throw std::runtime_error(
+        "desired-state v2 features.turboquant.cache_type_v has unsupported value");
   }
 }
 

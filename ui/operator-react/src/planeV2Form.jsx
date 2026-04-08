@@ -8,12 +8,18 @@ import {
 } from "./skillsFactory.js";
 
 const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
+const TURBOQUANT_DEFAULT_CACHE_TYPE_K = "planar3";
+const TURBOQUANT_DEFAULT_CACHE_TYPE_V = "f16";
+const TURBOQUANT_CACHE_TYPES = ["f16", "turbo3", "turbo4", "planar3", "planar4", "iso3", "iso4"];
 
 const FIELD_INFO = {
   planeName: "Unique plane identifier used by the controller, runtime artifacts, and API paths.",
   skillsEnabled: "Enable a dedicated plane-scoped Skills service for storing and resolving reusable skills.",
   browsingEnabled: "Enable a dedicated plane-scoped Isolated Browsing service for brokered web search, fetch, and approval-gated browser sessions.",
   browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
+  turboquantEnabled: "Enable KV-cache quantization for llama.cpp + llama_rpc planes. This requires a compatible turboquant-capable llama.cpp build.",
+  turboquantCacheTypeK: "KV cache type used for K cache pages. Defaults to planar3 when TurboQuant is enabled.",
+  turboquantCacheTypeV: "KV cache type used for V cache pages. Defaults to f16 when TurboQuant is enabled.",
   planeMode: "Choose llm for model serving planes or compute for custom GPU workloads without chat interaction.",
   protectedPlane: "Protected planes require an explicit confirmation before destructive actions such as delete.",
   factorySkillIds: "Select global Skills Factory records that should be copied into this plane when the rollout is applied.",
@@ -213,6 +219,9 @@ export function buildNewPlaneFormState() {
     skillsEnabled: false,
     browsingEnabled: false,
     browserSessionEnabled: false,
+    turboquantEnabled: false,
+    turboquantCacheTypeK: TURBOQUANT_DEFAULT_CACHE_TYPE_K,
+    turboquantCacheTypeV: TURBOQUANT_DEFAULT_CACHE_TYPE_V,
     planeMode: "llm",
     protectedPlane: false,
     factorySkillIds: [],
@@ -297,6 +306,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const worker = value?.worker || {};
   const app = value?.app || {};
   const workerResources = value?.resources?.worker || {};
+  const turboquant = value?.features?.turboquant || {};
   const appStart = app?.start || {};
   const inferStart = infer?.start || {};
   const workerStart = worker?.start || {};
@@ -314,6 +324,9 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     skillsEnabled: Boolean(value?.skills?.enabled),
     browsingEnabled: Boolean(value?.browsing?.enabled),
     browserSessionEnabled: Boolean(value?.browsing?.policy?.browser_session_enabled),
+    turboquantEnabled: Boolean(turboquant?.enabled),
+    turboquantCacheTypeK: turboquant?.cache_type_k || TURBOQUANT_DEFAULT_CACHE_TYPE_K,
+    turboquantCacheTypeV: turboquant?.cache_type_v || TURBOQUANT_DEFAULT_CACHE_TYPE_V,
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
     factorySkillIds: Array.isArray(value?.skills?.factory_skill_ids)
@@ -534,6 +547,15 @@ export function buildDesiredStateV2FromForm(form) {
         enabled: true,
         policy: {
           browser_session_enabled: Boolean(form.browserSessionEnabled),
+        },
+      };
+    }
+    if (form.turboquantEnabled) {
+      desiredState.features = {
+        turboquant: {
+          enabled: true,
+          cache_type_k: String(form.turboquantCacheTypeK || TURBOQUANT_DEFAULT_CACHE_TYPE_K),
+          cache_type_v: String(form.turboquantCacheTypeV || TURBOQUANT_DEFAULT_CACHE_TYPE_V),
         },
       };
     }
@@ -1439,6 +1461,14 @@ export function PlaneV2FormBuilder({
           onToggle={toggleFeature("browsingEnabled")}
         />
         <FeatureToggle
+          title="TurboQuant"
+          info={FIELD_INFO.turboquantEnabled}
+          active={form.planeMode === "llm" && form.turboquantEnabled}
+          disabled={form.planeMode !== "llm"}
+          disabledLabel="LLM only"
+          onToggle={toggleFeature("turboquantEnabled")}
+        />
+        <FeatureToggle
           title="App"
           info={FIELD_INFO.appEnabled}
           active={form.appEnabled}
@@ -1475,6 +1505,48 @@ export function PlaneV2FormBuilder({
             message={fieldWarning("Browser sessions are ignored until Isolated Browsing is enabled.")}
             severity="warning"
           />
+        </div>
+      ) : null}
+
+      {form.planeMode === "llm" && form.turboquantEnabled ? (
+        <div className="plane-form-toggle">
+          <div className="plane-form-section-header">
+            <InfoLabel info={FIELD_INFO.turboquantEnabled}>TurboQuant</InfoLabel>
+            <p className="plane-form-section-copy">
+              KV-cache quantization for the llama.cpp serving path. Implicit defaults when enabled:
+              {` ${TURBOQUANT_DEFAULT_CACHE_TYPE_K} / ${TURBOQUANT_DEFAULT_CACHE_TYPE_V}`}.
+            </p>
+          </div>
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.turboquantCacheTypeK}>K cache type</InfoLabel>
+              <select
+                className="text-input"
+                value={form.turboquantCacheTypeK}
+                onChange={bindText("turboquantCacheTypeK")}
+              >
+                {TURBOQUANT_CACHE_TYPES.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.turboquantCacheTypeV}>V cache type</InfoLabel>
+              <select
+                className="text-input"
+                value={form.turboquantCacheTypeV}
+                onChange={bindText("turboquantCacheTypeV")}
+              >
+                {TURBOQUANT_CACHE_TYPES.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
       ) : null}
 

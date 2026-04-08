@@ -19,6 +19,7 @@ namespace fs = std::filesystem;
 using control_support::BuildControlPaths;
 using control_support::EnabledGpuNodeCount;
 using control_support::LoadRegistry;
+using control_support::LoadActiveModel;
 using control_support::RuntimeProfile;
 using nlohmann::json;
 
@@ -81,6 +82,10 @@ std::string Join(const std::vector<std::string>& values, const std::string& deli
     joined += values[index];
   }
   return joined;
+}
+
+bool HasArgument(const std::vector<std::string>& args, const std::string& flag) {
+  return std::find(args.begin(), args.end(), flag) != args.end();
 }
 
 json FindCachedEntry(
@@ -212,6 +217,22 @@ void SwitchModel(
 
   const std::string served_model_name =
       args.served_model_name.empty() ? SafeServedModelName(args.model_id) : args.served_model_name;
+  const json current_active_model = LoadActiveModel(config);
+  std::vector<std::string> llama_args = profile.llama_args;
+  if (current_active_model.value("turboquant_enabled", false)) {
+    const std::string cache_type_k =
+        current_active_model.value("active_cache_type_k", std::string{});
+    const std::string cache_type_v =
+        current_active_model.value("active_cache_type_v", std::string{});
+    if (!cache_type_k.empty() && !HasArgument(llama_args, "--cache-type-k")) {
+      llama_args.push_back("--cache-type-k");
+      llama_args.push_back(cache_type_k);
+    }
+    if (!cache_type_v.empty() && !HasArgument(llama_args, "--cache-type-v")) {
+      llama_args.push_back("--cache-type-v");
+      llama_args.push_back(cache_type_v);
+    }
+  }
   json payload{
       {"model_id", args.model_id},
       {"served_model_name", served_model_name},
@@ -228,8 +249,15 @@ void SwitchModel(
        cached_entry.value(
            "runtime_model_path",
            cached_entry.value("local_model_path", std::string{}))},
-      {"llama_args", profile.llama_args},
+      {"llama_args", llama_args},
   };
+  if (current_active_model.value("turboquant_enabled", false)) {
+    payload["turboquant_enabled"] = true;
+    payload["active_cache_type_k"] =
+        current_active_model.value("active_cache_type_k", std::string{});
+    payload["active_cache_type_v"] =
+        current_active_model.value("active_cache_type_v", std::string{});
+  }
 
   std::cout << "switch-model-plan:\n";
   for (const auto& key : {"model_id",

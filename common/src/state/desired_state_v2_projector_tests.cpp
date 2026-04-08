@@ -90,6 +90,33 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
           name + ": browsing.policy.max_fetch_bytes mismatch");
     }
   }
+  if (rendered.turboquant.has_value()) {
+    Expect(rerendered.turboquant.has_value(), name + ": turboquant missing after rerender");
+    Expect(rerendered.turboquant->enabled == rendered.turboquant->enabled,
+           name + ": turboquant.enabled mismatch");
+    Expect(rerendered.turboquant->cache_type_k == rendered.turboquant->cache_type_k,
+           name + ": turboquant.cache_type_k mismatch");
+    Expect(rerendered.turboquant->cache_type_v == rendered.turboquant->cache_type_v,
+           name + ": turboquant.cache_type_v mismatch");
+  }
+  if (source.contains("features") && source.at("features").contains("turboquant")) {
+    Expect(projected.contains("features"), name + ": features block missing after projection");
+    Expect(projected.at("features").contains("turboquant"),
+           name + ": turboquant block missing after projection");
+    const auto& source_turboquant = source.at("features").at("turboquant");
+    const auto& projected_turboquant = projected.at("features").at("turboquant");
+    Expect(projected_turboquant.value("enabled", false) ==
+               source_turboquant.value("enabled", false),
+           name + ": turboquant.enabled projection mismatch");
+    if (source_turboquant.contains("cache_type_k")) {
+      Expect(projected_turboquant.at("cache_type_k") == source_turboquant.at("cache_type_k"),
+             name + ": turboquant.cache_type_k mismatch");
+    }
+    if (source_turboquant.contains("cache_type_v")) {
+      Expect(projected_turboquant.at("cache_type_v") == source_turboquant.at("cache_type_v"),
+             name + ": turboquant.cache_type_v mismatch");
+    }
+  }
   if (source.contains("skills")) {
     Expect(projected.contains("skills"), name + ": skills block missing after projection");
     Expect(projected.at("skills").value("enabled", false) ==
@@ -178,6 +205,27 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "llm-backend-only");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "turboquant-enabled"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-turboquant"},
+             }},
+            {"features",
+             {{"turboquant",
+               {{"enabled", true}, {"cache_type_k", "planar3"}, {"cache_type_v", "f16"}}}}},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "turboquant-enabled");
 
     ExpectRoundTrip(
         json{

@@ -17,6 +17,7 @@ class DesiredStateV2Projector final {
 
   void CollectInstancesAndDisks();
   void ProjectIdentity();
+  void ProjectFeatures();
   void ProjectHooks();
   void ProjectModel();
   void ProjectTopology();

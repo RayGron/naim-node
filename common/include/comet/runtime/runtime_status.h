@@ -147,6 +147,11 @@ struct RuntimeStatus {
   std::string active_model_id;
   std::string active_served_model_name;
   std::string active_runtime_profile;
+  bool turboquant_enabled = false;
+  std::string active_cache_type_k;
+  std::string active_cache_type_v;
+  std::string status_reason;
+  std::string failure_detail;
   std::string cached_local_model_path;
   std::string model_path;
   std::string gpu_device;

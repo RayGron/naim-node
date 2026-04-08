@@ -91,6 +91,73 @@ const comet::DiskSpec& FindDisk(
 int main() {
   try {
     {
+      const json turboquant_defaults{
+          {"version", 2},
+          {"plane_name", "turboquant-defaults"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-turboquant"},
+           }},
+          {"features", {{"turboquant", {{"enabled", true}}}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(turboquant_defaults, "turboquant-defaults");
+      Expect(state.turboquant.has_value(), "turboquant-defaults: turboquant missing");
+      Expect(state.turboquant->enabled, "turboquant-defaults: turboquant should be enabled");
+      Expect(
+          state.turboquant->cache_type_k == std::optional<std::string>("planar3"),
+          "turboquant-defaults: cache_type_k should default to planar3");
+      Expect(
+          state.turboquant->cache_type_v == std::optional<std::string>("f16"),
+          "turboquant-defaults: cache_type_v should default to f16");
+      std::cout << "ok: turboquant-defaults" << '\n';
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "turboquant-invalid-enum"},
+              {"plane_mode", "llm"},
+              {"model",
+               {
+                   {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                   {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                   {"served_model_name", "qwen-invalid"},
+               }},
+              {"features",
+               {{"turboquant",
+                 {{"enabled", true}, {"cache_type_k", "broken3"}, {"cache_type_v", "f16"}}}}},
+              {"runtime",
+               {{"engine", "llama.cpp"},
+                {"distributed_backend", "llama_rpc"},
+                {"workers", 1}}},
+              {"infer", {{"replicas", 1}}},
+              {"app", {{"enabled", false}}},
+          },
+          "turboquant-invalid-enum");
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "turboquant-compute"},
+              {"plane_mode", "compute"},
+              {"features", {{"turboquant", {{"enabled", true}}}}},
+              {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+              {"app", {{"enabled", false}}},
+          },
+          "turboquant-compute");
+    }
+
+    {
       const json state_file_v2{
           {"version", 2},
           {"plane_name", "thinking-flag"},

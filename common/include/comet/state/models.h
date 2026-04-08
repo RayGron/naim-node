@@ -290,6 +290,12 @@ struct BrowsingSettings {
   std::optional<BrowsingPolicySettings> policy;
 };
 
+struct TurboQuantFeatureSpec {
+  bool enabled = false;
+  std::optional<std::string> cache_type_k;
+  std::optional<std::string> cache_type_v;
+};
+
 using WebGatewayPolicySettings = BrowsingPolicySettings;
 using WebGatewaySettings = BrowsingSettings;
 
@@ -305,6 +311,7 @@ struct DesiredState {
   std::optional<InteractionSettings> interaction;
   std::optional<SkillsSettings> skills;
   std::optional<BrowsingSettings> browsing;
+  std::optional<TurboQuantFeatureSpec> turboquant;
   InferenceRuntimeSettings inference;
   WorkerGroupSpec worker_group;
   GatewaySettings gateway;

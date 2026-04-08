@@ -835,6 +835,9 @@ function interactionReasonMessage(status) {
   if (reason === "runtime_start_failed") {
     return failureDetail || "Runtime startup failed on the infer node.";
   }
+  if (reason === "turboquant_unsupported") {
+    return failureDetail || "TurboQuant is enabled but the configured llama.cpp runtime does not support the requested cache types.";
+  }
   if (reason === "runtime_status_missing") {
     return "Runtime status is not available yet.";
   }
@@ -4353,6 +4356,7 @@ function App() {
                         <div className="metric-row"><span>Observed nodes</span><strong>{runtimeSummary.observed_nodes ?? observationItems.length}</strong></div>
                         <div className="metric-row"><span>Ready nodes</span><strong>{readyNodes}</strong></div>
                         <div className="metric-row"><span>KV cache</span><strong>{formatDashboardBytesMbGb(runtimeSummary.kv_cache_bytes)}</strong></div>
+                        <div className="metric-row"><span>TurboQuant</span><strong>{runtimeSummary.turboquant_enabled ? `${runtimeSummary.active_cache_type_k || "?"}/${runtimeSummary.active_cache_type_v || "?"}` : "off"}</strong></div>
                         <div className="metric-row"><span>Observed instances</span><strong>{observedInstances.length}</strong></div>
                         <div className="metric-row"><span>Missing runtime payload</span><strong>{missingRuntimeNodes}</strong></div>
                       </div>
@@ -4652,6 +4656,7 @@ function App() {
                       <div className="metric-row"><span>Ready</span><strong>{interactionReady ? "yes" : "no"}</strong></div>
                       <div className="metric-row"><span>Model</span><strong>{interactionStatus?.served_model_name || interactionStatus?.active_model_id || "n/a"}</strong></div>
                       <div className="metric-row"><span>KV Cache</span><strong>{formatDashboardBytesMbGb(interactionStatus?.kv_cache_bytes ?? runtimeSummary.kv_cache_bytes)}</strong></div>
+                      <div className="metric-row"><span>TurboQuant</span><strong>{interactionStatus?.turboquant_enabled ? `${interactionStatus?.active_cache_type_k || "?"}/${interactionStatus?.active_cache_type_v || "?"}` : "off"}</strong></div>
                       <div className="metric-row"><span>Default language</span><strong>{desiredState?.interaction?.default_response_language || interactionStatus?.default_response_language || "n/a"}</strong></div>
                       <div className="metric-row"><span>Follow user language</span><strong>{yesNo(desiredState?.interaction?.follow_user_language ?? interactionStatus?.follow_user_language)}</strong></div>
                     </div>

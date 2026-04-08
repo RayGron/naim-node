@@ -1,7 +1,9 @@
 #include "app/infer_status_support.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -36,6 +38,10 @@ namespace replica_support = comet::infer::replica_support;
 
 namespace {
 
+bool StringContains(const std::string& haystack, const std::string& needle) {
+  return !needle.empty() && haystack.find(needle) != std::string::npos;
+}
+
 std::string Join(const std::vector<std::string>& values, const std::string& delimiter) {
   std::string joined;
   for (std::size_t index = 0; index < values.size(); ++index) {
@@ -66,6 +72,14 @@ std::vector<std::string> SplitCsv(const std::string& value) {
   return parts;
 }
 
+std::string ResolveExecutablePath(const char* env_name, const char* fallback) {
+  const char* value = std::getenv(env_name);
+  if (value != nullptr && *value != '\0') {
+    return value;
+  }
+  return fallback;
+}
+
 bool CommandExists(const std::string& command) {
   const std::string test = "command -v " + command + " >/dev/null 2>&1";
   return std::system(test.c_str()) == 0;
@@ -73,6 +87,89 @@ bool CommandExists(const std::string& command) {
 
 bool IsLiveRuntimePhase(const std::string& phase) {
   return phase == "starting" || phase == "running" || phase == "stopping";
+}
+
+comet::RuntimeStatus BuildRuntimeStatus(
+    const RuntimeConfig& config,
+    const std::string& backend,
+    const std::string& phase,
+    bool inference_ready,
+    bool gateway_ready,
+    int supervisor_pid,
+    const std::string& started_at);
+
+std::string ShellQuote(const std::string& value) {
+  std::string quoted = "'";
+  for (const char ch : value) {
+    if (ch == '\'') {
+      quoted += "'\\''";
+      continue;
+    }
+    quoted.push_back(ch);
+  }
+  quoted.push_back('\'');
+  return quoted;
+}
+
+std::optional<std::string> CaptureCommandOutput(const std::string& command) {
+  FILE* pipe = popen(command.c_str(), "r");
+  if (pipe == nullptr) {
+    return std::nullopt;
+  }
+  std::string output;
+  std::array<char, 4096> buffer{};
+  while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+    output += buffer.data();
+  }
+  const int rc = pclose(pipe);
+  if (rc != 0 && output.empty()) {
+    return std::nullopt;
+  }
+  return output;
+}
+
+std::optional<std::string> ValidateTurboQuantSupport(const RuntimeConfig& config) {
+  const json active_model = LoadActiveModel(config);
+  if (!active_model.value("turboquant_enabled", false)) {
+    return std::nullopt;
+  }
+  const std::string cache_type_k = active_model.value("active_cache_type_k", std::string{});
+  const std::string cache_type_v = active_model.value("active_cache_type_v", std::string{});
+  const std::string llama_server =
+      ResolveExecutablePath("COMET_LLAMA_SERVER_BIN", "/runtime/infer/bin/llama-server");
+  const auto help_output =
+      CaptureCommandOutput(ShellQuote(llama_server) + " --help 2>&1");
+  if (!help_output.has_value()) {
+    return "failed to inspect llama-server at " + llama_server;
+  }
+  if (!StringContains(*help_output, "--cache-type-k") ||
+      !StringContains(*help_output, "--cache-type-v")) {
+    return "llama-server does not advertise --cache-type-k/--cache-type-v support: " +
+           llama_server;
+  }
+  if (!cache_type_k.empty() && !StringContains(*help_output, cache_type_k)) {
+    return "llama-server help does not mention requested K cache type '" + cache_type_k + "'";
+  }
+  if (!cache_type_v.empty() && !StringContains(*help_output, cache_type_v)) {
+    return "llama-server help does not mention requested V cache type '" + cache_type_v + "'";
+  }
+  return std::nullopt;
+}
+
+void SaveDoctorFailureStatus(
+    const RuntimeConfig& config,
+    const std::string& backend,
+    const std::string& reason,
+    const std::string& detail) {
+  comet::RuntimeStatus status =
+      BuildRuntimeStatus(config, backend, "planned", false, false, 0, "");
+  status.status_reason = reason;
+  status.failure_detail = detail;
+  status.inference_ready = false;
+  status.gateway_ready = false;
+  status.launch_ready = false;
+  status.ready = false;
+  comet::SaveRuntimeStatusJson(status, BuildControlPaths(config).runtime_status_path.string());
 }
 
 json BuildGatewayPayload(const RuntimeConfig& config) {
@@ -140,6 +237,9 @@ comet::RuntimeStatus BuildRuntimeStatus(
   status.active_model_id = active_model.value("model_id", std::string{});
   status.active_served_model_name = active_model.value("served_model_name", std::string{});
   status.active_runtime_profile = active_model.value("runtime_profile", std::string{});
+  status.turboquant_enabled = active_model.value("turboquant_enabled", false);
+  status.active_cache_type_k = active_model.value("active_cache_type_k", std::string{});
+  status.active_cache_type_v = active_model.value("active_cache_type_v", std::string{});
   status.cached_local_model_path = active_model.value(
       "cached_runtime_model_path",
       active_model.value("cached_local_model_path", std::string{}));
@@ -186,6 +286,19 @@ comet::RuntimeStatus MergeWithObservedRuntimeStatus(
   }
   if (!observed->runtime_phase.empty()) {
     status.runtime_phase = observed->runtime_phase;
+  }
+  status.turboquant_enabled = observed->turboquant_enabled || status.turboquant_enabled;
+  if (!observed->active_cache_type_k.empty()) {
+    status.active_cache_type_k = observed->active_cache_type_k;
+  }
+  if (!observed->active_cache_type_v.empty()) {
+    status.active_cache_type_v = observed->active_cache_type_v;
+  }
+  if (!observed->status_reason.empty()) {
+    status.status_reason = observed->status_reason;
+  }
+  if (!observed->failure_detail.empty()) {
+    status.failure_detail = observed->failure_detail;
   }
   status.supervisor_pid = observed->supervisor_pid;
   if (!observed->started_at.empty()) {
@@ -288,6 +401,13 @@ int PrintStatus(const RuntimeConfig& config, const std::string& backend, bool ap
                      "cached_runtime_model_path",
                      active_model.value("cached_local_model_path", std::string{"(empty)"}))
               << "\n";
+    std::cout << "turboquant_enabled=" << (status.turboquant_enabled ? "yes" : "no") << "\n";
+    std::cout << "active_cache_type_k="
+              << (status.active_cache_type_k.empty() ? "(empty)" : status.active_cache_type_k)
+              << "\n";
+    std::cout << "active_cache_type_v="
+              << (status.active_cache_type_v.empty() ? "(empty)" : status.active_cache_type_v)
+              << "\n";
   } else {
     std::cout << "state=(empty)\n";
   }
@@ -315,6 +435,10 @@ int PrintStatus(const RuntimeConfig& config, const std::string& backend, bool ap
   std::cout << "api_endpoints_expected=" << status.api_endpoints_expected << "\n";
   std::cout << "api_endpoints_ready=" << status.api_endpoints_ready << "\n";
   std::cout << "launch_ready=" << (status.launch_ready ? "yes" : "no") << "\n";
+  std::cout << "status_reason="
+            << (status.status_reason.empty() ? "(empty)" : status.status_reason) << "\n";
+  std::cout << "failure_detail="
+            << (status.failure_detail.empty() ? "(empty)" : status.failure_detail) << "\n";
   std::cout << "kv_cache_bytes="
             << (status.kv_cache_bytes.has_value()
                     ? std::to_string(*status.kv_cache_bytes)
@@ -451,6 +575,23 @@ int RunDoctor(const RuntimeConfig& config, const std::string& checks) {
       std::cout << "  " << command << ": " << status << "\n";
       if (status == "FAIL") {
         rc = 1;
+      }
+    }
+    if (const auto turboquant_error = ValidateTurboQuantSupport(config);
+        turboquant_error.has_value()) {
+      std::cout << "  turboquant: FAIL (" << *turboquant_error << ")\n";
+      SaveDoctorFailureStatus(
+          config,
+          "llama-rpc-head",
+          "turboquant_unsupported",
+          *turboquant_error);
+      rc = 1;
+    } else {
+      const json active_model = LoadActiveModel(config);
+      if (active_model.value("turboquant_enabled", false)) {
+        std::cout << "  turboquant: OK ("
+                  << active_model.value("active_cache_type_k", std::string{"(empty)"}) << "/"
+                  << active_model.value("active_cache_type_v", std::string{"(empty)"}) << ")\n";
       }
     }
   }

@@ -439,6 +439,11 @@ comet::RuntimeStatus BuildRuntimeStatus(
       active_model.value("served_model_name", std::string{});
   status.active_runtime_profile =
       active_model.value("runtime_profile", std::string{});
+  status.turboquant_enabled = active_model.value("turboquant_enabled", false);
+  status.active_cache_type_k =
+      active_model.value("active_cache_type_k", std::string{});
+  status.active_cache_type_v =
+      active_model.value("active_cache_type_v", std::string{});
   status.cached_local_model_path =
       active_model.value(
           "cached_runtime_model_path",

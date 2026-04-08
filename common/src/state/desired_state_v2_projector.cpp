@@ -40,6 +40,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
   value_["version"] = 2;
   CollectInstancesAndDisks();
   ProjectIdentity();
+  ProjectFeatures();
   ProjectHooks();
   ProjectModel();
   ProjectTopology();
@@ -70,6 +71,24 @@ void DesiredStateV2Projector::ProjectIdentity() {
   if (state_.protected_plane) {
     value_["protected"] = true;
   }
+}
+
+void DesiredStateV2Projector::ProjectFeatures() {
+  if (!state_.turboquant.has_value()) {
+    return;
+  }
+  nlohmann::json turboquant = {
+      {"enabled", state_.turboquant->enabled},
+  };
+  if (state_.turboquant->cache_type_k.has_value()) {
+    turboquant["cache_type_k"] = *state_.turboquant->cache_type_k;
+  }
+  if (state_.turboquant->cache_type_v.has_value()) {
+    turboquant["cache_type_v"] = *state_.turboquant->cache_type_v;
+  }
+  value_["features"] = {
+      {"turboquant", std::move(turboquant)},
+  };
 }
 
 void DesiredStateV2Projector::ProjectHooks() {

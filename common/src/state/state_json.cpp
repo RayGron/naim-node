@@ -378,6 +378,19 @@ json ToJson(const BrowsingSettings& browsing) {
   return result;
 }
 
+json ToJson(const TurboQuantFeatureSpec& turboquant) {
+  json result = {
+      {"enabled", turboquant.enabled},
+  };
+  if (turboquant.cache_type_k.has_value()) {
+    result["cache_type_k"] = *turboquant.cache_type_k;
+  }
+  if (turboquant.cache_type_v.has_value()) {
+    result["cache_type_v"] = *turboquant.cache_type_v;
+  }
+  return result;
+}
+
 json ToJson(const DiskSpec& disk) {
   return json{
       {"name", disk.name},
@@ -854,6 +867,11 @@ json DesiredStateToJson(const DesiredState& state) {
   if (state.browsing.has_value()) {
     result["webgateway"] = ToJson(*state.browsing);
   }
+  if (state.turboquant.has_value()) {
+    result["features"] = {
+        {"turboquant", ToJson(*state.turboquant)},
+    };
+  }
 
   for (const auto& gpu_node : state.runtime_gpu_nodes) {
     result["runtime_gpu_nodes"].push_back(ToJson(gpu_node));
@@ -963,6 +981,23 @@ DesiredState DesiredStateFromJson(const json& value) {
       browsing.policy = std::move(policy);
     }
     state.browsing = std::move(browsing);
+  }
+  if (value.contains("features") && value.at("features").is_object()) {
+    const auto& features = value.at("features");
+    if (features.contains("turboquant") && features.at("turboquant").is_object()) {
+      TurboQuantFeatureSpec turboquant;
+      const auto& turboquant_json = features.at("turboquant");
+      turboquant.enabled = turboquant_json.value("enabled", turboquant.enabled);
+      if (turboquant_json.contains("cache_type_k") &&
+          !turboquant_json.at("cache_type_k").is_null()) {
+        turboquant.cache_type_k = turboquant_json.at("cache_type_k").get<std::string>();
+      }
+      if (turboquant_json.contains("cache_type_v") &&
+          !turboquant_json.at("cache_type_v").is_null()) {
+        turboquant.cache_type_v = turboquant_json.at("cache_type_v").get<std::string>();
+      }
+      state.turboquant = std::move(turboquant);
+    }
   }
 
   if (value.contains("inference") && value.at("inference").is_object()) {
@@ -1171,6 +1206,7 @@ DesiredState SliceDesiredStateForNode(
   result.interaction = state.interaction;
   result.skills = state.skills;
   result.browsing = state.browsing;
+  result.turboquant = state.turboquant;
   result.inference = state.inference;
   result.worker_group = state.worker_group;
   result.gateway = state.gateway;

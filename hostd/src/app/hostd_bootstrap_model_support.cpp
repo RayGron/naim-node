@@ -10,6 +10,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 #include <sodium.h>
 
@@ -27,6 +28,9 @@ struct BootstrapModelArtifact {
   std::optional<std::string> source_url;
   std::string target_host_path;
 };
+
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
 
 const comet::DiskSpec& RequirePlaneSharedDiskForNode(
     const HostdBootstrapModelSupport::Deps& deps,
@@ -488,23 +492,44 @@ void WriteBootstrapActiveModel(
       runtime_model_path_override.has_value()
           ? *runtime_model_path_override
           : BootstrapRuntimeModelPath(deps, state, target_host_path);
+  std::vector<std::string> llama_args;
+  std::optional<std::string> active_cache_type_k;
+  std::optional<std::string> active_cache_type_v;
+  if (state.turboquant.has_value() && state.turboquant->enabled) {
+    active_cache_type_k = state.turboquant->cache_type_k.value_or(
+        std::string(kTurboQuantDefaultCacheTypeK));
+    active_cache_type_v = state.turboquant->cache_type_v.value_or(
+        std::string(kTurboQuantDefaultCacheTypeV));
+    llama_args = {
+        "--cache-type-k",
+        *active_cache_type_k,
+        "--cache-type-v",
+        *active_cache_type_v,
+    };
+  }
+  json payload{
+      {"version", 1},
+      {"plane_name", state.plane_name},
+      {"model_id", bootstrap_model.model_id},
+      {"source_model_id", bootstrap_model.model_id},
+      {"served_model_name",
+       bootstrap_model.served_model_name.has_value()
+           ? *bootstrap_model.served_model_name
+           : bootstrap_model.model_id},
+      {"local_model_path", target_host_path},
+      {"cached_local_model_path", target_host_path},
+      {"cached_runtime_model_path", runtime_model_path},
+      {"runtime_model_path", runtime_model_path},
+  };
+  if (!llama_args.empty()) {
+    payload["llama_args"] = llama_args;
+    payload["turboquant_enabled"] = true;
+    payload["active_cache_type_k"] = *active_cache_type_k;
+    payload["active_cache_type_v"] = *active_cache_type_v;
+  }
   deps.write_text_file(
       ActiveModelPathForNode(deps, state, node_name),
-      json{
-          {"version", 1},
-          {"plane_name", state.plane_name},
-          {"model_id", bootstrap_model.model_id},
-          {"source_model_id", bootstrap_model.model_id},
-          {"served_model_name",
-           bootstrap_model.served_model_name.has_value()
-               ? *bootstrap_model.served_model_name
-               : bootstrap_model.model_id},
-          {"local_model_path", target_host_path},
-          {"cached_local_model_path", target_host_path},
-          {"cached_runtime_model_path", runtime_model_path},
-          {"runtime_model_path", runtime_model_path},
-      }
-          .dump(2));
+      payload.dump(2));
 }
 
 }  // namespace

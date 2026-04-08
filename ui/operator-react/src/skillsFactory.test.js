@@ -171,6 +171,38 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.browserSessionEnabled).toBe(true);
   });
 
+  it("round-trips turboquant capability through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "turboquant-plane";
+    form.modelPath = "/models/qwen";
+    form.turboquantEnabled = true;
+    form.turboquantCacheTypeK = "planar3";
+    form.turboquantCacheTypeV = "f16";
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features).toEqual({
+      turboquant: {
+        enabled: true,
+        cache_type_k: "planar3",
+        cache_type_v: "f16",
+      },
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.turboquantEnabled).toBe(true);
+    expect(reparsed.turboquantCacheTypeK).toBe("planar3");
+    expect(reparsed.turboquantCacheTypeV).toBe("f16");
+  });
+
+  it("does not serialize turboquant for compute planes", () => {
+    const form = buildNewPlaneFormState();
+    form.planeMode = "compute";
+    form.turboquantEnabled = true;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features).toBeUndefined();
+  });
+
   it("warns when browser sessions are enabled without browsing", () => {
     const form = buildNewPlaneFormState();
     form.modelPath = "/models/qwen";
@@ -216,6 +248,7 @@ describe("PlaneEditorDialog", () => {
 
     expect(html).toContain("New plane");
     expect(html).toContain("Isolated Browsing");
+    expect(html).toContain("TurboQuant");
     expect(html).toContain("Generated JSON");
     expect(html).not.toContain("Runtime engine");
   });

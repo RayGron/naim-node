@@ -16,6 +16,7 @@ class DesiredStateV2Renderer final {
   DesiredState RenderState();
 
   void RenderIdentity();
+  void RenderFeatures();
   void RenderHooks();
   void RenderModel();
   void RenderInteraction();
@@ -87,6 +88,7 @@ class DesiredStateV2Renderer final {
   nlohmann::json app_json_;
   nlohmann::json skills_json_;
   nlohmann::json browsing_json_;
+  nlohmann::json features_json_;
   std::vector<std::string> infer_names_;
 };
 

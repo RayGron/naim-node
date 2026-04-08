@@ -754,7 +754,10 @@ nlohmann::json DashboardService::BuildPayload(
       nodes_payload.ready_nodes,
       nodes_payload.not_ready_nodes,
       nodes_payload.degraded_gpu_nodes,
-      nodes_payload.kv_cache_bytes);
+      nodes_payload.kv_cache_bytes,
+      nodes_payload.turboquant_enabled,
+      nodes_payload.active_cache_type_k,
+      nodes_payload.active_cache_type_v);
   payload["skills"] = PlaneDashboardSkillsSummaryService::BuildPayload(
       *view.desired_state,
       store.LoadPlaneSkillBindings(view.desired_state->plane_name, std::nullopt));
@@ -1050,7 +1053,10 @@ json DashboardService::BuildRuntimePayload(
     int ready_nodes,
     int not_ready_nodes,
     int degraded_gpu_nodes,
-    const std::optional<std::uint64_t>& kv_cache_bytes) {
+    const std::optional<std::uint64_t>& kv_cache_bytes,
+    bool turboquant_enabled,
+    const std::string& active_cache_type_k,
+    const std::string& active_cache_type_v) {
   return json{
       {"observed_nodes", observed_nodes},
       {"ready_nodes", ready_nodes},
@@ -1058,6 +1064,11 @@ json DashboardService::BuildRuntimePayload(
       {"degraded_gpu_telemetry_nodes", degraded_gpu_nodes},
       {"kv_cache_bytes",
        kv_cache_bytes.has_value() ? json(*kv_cache_bytes) : json(nullptr)},
+      {"turboquant_enabled", turboquant_enabled},
+      {"active_cache_type_k",
+       active_cache_type_k.empty() ? json(nullptr) : json(active_cache_type_k)},
+      {"active_cache_type_v",
+       active_cache_type_v.empty() ? json(nullptr) : json(active_cache_type_v)},
   };
 }
 
@@ -1179,9 +1190,29 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
           runtime_status->kv_cache_bytes.has_value()
               ? json(*runtime_status->kv_cache_bytes)
               : json(nullptr);
+      item["turboquant_enabled"] = runtime_status->turboquant_enabled;
+      item["active_cache_type_k"] =
+          runtime_status->active_cache_type_k.empty()
+              ? json(nullptr)
+              : json(runtime_status->active_cache_type_k);
+      item["active_cache_type_v"] =
+          runtime_status->active_cache_type_v.empty()
+              ? json(nullptr)
+              : json(runtime_status->active_cache_type_v);
       if (runtime_status->kv_cache_bytes.has_value()) {
         payload.kv_cache_bytes =
             payload.kv_cache_bytes.value_or(0) + *runtime_status->kv_cache_bytes;
+      }
+      if (runtime_status->turboquant_enabled) {
+        payload.turboquant_enabled = true;
+      }
+      if (payload.active_cache_type_k.empty() &&
+          !runtime_status->active_cache_type_k.empty()) {
+        payload.active_cache_type_k = runtime_status->active_cache_type_k;
+      }
+      if (payload.active_cache_type_v.empty() &&
+          !runtime_status->active_cache_type_v.empty()) {
+        payload.active_cache_type_v = runtime_status->active_cache_type_v;
       }
       if (runtime_status->launch_ready) {
         ++payload.ready_nodes;
@@ -1204,6 +1235,9 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
             fallback.runtime_phase.empty() ? json(nullptr)
                                            : json(fallback.runtime_phase);
         item["kv_cache_bytes"] = nullptr;
+        item["turboquant_enabled"] = nullptr;
+        item["active_cache_type_k"] = nullptr;
+        item["active_cache_type_v"] = nullptr;
         if (fallback.launch_ready) {
           ++payload.ready_nodes;
         } else {
@@ -1213,6 +1247,9 @@ DashboardService::NodesPayload DashboardService::BuildNodesPayload(
         item["runtime_launch_ready"] = nullptr;
         item["runtime_phase"] = nullptr;
         item["kv_cache_bytes"] = nullptr;
+        item["turboquant_enabled"] = nullptr;
+        item["active_cache_type_k"] = nullptr;
+        item["active_cache_type_v"] = nullptr;
         ++payload.not_ready_nodes;
       }
     }
