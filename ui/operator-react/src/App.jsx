@@ -3962,6 +3962,7 @@ function App() {
           const storageEnabled = registry?.storage_role_enabled === true;
           const storageEligible = registry?.storage_role_eligible !== false;
           const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
+          const canManageStorageRole = authState.user?.role === "admin";
           return (
             <article className="node-card" key={host?.node_name || host?.observed_at}>
               <div className="card-row">
@@ -3988,10 +3989,16 @@ function App() {
                   <button
                     className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
                     type="button"
-                    disabled={storageBusy || (!storageEnabled && !storageEligible)}
+                    disabled={
+                      storageBusy ||
+                      !canManageStorageRole ||
+                      (!storageEnabled && !storageEligible)
+                    }
                     onClick={() => setHostStorageRole(registry, !storageEnabled)}
                     title={
-                      storageEligible
+                      !canManageStorageRole
+                        ? "Admin role required"
+                        : storageEligible
                         ? "Toggle model storage role"
                         : "Host has not reported a usable storage root yet"
                     }

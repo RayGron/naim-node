@@ -72,6 +72,17 @@ bool IsPlaneBrowsingRequest(const std::string& path) {
   return ExtractPlaneFeatureRequestName(path, "/webgateway").has_value();
 }
 
+bool IsHostdStorageRoleRequest(const std::string& path) {
+  if (!ControllerHttpServerSupport::StartsWithPath(
+          path,
+          "/api/v1/hostd/hosts/")) {
+    return false;
+  }
+  const auto suffix_pos = path.rfind("/storage-role");
+  return suffix_pos != std::string::npos &&
+         suffix_pos + std::string("/storage-role").size() == path.size();
+}
+
 int InteractionErrorStatusCode(const InteractionValidationError& error) {
   if (error.code == "model_mismatch" ||
       error.code == "skills_disabled" ||
@@ -628,6 +639,27 @@ HttpResponse ControllerHttpRouter::HandleRequest(
         200,
         health_service_.BuildPayload(db_path_),
           {});
+  }
+  if (IsHostdStorageRoleRequest(request.path)) {
+    try {
+      naim::ControllerStore store(db_path_);
+      store.Initialize();
+      if (!auth_support_.RequireControllerAdminUser(store, request).has_value()) {
+        return deps_.build_json_response(
+            401,
+            json{{"status", "unauthorized"},
+                 {"message", "admin authentication required"}},
+            {{"Set-Cookie",
+              auth_support_.ClearSessionCookieHeader(request)}});
+      }
+    } catch (const std::exception& error) {
+      return deps_.build_json_response(
+          500,
+          json{{"status", "internal_error"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
   }
   for (const auto& handler : pre_auth_handlers_) {
     if (const auto response =
