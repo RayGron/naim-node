@@ -57,6 +57,9 @@ remote_main_bash \
   "${web_ui_image}" \
   "${NAIM_MAIN_CONTROLLER_LOCAL_PORT}" \
   "${NAIM_MAIN_WEB_UI_LOCAL_PORT}" \
+  "${NAIM_WEBAUTHN_RP_ID}" \
+  "${NAIM_WEBAUTHN_ORIGIN}" \
+  "${NAIM_WEBAUTHN_RP_NAME}" \
   "${skip_pull}" <<'REMOTE'
 set -euo pipefail
 
@@ -65,7 +68,10 @@ controller_image="$2"
 web_ui_image="$3"
 controller_local_port="$4"
 web_ui_local_port="$5"
-skip_pull="$6"
+webauthn_rp_id="$6"
+webauthn_origin="$7"
+webauthn_rp_name="$8"
+skip_pull="$9"
 
 sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" "${main_root}"
 sudo install -d -m 0750 -o "$(id -un)" -g "$(id -gn)" \
@@ -97,6 +103,10 @@ services:
       - http://naim-skills-factory:18082
     ports:
       - "127.0.0.1:${controller_local_port}:18080"
+    environment:
+      NAIM_WEBAUTHN_RP_ID: "${webauthn_rp_id}"
+      NAIM_WEBAUTHN_ORIGIN: "${webauthn_origin}"
+      NAIM_WEBAUTHN_RP_NAME: "${webauthn_rp_name}"
     volumes:
       - ${main_root}/state:/naim/state
       - ${main_root}/artifacts:/naim/artifacts

@@ -11,10 +11,16 @@
     respond @health "ok" 200
 
     @events path /api/v1/events/stream*
-    reverse_proxy @events {$NAIM_CONTROLLER_UPSTREAM}
+    reverse_proxy @events {$NAIM_CONTROLLER_UPSTREAM} {
+      header_up X-Forwarded-Proto {http.request.header.X-Forwarded-Proto}
+      header_up X-Forwarded-Host {host}
+    }
 
     @api path /api/*
-    reverse_proxy @api {$NAIM_CONTROLLER_UPSTREAM}
+    reverse_proxy @api {$NAIM_CONTROLLER_UPSTREAM} {
+      header_up X-Forwarded-Proto {http.request.header.X-Forwarded-Proto}
+      header_up X-Forwarded-Host {host}
+    }
 
     try_files {path} /index.html
     file_server
