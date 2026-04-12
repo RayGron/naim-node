@@ -42,6 +42,34 @@ class RecordingHostdBackend final : public naim::hostd::HostdBackend {
     return true;
   }
 
+  nlohmann::json RequestModelArtifactChunk(
+      const std::string&,
+      const std::string&,
+      const std::string&,
+      std::uintmax_t,
+      std::uintmax_t) override {
+    return nlohmann::json::object();
+  }
+
+  nlohmann::json LoadModelArtifactChunk(
+      const std::string&,
+      int) override {
+    return nlohmann::json::object();
+  }
+
+  nlohmann::json RequestModelArtifactManifest(
+      const std::string&,
+      const std::string&,
+      const std::vector<std::string>&) override {
+    return nlohmann::json::object();
+  }
+
+  nlohmann::json LoadModelArtifactManifest(
+      const std::string&,
+      int) override {
+    return nlohmann::json::object();
+  }
+
   void UpsertHostObservation(const naim::HostObservation&) override {}
 
   void AppendEvent(const naim::EventRecord& event) override {

@@ -78,10 +78,10 @@ void DesiredStateV2Projector::ProjectPlacement() {
   if (state_.placement_target.has_value() && !state_.placement_target->empty()) {
     constexpr std::string_view kNodePrefix = "node:";
     if (state_.placement_target->rfind(kNodePrefix, 0) == 0) {
-      placement["primary_node"] = state_.placement_target->substr(kNodePrefix.size());
+      placement["execution_node"] = state_.placement_target->substr(kNodePrefix.size());
     }
   } else if (!state_.nodes.empty()) {
-    placement["primary_node"] = DefaultNodeName();
+    placement["execution_node"] = DefaultNodeName();
   }
   if (state_.app_host.has_value()) {
     nlohmann::json app_host = {
@@ -125,6 +125,12 @@ void DesiredStateV2Projector::ProjectModel() {
   };
   if (model.local_path.has_value() && !model.local_path->empty()) {
     model_json["materialization"]["local_path"] = *model.local_path;
+  }
+  if (model.source_node_name.has_value() && !model.source_node_name->empty()) {
+    model_json["materialization"]["source_node_name"] = *model.source_node_name;
+  }
+  if (!model.source_paths.empty()) {
+    model_json["materialization"]["source_paths"] = model.source_paths;
   }
   if (model.served_model_name.has_value() && !model.served_model_name->empty()) {
     model_json["served_model_name"] = *model.served_model_name;

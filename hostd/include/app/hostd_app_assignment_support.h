@@ -9,6 +9,7 @@
 
 #include "app/hostd_bootstrap_model_support_factory.h"
 #include "app/hostd_app_observation_support.h"
+#include "app/hostd_bootstrap_transfer_support.h"
 #include "app/hostd_command_support.h"
 #include "app/hostd_compose_runtime_support.h"
 #include "app/hostd_desired_state_apply_plan_support.h"
@@ -77,6 +78,21 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
       const std::optional<int>& desired_generation,
       const std::optional<int>& assignment_id,
       HostdBackend* backend) const override;
+  void DownloadModelLibraryArtifacts(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const override;
+  void ReadModelArtifactChunk(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const override;
+  void BuildModelArtifactManifest(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const override;
   void ShowDemoOps(
       const std::string& node_name,
       const std::string& storage_root,
@@ -114,6 +130,7 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
   HostdDesiredStateApplyPlanSupport apply_plan_support_;
   HostdPostDeploySupport post_deploy_support_;
   HostdReportingSupport reporting_support_;
+  HostdBootstrapTransferSupport model_library_transfer_support_;
   HostdBootstrapModelSupportFactory bootstrap_model_support_factory_;
   HostdBootstrapModelSupport bootstrap_model_support_;
   HostdDesiredStateDisplaySupport display_support_;

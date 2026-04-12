@@ -72,6 +72,12 @@ json StateJsonSettingsCodecs::ToJson(
   if (bootstrap_model.local_path.has_value()) {
     result["local_path"] = *bootstrap_model.local_path;
   }
+  if (bootstrap_model.source_node_name.has_value()) {
+    result["source_node_name"] = *bootstrap_model.source_node_name;
+  }
+  if (!bootstrap_model.source_paths.empty()) {
+    result["source_paths"] = bootstrap_model.source_paths;
+  }
   if (bootstrap_model.source_url.has_value()) {
     result["source_url"] = *bootstrap_model.source_url;
   }
@@ -201,6 +207,12 @@ BootstrapModelSpec StateJsonSettingsCodecs::BootstrapModelSpecFromJson(
   }
   if (value.contains("local_path") && !value.at("local_path").is_null()) {
     bootstrap_model.local_path = value.at("local_path").get<std::string>();
+  }
+  if (value.contains("source_node_name") && !value.at("source_node_name").is_null()) {
+    bootstrap_model.source_node_name = value.at("source_node_name").get<std::string>();
+  }
+  if (value.contains("source_paths") && value.at("source_paths").is_array()) {
+    bootstrap_model.source_paths = value.at("source_paths").get<std::vector<std::string>>();
   }
   if (value.contains("source_url") && !value.at("source_url").is_null()) {
     bootstrap_model.source_url = value.at("source_url").get<std::string>();

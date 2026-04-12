@@ -330,6 +330,35 @@ std::optional<int> ControllerCli::TryRun() const {
         command_line_.message());
   }
 
+  if (command == "reset-hostd-onboarding") {
+    const auto node_name = command_line_.node();
+    if (!node_name.has_value()) {
+      return MissingRequired("--node");
+    }
+    return host_registry_service_.ResetHostOnboarding(
+        *node_name,
+        command_line_.message());
+  }
+
+  if (command == "set-hostd-storage-role") {
+    const auto node_name = command_line_.node();
+    if (!node_name.has_value()) {
+      return MissingRequired("--node");
+    }
+    const auto status = command_line_.status();
+    if (!status.has_value()) {
+      return MissingRequired("--status");
+    }
+    if (*status != "enabled" && *status != "disabled") {
+      std::cerr << "error: --status must be enabled or disabled\n";
+      return 1;
+    }
+    return host_registry_service_.SetHostStorageRole(
+        *node_name,
+        *status == "enabled",
+        command_line_.message());
+  }
+
   if (command == "ensure-web-ui") {
     return web_ui_service_.Ensure(
         WebUiService::ResolveWebUiRoot(command_line_.web_ui_root()),

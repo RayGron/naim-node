@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS registered_hosts (
     onboarding_state TEXT NOT NULL DEFAULT 'none',
     derived_role TEXT NOT NULL DEFAULT 'ineligible',
     role_reason TEXT NOT NULL DEFAULT '',
+    storage_role_enabled INTEGER NOT NULL DEFAULT 0,
     last_inventory_scan_at TEXT NOT NULL DEFAULT '',
     session_state TEXT NOT NULL DEFAULT 'disconnected',
     session_token TEXT NOT NULL DEFAULT '',

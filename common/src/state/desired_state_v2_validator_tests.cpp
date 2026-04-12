@@ -1422,11 +1422,11 @@ int main() {
         "exclusive-share-mode-requires-full-gpu");
 
     {
-      const json placement_primary_node{
+      const json placement_execution_node{
           {"version", 2},
-          {"plane_name", "placement-primary-node"},
+          {"plane_name", "placement-execution-node"},
           {"plane_mode", "llm"},
-          {"placement", {{"primary_node", "remote-worker-a"}}},
+          {"placement", {{"execution_node", "remote-worker-a"}}},
           {"model",
            {
                {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
@@ -1438,30 +1438,49 @@ int main() {
           {"infer", {{"replicas", 1}}},
           {"app", {{"enabled", false}}},
       };
-      const auto state = RenderValid(placement_primary_node, "placement-primary-node");
+      const auto state = RenderValid(placement_execution_node, "placement-execution-node");
       Expect(state.placement_target == std::optional<std::string>("node:remote-worker-a"),
-             "placement-primary-node: placement_target should render from placement.primary_node");
+             "placement-execution-node: placement_target should render from placement.execution_node");
       Expect(!state.nodes.empty() && state.nodes.front().name == "remote-worker-a",
-             "placement-primary-node: renderer should synthesize node inventory");
+             "placement-execution-node: renderer should synthesize node inventory");
       const auto projected = naim::DesiredStateV2Projector::Project(state);
       Expect(projected.contains("placement") && projected.at("placement").is_object(),
-             "placement-primary-node: projector should emit placement block");
-      Expect(projected.at("placement").at("primary_node").get<std::string>() == "remote-worker-a",
-             "placement-primary-node: projector primary_node mismatch");
+             "placement-execution-node: projector should emit placement block");
+      Expect(projected.at("placement").at("execution_node").get<std::string>() == "remote-worker-a",
+             "placement-execution-node: projector execution_node mismatch");
       Expect(!projected.contains("topology"),
-             "placement-primary-node: projector should suppress topology when placement_target is set");
+             "placement-execution-node: projector should suppress topology when placement_target is set");
       const auto persisted = naim::DeserializeDesiredStateJson(
           naim::SerializeDesiredStateJson(state));
       Expect(
           persisted.placement_target == std::optional<std::string>("node:remote-worker-a"),
-          "placement-primary-node: placement_target should survive desired-state persistence");
+          "placement-execution-node: placement_target should survive desired-state persistence");
       const auto persisted_v2 = naim::DeserializeDesiredStateJson(
           naim::SerializeDesiredStateV2Json(state));
       Expect(persisted_v2.plane_name == state.plane_name,
-             "placement-primary-node: v2 persistence should preserve plane_name");
+             "placement-execution-node: v2 persistence should preserve plane_name");
       Expect(!persisted_v2.nodes.empty(),
-             "placement-primary-node: v2 persistence should preserve nodes");
-      std::cout << "ok: placement-primary-node" << '\n';
+             "placement-execution-node: v2 persistence should preserve nodes");
+      std::cout << "ok: placement-execution-node" << '\n';
+    }
+
+    {
+      const json legacy_placement_primary_node_alias{
+          {"version", 2},
+          {"plane_name", "legacy-placement-primary-node-alias"},
+          {"plane_mode", "compute"},
+          {"placement", {{"primary_node", "remote-worker-a"}}},
+          {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+      };
+      const auto state = RenderValid(
+          legacy_placement_primary_node_alias,
+          "legacy-placement-primary-node-alias");
+      Expect(state.placement_target == std::optional<std::string>("node:remote-worker-a"),
+             "legacy placement.primary_node alias should still render");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("placement").at("execution_node").get<std::string>() == "remote-worker-a",
+             "legacy placement.primary_node alias should project as execution_node");
+      std::cout << "ok: legacy-placement-primary-node-alias" << '\n';
     }
 
     {
@@ -1519,7 +1538,7 @@ int main() {
             {"version", 2},
             {"plane_name", "bad-legacy-infer-node-without-topology"},
             {"plane_mode", "llm"},
-            {"placement", {{"primary_node", "worker-a"}}},
+            {"placement", {{"execution_node", "worker-a"}}},
             {"model",
              {
                  {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
@@ -1536,7 +1555,7 @@ int main() {
             {"version", 2},
             {"plane_name", "bad-legacy-worker-assignments-without-topology"},
             {"plane_mode", "compute"},
-            {"placement", {{"primary_node", "worker-a"}}},
+            {"placement", {{"execution_node", "worker-a"}}},
             {"runtime", {{"engine", "custom"}, {"workers", 1}}},
             {"worker", {{"assignments", json::array({{{"node", "worker-a"}, {"gpu_device", "0"}}})}}},
         },
@@ -1548,7 +1567,7 @@ int main() {
           {"plane_name", "placement-app-host"},
           {"plane_mode", "llm"},
           {"placement",
-           {{"primary_node", "worker-a"},
+           {{"execution_node", "worker-a"},
             {"app_host", {{"address", "10.0.0.15"}, {"ssh_key_path", "/tmp/id_ed25519"}}}}},
           {"model",
            {
@@ -1600,7 +1619,7 @@ int main() {
             {"plane_name", "bad-app-host-auth"},
             {"plane_mode", "compute"},
             {"placement",
-             {{"primary_node", "worker-a"},
+             {{"execution_node", "worker-a"},
               {"app_host",
                {{"address", "10.0.0.15"},
                 {"ssh_key_path", "/tmp/id_ed25519"},

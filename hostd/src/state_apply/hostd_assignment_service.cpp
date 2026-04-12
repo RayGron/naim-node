@@ -146,6 +146,85 @@ void HostdAssignmentService::ApplyNextAssignment(
       assignment->status_message.empty() ? "" : " [" + assignment->status_message + "]";
 
   try {
+    if (assignment->assignment_type == "model-library-download") {
+      support_.PublishAssignmentProgress(
+          backend.get(),
+          assignment->id,
+          support_.BuildAssignmentProgressPayload(
+              "starting",
+              "Starting model download",
+              "Storage node accepted the model library download assignment.",
+              5,
+              assignment->plane_name,
+              node_name));
+      support_.DownloadModelLibraryArtifacts(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      support_.PublishAssignmentProgress(
+          backend.get(),
+          assignment->id,
+          support_.BuildAssignmentProgressPayload(
+              "completed",
+              "Model download completed",
+              "Storage node finished the model library download assignment.",
+              100,
+              assignment->plane_name,
+              node_name));
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "downloaded model library artifacts on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      support_.AppendHostdEvent(
+          *backend,
+          "model-library",
+          "downloaded",
+          "downloaded model library artifacts on node " + node_name,
+          nlohmann::json{
+              {"assignment_type", assignment->assignment_type},
+              {"attempt_count", assignment->attempt_count},
+              {"max_attempts", assignment->max_attempts},
+          },
+          assignment->plane_name,
+          node_name,
+          "",
+          assignment->id,
+          std::nullopt,
+          "info");
+      return;
+    }
+    if (assignment->assignment_type == "model-artifact-read-chunk") {
+      support_.ReadModelArtifactChunk(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "read model artifact chunk on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      return;
+    }
+    if (assignment->assignment_type == "model-artifact-build-manifest") {
+      support_.BuildModelArtifactManifest(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "built model artifact manifest on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      return;
+    }
+
     if (assignment->assignment_type != "apply-node-state" &&
         assignment->assignment_type != "drain-node-state" &&
         assignment->assignment_type != "stop-plane-state" &&

@@ -36,6 +36,24 @@ class HostRegistryService : public IHostRegistryService {
       const std::string& public_key_base64,
       const std::optional<std::string>& status_message) const override;
 
+  nlohmann::json ResetHostOnboardingPayload(
+      const std::string& node_name,
+      const std::optional<std::string>& status_message) const;
+
+  int ResetHostOnboarding(
+      const std::string& node_name,
+      const std::optional<std::string>& status_message) const override;
+
+  nlohmann::json SetHostStorageRolePayload(
+      const std::string& node_name,
+      bool enabled,
+      const std::optional<std::string>& status_message) const;
+
+  int SetHostStorageRole(
+      const std::string& node_name,
+      bool enabled,
+      const std::optional<std::string>& status_message) const override;
+
  private:
   std::string db_path_;
   HostRegistryEventSink event_sink_;

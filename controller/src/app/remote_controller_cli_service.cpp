@@ -139,8 +139,41 @@ int RemoteControllerCliService::ExecuteCommand(
         target,
         "POST",
         "/api/v1/hostd/hosts/" + ControllerHttpServerSupport::UrlEncode(*node_name) +
-            "/rotate-key",
+        "/rotate-key",
         {{"public_key_base64", *public_key}, {"message", message.value_or("")}}));
+  }
+  if (command == "reset-hostd-onboarding") {
+    if (!node_name.has_value()) {
+      std::cerr << "error: --node is required\n";
+      return 1;
+    }
+    return EmitRemoteJsonPayload(SendControllerJsonRequest(
+        target,
+        "POST",
+        "/api/v1/hostd/hosts/" + ControllerHttpServerSupport::UrlEncode(*node_name) +
+        "/reset-onboarding",
+        {{"message", message.value_or("")}}));
+  }
+  if (command == "set-hostd-storage-role") {
+    if (!node_name.has_value()) {
+      std::cerr << "error: --node is required\n";
+      return 1;
+    }
+    if (!status.has_value()) {
+      std::cerr << "error: --status is required\n";
+      return 1;
+    }
+    if (*status != "enabled" && *status != "disabled") {
+      std::cerr << "error: --status must be enabled or disabled\n";
+      return 1;
+    }
+    return EmitRemoteJsonPayload(SendControllerJsonRequest(
+        target,
+        "POST",
+        "/api/v1/hostd/hosts/" + ControllerHttpServerSupport::UrlEncode(*node_name) +
+            "/storage-role",
+        {{"enabled", *status == "enabled" ? "true" : "false"},
+         {"message", message.value_or("")}}));
   }
   if (command == "show-host-assignments") {
     return EmitRemoteJsonPayload(SendControllerJsonRequest(

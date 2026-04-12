@@ -151,6 +151,12 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
       if (summary.storage_root.empty()) {
         continue;
       }
+      if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
+              summary.derived_role,
+              summary.storage_role_enabled,
+              false)) {
+        continue;
+      }
       if (NormalizePathString(std::filesystem::path(summary.storage_root)) == entry.root) {
         node_name = candidate_node_name;
         break;
@@ -192,7 +198,9 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
         {"role_eligible",
          ModelLibraryNodePlacement::AllowsModelPlacementRole(
              summary.derived_role,
+             summary.storage_role_enabled,
              false)},
+        {"storage_role_enabled", summary.storage_role_enabled},
         {"role_reason", summary.role_reason.empty() ? json(nullptr) : json(summary.role_reason)},
         {"storage_root", summary.storage_root.empty() ? json(nullptr) : json(summary.storage_root)},
         {"storage_total_bytes",
@@ -354,11 +362,12 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     }
     if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
             summary.derived_role,
+            summary.storage_role_enabled,
             false)) {
       return support_.build_json_response(
           409,
           json{{"status", "conflict"},
-               {"message", "target_node_name must have derived_role storage or worker"}},
+               {"message", "target_node_name must have storage role enabled or derived_role storage/worker"}},
           {});
     }
     if (summary.storage_root.empty() || !IsUsableAbsoluteHostPath(summary.storage_root)) {
@@ -435,6 +444,13 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   try {
     if (detected_source_format == "safetensors" &&
         desired_output_format == "gguf") {
+      if (!target_node_name.empty()) {
+        return support_.build_json_response(
+            400,
+            json{{"status", "bad_request"},
+                 {"message", "storage-node downloads cannot run safetensors-to-GGUF conversion yet"}},
+            {});
+      }
       const std::string job_id = GenerateJobId();
       const std::filesystem::path staging_directory =
           destination_root /
@@ -515,6 +531,39 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   job.created_at = support_.utc_now_sql_timestamp();
   job.updated_at = job.created_at;
   store.UpsertModelLibraryDownloadJob(job);
+  if (!target_node_name.empty()) {
+    naim::HostAssignment assignment;
+    assignment.node_name = target_node_name;
+    assignment.plane_name = "model-library:" + job_id;
+    assignment.desired_generation = 0;
+    assignment.max_attempts = 3;
+    assignment.assignment_type = "model-library-download";
+    assignment.desired_state_json =
+        json{
+            {"job_id", job_id},
+            {"model_id", model_id},
+            {"source_urls", source_urls},
+            {"target_paths", target_paths},
+            {"target_root", job.target_root},
+            {"target_subdir", target_subdir},
+        }
+            .dump();
+    assignment.artifacts_root = job.target_root;
+    assignment.status_message = "queued model library download";
+    assignment.progress_json =
+        json{{"phase", "queued"},
+             {"title", "Model download queued"},
+             {"detail", "Waiting for storage node to claim the download assignment."},
+             {"percent", 0}}
+            .dump();
+    store.EnqueueHostAssignments(
+        {assignment},
+        "superseded by a newer model library download assignment");
+    return support_.build_json_response(
+        202,
+        json{{"status", "accepted"}, {"job", BuildJobPayload(job)}},
+        {});
+  }
   PersistDownloadJobMetadata(job);
   StartDownloadJob(db_path, job_id);
   return support_.build_json_response(
@@ -631,6 +680,7 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
     }
     if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
             source_node_summary->derived_role,
+            source_node_summary->storage_role_enabled,
             true)) {
       return support_.build_json_response(
           409,
@@ -1219,6 +1269,12 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
   std::set<std::string> roots;
   for (const auto& host : store.LoadRegisteredHosts()) {
     const auto summary = ModelLibraryNodePlacement::BuildSummary(host);
+    if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
+            summary.derived_role,
+            summary.storage_role_enabled,
+            false)) {
+      continue;
+    }
     if (IsUsableAbsoluteHostPath(summary.storage_root)) {
       roots.insert(NormalizePathString(std::filesystem::path(summary.storage_root)));
     }
@@ -1582,6 +1638,9 @@ void ModelLibraryService::ResumePersistentJobs(const std::string& db_path) const
   naim::ControllerStore store(db_path);
   store.Initialize();
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (!job.node_name.empty()) {
+      continue;
+    }
     if (job.status == "queued" || job.status == "running") {
       StartDownloadJob(db_path, job.id);
     }
@@ -1807,6 +1866,122 @@ ModelLibraryService::ScanEntries(const std::string& db_path) const {
       }
       entries_by_path[entry.path] = std::move(entry);
     }
+  }
+
+  for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (job.status != "completed" || job.node_name.empty()) {
+      continue;
+    }
+    const auto job_paths =
+        job.retained_output_paths.empty() ? job.target_paths : job.retained_output_paths;
+    if (job_paths.empty()) {
+      continue;
+    }
+    std::vector<std::string> normalized_paths;
+    normalized_paths.reserve(job_paths.size());
+    for (const auto& path_text : job_paths) {
+      if (!IsUsableAbsoluteHostPath(path_text)) {
+        continue;
+      }
+      normalized_paths.push_back(NormalizePathString(std::filesystem::path(path_text)));
+    }
+    if (normalized_paths.empty()) {
+      continue;
+    }
+    std::sort(normalized_paths.begin(), normalized_paths.end());
+    normalized_paths.erase(
+        std::unique(normalized_paths.begin(), normalized_paths.end()),
+        normalized_paths.end());
+
+    const std::filesystem::path first_path(normalized_paths.front());
+    const std::string root =
+        IsUsableAbsoluteHostPath(job.target_root)
+            ? NormalizePathString(std::filesystem::path(job.target_root))
+            : NormalizePathString(first_path.parent_path());
+    const auto size_bytes =
+        job.bytes_total.has_value()
+            ? static_cast<std::uintmax_t>(*job.bytes_total)
+            : static_cast<std::uintmax_t>(job.bytes_done);
+
+    if (normalized_paths.size() > 1) {
+      std::string multipart_prefix;
+      int part_index = 0;
+      int part_total = 0;
+      const bool multipart =
+          ParseMultipartGgufFilename(
+              first_path.filename().string(),
+              &multipart_prefix,
+              &part_index,
+              &part_total);
+      const std::string group_key =
+          multipart
+              ? NormalizePathString(first_path.parent_path() / multipart_prefix)
+              : normalized_paths.front();
+      if (entries_by_path.count(group_key) != 0) {
+        continue;
+      }
+      ModelLibraryEntry entry;
+      entry.path = normalized_paths.front();
+      entry.name = multipart ? multipart_prefix : first_path.filename().string();
+      entry.kind = multipart ? "multipart-gguf" : "file";
+      entry.format = "gguf";
+      entry.root = root;
+      entry.paths = normalized_paths;
+      entry.size_bytes = size_bytes;
+      entry.part_count = static_cast<int>(normalized_paths.size());
+      entry.quantization = DetectEntryQuantization(
+          multipart ? multipart_prefix : first_path.stem().string());
+      bool referenced = false;
+      for (const auto& path : normalized_paths) {
+        if (const auto reference_it = reference_map.find(path);
+            reference_it != reference_map.end()) {
+          referenced = true;
+          entry.referenced_by.insert(
+              entry.referenced_by.end(),
+              reference_it->second.begin(),
+              reference_it->second.end());
+        }
+      }
+      if (referenced) {
+        std::sort(entry.referenced_by.begin(), entry.referenced_by.end());
+        entry.referenced_by.erase(
+            std::unique(entry.referenced_by.begin(), entry.referenced_by.end()),
+            entry.referenced_by.end());
+        entry.deletable = false;
+      }
+      entries_by_path[group_key] = std::move(entry);
+      continue;
+    }
+
+    const std::string normalized_path = normalized_paths.front();
+    if (entries_by_path.count(normalized_path) != 0) {
+      continue;
+    }
+    ModelLibraryEntry entry;
+    entry.path = normalized_path;
+    entry.name = first_path.filename().string();
+    entry.kind = "file";
+    entry.format = EndsWithIgnoreCase(entry.name, ".gguf") ? "gguf" : job.desired_output_format;
+    if (entry.format.empty()) {
+      entry.format = "unknown";
+    }
+    entry.root = root;
+    entry.paths = {normalized_path};
+    entry.size_bytes = size_bytes;
+    entry.quantization =
+        entry.format == "gguf" ? DetectEntryQuantization(first_path.stem().string()) : "base";
+    if (entry.quantization != "base") {
+      entry.quantized_from_path =
+          NormalizePathString(
+              first_path.parent_path() /
+              (StripKnownQuantizationSuffix(first_path.stem().string()) + ".gguf"));
+    }
+    if (const auto reference_it = reference_map.find(entry.path);
+        reference_it != reference_map.end()) {
+      entry.referenced_by = reference_it->second;
+      entry.deletable = false;
+    }
+    entries_by_path[normalized_path] = std::move(entry);
   }
 
   for (auto& [group_key, group] : multipart_groups) {

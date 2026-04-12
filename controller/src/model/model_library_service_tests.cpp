@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -113,11 +115,12 @@ int main() {
     fs::create_directories(src_root);
     fs::create_directories(dst_root);
     fs::create_directories(storage_root);
-    {
-      std::ofstream out(source_path);
-      out << "persistent-model-library-job";
-    }
-    const fs::path tools_root = temp_root / "tools";
+	    {
+	      std::ofstream out(source_path);
+	      out << "persistent-model-library-job";
+	    }
+	    const auto source_payload_size = fs::file_size(source_path);
+	    const fs::path tools_root = temp_root / "tools";
     fs::create_directories(tools_root);
     const fs::path fake_convert = tools_root / "fake-convert.sh";
     const fs::path fake_quantize = tools_root / "fake-quantize.sh";
@@ -238,7 +241,6 @@ int main() {
         ReadFile(target_path) == "persistent-model-library-job",
         "downloaded model payload should match source contents");
 
-    const fs::path node_target_path = dst_root / "node-aware" / "smoke.gguf";
     const auto node_download_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
@@ -254,13 +256,27 @@ int main() {
     Expect(node_download_response.status_code == 202, "node-aware download should be accepted");
     const auto node_download_job_id =
         nlohmann::json::parse(node_download_response.body).at("job").at("id").get<std::string>();
-    const auto node_download_job =
-        WaitForJobStatus(store, node_download_job_id, "completed");
-    Expect(node_download_job.node_name == "worker-node-a",
+    const auto node_download_job = store.LoadModelLibraryDownloadJob(node_download_job_id);
+    Expect(node_download_job.has_value(), "node-aware download job should be persisted");
+    Expect(node_download_job->node_name == "worker-node-a",
            "node-aware download job should persist target node_name");
-    Expect(fs::exists(node_target_path), "node-aware download target should exist");
+    Expect(node_download_job->status == "queued",
+           "node-aware download should wait for hostd assignment");
+    const auto node_assignments =
+        store.LoadHostAssignments(
+            std::make_optional<std::string>("worker-node-a"),
+            naim::HostAssignmentStatus::Pending);
+    Expect(
+        std::any_of(
+            node_assignments.begin(),
+            node_assignments.end(),
+            [&](const naim::HostAssignment& assignment) {
+              return assignment.assignment_type == "model-library-download" &&
+                     assignment.desired_state_json.find(node_download_job_id) !=
+                         std::string::npos;
+            }),
+        "node-aware download should enqueue hostd model-library-download assignment");
 
-    const fs::path storage_target_path = storage_root / "storage-aware" / "smoke.gguf";
     const auto storage_download_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
@@ -277,13 +293,46 @@ int main() {
            "storage node should be accepted for non-quantized download");
     const auto storage_download_job_id =
         nlohmann::json::parse(storage_download_response.body).at("job").at("id").get<std::string>();
-    const auto storage_download_job =
-        WaitForJobStatus(store, storage_download_job_id, "completed");
-    Expect(storage_download_job.node_name == "storage-node-a",
+    const auto storage_download_job = store.LoadModelLibraryDownloadJob(storage_download_job_id);
+    Expect(storage_download_job.has_value(), "storage download job should be persisted");
+    Expect(storage_download_job->node_name == "storage-node-a",
            "storage download job should persist target node_name");
-    Expect(fs::exists(storage_target_path), "storage-node download target should exist");
+    Expect(storage_download_job->status == "queued",
+           "storage download should wait for hostd assignment");
+    const auto storage_assignments =
+        store.LoadHostAssignments(
+            std::make_optional<std::string>("storage-node-a"),
+            naim::HostAssignmentStatus::Pending);
+	    Expect(
+	        std::any_of(
+	            storage_assignments.begin(),
+	            storage_assignments.end(),
+	            [&](const naim::HostAssignment& assignment) {
+	              return assignment.assignment_type == "model-library-download" &&
+	                     assignment.desired_state_json.find(storage_download_job_id) !=
+	                         std::string::npos;
+	            }),
+	        "storage download should enqueue hostd model-library-download assignment");
+	    auto completed_storage_job = *storage_download_job;
+	    completed_storage_job.status = "completed";
+	    completed_storage_job.phase = "completed";
+	    completed_storage_job.bytes_done = source_payload_size;
+	    completed_storage_job.bytes_total = source_payload_size;
+	    store.UpsertModelLibraryDownloadJob(completed_storage_job);
+	    const auto remote_storage_payload = service.BuildPayload(db_path.string());
+	    bool found_remote_storage_item = false;
+	    for (const auto& item : remote_storage_payload.at("items")) {
+	      if (item.at("path").get<std::string>() == completed_storage_job.target_paths.front()) {
+	        found_remote_storage_item =
+	            item.at("node_name").get<std::string>() == "storage-node-a" &&
+	            item.at("size_bytes").get<std::uintmax_t>() == source_payload_size;
+	      }
+	    }
+	    Expect(
+	        found_remote_storage_item,
+	        "completed storage-node downloads should remain visible without controller-local files");
 
-    const auto low_capacity_response = service.EnqueueDownload(
+	    const auto low_capacity_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
             "POST",
@@ -815,13 +864,19 @@ int main() {
             std::vector<std::string>{"FP16"},
         "FP16 quantization jobs should persist canonical quantization names");
 
+    const fs::path storage_base_path = storage_root / "storage-aware" / "model-storage-aware.gguf";
+    fs::create_directories(storage_base_path.parent_path());
+    {
+      std::ofstream out(storage_base_path);
+      out << "storage-node-base-gguf";
+    }
     const auto storage_quantization_response = service.EnqueueQuantization(
         db_path.string(),
         JsonRequest(
             "POST",
             "/api/v1/model-library/quantize",
             nlohmann::json{
-                {"source_path", storage_target_path.string()},
+                {"source_path", storage_base_path.string()},
                 {"replace_existing", true},
             }));
     Expect(

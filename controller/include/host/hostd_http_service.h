@@ -40,6 +40,18 @@ class HostdHttpService {
   HttpResponse HandleAssignmentAction(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse HandleModelArtifactChunkRequest(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleModelArtifactChunkPoll(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleModelArtifactManifestRequest(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleModelArtifactManifestPoll(
+      const std::string& db_path,
+      const HttpRequest& request) const;
   HttpResponse HandleObservations(
       const std::string& db_path,
       const HttpRequest& request) const;

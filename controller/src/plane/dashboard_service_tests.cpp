@@ -648,7 +648,7 @@ void TestPlaneScopedNodesIgnoreForeignRuntimeStatus() {
   std::cout << "ok: plane-scoped-nodes-ignore-foreign-runtime-status" << '\n';
 }
 
-void TestPlanePayloadExposesPlacementFirstTargets() {
+void TestPlanePayloadExposesExecutionNodeTargets() {
   naim::DesiredState desired_state;
   desired_state.plane_name = "placement-plane";
   desired_state.plane_mode = naim::PlaneMode::Llm;
@@ -703,11 +703,11 @@ void TestPlanePayloadExposesPlacementFirstTargets() {
       2);
   const auto& placement = payload.at("placement");
   Expect(
-      placement.at("mode").get<std::string>() == "placement-first",
-      "plane payload should expose placement-first mode");
+      placement.at("mode").get<std::string>() == "execution-node",
+      "plane payload should expose execution-node mode");
   Expect(
-      placement.at("primary_node").get<std::string>() == "worker-a",
-      "plane payload should expose primary placement node");
+      placement.at("execution_node").get<std::string>() == "worker-a",
+      "plane payload should expose selected execution node");
   Expect(
       placement.at("app_host").at("enabled").get<bool>(),
       "plane payload should expose enabled external app host");
@@ -729,7 +729,7 @@ void TestPlanePayloadExposesPlacementFirstTargets() {
       FindPlaneServiceTarget(placement, "skills-factory").at("target").get<std::string>() ==
           "naim-controller",
       "skills factory should stay on naim");
-  std::cout << "ok: plane-payload-exposes-placement-first-targets" << '\n';
+  std::cout << "ok: plane-payload-exposes-execution-node-targets" << '\n';
 }
 
 void TestPlanePayloadExposesLegacyCompatibilityMode() {
@@ -766,8 +766,8 @@ void TestPlanePayloadExposesLegacyCompatibilityMode() {
       placement.at("mode").get<std::string>() == "legacy-topology-compatibility",
       "plane payload should expose legacy compatibility mode when placement_target is absent");
   Expect(
-      placement.at("primary_node").is_null(),
-      "legacy compatibility payload should not invent a primary node");
+      placement.at("execution_node").is_null(),
+      "legacy compatibility payload should not invent an execution node");
   Expect(
       FindPlaneServiceTarget(placement, "infer").at("target").get<std::string>() ==
           "controller-node",
@@ -789,7 +789,7 @@ int main() {
     TestSkillsFactoryProbeFailureDoesNotBreakPayload();
     TestRuntimePayloadIncludesKvCacheBytes();
     TestPlaneScopedNodesIgnoreForeignRuntimeStatus();
-    TestPlanePayloadExposesPlacementFirstTargets();
+    TestPlanePayloadExposesExecutionNodeTargets();
     TestPlanePayloadExposesLegacyCompatibilityMode();
     return 0;
   } catch (const std::exception& error) {

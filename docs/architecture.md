@@ -81,11 +81,14 @@ Current architectural contract:
 
 Current plane deployment contract:
 
-- each plane currently chooses exactly one primary `naim-node`
-- by default all plane containers run on that selected node
+- each plane chooses an execution node when it is created or edited
+- desired-state v2 stores this selection as `placement.execution_node`
+- execution-node selection is not exclusive; multiple planes may run on the same connected node
+- any connected node that passes role, capacity, and policy checks may accept a plane
+- by default all plane containers run on that selected execution node
 - `app` containers are the exception and may be deployed to an external host over SSH
 - when a plane runs replicated `skills-<plane>` containers, they must live on the same machine as
-  the plane's `app` container rather than on the primary `naim-node`
+  the plane's `app` container, or on the selected execution node when there is no external app host
 - plane creation must capture the SSH address plus either a key path or username/password for that
   external app host
 - plane creation still captures worker count and soft GPU allocation intent

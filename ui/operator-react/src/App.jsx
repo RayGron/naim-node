@@ -94,6 +94,10 @@ function modelLibraryPath(suffix = "") {
   return suffix ? `/api/v1/model-library/${suffix}` : "/api/v1/model-library";
 }
 
+function hostdHostsPath(nodeName = "") {
+  return queryPath("/api/v1/hostd/hosts", { node: nodeName });
+}
+
 function skillsFactoryPath(suffix = "") {
   return suffix ? `/api/v1/skills-factory/${suffix}` : "/api/v1/skills-factory";
 }
@@ -1812,12 +1816,13 @@ function App() {
   const [dashboard, setDashboard] = useState(null);
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
+  const [hostdHosts, setHostdHosts] = useState([]);
   const [diskState, setDiskState] = useState(null);
   const [rolloutState, setRolloutState] = useState(null);
   const [rebalancePlan, setRebalancePlan] = useState(null);
   const [events, setEvents] = useState([]);
   const [interactionStatus, setInteractionStatus] = useState(null);
-  const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [] });
+  const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [], nodes: [] });
   const [skillsFactory, setSkillsFactory] = useState({
     items: [],
     groups: [],
@@ -1856,6 +1861,7 @@ function App() {
   const [modelDownloadForm, setModelDownloadForm] = useState({
     modelId: "",
     targetRoot: "",
+    targetNodeName: "",
     targetSubdir: "",
     sourceUrls: "",
     format: "unknown",
@@ -1910,12 +1916,13 @@ function App() {
     setDashboard(null);
     setHostObservations(null);
     setGlobalHostObservations(null);
+    setHostdHosts([]);
     setDiskState(null);
     setRolloutState(null);
     setRebalancePlan(null);
     setEvents([]);
     setInteractionStatus(null);
-    setModelLibrary({ items: [], roots: [], jobs: [] });
+    setModelLibrary({ items: [], roots: [], jobs: [], nodes: [] });
     setModelsTab("library");
     setSkillsFactory({
       items: [],
@@ -2031,6 +2038,7 @@ function App() {
         items: Array.isArray(payload.items) ? payload.items : [],
         roots: Array.isArray(payload.roots) ? payload.roots : [],
         jobs: nextJobs,
+        nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
       });
       setModelJobPage((current) => {
         const nextPageCount = Math.max(
@@ -2089,10 +2097,12 @@ function App() {
           stale_after: 30,
         }),
       );
+      const hostdHostsRequest = fetchJson(hostdHostsPath());
       if (!planeName) {
-        const [dashboardPayload, globalHostObservationsPayload] = await Promise.all([
+        const [dashboardPayload, globalHostObservationsPayload, hostdHostsPayload] = await Promise.all([
           fetchJson(queryPath("/api/v1/dashboard", { stale_after: 30 })),
           globalHostObservationsRequest,
+          hostdHostsRequest,
         ]);
         const globalObservationItems = hostObservationItemsFromPayload(
           globalHostObservationsPayload,
@@ -2102,6 +2112,7 @@ function App() {
         setDashboard(dashboardPayload);
         setHostObservations(null);
         setGlobalHostObservations(globalHostObservationsPayload);
+        setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
         setMetricHistory((current) =>
           appendMetricHistory(
             current,
@@ -2132,6 +2143,7 @@ function App() {
         rebalancePayload,
         eventsPayload,
         interactionPayload,
+        hostdHostsPayload,
       ] = await Promise.all([
         fetchJson(planePath(planeName)),
         fetchJson(planePath(planeName, "dashboard")),
@@ -2157,12 +2169,14 @@ function App() {
           }),
         ),
         fetchJson(interactionPath(planeName, "status")),
+        hostdHostsRequest,
       ]);
 
       setPlaneDetail(planePayload);
       setDashboard(dashboardPayload);
       setHostObservations(hostObservationsPayload);
       setGlobalHostObservations(globalHostObservationsPayload);
+      setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
       setDiskState(diskPayload);
       setRolloutState(rolloutPayload);
       setRebalancePlan(rebalancePayload);
@@ -2422,7 +2436,10 @@ function App() {
 
   async function enqueueModelLibraryDownload() {
     const sourceUrls = normalizeModelDownloadSourceUrls(modelDownloadForm.sourceUrls);
-    if (!modelDownloadForm.targetRoot.trim() || sourceUrls.length === 0) {
+    if (
+      (!modelDownloadForm.targetRoot.trim() && !modelDownloadForm.targetNodeName.trim()) ||
+      sourceUrls.length === 0
+    ) {
       return;
     }
     setModelLibraryBusy("download");
@@ -2434,7 +2451,8 @@ function App() {
         },
         body: JSON.stringify({
           model_id: modelDownloadForm.modelId.trim() || undefined,
-          target_root: modelDownloadForm.targetRoot.trim(),
+          target_root: modelDownloadForm.targetRoot.trim() || undefined,
+          target_node_name: modelDownloadForm.targetNodeName.trim() || undefined,
           target_subdir: modelDownloadForm.targetSubdir.trim() || undefined,
           source_urls: sourceUrls,
           format: modelDownloadForm.format,
@@ -2450,6 +2468,31 @@ function App() {
       await refreshAll(selectedPlane);
     } finally {
       setModelLibraryBusy("");
+    }
+  }
+
+  async function setHostStorageRole(host, enabled) {
+    const nodeName = host?.node_name;
+    if (!nodeName) {
+      return;
+    }
+    setActionBusy(`storage-role:${nodeName}`);
+    try {
+      await fetchJson(`/api/v1/hostd/hosts/${encodeURIComponent(nodeName)}/storage-role`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          enabled,
+          message: enabled
+            ? "storage role enabled from web ui"
+            : "storage role disabled from web ui",
+        }),
+      });
+      await Promise.all([refreshAll(selectedPlane), refreshModelLibrary()]);
+    } finally {
+      setActionBusy("");
     }
   }
 
@@ -3300,6 +3343,14 @@ function App() {
   const activeModelCount = Array.isArray(modelLibrary.items) ? modelLibrary.items.length : 0;
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
+  const modelLibraryNodes = Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : [];
+  const storageModelNodes = modelLibraryNodes.filter(
+    (node) =>
+      node?.storage_role_enabled === true &&
+      node?.registration_state === "registered" &&
+      node?.session_state === "connected" &&
+      node?.storage_root,
+  );
   const modelLibraryJobs = Array.isArray(modelLibrary.jobs) ? modelLibrary.jobs : [];
   const downloadModelJobs = modelLibraryJobs.filter(
     (job) => normalizeModelLibraryJobKind(job?.job_kind) === "download",
@@ -3862,7 +3913,31 @@ function App() {
   }
 
   function renderHostCards(hostItems) {
-    const items = [...(hostItems || [])].sort((left, right) => {
+    const registeredByNode = new Map(
+      (hostdHosts || [])
+        .filter((host) => host?.node_name)
+        .map((host) => [host.node_name, host]),
+    );
+    const mergedByNode = new Map();
+    for (const host of hostItems || []) {
+      if (host?.node_name) {
+        mergedByNode.set(host.node_name, {
+          ...host,
+          registry: registeredByNode.get(host.node_name) || null,
+        });
+      }
+    }
+    for (const host of hostdHosts || []) {
+      if (host?.node_name && !mergedByNode.has(host.node_name)) {
+        mergedByNode.set(host.node_name, {
+          node_name: host.node_name,
+          status: host.session_state || host.registration_state || "registered",
+          heartbeat_at: host.last_heartbeat_at || host.last_session_at,
+          registry: host,
+        });
+      }
+    }
+    const items = [...mergedByNode.values()].sort((left, right) => {
       const leftReady = left?.runtime_status?.available === true ? 0 : 1;
       const rightReady = right?.runtime_status?.available === true ? 0 : 1;
       if (leftReady !== rightReady) {
@@ -3883,6 +3958,10 @@ function App() {
           const totalMemoryBytes = Number(cpu.total_memory_bytes || 0);
           const gpuTempCount = Number(gpu.temperature_device_count || 0);
           const gpuDeviceCount = Number(gpu.device_count || 0);
+          const registry = host?.registry || null;
+          const storageEnabled = registry?.storage_role_enabled === true;
+          const storageEligible = registry?.storage_role_eligible !== false;
+          const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
           return (
             <article className="node-card" key={host?.node_name || host?.observed_at}>
               <div className="card-row">
@@ -3900,8 +3979,27 @@ function App() {
                 <div className="metric-row"><span>GPU temp</span><strong>{gpuTempCount > 0 ? formatTemperature(gpu.hottest_temperature_c) : "n/a"}</strong></div>
                 <div className="metric-row"><span>GPU count</span><strong>{gpuDeviceCount || "n/a"}</strong></div>
                 <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
+                <div className="metric-row"><span>Storage role</span><strong>{storageEnabled ? "enabled" : "disabled"}</strong></div>
+                <div className="metric-row"><span>Storage root</span><strong>{registry?.capacity_summary?.storage_root || "n/a"}</strong></div>
                 <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at)}</strong></div>
               </div>
+              {registry ? (
+                <div className="toolbar">
+                  <button
+                    className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
+                    type="button"
+                    disabled={storageBusy || (!storageEnabled && !storageEligible)}
+                    onClick={() => setHostStorageRole(registry, !storageEnabled)}
+                    title={
+                      storageEligible
+                        ? "Toggle model storage role"
+                        : "Host has not reported a usable storage root yet"
+                    }
+                  >
+                    {storageEnabled ? "Disable storage" : "Enable storage"}
+                  </button>
+                </div>
+              ) : null}
             </article>
           );
         })}
@@ -5050,8 +5148,31 @@ function App() {
             setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
           }
           placeholder="/abs/path/to/model/library"
+          disabled={Boolean(modelDownloadForm.targetNodeName)}
           spellCheck="false"
         />
+        <label className="field-label" htmlFor="model-target-node">
+          Storage node
+        </label>
+        <select
+          id="model-target-node"
+          className="text-input"
+          value={modelDownloadForm.targetNodeName}
+          onChange={(event) =>
+            setModelDownloadForm((current) => ({
+              ...current,
+              targetNodeName: event.target.value,
+              targetRoot: event.target.value ? "" : current.targetRoot,
+            }))
+          }
+        >
+          <option value="">Manual target root</option>
+          {storageModelNodes.map((node) => (
+            <option key={node.node_name} value={node.node_name}>
+              {node.node_name} - {node.storage_root}
+            </option>
+          ))}
+        </select>
         <label className="field-label" htmlFor="model-target-subdir">
           Target subdir
         </label>
@@ -5129,7 +5250,8 @@ function App() {
             type="button"
             disabled={
               modelLibraryBusy !== "" ||
-              !modelDownloadForm.targetRoot.trim() ||
+              (!modelDownloadForm.targetRoot.trim() &&
+                !modelDownloadForm.targetNodeName.trim()) ||
               !modelDownloadForm.sourceUrls.trim()
             }
             onClick={enqueueModelLibraryDownload}
@@ -6495,8 +6617,8 @@ function App() {
                     Observed hosts with runtime, temperature, GPU, and memory posture.
                   </span>
                 </div>
-                {globalObservationItems.length === 0 ? (
-                  <EmptyState title="No observed hosts" detail="Waiting for host telemetry to arrive." />
+                {globalObservationItems.length === 0 && hostdHosts.length === 0 ? (
+                  <EmptyState title="No connected hosts" detail="Waiting for hostd registration or telemetry." />
                 ) : (
                   renderHostCards(globalObservationItems)
                 )}

@@ -7,17 +7,17 @@ namespace naim {
 DesiredStatePlacementResolver::DesiredStatePlacementResolver(const DesiredState& state)
     : state_(state) {}
 
-bool DesiredStatePlacementResolver::HasPrimaryNode() const {
-  return PrimaryNodeName().has_value();
+bool DesiredStatePlacementResolver::HasExecutionNode() const {
+  return ExecutionNodeName().has_value();
 }
 
-std::optional<std::string> DesiredStatePlacementResolver::PrimaryNodeName() const {
+std::optional<std::string> DesiredStatePlacementResolver::ExecutionNodeName() const {
   return ResolvePlacementTargetAlias();
 }
 
 std::string DesiredStatePlacementResolver::DefaultNodeName() const {
-  if (const auto primary_node = PrimaryNodeName(); primary_node.has_value()) {
-    return *primary_node;
+  if (const auto execution_node = ExecutionNodeName(); execution_node.has_value()) {
+    return *execution_node;
   }
   if (!state_.nodes.empty()) {
     return state_.nodes.front().name;
@@ -26,7 +26,7 @@ std::string DesiredStatePlacementResolver::DefaultNodeName() const {
 }
 
 bool DesiredStatePlacementResolver::ShouldEmitTopology() const {
-  return !HasPrimaryNode() && !IsDefaultSingleNodeTopology();
+  return !HasExecutionNode() && !IsDefaultSingleNodeTopology();
 }
 
 bool DesiredStatePlacementResolver::IsDefaultSingleNodeTopology() const {

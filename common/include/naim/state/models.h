@@ -235,6 +235,8 @@ struct BootstrapModelSpec {
   std::optional<std::string> served_model_name;
   std::string materialization_mode = "copy";
   std::optional<std::string> local_path;
+  std::optional<std::string> source_node_name;
+  std::vector<std::string> source_paths;
   std::optional<std::string> source_url;
   std::vector<std::string> source_urls;
   std::optional<std::string> target_filename;

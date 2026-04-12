@@ -85,6 +85,66 @@ bool HttpHostdBackend::UpdateHostAssignmentProgress(
   return true;
 }
 
+nlohmann::json HttpHostdBackend::RequestModelArtifactChunk(
+    const std::string& requester_node_name,
+    const std::string& source_node_name,
+    const std::string& source_path,
+    const std::uintmax_t offset,
+    const std::uintmax_t max_bytes) {
+  EnsureSession(requester_node_name, "requesting model artifact chunk");
+  return SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/model-artifacts/chunks/request",
+      nlohmann::json{
+          {"requester_node_name", requester_node_name},
+          {"source_node_name", source_node_name},
+          {"source_path", source_path},
+          {"offset", offset},
+          {"max_bytes", max_bytes},
+      },
+      "model-artifacts/chunks/request");
+}
+
+nlohmann::json HttpHostdBackend::LoadModelArtifactChunk(
+    const std::string& requester_node_name,
+    const int assignment_id) {
+  EnsureSession(requester_node_name, "loading model artifact chunk");
+  return SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/model-artifacts/chunks/poll",
+      nlohmann::json{
+          {"requester_node_name", requester_node_name},
+          {"assignment_id", assignment_id},
+      },
+      "model-artifacts/chunks/poll");
+}
+
+nlohmann::json HttpHostdBackend::RequestModelArtifactManifest(
+    const std::string& requester_node_name,
+    const std::string& source_node_name,
+    const std::vector<std::string>& source_paths) {
+  EnsureSession(requester_node_name, "requesting model artifact manifest");
+  return SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/model-artifacts/manifest/request",
+      nlohmann::json{
+          {"requester_node_name", requester_node_name},
+          {"source_node_name", source_node_name},
+          {"source_paths", source_paths},
+      },
+      "model-artifacts/manifest/request");
+}
+
+nlohmann::json HttpHostdBackend::LoadModelArtifactManifest(
+    const std::string& requester_node_name,
+    const int assignment_id) {
+  EnsureSession(requester_node_name, "loading model artifact manifest");
+  return SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/model-artifacts/manifest/poll",
+      nlohmann::json{
+          {"requester_node_name", requester_node_name},
+          {"assignment_id", assignment_id},
+      },
+      "model-artifacts/manifest/poll");
+}
+
 void HttpHostdBackend::UpsertHostObservation(const naim::HostObservation& observation) {
   EnsureSession(observation.node_name, "uploading observation");
   SendEncryptedControllerJsonRequest(

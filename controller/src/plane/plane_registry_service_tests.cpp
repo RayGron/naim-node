@@ -121,8 +121,8 @@ class TestPlaneRegistryQuerySupport final
   }
 };
 
-void TestPlacementFirstRegistryPayload() {
-  const auto db_path = MakeTempDbPath("placement-first");
+void TestExecutionNodeRegistryPayload() {
+  const auto db_path = MakeTempDbPath("execution-node");
   naim::ControllerStore store(db_path);
   store.Initialize();
 
@@ -195,18 +195,18 @@ void TestPlacementFirstRegistryPayload() {
   const auto item = FindPlaneItem(payload, "placement-plane");
   const auto& placement = item.at("placement");
   Expect(
-      placement.at("mode").get<std::string>() == "placement-first",
-      "registry payload should expose placement-first mode");
+      placement.at("mode").get<std::string>() == "execution-node",
+      "registry payload should expose execution-node mode");
   Expect(
-      placement.at("primary_node").get<std::string>() == "worker-a",
-      "registry payload should expose primary node");
+      placement.at("execution_node").get<std::string>() == "worker-a",
+      "registry payload should expose selected execution node");
   Expect(
       placement.at("app_host").at("auth_mode").get<std::string>() == "ssh-key",
       "registry payload should expose app host auth mode");
   Expect(
       placement.at("service_targets").size() >= 4,
       "registry payload should expose service targets");
-  std::cout << "ok: placement-first-registry-payload" << '\n';
+  std::cout << "ok: execution-node-registry-payload" << '\n';
 }
 
 void TestLegacyCompatibilityRegistryPayload() {
@@ -257,8 +257,8 @@ void TestLegacyCompatibilityRegistryPayload() {
       placement.at("mode").get<std::string>() == "legacy-topology-compatibility",
       "registry payload should expose legacy compatibility mode");
   Expect(
-      placement.at("primary_node").is_null(),
-      "registry payload should not invent a primary node for legacy state");
+      placement.at("execution_node").is_null(),
+      "registry payload should not invent an execution node for legacy state");
   std::cout << "ok: legacy-compatibility-registry-payload" << '\n';
 }
 
@@ -266,7 +266,7 @@ void TestLegacyCompatibilityRegistryPayload() {
 
 int main() {
   try {
-    TestPlacementFirstRegistryPayload();
+    TestExecutionNodeRegistryPayload();
     TestLegacyCompatibilityRegistryPayload();
     return 0;
   } catch (const std::exception& error) {

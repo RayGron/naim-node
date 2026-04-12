@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "infra/controller_action.h"
 
@@ -15,6 +17,8 @@
 using nlohmann::json;
 
 namespace {
+
+constexpr std::uintmax_t kMaxModelArtifactChunkBytes = 4ULL * 1024ULL * 1024ULL;
 
 bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
   return path.rfind(prefix, 0) == 0;
@@ -122,6 +126,121 @@ json ParseCapabilitiesJson(const std::string& capabilities_json) {
   }
   const json parsed = json::parse(capabilities_json, nullptr, false);
   return parsed.is_discarded() ? json::object() : parsed;
+}
+
+bool IsUsableAbsoluteHostPath(const std::string& value) {
+  return !value.empty() && value.front() == '/' &&
+         value.rfind("/naim/", 0) != 0;
+}
+
+std::string NormalizePathString(const std::filesystem::path& path) {
+  return path.lexically_normal().string();
+}
+
+bool PathBelongsToRoot(
+    const std::filesystem::path& path,
+    const std::filesystem::path& root) {
+  const auto normalized_path = path.lexically_normal();
+  const auto normalized_root = root.lexically_normal();
+  const auto relative = normalized_path.lexically_relative(normalized_root);
+  if (relative.empty()) {
+    return true;
+  }
+  const auto relative_text = relative.string();
+  return relative_text != ".." && relative_text.rfind("../", 0) != 0 &&
+         relative_text.rfind("..\\", 0) != 0;
+}
+
+bool HostAllowsModelArtifactSource(const naim::RegisteredHostRecord& host) {
+  return host.registration_state == "registered" &&
+         host.session_state == "connected" &&
+         (host.storage_role_enabled || host.derived_role == "storage" ||
+          host.derived_role == "worker");
+}
+
+std::string HostStorageRoot(const naim::RegisteredHostRecord& host) {
+  const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
+  if (capabilities.contains("storage_root") && capabilities["storage_root"].is_string()) {
+    return capabilities["storage_root"].get<std::string>();
+  }
+  return {};
+}
+
+bool HostCanServeModelArtifactPath(
+    const naim::RegisteredHostRecord& host,
+    const std::string& source_path) {
+  if (!HostAllowsModelArtifactSource(host) || !IsUsableAbsoluteHostPath(source_path)) {
+    return false;
+  }
+  const std::string storage_root = HostStorageRoot(host);
+  return IsUsableAbsoluteHostPath(storage_root) &&
+         PathBelongsToRoot(source_path, storage_root);
+}
+
+std::optional<std::string> ResolveModelArtifactSourceNode(
+    naim::ControllerStore& store,
+    const std::string& requested_source_node_name,
+    const std::string& source_path) {
+  if (!IsUsableAbsoluteHostPath(source_path)) {
+    return std::nullopt;
+  }
+  const std::string normalized_source =
+      NormalizePathString(std::filesystem::path(source_path));
+  if (!requested_source_node_name.empty()) {
+    const auto host = store.LoadRegisteredHost(requested_source_node_name);
+    if (host.has_value() && HostCanServeModelArtifactPath(*host, normalized_source)) {
+      return host->node_name;
+    }
+    return std::nullopt;
+  }
+
+  for (const auto& job : store.LoadModelLibraryDownloadJobs("completed")) {
+    if (job.node_name.empty()) {
+      continue;
+    }
+    std::vector<std::string> paths = job.retained_output_paths;
+    paths.insert(paths.end(), job.target_paths.begin(), job.target_paths.end());
+    for (const auto& path : paths) {
+      if (NormalizePathString(std::filesystem::path(path)) == normalized_source) {
+        const auto host = store.LoadRegisteredHost(job.node_name);
+        if (host.has_value() && HostCanServeModelArtifactPath(*host, normalized_source)) {
+          return host->node_name;
+        }
+      }
+    }
+  }
+
+  for (const auto& host : store.LoadRegisteredHosts()) {
+    if (HostCanServeModelArtifactPath(host, normalized_source)) {
+      return host.node_name;
+    }
+  }
+  return std::nullopt;
+}
+
+std::vector<std::string> ParseRequestedSourcePaths(const json& body) {
+  std::vector<std::string> source_paths;
+  if (body.contains("source_paths") && body.at("source_paths").is_array()) {
+    for (const auto& item : body.at("source_paths")) {
+      if (!item.is_string()) {
+        continue;
+      }
+      const std::string path = NormalizePathString(std::filesystem::path(item.get<std::string>()));
+      if (!path.empty()) {
+        source_paths.push_back(path);
+      }
+    }
+  }
+  if (source_paths.empty()) {
+    const std::string source_path =
+        NormalizePathString(std::filesystem::path(body.value("source_path", std::string{})));
+    if (!source_path.empty()) {
+      source_paths.push_back(source_path);
+    }
+  }
+  std::sort(source_paths.begin(), source_paths.end());
+  source_paths.erase(std::unique(source_paths.begin(), source_paths.end()), source_paths.end());
+  return source_paths;
 }
 
 HostInventorySummary BuildInventorySummary(
@@ -282,6 +401,18 @@ std::optional<HttpResponse> HostdHttpService::HandleRequest(
   }
   if (StartsWithPathPrefix(request.path, "/api/v1/hostd/assignments/")) {
     return HandleAssignmentAction(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/model-artifacts/chunks/request") {
+    return HandleModelArtifactChunkRequest(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/model-artifacts/chunks/poll") {
+    return HandleModelArtifactChunkPoll(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/model-artifacts/manifest/request") {
+    return HandleModelArtifactManifestRequest(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/model-artifacts/manifest/poll") {
+    return HandleModelArtifactManifestPoll(db_path, request);
   }
   if (request.path == "/api/v1/hostd/observations") {
     return HandleObservations(db_path, request);
@@ -674,6 +805,89 @@ HttpResponse HostdHttpService::HandleHostPath(
           {});
     }
   }
+  const auto reset_onboarding_pos = remainder.find("/reset-onboarding");
+  if (reset_onboarding_pos != std::string::npos &&
+      reset_onboarding_pos + std::string("/reset-onboarding").size() == remainder.size()) {
+    if (request.method != "POST") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
+    const std::string node_name = remainder.substr(0, reset_onboarding_pos);
+    try {
+      const json body = ParseJsonBody(request);
+      const std::optional<std::string> message =
+          body.contains("message") && body["message"].is_string()
+              ? std::make_optional(body["message"].get<std::string>())
+              : std::nullopt;
+      const auto service =
+          naim::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+      return support_.build_json_response(
+          200,
+          service.ResetHostOnboardingPayload(node_name, message),
+          {});
+    } catch (const std::exception& error) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
+  }
+  const auto storage_role_pos = remainder.find("/storage-role");
+  if (storage_role_pos != std::string::npos &&
+      storage_role_pos + std::string("/storage-role").size() == remainder.size()) {
+    if (request.method != "POST") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
+    const std::string node_name = remainder.substr(0, storage_role_pos);
+    try {
+      const json body = ParseJsonBody(request);
+      std::optional<bool> enabled;
+      if (body.contains("enabled") && body["enabled"].is_boolean()) {
+        enabled = body["enabled"].get<bool>();
+      } else if (const auto query_enabled = FindQueryStringValue(request, "enabled");
+                 query_enabled.has_value()) {
+        if (*query_enabled == "true" || *query_enabled == "1" ||
+            *query_enabled == "enabled") {
+          enabled = true;
+        } else if (*query_enabled == "false" || *query_enabled == "0" ||
+                   *query_enabled == "disabled") {
+          enabled = false;
+        }
+      }
+      if (!enabled.has_value()) {
+        return support_.build_json_response(
+            400,
+            json{{"status", "bad_request"},
+                 {"message", "missing required boolean field or query parameter 'enabled'"}},
+            {});
+      }
+      std::optional<std::string> message;
+      if (body.contains("message") && body["message"].is_string()) {
+        message = body["message"].get<std::string>();
+      } else {
+        message = FindQueryStringValue(request, "message");
+      }
+      const auto service =
+          naim::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+      return support_.build_json_response(
+          200,
+          service.SetHostStorageRolePayload(
+              node_name,
+              *enabled,
+              message),
+          {});
+    } catch (const std::exception& error) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
+  }
   return support_.build_json_response(404, json{{"status", "not_found"}}, {});
 }
 
@@ -921,6 +1135,29 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
     if (action == "progress") {
       const bool updated =
           context.store().UpdateHostAssignmentProgress(assignment_id, body.dump());
+      if (assignment->assignment_type == "model-library-download") {
+        const json assignment_payload =
+            json::parse(assignment->desired_state_json, nullptr, false);
+        const std::string job_id =
+            assignment_payload.is_object()
+                ? assignment_payload.value("job_id", std::string{})
+                : std::string{};
+        if (!job_id.empty()) {
+          if (auto job = context.store().LoadModelLibraryDownloadJob(job_id);
+              job.has_value()) {
+            job->status = "running";
+            job->phase = body.value("phase", std::string("running"));
+            job->current_item = body.value("detail", std::string{});
+            if (body.contains("bytes_done") && body["bytes_done"].is_number_integer()) {
+              job->bytes_done = body["bytes_done"].get<std::int64_t>();
+            }
+            if (body.contains("bytes_total") && body["bytes_total"].is_number_integer()) {
+              job->bytes_total = body["bytes_total"].get<std::int64_t>();
+            }
+            context.store().UpsertModelLibraryDownloadJob(*job);
+          }
+        }
+      }
       return context.EncryptedResponse(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/progress",
@@ -931,6 +1168,24 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
     if (action == "applied") {
       const bool updated = context.store().TransitionClaimedHostAssignment(
           assignment_id, naim::HostAssignmentStatus::Applied, status_message);
+      if (updated && assignment->assignment_type == "model-library-download") {
+        const json assignment_payload =
+            json::parse(assignment->desired_state_json, nullptr, false);
+        const std::string job_id =
+            assignment_payload.is_object()
+                ? assignment_payload.value("job_id", std::string{})
+                : std::string{};
+        if (!job_id.empty()) {
+          if (auto job = context.store().LoadModelLibraryDownloadJob(job_id);
+              job.has_value()) {
+            job->status = "completed";
+            job->phase = "completed";
+            job->current_item.clear();
+            job->error_message.clear();
+            context.store().UpsertModelLibraryDownloadJob(*job);
+          }
+        }
+      }
       if (updated && assignment->assignment_type == "apply-node-state") {
         const auto plane_assignments = context.store().LoadHostAssignments(
             std::nullopt, std::nullopt, assignment->plane_name);
@@ -971,6 +1226,23 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
                                      assignment_id,
                                      naim::HostAssignmentStatus::Failed,
                                      status_message);
+      if (updated && assignment->assignment_type == "model-library-download" && !retry) {
+        const json assignment_payload =
+            json::parse(assignment->desired_state_json, nullptr, false);
+        const std::string job_id =
+            assignment_payload.is_object()
+                ? assignment_payload.value("job_id", std::string{})
+                : std::string{};
+        if (!job_id.empty()) {
+          if (auto job = context.store().LoadModelLibraryDownloadJob(job_id);
+              job.has_value()) {
+            job->status = "failed";
+            job->phase = "failed";
+            job->error_message = status_message;
+            context.store().UpsertModelLibraryDownloadJob(*job);
+          }
+        }
+      }
       return context.EncryptedResponse(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/failed",
@@ -980,6 +1252,406 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
                {"retry", retry}});
     }
     return context.Json(404, json{{"status", "not_found"}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+	        {});
+	  }
+	}
+
+HttpResponse HostdHttpService::HandleModelArtifactChunkRequest(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "model-artifacts/chunks/request");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    if (requester_node_name != host.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "requester_node_name does not match host session"}});
+    }
+    const std::string source_path = NormalizePathString(
+        std::filesystem::path(body.value("source_path", std::string{})));
+    const std::string requested_source_node_name =
+        body.value("source_node_name", std::string{});
+    const auto source_node_name = ResolveModelArtifactSourceNode(
+        context.store(),
+        requested_source_node_name,
+        source_path);
+    if (!source_node_name.has_value()) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/chunks/request",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "model artifact source node not found or not eligible"}});
+    }
+
+    const std::uintmax_t offset =
+        body.contains("offset") && body.at("offset").is_number_unsigned()
+            ? body.at("offset").get<std::uintmax_t>()
+            : std::uintmax_t{0};
+    std::uintmax_t max_bytes =
+        body.contains("max_bytes") && body.at("max_bytes").is_number_unsigned()
+            ? body.at("max_bytes").get<std::uintmax_t>()
+            : kMaxModelArtifactChunkBytes;
+    if (max_bytes == 0 || max_bytes > kMaxModelArtifactChunkBytes) {
+      max_bytes = kMaxModelArtifactChunkBytes;
+    }
+
+    const std::string transfer_id = naim::RandomTokenBase64(18);
+    const std::string plane_name = "model-transfer:" + transfer_id;
+    naim::HostAssignment assignment;
+    assignment.node_name = *source_node_name;
+    assignment.plane_name = plane_name;
+    assignment.desired_generation = 0;
+    assignment.max_attempts = 3;
+    assignment.assignment_type = "model-artifact-read-chunk";
+    assignment.desired_state_json =
+        json{{"transfer_id", transfer_id},
+             {"requester_node_name", requester_node_name},
+             {"source_node_name", *source_node_name},
+             {"source_path", source_path},
+             {"offset", offset},
+             {"max_bytes", max_bytes}}
+            .dump();
+    assignment.artifacts_root = source_path;
+    assignment.status_message = "queued model artifact chunk read";
+    assignment.progress_json =
+        json{{"phase", "queued"},
+             {"title", "Model artifact chunk queued"},
+             {"detail", "Waiting for storage node to read the model artifact chunk."},
+             {"percent", 0}}
+            .dump();
+    context.store().EnqueueHostAssignments({assignment}, "");
+
+    int assignment_id = 0;
+    for (const auto& candidate :
+         context.store().LoadHostAssignments(
+             std::make_optional<std::string>(*source_node_name),
+             std::nullopt,
+             std::make_optional<std::string>(plane_name))) {
+      const json desired =
+          json::parse(candidate.desired_state_json, nullptr, false);
+      if (desired.is_object() && desired.value("transfer_id", std::string{}) == transfer_id) {
+        assignment_id = candidate.id;
+        break;
+      }
+    }
+    if (assignment_id <= 0) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/chunks/request",
+          json{{"service", "naim-controller"},
+               {"status", "internal_error"},
+               {"message", "failed to resolve queued model artifact assignment"}});
+    }
+    return context.EncryptedResponse(
+        &host,
+        "model-artifacts/chunks/request",
+        json{{"service", "naim-controller"},
+             {"status", "queued"},
+             {"assignment_id", assignment_id},
+             {"transfer_id", transfer_id},
+             {"source_node_name", *source_node_name},
+             {"source_path", source_path},
+             {"offset", offset},
+             {"max_bytes", max_bytes}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleModelArtifactChunkPoll(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "model-artifacts/chunks/poll");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    if (requester_node_name != host.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "requester_node_name does not match host session"}});
+    }
+    const int assignment_id = body.value("assignment_id", 0);
+    const auto assignment = context.store().LoadHostAssignment(assignment_id);
+    if (!assignment.has_value() ||
+        assignment->assignment_type != "model-artifact-read-chunk") {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/chunks/poll",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "model artifact chunk assignment not found"}});
+    }
+    const json desired =
+        json::parse(assignment->desired_state_json, nullptr, false);
+    if (!desired.is_object() ||
+        desired.value("requester_node_name", std::string{}) != requester_node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "model artifact chunk assignment belongs to another requester"}});
+    }
+    json progress = json::object();
+    if (!assignment->progress_json.empty()) {
+      progress = json::parse(assignment->progress_json, nullptr, false);
+      if (!progress.is_object()) {
+        progress = json::object();
+      }
+    }
+    return context.EncryptedResponse(
+        &host,
+        "model-artifacts/chunks/poll",
+        json{{"service", "naim-controller"},
+             {"status", naim::ToString(assignment->status)},
+             {"assignment_id", assignment->id},
+             {"source_node_name", assignment->node_name},
+             {"status_message", assignment->status_message},
+             {"progress", progress}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleModelArtifactManifestRequest(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "model-artifacts/manifest/request");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    if (requester_node_name != host.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "requester_node_name does not match host session"}});
+    }
+
+    const std::vector<std::string> source_paths = ParseRequestedSourcePaths(body);
+    if (source_paths.empty()) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/request",
+          json{{"service", "naim-controller"},
+               {"status", "bad_request"},
+               {"message", "model artifact manifest request is missing source_paths"}});
+    }
+
+    const std::string requested_source_node_name =
+        body.value("source_node_name", std::string{});
+    const auto source_node_name = ResolveModelArtifactSourceNode(
+        context.store(),
+        requested_source_node_name,
+        source_paths.front());
+    if (!source_node_name.has_value()) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/request",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "model artifact source node not found or not eligible"}});
+    }
+    const auto source_host = context.store().LoadRegisteredHost(*source_node_name);
+    const bool all_paths_allowed =
+        source_host.has_value() &&
+        std::all_of(
+            source_paths.begin(),
+            source_paths.end(),
+            [&](const std::string& source_path) {
+              return HostCanServeModelArtifactPath(*source_host, source_path);
+            });
+    if (!all_paths_allowed) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/request",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "one or more model artifact source paths are not eligible"}});
+    }
+
+    const std::string transfer_id = naim::RandomTokenBase64(18);
+    const std::string plane_name = "model-manifest:" + transfer_id;
+    naim::HostAssignment assignment;
+    assignment.node_name = *source_node_name;
+    assignment.plane_name = plane_name;
+    assignment.desired_generation = 0;
+    assignment.max_attempts = 3;
+    assignment.assignment_type = "model-artifact-build-manifest";
+    assignment.desired_state_json =
+        json{{"transfer_id", transfer_id},
+             {"requester_node_name", requester_node_name},
+             {"source_node_name", *source_node_name},
+             {"source_paths", source_paths}}
+            .dump();
+    assignment.artifacts_root = source_paths.front();
+    assignment.status_message = "queued model artifact manifest build";
+    assignment.progress_json =
+        json{{"phase", "queued"},
+             {"title", "Model artifact manifest queued"},
+             {"detail", "Waiting for storage node to build the model artifact manifest."},
+             {"percent", 0}}
+            .dump();
+    context.store().EnqueueHostAssignments({assignment}, "");
+
+    int assignment_id = 0;
+    for (const auto& candidate :
+         context.store().LoadHostAssignments(
+             std::make_optional<std::string>(*source_node_name),
+             std::nullopt,
+             std::make_optional<std::string>(plane_name))) {
+      const json desired =
+          json::parse(candidate.desired_state_json, nullptr, false);
+      if (desired.is_object() && desired.value("transfer_id", std::string{}) == transfer_id) {
+        assignment_id = candidate.id;
+        break;
+      }
+    }
+    if (assignment_id <= 0) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/request",
+          json{{"service", "naim-controller"},
+               {"status", "internal_error"},
+               {"message", "failed to resolve queued model artifact manifest assignment"}});
+    }
+    return context.EncryptedResponse(
+        &host,
+        "model-artifacts/manifest/request",
+        json{{"service", "naim-controller"},
+             {"status", "queued"},
+             {"assignment_id", assignment_id},
+             {"transfer_id", transfer_id},
+             {"source_node_name", *source_node_name},
+             {"source_paths", source_paths}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleModelArtifactManifestPoll(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "model-artifacts/manifest/poll");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    if (requester_node_name != host.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "requester_node_name does not match host session"}});
+    }
+    const int assignment_id = body.value("assignment_id", 0);
+    const auto assignment = context.store().LoadHostAssignment(assignment_id);
+    if (!assignment.has_value() ||
+        assignment->assignment_type != "model-artifact-build-manifest") {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/poll",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "model artifact manifest assignment not found"}});
+    }
+    const json desired =
+        json::parse(assignment->desired_state_json, nullptr, false);
+    if (!desired.is_object() ||
+        desired.value("requester_node_name", std::string{}) != requester_node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "model artifact manifest assignment belongs to another requester"}});
+    }
+    json progress = json::object();
+    if (!assignment->progress_json.empty()) {
+      progress = json::parse(assignment->progress_json, nullptr, false);
+      if (!progress.is_object()) {
+        progress = json::object();
+      }
+    }
+    return context.EncryptedResponse(
+        &host,
+        "model-artifacts/manifest/poll",
+        json{{"service", "naim-controller"},
+             {"status", naim::ToString(assignment->status)},
+             {"assignment_id", assignment->id},
+             {"source_node_name", assignment->node_name},
+             {"status_message", assignment->status_message},
+             {"progress", progress}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,

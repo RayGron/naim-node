@@ -60,6 +60,21 @@ class IHostdAssignmentSupport {
       const std::optional<int>& desired_generation,
       const std::optional<int>& assignment_id,
       HostdBackend* backend) const = 0;
+  virtual void DownloadModelLibraryArtifacts(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const = 0;
+  virtual void ReadModelArtifactChunk(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const = 0;
+  virtual void BuildModelArtifactManifest(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const = 0;
   virtual void ShowDemoOps(
       const std::string& node_name,
       const std::string& storage_root,

@@ -440,6 +440,11 @@ void InitializeSchema(
   EnsureColumn(
       db,
       "registered_hosts",
+      "storage_role_enabled",
+      "storage_role_enabled INTEGER NOT NULL DEFAULT 0");
+  EnsureColumn(
+      db,
+      "registered_hosts",
       "last_inventory_scan_at",
       "last_inventory_scan_at TEXT NOT NULL DEFAULT ''");
   EnsureColumn(

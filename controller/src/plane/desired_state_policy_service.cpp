@@ -98,27 +98,27 @@ void DesiredStatePolicyService::ValidateDesiredStateForControllerAdmission(
     naim::ControllerStore& store,
     const naim::DesiredState& desired_state) const {
   const naim::DesiredStatePlacementResolver placement_resolver(desired_state);
-  if (const auto placement_node_name = placement_resolver.PrimaryNodeName();
+  if (const auto placement_node_name = placement_resolver.ExecutionNodeName();
       placement_node_name.has_value()) {
     const auto host = store.LoadRegisteredHost(*placement_node_name);
     if (!host.has_value()) {
       throw std::invalid_argument(
-          "placement.primary_node '" + *placement_node_name +
+          "placement.execution_node '" + *placement_node_name +
           "' is not registered in naim");
     }
     if (host->registration_state != "registered") {
       throw std::invalid_argument(
-          "placement.primary_node '" + *placement_node_name +
+          "placement.execution_node '" + *placement_node_name +
           "' is not ready for plane placement");
     }
     if (host->session_state != "connected") {
       throw std::invalid_argument(
-          "placement.primary_node '" + *placement_node_name +
+          "placement.execution_node '" + *placement_node_name +
           "' is not currently connected");
     }
     if (host->derived_role != "worker") {
       throw std::invalid_argument(
-          "placement.primary_node '" + *placement_node_name +
+          "placement.execution_node '" + *placement_node_name +
           "' must have derived_role=worker");
     }
   }

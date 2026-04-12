@@ -48,6 +48,13 @@ class HostdBootstrapModelSupport final {
       const naim::BootstrapModelSpec& bootstrap_model,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const;
+  bool TryAcquireControllerRelayedBootstrapModel(
+      const naim::DesiredState& state,
+      const std::string& node_name,
+      const naim::BootstrapModelSpec& bootstrap_model,
+      const std::string& target_path,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const;
   bool TryUseSharedBootstrapFromOtherNode(
       const naim::DesiredState& state,
       const std::string& node_name,

@@ -167,6 +167,9 @@ json HostRegistryService::BuildPayload(
         {"session_state", host.session_state},
         {"derived_role", derived_role},
         {"role_eligible", derived_role == "storage" || derived_role == "worker"},
+        {"storage_role_enabled", host.storage_role_enabled},
+        {"storage_role_eligible",
+         inventory.has_storage_capacity && !inventory.storage_root.empty()},
         {"role_reason", role_reason.empty() ? json(nullptr) : json(role_reason)},
         {"last_inventory_scan_at",
          host.last_inventory_scan_at.empty() ? json(nullptr) : json(host.last_inventory_scan_at)},
@@ -292,6 +295,161 @@ int HostRegistryService::RotateHostKey(
   std::cout << "host key rotated: " << node_name
             << " fingerprint=" << naim::ComputeKeyFingerprintHex(host->public_key_base64)
             << "\n";
+  return 0;
+}
+
+nlohmann::json HostRegistryService::ResetHostOnboardingPayload(
+    const std::string& node_name,
+    const std::optional<std::string>& status_message) const {
+  naim::ControllerStore store(db_path_);
+  store.Initialize();
+
+  auto host = store.LoadRegisteredHost(node_name);
+  if (!host.has_value()) {
+    throw std::runtime_error("registered host '" + node_name + "' not found");
+  }
+  if (host->session_state == "connected") {
+    throw std::runtime_error(
+        "registered host '" + node_name +
+        "' is connected; stop hostd or revoke the host before resetting onboarding");
+  }
+
+  const auto pending_assignments =
+      store.LoadHostAssignments(node_name, naim::HostAssignmentStatus::Pending);
+  const auto claimed_assignments =
+      store.LoadHostAssignments(node_name, naim::HostAssignmentStatus::Claimed);
+  if (!pending_assignments.empty() || !claimed_assignments.empty()) {
+    throw std::runtime_error(
+        "registered host '" + node_name +
+        "' has pending or claimed assignments; drain or finish assignments before resetting");
+  }
+
+  const std::string previous_registration_state = host->registration_state;
+  const std::string previous_onboarding_state = host->onboarding_state;
+  const std::string previous_session_state = host->session_state;
+  const std::string previous_fingerprint =
+      host->public_key_base64.empty()
+          ? std::string{}
+          : naim::ComputeKeyFingerprintHex(host->public_key_base64);
+
+  const std::string onboarding_key = naim::RandomTokenBase64(24);
+  host->public_key_base64.clear();
+  host->controller_public_key_fingerprint.clear();
+  host->registration_state = "provisioned";
+  host->onboarding_key_hash = naim::ComputeSha256Hex(onboarding_key);
+  host->onboarding_state = "pending";
+  host->derived_role = "ineligible";
+  host->role_reason = "awaiting first inventory scan";
+  host->storage_role_enabled = false;
+  host->last_inventory_scan_at.clear();
+  host->session_state = "disconnected";
+  host->session_token.clear();
+  host->session_expires_at.clear();
+  host->session_host_sequence = 0;
+  host->session_controller_sequence = 0;
+  host->capabilities_json = "{}";
+  host->status_message =
+      status_message.value_or("host onboarding reset by operator");
+  host->last_session_at.clear();
+  host->last_heartbeat_at.clear();
+  store.UpsertRegisteredHost(*host);
+
+  event_sink_(
+      store,
+      "reset-onboarding",
+      host->status_message,
+      json{
+          {"previous_registration_state", previous_registration_state},
+          {"previous_onboarding_state", previous_onboarding_state},
+          {"previous_session_state", previous_session_state},
+          {"previous_fingerprint",
+           previous_fingerprint.empty() ? json(nullptr) : json(previous_fingerprint)},
+      },
+      node_name,
+      "warning");
+
+  return json{
+      {"service", "naim-controller"},
+      {"node_name", node_name},
+      {"registration_state", host->registration_state},
+      {"onboarding_state", host->onboarding_state},
+      {"onboarding_key", onboarding_key},
+      {"status_message", host->status_message},
+  };
+}
+
+int HostRegistryService::ResetHostOnboarding(
+    const std::string& node_name,
+    const std::optional<std::string>& status_message) const {
+  std::cout << ResetHostOnboardingPayload(node_name, status_message).dump(2) << "\n";
+  return 0;
+}
+
+nlohmann::json HostRegistryService::SetHostStorageRolePayload(
+    const std::string& node_name,
+    bool enabled,
+    const std::optional<std::string>& status_message) const {
+  naim::ControllerStore store(db_path_);
+  store.Initialize();
+
+  auto host = store.LoadRegisteredHost(node_name);
+  if (!host.has_value()) {
+    throw std::runtime_error("registered host '" + node_name + "' not found");
+  }
+
+  const auto observations = store.LoadHostObservations(node_name);
+  const std::optional<naim::HostObservation> observation =
+      observations.empty()
+          ? std::nullopt
+          : std::optional<naim::HostObservation>(observations.front());
+  const auto inventory = BuildInventorySummary(*host, observation);
+  if (enabled && (!inventory.has_storage_capacity || inventory.storage_root.empty())) {
+    throw std::runtime_error(
+        "registered host '" + node_name +
+        "' does not advertise a usable storage_root with storage capacity");
+  }
+
+  const bool previous_enabled = host->storage_role_enabled;
+  host->storage_role_enabled = enabled;
+  host->status_message =
+      status_message.value_or(enabled ? "storage role enabled by operator"
+                                      : "storage role disabled by operator");
+  store.UpsertRegisteredHost(*host);
+
+  event_sink_(
+      store,
+      "storage-role-updated",
+      host->status_message,
+      json{
+          {"previous_enabled", previous_enabled},
+          {"enabled", enabled},
+          {"storage_root",
+           inventory.storage_root.empty() ? json(nullptr) : json(inventory.storage_root)},
+          {"storage_total_bytes", inventory.has_storage_capacity
+                                      ? json(inventory.storage_total_bytes)
+                                      : json(nullptr)},
+          {"storage_free_bytes", inventory.has_storage_capacity
+                                     ? json(inventory.storage_free_bytes)
+                                     : json(nullptr)},
+      },
+      node_name,
+      "info");
+
+  return json{
+      {"service", "naim-controller"},
+      {"node_name", node_name},
+      {"storage_role_enabled", host->storage_role_enabled},
+      {"storage_root",
+       inventory.storage_root.empty() ? json(nullptr) : json(inventory.storage_root)},
+      {"status_message", host->status_message},
+  };
+}
+
+int HostRegistryService::SetHostStorageRole(
+    const std::string& node_name,
+    bool enabled,
+    const std::optional<std::string>& status_message) const {
+  std::cout << SetHostStorageRolePayload(node_name, enabled, status_message).dump(2) << "\n";
   return 0;
 }
 

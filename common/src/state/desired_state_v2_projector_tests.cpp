@@ -43,6 +43,12 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(rerendered.bootstrap_model->target_filename ==
                rendered.bootstrap_model->target_filename,
            name + ": target_filename mismatch");
+    Expect(rerendered.bootstrap_model->source_node_name ==
+               rendered.bootstrap_model->source_node_name,
+           name + ": source_node_name mismatch");
+    Expect(rerendered.bootstrap_model->source_paths ==
+               rendered.bootstrap_model->source_paths,
+           name + ": source_paths mismatch");
     Expect(rerendered.bootstrap_model->source_urls == rendered.bootstrap_model->source_urls,
            name + ": source_urls mismatch");
   }
@@ -155,7 +161,7 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
   std::cout << "ok-roundtrip: " << name << '\n';
 }
 
-void ExpectPlacementFirstProjection(const json& source, const std::string& name) {
+void ExpectExecutionNodeProjection(const json& source, const std::string& name) {
   const auto rendered = naim::DesiredStateV2Renderer::Render(source);
   const auto projected = naim::DesiredStateV2Projector::Project(rendered);
   naim::DesiredStateV2Validator::ValidateOrThrow(projected);
@@ -182,7 +188,7 @@ void ExpectPlacementFirstProjection(const json& source, const std::string& name)
         !projected.at("webgateway").contains("node"),
         name + ": webgateway.node must be suppressed");
   }
-  std::cout << "ok-placement-first: " << name << '\n';
+  std::cout << "ok-execution-node: " << name << '\n';
 }
 
 }  // namespace
@@ -423,13 +429,13 @@ int main() {
         },
         "llm-with-browsing");
 
-    ExpectPlacementFirstProjection(
+    ExpectExecutionNodeProjection(
         json{
             {"version", 2},
-            {"plane_name", "placement-first-clean"},
+            {"plane_name", "execution-node-clean"},
             {"plane_mode", "llm"},
             {"placement",
-             {{"primary_node", "worker-node-a"},
+             {{"execution_node", "worker-node-a"},
               {"app_host", {{"address", "10.0.0.15"}, {"ssh_key_path", "/tmp/id_ed25519"}}}}},
             {"model",
              {
@@ -443,7 +449,7 @@ int main() {
             {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
             {"skills", {{"enabled", true}, {"image", "example/skills:dev"}}},
         },
-        "placement-first-clean");
+        "execution-node-clean");
 
     return 0;
   } catch (const std::exception& ex) {

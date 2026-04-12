@@ -13,15 +13,15 @@ PlanePlacementPayloadBuilder::PlanePlacementPayloadBuilder(
 
 nlohmann::json PlanePlacementPayloadBuilder::Build() const {
   const naim::DesiredStatePlacementResolver placement_resolver(desired_state_);
-  const auto primary_node_name = placement_resolver.PrimaryNodeName();
+  const auto execution_node_name = placement_resolver.ExecutionNodeName();
   const auto app_host_auth_mode = ResolveExternalAppHostAuthMode();
 
   nlohmann::json payload{
       {"mode",
-       primary_node_name.has_value() ? nlohmann::json("placement-first")
+       execution_node_name.has_value() ? nlohmann::json("execution-node")
                                      : nlohmann::json("legacy-topology-compatibility")},
-      {"primary_node",
-       primary_node_name.has_value() ? nlohmann::json(*primary_node_name)
+      {"execution_node",
+       execution_node_name.has_value() ? nlohmann::json(*execution_node_name)
                                      : nlohmann::json(nullptr)},
       {"app_host",
        desired_state_.app_host.has_value()

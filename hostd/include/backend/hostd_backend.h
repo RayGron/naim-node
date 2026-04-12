@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -22,6 +24,22 @@ class HostdBackend {
   virtual bool UpdateHostAssignmentProgress(
       int assignment_id,
       const nlohmann::json& progress) = 0;
+  virtual nlohmann::json RequestModelArtifactChunk(
+      const std::string& requester_node_name,
+      const std::string& source_node_name,
+      const std::string& source_path,
+      std::uintmax_t offset,
+      std::uintmax_t max_bytes) = 0;
+  virtual nlohmann::json LoadModelArtifactChunk(
+      const std::string& requester_node_name,
+      int assignment_id) = 0;
+  virtual nlohmann::json RequestModelArtifactManifest(
+      const std::string& requester_node_name,
+      const std::string& source_node_name,
+      const std::vector<std::string>& source_paths) = 0;
+  virtual nlohmann::json LoadModelArtifactManifest(
+      const std::string& requester_node_name,
+      int assignment_id) = 0;
   virtual void UpsertHostObservation(const naim::HostObservation& observation) = 0;
   virtual void AppendEvent(const naim::EventRecord& event) = 0;
   virtual void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) = 0;

@@ -43,6 +43,7 @@ ModelLibraryNodeSummary ModelLibraryNodePlacement::BuildSummary(
   summary.session_state = host.session_state;
   summary.derived_role = host.derived_role;
   summary.role_reason = host.role_reason;
+  summary.storage_role_enabled = host.storage_role_enabled;
   const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
   if (capabilities.contains("storage_root") &&
       capabilities.at("storage_root").is_string()) {
@@ -58,11 +59,12 @@ ModelLibraryNodeSummary ModelLibraryNodePlacement::BuildSummary(
 
 bool ModelLibraryNodePlacement::AllowsModelPlacementRole(
     const std::string& derived_role,
+    bool storage_role_enabled,
     bool quantization_required) {
   if (quantization_required) {
     return derived_role == "worker";
   }
-  return derived_role == "worker" || derived_role == "storage";
+  return storage_role_enabled || derived_role == "worker" || derived_role == "storage";
 }
 
 bool ModelLibraryNodePlacement::PathBelongsToRoot(

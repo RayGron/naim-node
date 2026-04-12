@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -41,6 +42,30 @@ void SeedHost(
   host.execution_mode = "mixed";
   host.capabilities_json = json{{"storage_root", storage_root}}.dump();
   store.UpsertRegisteredHost(host);
+}
+
+naim::controller::HostRegistryEventSink TestEventSink() {
+  return [](naim::ControllerStore& store,
+            const std::string& event_type,
+            const std::string& message,
+            const json& payload,
+            const std::string& node_name,
+            const std::string& severity) {
+    store.AppendEvent(naim::EventRecord{
+        0,
+        "",
+        node_name,
+        "",
+        std::nullopt,
+        std::nullopt,
+        "host-registry",
+        event_type,
+        severity,
+        message,
+        payload.dump(),
+        "",
+    });
+  };
 }
 
 void SeedObservation(
@@ -167,12 +192,170 @@ void TestDerivesIneligibleRole() {
   Expect(!item.at("role_eligible").get<bool>(), "ineligible role should not be eligible");
 }
 
+void TestResetOnboardingIssuesNewKeyAndClearsIdentity() {
+  const std::string db_path = MakeTempDbPath("reset-onboarding");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+
+  naim::RegisteredHostRecord host;
+  host.node_name = "reset-node";
+  host.registration_state = "registered";
+  host.onboarding_state = "completed";
+  host.session_state = "disconnected";
+  host.public_key_base64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  host.controller_public_key_fingerprint = "old-controller-fingerprint";
+  host.session_token = "old-session";
+  host.session_expires_at = "2026-04-09 11:30:00";
+  host.session_host_sequence = 7;
+  host.session_controller_sequence = 9;
+  host.capabilities_json = json{{"storage_root", "/srv/reset-node"}}.dump();
+  host.derived_role = "worker";
+  host.role_reason = "old role";
+  host.storage_role_enabled = true;
+  host.last_inventory_scan_at = "2026-04-09 11:30:00";
+  host.last_session_at = "2026-04-09 11:30:00";
+  host.last_heartbeat_at = "2026-04-09 11:30:00";
+  store.UpsertRegisteredHost(host);
+
+  const naim::controller::HostRegistryService service(db_path, TestEventSink());
+  const json payload = service.ResetHostOnboardingPayload(
+      "reset-node",
+      std::make_optional<std::string>("operator requested reprovision"));
+
+  Expect(payload.at("node_name").get<std::string>() == "reset-node", "reset node mismatch");
+  Expect(
+      payload.at("registration_state").get<std::string>() == "provisioned",
+      "reset should provision host");
+  Expect(
+      payload.at("onboarding_state").get<std::string>() == "pending",
+      "reset should create pending onboarding");
+  Expect(
+      !payload.at("onboarding_key").get<std::string>().empty(),
+      "reset should return onboarding key");
+
+  const auto updated = store.LoadRegisteredHost("reset-node");
+  Expect(updated.has_value(), "reset host should still exist");
+  Expect(updated->registration_state == "provisioned", "updated registration mismatch");
+  Expect(updated->onboarding_state == "pending", "updated onboarding mismatch");
+  Expect(!updated->onboarding_key_hash.empty(), "updated host should store key hash");
+  Expect(updated->public_key_base64.empty(), "reset should clear public key");
+  Expect(updated->session_state == "disconnected", "reset session state mismatch");
+  Expect(updated->session_token.empty(), "reset should clear session token");
+  Expect(updated->session_host_sequence == 0, "reset should clear host sequence");
+  Expect(updated->session_controller_sequence == 0, "reset should clear controller sequence");
+  Expect(updated->capabilities_json == "{}", "reset should clear capabilities");
+  Expect(updated->derived_role == "ineligible", "reset should clear derived role");
+  Expect(!updated->storage_role_enabled, "reset should disable storage role");
+
+  const auto events = store.LoadEvents(std::nullopt, "reset-node", std::nullopt, "host-registry");
+  Expect(events.size() == 1, "reset should append one host registry event");
+  Expect(events.at(0).event_type == "reset-onboarding", "reset event type mismatch");
+  Expect(events.at(0).severity == "warning", "reset event severity mismatch");
+}
+
+void TestSetHostStorageRole() {
+  constexpr std::uint64_t kGiB = 1024ULL * 1024ULL * 1024ULL;
+  const std::string db_path = MakeTempDbPath("set-storage-role");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  SeedHost(store, "storage-toggle-node", "/srv/storage-toggle-node");
+  SeedObservation(
+      store,
+      "storage-toggle-node",
+      "/srv/storage-toggle-node",
+      4,
+      128ULL * kGiB,
+      500ULL * kGiB,
+      400ULL * kGiB);
+
+  const naim::controller::HostRegistryService service(db_path, TestEventSink());
+  const json enabled_payload = service.SetHostStorageRolePayload(
+      "storage-toggle-node",
+      true,
+      std::make_optional<std::string>("operator enabled storage role"));
+  Expect(
+      enabled_payload.at("storage_role_enabled").get<bool>(),
+      "storage role should be enabled");
+  auto updated = store.LoadRegisteredHost("storage-toggle-node");
+  Expect(updated.has_value(), "storage role host should still exist");
+  Expect(updated->storage_role_enabled, "storage role flag should persist");
+  const json listed =
+      service.BuildPayload(std::make_optional<std::string>("storage-toggle-node"))
+          .at("items")
+          .at(0);
+  Expect(
+      listed.at("storage_role_enabled").get<bool>(),
+      "host listing should expose enabled storage role");
+  Expect(
+      listed.at("storage_role_eligible").get<bool>(),
+      "host listing should expose storage eligibility");
+
+  const json disabled_payload = service.SetHostStorageRolePayload(
+      "storage-toggle-node",
+      false,
+      std::nullopt);
+  Expect(
+      !disabled_payload.at("storage_role_enabled").get<bool>(),
+      "storage role should be disabled");
+}
+
+void TestResetOnboardingRejectsConnectedHost() {
+  const std::string db_path = MakeTempDbPath("reset-connected");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  SeedHost(store, "connected-node", "/srv/connected-node");
+
+  const naim::controller::HostRegistryService service(db_path, TestEventSink());
+  bool threw = false;
+  try {
+    (void)service.ResetHostOnboardingPayload("connected-node", std::nullopt);
+  } catch (const std::exception& error) {
+    threw = std::string(error.what()).find("connected") != std::string::npos;
+  }
+  Expect(threw, "reset should reject connected host");
+}
+
+void TestResetOnboardingRejectsActiveAssignments() {
+  const std::string db_path = MakeTempDbPath("reset-active-assignment");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+
+  naim::RegisteredHostRecord host;
+  host.node_name = "assigned-node";
+  host.registration_state = "registered";
+  host.onboarding_state = "completed";
+  host.session_state = "disconnected";
+  store.UpsertRegisteredHost(host);
+
+  naim::HostAssignment assignment;
+  assignment.node_name = "assigned-node";
+  assignment.plane_name = "plane-a";
+  assignment.desired_generation = 1;
+  assignment.assignment_type = "apply-desired-state";
+  assignment.desired_state_json = "{}";
+  assignment.status = naim::HostAssignmentStatus::Pending;
+  store.EnqueueHostAssignments({assignment});
+
+  const naim::controller::HostRegistryService service(db_path, TestEventSink());
+  bool threw = false;
+  try {
+    (void)service.ResetHostOnboardingPayload("assigned-node", std::nullopt);
+  } catch (const std::exception& error) {
+    threw = std::string(error.what()).find("assignments") != std::string::npos;
+  }
+  Expect(threw, "reset should reject active host assignments");
+}
+
 }  // namespace
 
 int main() {
   TestDerivesStorageRole();
   TestDerivesWorkerRole();
   TestDerivesIneligibleRole();
+  TestSetHostStorageRole();
+  TestResetOnboardingIssuesNewKeyAndClearsIdentity();
+  TestResetOnboardingRejectsConnectedHost();
+  TestResetOnboardingRejectsActiveAssignments();
   std::cout << "host registry service tests passed\n";
   return 0;
 }

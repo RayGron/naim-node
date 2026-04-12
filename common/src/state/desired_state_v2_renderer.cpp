@@ -37,6 +37,14 @@ bool HasExplicitPrivateStorage(
           !service_json.at(legacy_volume_key).empty());
 }
 
+std::string PlacementExecutionNodeName(const nlohmann::json& placement) {
+  const std::string execution_node = placement.value("execution_node", std::string{});
+  if (!execution_node.empty()) {
+    return execution_node;
+  }
+  return placement.value("primary_node", std::string{});
+}
+
 }  // namespace
 
 DesiredState DesiredStateV2Renderer::Render(const nlohmann::json& value) {
@@ -163,9 +171,9 @@ void DesiredStateV2Renderer::RenderPlacement() {
     return;
   }
   const auto& placement = value_.at("placement");
-  const std::string primary_node = placement.value("primary_node", std::string{});
-  if (!primary_node.empty()) {
-    state_.placement_target = "node:" + primary_node;
+  const std::string execution_node = PlacementExecutionNodeName(placement);
+  if (!execution_node.empty()) {
+    state_.placement_target = "node:" + execution_node;
   }
   if (placement.contains("app_host") && placement.at("app_host").is_object()) {
     ExternalAppHostConfig app_host;
@@ -230,6 +238,14 @@ void DesiredStateV2Renderer::RenderModel() {
         model.local_path.has_value() ? std::string("reference") : std::string("copy"));
     if (materialization.contains("local_path") && materialization.at("local_path").is_string()) {
       model.local_path = materialization.at("local_path").get<std::string>();
+    }
+    if (materialization.contains("source_node_name") &&
+        materialization.at("source_node_name").is_string()) {
+      model.source_node_name = materialization.at("source_node_name").get<std::string>();
+    }
+    if (materialization.contains("source_paths") &&
+        materialization.at("source_paths").is_array()) {
+      model.source_paths = materialization.at("source_paths").get<std::vector<std::string>>();
     }
   }
 

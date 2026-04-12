@@ -866,6 +866,11 @@ json DashboardService::BuildBootstrapModelPayload(
       {"local_path",
        bootstrap_model->local_path.has_value() ? json(*bootstrap_model->local_path)
                                                : json(nullptr)},
+      {"source_node_name",
+       bootstrap_model->source_node_name.has_value()
+           ? json(*bootstrap_model->source_node_name)
+           : json(nullptr)},
+      {"source_paths", bootstrap_model->source_paths},
       {"source_url",
        bootstrap_model->source_url.has_value() ? json(*bootstrap_model->source_url)
                                                : json(nullptr)},

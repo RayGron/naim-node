@@ -1,6 +1,7 @@
 #include "naim/state/desired_state_v2_validator.h"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -11,6 +12,23 @@ namespace {
 
 bool FieldEnabledByDefault(const nlohmann::json& service_json, bool default_value) {
   return service_json.value("enabled", default_value);
+}
+
+std::optional<std::string> PlacementExecutionNodeName(const nlohmann::json& placement) {
+  const std::string execution_node = placement.value("execution_node", std::string{});
+  const std::string legacy_primary_node = placement.value("primary_node", std::string{});
+  if (!execution_node.empty() && !legacy_primary_node.empty() &&
+      execution_node != legacy_primary_node) {
+    throw std::runtime_error(
+        "desired-state v2 placement.execution_node conflicts with legacy placement.primary_node");
+  }
+  if (!execution_node.empty()) {
+    return execution_node;
+  }
+  if (!legacy_primary_node.empty()) {
+    return legacy_primary_node;
+  }
+  return std::nullopt;
 }
 
 }  // namespace
@@ -153,11 +171,17 @@ void DesiredStateV2Validator::ValidatePlacement() const {
   }
   RequireObject("placement");
   const auto& placement = value_.at("placement");
-  if (!placement.contains("primary_node") ||
-      !placement.at("primary_node").is_string() ||
-      placement.at("primary_node").get<std::string>().empty()) {
+  if (placement.contains("execution_node") && !placement.at("execution_node").is_string()) {
     throw std::runtime_error(
-        "desired-state v2 placement.primary_node must be a non-empty string");
+        "desired-state v2 placement.execution_node must be a string");
+  }
+  if (placement.contains("primary_node") && !placement.at("primary_node").is_string()) {
+    throw std::runtime_error(
+        "desired-state v2 placement.primary_node legacy alias must be a string");
+  }
+  if (!PlacementExecutionNodeName(placement).has_value()) {
+    throw std::runtime_error(
+        "desired-state v2 placement.execution_node must be a non-empty string");
   }
   if (!placement.contains("app_host")) {
     return;
@@ -609,7 +633,7 @@ std::optional<std::string> DesiredStateV2Validator::KnownNodeExecutionMode(
     const std::string& node_name) const {
   if (!LegacyTopologyPlacementEnabled()) {
     if (value_.contains("placement") && value_.at("placement").is_object() &&
-        value_.at("placement").value("primary_node", std::string{}) == node_name) {
+        PlacementExecutionNodeName(value_.at("placement")).value_or(std::string{}) == node_name) {
       return std::string("mixed");
     }
     return std::nullopt;
@@ -617,7 +641,7 @@ std::optional<std::string> DesiredStateV2Validator::KnownNodeExecutionMode(
   const auto& topology = value_.at("topology");
   if (!topology.contains("nodes") || !topology.at("nodes").is_array()) {
     if (value_.contains("placement") && value_.at("placement").is_object() &&
-        value_.at("placement").value("primary_node", std::string{}) == node_name) {
+        PlacementExecutionNodeName(value_.at("placement")).value_or(std::string{}) == node_name) {
       return std::string("mixed");
     }
     return std::nullopt;
@@ -628,7 +652,7 @@ std::optional<std::string> DesiredStateV2Validator::KnownNodeExecutionMode(
     }
   }
   if (value_.contains("placement") && value_.at("placement").is_object() &&
-      value_.at("placement").value("primary_node", std::string{}) == node_name) {
+      PlacementExecutionNodeName(value_.at("placement")).value_or(std::string{}) == node_name) {
     return std::string("mixed");
   }
   return std::nullopt;

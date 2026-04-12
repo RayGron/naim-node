@@ -39,8 +39,8 @@ const FIELD_INFO = {
   gatewayPort: "HTTP port exposed by the plane gateway.",
   inferencePort: "Internal inference API port used by infer and worker services.",
   serverName: "Logical host name advertised by the gateway and status surfaces.",
-  primaryNode: "Primary naim-node selected for this plane. By default plane containers colocate on this node.",
-  appHostEnabled: "Deploy the app container to an external SSH host instead of the primary naim-node.",
+  executionNode: "Connected naim-node selected for this plane. By default plane containers colocate on this node.",
+  appHostEnabled: "Deploy the app container to an external SSH host instead of the selected execution node.",
   appHostAddress: "Address of the external SSH host that should run the app container.",
   appHostAuthMode: "Authentication mode used for the external app host SSH connection.",
   appHostSshKeyPath: "Path to the SSH private key used to deploy the app container.",
@@ -210,8 +210,10 @@ function normalizeWorkerAssignments(assignments) {
   }));
 }
 
-function derivePrimaryNodeFromDesiredStateV2(value) {
-  const placementNode = String(value?.placement?.primary_node || "").trim();
+function deriveExecutionNodeFromDesiredStateV2(value) {
+  const placementNode = String(
+    value?.placement?.execution_node || value?.placement?.primary_node || "",
+  ).trim();
   if (placementNode) {
     return placementNode;
   }
@@ -256,6 +258,8 @@ export function buildNewPlaneFormState() {
     modelUrls: "",
     materializationMode: "reference",
     materializationLocalPath: "",
+    materializationSourceNodeName: "",
+    materializationSourcePaths: [],
     servedModelName: "",
     servedModelNameManual: false,
     modelTargetFilename: "",
@@ -275,7 +279,7 @@ export function buildNewPlaneFormState() {
     inferencePort: 18094,
     serverName: "",
     serverNameManual: false,
-    primaryNode: "local-hostd",
+    executionNode: "local-hostd",
     appHostEnabled: false,
     appHostAddress: "",
     appHostAuthMode: "ssh-key",
@@ -349,7 +353,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const planeName = value?.plane_name || defaults.planeName;
   const servedModelName = value?.model?.served_model_name || deriveServedModelName(planeName);
   const serverName = network.server_name || deriveServerName(planeName);
-  const primaryNode = derivePrimaryNodeFromDesiredStateV2(value);
+  const executionNode = deriveExecutionNodeFromDesiredStateV2(value);
   const appHostAuthMode =
     appHost?.ssh_key_path ? "ssh-key" : appHost?.username || appHost?.password ? "password" : defaults.appHostAuthMode;
   return {
@@ -370,6 +374,10 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     modelUrls: Array.isArray(source.urls) ? source.urls.join("\n") : "",
     materializationMode: materialization.mode || defaults.materializationMode,
     materializationLocalPath: materialization.local_path || "",
+    materializationSourceNodeName: materialization.source_node_name || "",
+    materializationSourcePaths: Array.isArray(materialization.source_paths)
+      ? materialization.source_paths
+      : [],
     servedModelName,
     servedModelNameManual: servedModelName !== deriveServedModelName(planeName),
     modelTargetFilename: value?.model?.target_filename || "",
@@ -393,7 +401,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     inferencePort: Number(network.inference_port ?? defaults.inferencePort),
     serverName,
     serverNameManual: serverName !== deriveServerName(planeName),
-    primaryNode,
+    executionNode,
     appHostEnabled: Boolean(appHost?.address),
     appHostAddress: appHost?.address || "",
     appHostAuthMode,
@@ -509,7 +517,7 @@ export function buildDesiredStateV2FromForm(form) {
       server_name: serverName,
     },
     placement: {
-      primary_node: String(form.primaryNode || "").trim() || "local-hostd",
+      execution_node: String(form.executionNode || "").trim() || "local-hostd",
     },
     app: {
       enabled: Boolean(form.appEnabled),
@@ -564,8 +572,8 @@ export function buildDesiredStateV2FromForm(form) {
     }
   }
 
-    if (form.planeMode === "llm") {
-      desiredState.model = {
+  if (form.planeMode === "llm") {
+    desiredState.model = {
       source,
       materialization: {
         mode: form.materializationMode,
@@ -574,6 +582,15 @@ export function buildDesiredStateV2FromForm(form) {
     };
     if (form.materializationLocalPath.trim()) {
       desiredState.model.materialization.local_path = form.materializationLocalPath.trim();
+    }
+    if (String(form.materializationSourceNodeName || "").trim()) {
+      desiredState.model.materialization.source_node_name =
+        String(form.materializationSourceNodeName || "").trim();
+    }
+    if (Array.isArray(form.materializationSourcePaths) && form.materializationSourcePaths.length > 0) {
+      desiredState.model.materialization.source_paths = form.materializationSourcePaths
+        .map((path) => String(path || "").trim())
+        .filter(Boolean);
     }
     if (form.modelTargetFilename.trim()) {
       desiredState.model.target_filename = form.modelTargetFilename.trim();
@@ -842,15 +859,15 @@ export function validatePlaneV2Form(form) {
   }
 
   const referencedNodes = [
-    String(form?.primaryNode || "").trim(),
+    String(form?.executionNode || "").trim(),
     String(form?.inferNode || "").trim(),
     String(form?.workerNode || "").trim(),
     String(form?.appNode || "").trim(),
     ...enabledAssignments.map((assignment) => String(assignment.node || "").trim()),
   ].filter(Boolean);
 
-  if (!String(form?.primaryNode || "").trim()) {
-    errors.push("Primary node is required.");
+  if (!String(form?.executionNode || "").trim()) {
+    errors.push("Execution node is required.");
   }
   if (form?.appHostEnabled && !form?.appEnabled) {
     errors.push("External app host requires the app container to be enabled.");
@@ -1298,6 +1315,8 @@ export function PlaneV2FormBuilder({
         modelRef: item?.model_id || item?.name || item?.path || "",
         materializationMode: "reference",
         materializationLocalPath: item?.path || "",
+        materializationSourceNodeName: item?.node_name || "",
+        materializationSourcePaths: Array.isArray(item?.paths) ? item.paths : [],
         servedModelName: current.servedModelNameManual
           ? current.servedModelName
           : fallbackName.replace(/\s+/g, "-").toLowerCase(),
@@ -1324,7 +1343,7 @@ export function PlaneV2FormBuilder({
   function enableSingleHostLayout() {
     updatePlaneDialogForm(setDialog, (current) => ({
       ...current,
-      primaryNode: "local-hostd",
+      executionNode: "local-hostd",
       topologyEnabled: false,
       topologyNodes: [],
       inferNode: "",
@@ -1354,7 +1373,7 @@ export function PlaneV2FormBuilder({
         ...current,
         runtimeEngine: "llama.cpp",
         inferReplicas: workerCount,
-        primaryNode: "infer-hostd",
+        executionNode: "infer-hostd",
         topologyEnabled: true,
         topologyNodes: topologyNodesValue,
         inferNode: "infer-hostd",
@@ -2054,12 +2073,12 @@ export function PlaneV2FormBuilder({
 
       <AdvancedSection
         title="Placement and topology"
-        description="Primary node selection is the normal path. Custom topology stays available only for legacy split-host and manual placement layouts."
+        description="Execution node selection is the normal path. Custom topology stays available only for legacy split-host and manual placement layouts."
       >
         <SectionMeta>{topologySummary}</SectionMeta>
         <SectionActions>
           <button className="ghost-button" type="button" onClick={enableSingleHostLayout}>
-            Use placement-first single-node layout
+            Use selected-node layout
           </button>
           <button className="ghost-button" type="button" onClick={generateSplitHostLayout}>
             Generate legacy split-host layout
@@ -2067,13 +2086,13 @@ export function PlaneV2FormBuilder({
         </SectionActions>
         <div className="plane-form-grid">
           <label className="field-label">
-            <InfoLabel info={FIELD_INFO.primaryNode}>Primary node</InfoLabel>
+            <InfoLabel info={FIELD_INFO.executionNode}>Execution node</InfoLabel>
             <input
-              className={inputClassName(Boolean(fieldError("Primary node is required.")))}
-              value={form.primaryNode}
-              onChange={bindText("primaryNode")}
+              className={inputClassName(Boolean(fieldError("Execution node is required.")))}
+              value={form.executionNode}
+              onChange={bindText("executionNode")}
             />
-            <FieldHint message={fieldError("Primary node is required.")} />
+            <FieldHint message={fieldError("Execution node is required.")} />
           </label>
           <label className="field-label plane-checkbox">
             <input
@@ -2330,9 +2349,9 @@ export function PlaneV2FormBuilder({
                   </label>
                 ) : (
                   <div className="field-label">
-                    <InfoLabel info={FIELD_INFO.primaryNode}>Infer node</InfoLabel>
+                    <InfoLabel info={FIELD_INFO.executionNode}>Infer node</InfoLabel>
                     <div className="plane-form-section-copy">
-                      Infer colocates with the selected primary node unless legacy topology is enabled.
+                      Infer colocates with the selected execution node unless legacy topology is enabled.
                     </div>
                   </div>
                 )}
@@ -2513,9 +2532,9 @@ export function PlaneV2FormBuilder({
               </label>
             ) : (
               <div className="field-label">
-                <InfoLabel info={FIELD_INFO.primaryNode}>App placement</InfoLabel>
+                <InfoLabel info={FIELD_INFO.executionNode}>App placement</InfoLabel>
                 <div className="plane-form-section-copy">
-                  App runs on the primary node by default and moves only when External app host is enabled.
+                  App runs on the selected execution node by default and moves only when External app host is enabled.
                 </div>
               </div>
             )}

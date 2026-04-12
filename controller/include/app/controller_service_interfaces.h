@@ -115,6 +115,13 @@ class IHostRegistryService {
       const std::string& node_name,
       const std::string& public_key_base64,
       const std::optional<std::string>& status_message) const = 0;
+  virtual int ResetHostOnboarding(
+      const std::string& node_name,
+      const std::optional<std::string>& status_message) const = 0;
+  virtual int SetHostStorageRole(
+      const std::string& node_name,
+      bool enabled,
+      const std::optional<std::string>& status_message) const = 0;
 };
 
 class IPlaneService {

@@ -54,7 +54,7 @@ trap cleanup_image_context EXIT
 
 mkdir -p "${image_context}/build/linux/x64/bin"
 cp -R "${repo_root}/runtime" "${image_context}/runtime"
-for binary in naim-controller naim-hostd naim-inferctl naim-workerd naim-skillsd naim-webgatewayd; do
+for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd naim-skillsd naim-webgatewayd; do
   cp "${build_dir}/${binary}" "${image_context}/build/linux/x64/${binary}"
 done
 cp "${build_dir}/bin/llama-server" "${image_context}/build/linux/x64/bin/llama-server"

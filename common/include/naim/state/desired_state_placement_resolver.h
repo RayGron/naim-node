@@ -11,8 +11,8 @@ class DesiredStatePlacementResolver final {
  public:
   explicit DesiredStatePlacementResolver(const DesiredState& state);
 
-  bool HasPrimaryNode() const;
-  std::optional<std::string> PrimaryNodeName() const;
+  bool HasExecutionNode() const;
+  std::optional<std::string> ExecutionNodeName() const;
   std::string DefaultNodeName() const;
   bool ShouldEmitTopology() const;
 

@@ -25,18 +25,19 @@ RegisteredHostRecord RegisteredHostFromStatement(sqlite3_stmt* statement) {
   host.onboarding_state = ToColumnText(statement, 8);
   host.derived_role = ToColumnText(statement, 9);
   host.role_reason = ToColumnText(statement, 10);
-  host.last_inventory_scan_at = ToColumnText(statement, 11);
-  host.session_state = ToColumnText(statement, 12);
-  host.session_token = ToColumnText(statement, 13);
-  host.session_expires_at = ToColumnText(statement, 14);
-  host.session_host_sequence = sqlite3_column_int64(statement, 15);
-  host.session_controller_sequence = sqlite3_column_int64(statement, 16);
-  host.capabilities_json = ToColumnText(statement, 17);
-  host.status_message = ToColumnText(statement, 18);
-  host.last_session_at = ToColumnText(statement, 19);
-  host.last_heartbeat_at = ToColumnText(statement, 20);
-  host.created_at = ToColumnText(statement, 21);
-  host.updated_at = ToColumnText(statement, 22);
+  host.storage_role_enabled = sqlite3_column_int(statement, 11) != 0;
+  host.last_inventory_scan_at = ToColumnText(statement, 12);
+  host.session_state = ToColumnText(statement, 13);
+  host.session_token = ToColumnText(statement, 14);
+  host.session_expires_at = ToColumnText(statement, 15);
+  host.session_host_sequence = sqlite3_column_int64(statement, 16);
+  host.session_controller_sequence = sqlite3_column_int64(statement, 17);
+  host.capabilities_json = ToColumnText(statement, 18);
+  host.status_message = ToColumnText(statement, 19);
+  host.last_session_at = ToColumnText(statement, 20);
+  host.last_heartbeat_at = ToColumnText(statement, 21);
+  host.created_at = ToColumnText(statement, 22);
+  host.updated_at = ToColumnText(statement, 23);
   return host;
 }
 
@@ -59,6 +60,7 @@ void RegisteredHostRepository::UpsertRegisteredHost(const RegisteredHostRecord& 
       " onboarding_state,"
       " derived_role,"
       " role_reason,"
+      " storage_role_enabled,"
       " last_inventory_scan_at,"
       " session_state,"
       " session_token,"
@@ -71,7 +73,7 @@ void RegisteredHostRepository::UpsertRegisteredHost(const RegisteredHostRecord& 
       " last_heartbeat_at,"
       " updated_at"
       ") VALUES ("
-      " ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, CURRENT_TIMESTAMP"
+      " ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, CURRENT_TIMESTAMP"
       ")"
       " ON CONFLICT(node_name) DO UPDATE SET"
       " advertised_address = excluded.advertised_address,"
@@ -84,6 +86,7 @@ void RegisteredHostRepository::UpsertRegisteredHost(const RegisteredHostRecord& 
       " onboarding_state = excluded.onboarding_state,"
       " derived_role = excluded.derived_role,"
       " role_reason = excluded.role_reason,"
+      " storage_role_enabled = excluded.storage_role_enabled,"
       " last_inventory_scan_at = excluded.last_inventory_scan_at,"
       " session_state = excluded.session_state,"
       " session_token = excluded.session_token,"
@@ -106,16 +109,17 @@ void RegisteredHostRepository::UpsertRegisteredHost(const RegisteredHostRecord& 
   statement.BindText(9, host.onboarding_state);
   statement.BindText(10, host.derived_role);
   statement.BindText(11, host.role_reason);
-  statement.BindText(12, host.last_inventory_scan_at);
-  statement.BindText(13, host.session_state);
-  statement.BindText(14, host.session_token);
-  statement.BindText(15, host.session_expires_at);
-  statement.BindInt(16, static_cast<int>(host.session_host_sequence));
-  statement.BindInt(17, static_cast<int>(host.session_controller_sequence));
-  statement.BindText(18, host.capabilities_json);
-  statement.BindText(19, host.status_message);
-  statement.BindText(20, host.last_session_at);
-  statement.BindText(21, host.last_heartbeat_at);
+  statement.BindInt(12, host.storage_role_enabled ? 1 : 0);
+  statement.BindText(13, host.last_inventory_scan_at);
+  statement.BindText(14, host.session_state);
+  statement.BindText(15, host.session_token);
+  statement.BindText(16, host.session_expires_at);
+  statement.BindInt(17, static_cast<int>(host.session_host_sequence));
+  statement.BindInt(18, static_cast<int>(host.session_controller_sequence));
+  statement.BindText(19, host.capabilities_json);
+  statement.BindText(20, host.status_message);
+  statement.BindText(21, host.last_session_at);
+  statement.BindText(22, host.last_heartbeat_at);
   statement.StepDone();
 }
 
@@ -134,6 +138,7 @@ std::optional<RegisteredHostRecord> RegisteredHostRepository::LoadRegisteredHost
       " onboarding_state,"
       " derived_role,"
       " role_reason,"
+      " storage_role_enabled,"
       " last_inventory_scan_at,"
       " session_state,"
       " session_token,"
@@ -168,6 +173,7 @@ std::vector<RegisteredHostRecord> RegisteredHostRepository::LoadRegisteredHosts(
       " onboarding_state,"
       " derived_role,"
       " role_reason,"
+      " storage_role_enabled,"
       " last_inventory_scan_at,"
       " session_state,"
       " session_token,"

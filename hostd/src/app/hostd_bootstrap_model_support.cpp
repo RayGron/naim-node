@@ -2,13 +2,72 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <thread>
+
+#include "naim/security/crypto_utils.h"
 
 namespace naim::hostd {
 
 namespace fs = std::filesystem;
+
+namespace {
+
+constexpr std::uintmax_t kControllerRelayedChunkBytes = 4ULL * 1024ULL * 1024ULL;
+constexpr int kControllerRelayedChunkPollAttempts = 600;
+constexpr std::chrono::milliseconds kControllerRelayedChunkPollInterval(500);
+
+std::optional<std::uintmax_t> JsonUintmax(const nlohmann::json& payload, const std::string& key) {
+  if (!payload.contains(key) || !payload.at(key).is_number_unsigned()) {
+    return std::nullopt;
+  }
+  return payload.at(key).get<std::uintmax_t>();
+}
+
+std::string BuildManifestCanonicalText(const std::vector<nlohmann::json>& files) {
+  std::vector<nlohmann::json> sorted_files = files;
+  std::sort(
+      sorted_files.begin(),
+      sorted_files.end(),
+      [](const nlohmann::json& lhs, const nlohmann::json& rhs) {
+        const int lhs_root = lhs.value("root_index", 0);
+        const int rhs_root = rhs.value("root_index", 0);
+        if (lhs_root != rhs_root) {
+          return lhs_root < rhs_root;
+        }
+        return lhs.value("relative_path", std::string{}) <
+               rhs.value("relative_path", std::string{});
+      });
+  std::string canonical = "naim-model-manifest-v1\n";
+  for (const auto& file : sorted_files) {
+    canonical += "file ";
+    canonical += std::to_string(file.value("root_index", 0));
+    canonical += " ";
+    canonical += file.value("relative_path", std::string{});
+    canonical += " ";
+    canonical += std::to_string(JsonUintmax(file, "size_bytes").value_or(0));
+    canonical += " ";
+    canonical += file.value("sha256", std::string{});
+    canonical += "\n";
+  }
+  return canonical;
+}
+
+std::string ComputeManifestSha256Hex(const std::vector<nlohmann::json>& files) {
+  return naim::ComputeSha256Hex(BuildManifestCanonicalText(files));
+}
+
+std::string NormalizeLowercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+}  // namespace
 
 HostdBootstrapModelSupport::HostdBootstrapModelSupport(
     const HostdBootstrapModelArtifactSupport& artifact_support,
@@ -61,6 +120,10 @@ bool HostdBootstrapModelSupport::TryUseReferenceBootstrapModel(
 
   std::error_code error;
   if (!fs::exists(*bootstrap_model.local_path, error) || error) {
+    if (bootstrap_model.source_node_name.has_value() &&
+        !bootstrap_model.source_node_name->empty()) {
+      return false;
+    }
     throw std::runtime_error(
         "bootstrap model reference path does not exist: " + *bootstrap_model.local_path);
   }
@@ -79,6 +142,329 @@ bool HostdBootstrapModelSupport::TryUseReferenceBootstrapModel(
       node_name,
       *bootstrap_model.local_path,
       *bootstrap_model.local_path);
+  return true;
+}
+
+bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
+    const naim::DesiredState& state,
+    const std::string& node_name,
+    const naim::BootstrapModelSpec& bootstrap_model,
+    const std::string& target_path,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (!bootstrap_model.local_path.has_value() ||
+      bootstrap_model.local_path->empty() ||
+      !bootstrap_model.source_node_name.has_value() ||
+      bootstrap_model.source_node_name->empty()) {
+    return false;
+  }
+
+  if (backend == nullptr) {
+    throw std::runtime_error(
+        "bootstrap model source_node_name requires a controller backend for model relay");
+  }
+
+  std::vector<std::string> source_paths = bootstrap_model.source_paths;
+  if (source_paths.empty()) {
+    source_paths.push_back(*bootstrap_model.local_path);
+  }
+  for (auto& source_path : source_paths) {
+    source_path = fs::path(source_path).lexically_normal().string();
+    if (source_path.empty() || source_path.front() != '/') {
+      throw std::runtime_error(
+          "bootstrap model controller relay requires absolute source paths");
+    }
+  }
+  std::sort(source_paths.begin(), source_paths.end());
+  source_paths.erase(std::unique(source_paths.begin(), source_paths.end()), source_paths.end());
+
+  bool all_sources_exist_locally = !source_paths.empty();
+  std::error_code error;
+  for (const auto& source_path : source_paths) {
+    all_sources_exist_locally =
+        all_sources_exist_locally && fs::exists(source_path, error) && !error;
+    error.clear();
+  }
+  if (all_sources_exist_locally) {
+    return false;
+  }
+
+  PublishAssignmentProgress(
+      backend,
+      assignment_id,
+      "acquiring-model",
+      "Acquiring model",
+      "Requesting bootstrap model manifest from storage node " +
+          *bootstrap_model.source_node_name + ".",
+      20,
+      state.plane_name,
+      node_name);
+
+  const nlohmann::json manifest_request = backend->RequestModelArtifactManifest(
+      node_name,
+      *bootstrap_model.source_node_name,
+      source_paths);
+  if (manifest_request.value("status", std::string{}) != "queued") {
+    throw std::runtime_error(
+        "controller did not queue model artifact manifest relay: " +
+        manifest_request.value("message", std::string("unknown error")));
+  }
+  const int manifest_assignment_id = manifest_request.value("assignment_id", 0);
+  if (manifest_assignment_id <= 0) {
+    throw std::runtime_error("controller returned invalid model artifact manifest assignment id");
+  }
+
+  nlohmann::json manifest = nlohmann::json::object();
+  bool manifest_ready = false;
+  for (int attempt = 0; attempt < kControllerRelayedChunkPollAttempts; ++attempt) {
+    const nlohmann::json poll =
+        backend->LoadModelArtifactManifest(node_name, manifest_assignment_id);
+    const std::string status = poll.value("status", std::string{});
+    if (status == "failed" || status == "superseded") {
+      throw std::runtime_error(
+          "model artifact manifest relay failed: " +
+          poll.value("status_message", std::string("unknown error")));
+    }
+    if (status == "applied") {
+      manifest = poll.contains("progress") && poll.at("progress").is_object()
+                     ? poll.at("progress")
+                     : nlohmann::json::object();
+      if (manifest.value("phase", std::string{}) != "manifest-ready" ||
+          !manifest.contains("files") ||
+          !manifest.at("files").is_array()) {
+        throw std::runtime_error("model artifact manifest relay applied without manifest payload");
+      }
+      manifest_ready = true;
+      break;
+    }
+    std::this_thread::sleep_for(kControllerRelayedChunkPollInterval);
+  }
+  if (!manifest_ready) {
+    throw std::runtime_error("timed out waiting for model artifact manifest relay");
+  }
+
+  std::vector<nlohmann::json> files = manifest.at("files").get<std::vector<nlohmann::json>>();
+  if (files.empty()) {
+    throw std::runtime_error("model artifact manifest is empty");
+  }
+  std::sort(files.begin(), files.end(), [](const nlohmann::json& lhs, const nlohmann::json& rhs) {
+    const int lhs_root = lhs.value("root_index", 0);
+    const int rhs_root = rhs.value("root_index", 0);
+    if (lhs_root != rhs_root) {
+      return lhs_root < rhs_root;
+    }
+    return lhs.value("relative_path", std::string{}) <
+           rhs.value("relative_path", std::string{});
+  });
+  for (const auto& file : files) {
+    if (file.value("sha256", std::string{}).empty() ||
+        !JsonUintmax(file, "size_bytes").has_value()) {
+      throw std::runtime_error("model artifact manifest is missing file checksum metadata");
+    }
+  }
+  const std::string manifest_sha256 = manifest.value("manifest_sha256", std::string{});
+  const std::string computed_manifest_sha256 = ComputeManifestSha256Hex(files);
+  if (manifest_sha256.empty() ||
+      NormalizeLowercase(manifest_sha256) != NormalizeLowercase(computed_manifest_sha256)) {
+    throw std::runtime_error("model artifact manifest checksum mismatch");
+  }
+
+  bool directory_transfer = false;
+  if (manifest.contains("roots") && manifest.at("roots").is_array()) {
+    for (const auto& root : manifest.at("roots")) {
+      directory_transfer =
+          directory_transfer || root.value("kind", std::string{}) == "directory";
+    }
+  }
+  if (bootstrap_model.sha256.has_value()) {
+    const std::string expected_artifact_sha256 =
+        (!directory_transfer && files.size() == 1)
+            ? files.front().value("sha256", std::string{})
+            : manifest_sha256;
+    if (NormalizeLowercase(*bootstrap_model.sha256) !=
+        NormalizeLowercase(expected_artifact_sha256)) {
+      throw std::runtime_error("bootstrap model artifact checksum mismatch in manifest");
+    }
+  }
+
+  std::vector<std::string> target_paths;
+  target_paths.reserve(files.size());
+  const fs::path target_root =
+      directory_transfer ? fs::path(target_path + ".partdir") : fs::path(target_path).parent_path();
+  if (directory_transfer) {
+    fs::remove_all(target_root, error);
+    fs::create_directories(target_root);
+  }
+
+  for (std::size_t index = 0; index < files.size(); ++index) {
+    const std::string relative_path =
+        fs::path(files[index].value("relative_path", std::string{})).lexically_normal().generic_string();
+    if (relative_path.empty() || relative_path == "." || relative_path.front() == '/' ||
+        relative_path == ".." || relative_path.rfind("../", 0) == 0) {
+      throw std::runtime_error("model artifact manifest contains unsafe relative path");
+    }
+    fs::path resolved_target;
+    if (directory_transfer) {
+      resolved_target = target_root / relative_path;
+    } else if (files.size() == 1) {
+      resolved_target = target_path;
+    } else {
+      resolved_target = fs::path(target_path).parent_path() / relative_path;
+    }
+    target_paths.push_back(resolved_target.string());
+  }
+
+  bool already_present = true;
+  for (std::size_t index = 0; index < files.size(); ++index) {
+    const auto expected_size = JsonUintmax(files[index], "size_bytes");
+    const auto current_size = transfer_support_.FileSizeIfExists(target_paths[index]);
+    already_present = already_present && expected_size.has_value() &&
+                      current_size.has_value() && *expected_size == *current_size;
+    if (already_present) {
+      already_present =
+          NormalizeLowercase(naim::ComputeFileSha256Hex(target_paths[index])) ==
+          NormalizeLowercase(files[index].value("sha256", std::string{}));
+    }
+  }
+  if (already_present) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        "using-cached-model",
+        "Using cached model",
+        "Using the model artifact already present in the plane shared disk.",
+        72,
+        state.plane_name,
+        node_name);
+    active_model_support_.WriteBootstrapActiveModel(
+        state,
+        node_name,
+        directory_transfer ? target_path : target_paths.front());
+    return true;
+  }
+
+  const std::uintmax_t aggregate_total =
+      JsonUintmax(manifest, "bytes_total").value_or(std::uintmax_t{0});
+  std::uintmax_t aggregate_done = 0;
+  for (std::size_t file_index = 0; file_index < files.size(); ++file_index) {
+    const std::string source_path = files[file_index].value("source_path", std::string{});
+    const std::string file_target_path = target_paths[file_index];
+    file_support_.EnsureParentDirectory(file_target_path);
+    const std::string temp_path = file_target_path + ".part";
+    fs::remove(temp_path, error);
+    std::ofstream output(temp_path, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+      throw std::runtime_error("failed to open bootstrap model relay target: " + temp_path);
+    }
+
+    std::uintmax_t offset = 0;
+    bool eof = false;
+    while (!eof) {
+      const nlohmann::json request = backend->RequestModelArtifactChunk(
+          node_name,
+          *bootstrap_model.source_node_name,
+          source_path,
+          offset,
+          kControllerRelayedChunkBytes);
+      if (request.value("status", std::string{}) != "queued") {
+        throw std::runtime_error(
+            "controller did not queue model artifact chunk relay: " +
+            request.value("message", std::string("unknown error")));
+      }
+      const int chunk_assignment_id = request.value("assignment_id", 0);
+      if (chunk_assignment_id <= 0) {
+        throw std::runtime_error("controller returned invalid model artifact chunk assignment id");
+      }
+
+      bool chunk_ready = false;
+      for (int attempt = 0; attempt < kControllerRelayedChunkPollAttempts; ++attempt) {
+        const nlohmann::json poll =
+            backend->LoadModelArtifactChunk(node_name, chunk_assignment_id);
+        const std::string status = poll.value("status", std::string{});
+        if (status == "failed" || status == "superseded") {
+          throw std::runtime_error(
+              "model artifact chunk relay failed: " +
+              poll.value("status_message", std::string("unknown error")));
+        }
+        if (status == "applied") {
+          const nlohmann::json progress =
+              poll.contains("progress") && poll.at("progress").is_object()
+                  ? poll.at("progress")
+                  : nlohmann::json::object();
+          if (progress.value("phase", std::string{}) != "chunk-ready") {
+            throw std::runtime_error("model artifact chunk relay applied without chunk payload");
+          }
+          const auto progress_offset = JsonUintmax(progress, "offset").value_or(offset);
+          if (progress_offset != offset) {
+            throw std::runtime_error("model artifact chunk relay returned an unexpected offset");
+          }
+          const std::vector<unsigned char> bytes =
+              naim::DecodeBytesBase64(progress.value("bytes_base64", std::string{}));
+          if (bytes.empty() && !progress.value("eof", false)) {
+            throw std::runtime_error("model artifact chunk relay returned an empty non-final chunk");
+          }
+          if (!bytes.empty()) {
+            output.write(
+                reinterpret_cast<const char*>(bytes.data()),
+                static_cast<std::streamsize>(bytes.size()));
+            if (!output.good()) {
+              throw std::runtime_error("failed to write bootstrap model relay target: " + temp_path);
+            }
+          }
+          const std::uintmax_t next_offset =
+              JsonUintmax(progress, "next_offset").value_or(offset + bytes.size());
+          aggregate_done += next_offset - offset;
+          offset = next_offset;
+          eof = progress.value("eof", false);
+          int percent = 60;
+          if (aggregate_total > 0) {
+            percent = 20 + static_cast<int>(
+                               (static_cast<double>(aggregate_done) / aggregate_total) * 40.0);
+            percent = std::clamp(percent, 20, 60);
+          }
+          const std::optional<std::uintmax_t> aggregate_total_progress =
+              aggregate_total > 0 ? std::optional<std::uintmax_t>(aggregate_total)
+                                  : std::nullopt;
+          PublishAssignmentProgress(
+              backend,
+              assignment_id,
+              "acquiring-model",
+              "Acquiring model",
+              "Copying bootstrap model from storage node " + *bootstrap_model.source_node_name +
+                  " through the controller.",
+              percent,
+              state.plane_name,
+              node_name,
+              aggregate_done,
+              aggregate_total_progress);
+          chunk_ready = true;
+          break;
+        }
+        std::this_thread::sleep_for(kControllerRelayedChunkPollInterval);
+      }
+      if (!chunk_ready) {
+        throw std::runtime_error("timed out waiting for model artifact chunk relay");
+      }
+    }
+
+    output.close();
+    if (!output.good()) {
+      throw std::runtime_error("failed to close bootstrap model relay target: " + temp_path);
+    }
+    fs::rename(temp_path, file_target_path);
+    if (NormalizeLowercase(naim::ComputeFileSha256Hex(file_target_path)) !=
+        NormalizeLowercase(files[file_index].value("sha256", std::string{}))) {
+      throw std::runtime_error("model artifact chunk relay file checksum mismatch: " + file_target_path);
+    }
+  }
+
+  std::string active_target_path = target_paths.front();
+  if (directory_transfer) {
+    fs::remove_all(target_path, error);
+    fs::rename(target_root, target_path);
+    active_target_path = target_path;
+  }
+  active_model_support_.WriteBootstrapActiveModel(state, node_name, active_target_path);
   return true;
 }
 
@@ -320,6 +706,15 @@ void HostdBootstrapModelSupport::BootstrapPlaneModelIfNeeded(
 
   const std::string target_path = artifact_support_.TargetPath(state, node_name);
   const auto artifacts = artifact_support_.BuildArtifacts(state, node_name);
+  if (TryAcquireControllerRelayedBootstrapModel(
+          state,
+          node_name,
+          bootstrap_model,
+          target_path,
+          backend,
+          assignment_id)) {
+    return;
+  }
   if (TryUseSharedBootstrapFromOtherNode(
           state,
           node_name,

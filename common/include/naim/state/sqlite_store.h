@@ -185,6 +185,7 @@ struct RegisteredHostRecord {
   std::string onboarding_state;
   std::string derived_role;
   std::string role_reason;
+  bool storage_role_enabled = false;
   std::string last_inventory_scan_at;
   std::string session_state;
   std::string session_token;

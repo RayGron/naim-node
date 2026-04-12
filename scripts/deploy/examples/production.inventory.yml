@@ -1,0 +1,26 @@
+registry:
+  url: registry.example.com
+  project: naim
+  tag: 2026-04-12.1
+  username: admin
+  password_file: /secure/path/registry-password
+
+control:
+  ssh: admin@control.example.com
+  root: /opt/naim/control-plane
+  domain: naim.example.com
+  controller_local_port: 18084
+  web_ui_local_port: 18083
+  hostd_public_port: 18080
+  hostd_public_url: http://control.example.com:18080
+
+workers:
+  - name: gpu-worker-1
+    ssh: admin@gpu-worker-1.example.com
+    ssh_port: 22
+    root: /opt/naim/hostd
+    shared_root: /srv/naim
+    controller_url: http://control.example.com:18080
+    nvidia: true
+    poll_interval_sec: 2
+    inventory_scan_interval_sec: 30
