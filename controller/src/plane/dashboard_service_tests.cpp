@@ -496,6 +496,50 @@ void TestSkillsFactoryProbeFailureDoesNotBreakPayload() {
   std::cout << "ok: skills-factory-probe-failure-does-not-break-payload" << '\n';
 }
 
+void TestPeerLinksIncludedWithoutDesiredPlane() {
+  const auto db_path = MakeTempDbPath("peer-links-without-plane");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+
+  naim::HostPeerLinkRecord hpc_to_storage;
+  hpc_to_storage.observer_node_name = "hpc1";
+  hpc_to_storage.peer_node_name = "storage1";
+  hpc_to_storage.peer_endpoint = "http://192.168.88.252:29999";
+  hpc_to_storage.local_interface = "vmbr0";
+  hpc_to_storage.remote_address = "192.168.88.252";
+  hpc_to_storage.seen_udp = true;
+  hpc_to_storage.tcp_reachable = true;
+  hpc_to_storage.rtt_ms = 1;
+  hpc_to_storage.last_seen_at = "2026-04-17 18:56:06";
+  hpc_to_storage.last_probe_at = "2026-04-17 18:56:06";
+  store.UpsertHostPeerLink(hpc_to_storage);
+
+  naim::HostPeerLinkRecord storage_to_hpc;
+  storage_to_hpc.observer_node_name = "storage1";
+  storage_to_hpc.peer_node_name = "hpc1";
+  storage_to_hpc.peer_endpoint = "http://192.168.88.13:29999";
+  storage_to_hpc.local_interface = "enp12s0";
+  storage_to_hpc.remote_address = "192.168.88.13";
+  storage_to_hpc.seen_udp = true;
+  storage_to_hpc.tcp_reachable = true;
+  storage_to_hpc.rtt_ms = 1;
+  storage_to_hpc.last_seen_at = "2026-04-17 18:56:16";
+  storage_to_hpc.last_probe_at = "2026-04-17 18:56:16";
+  store.UpsertHostPeerLink(storage_to_hpc);
+
+  ScopedEnvVar admin_upstream("NAIM_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
+  ScopedEnvVar internal_upstream("NAIM_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
+  ScopedEnvVar skills_factory_upstream("NAIM_SKILLS_FACTORY_UPSTREAM", std::nullopt);
+  ScopedEnvVar web_ui_root_env("NAIM_WEB_UI_ROOT", std::nullopt);
+  ScopedEnvVar hostd_node("NAIM_HOSTD_NODE_NAME", std::string("local-hostd"));
+
+  const auto payload = MakeDashboardService().BuildPayload(db_path, 300, std::nullopt);
+  const auto summary = payload.at("peer_links").at("summary");
+  Expect(summary.at("total").get<int>() == 2, "dashboard should include peer links without a desired plane");
+  Expect(summary.at("direct").get<int>() == 2, "bidirectional reachable peer links should be direct");
+  std::cout << "ok: peer-links-included-without-desired-plane" << '\n';
+}
+
 void TestRuntimePayloadIncludesKvCacheBytes() {
   const naim::controller::ControllerRuntimeSupportService runtime_support_service;
   const std::string now = runtime_support_service.UtcNowSqlTimestamp();
@@ -787,6 +831,7 @@ int main() {
     TestHostdStaleHeartbeatWarning();
     TestWebUiMissingStateCritical();
     TestSkillsFactoryProbeFailureDoesNotBreakPayload();
+    TestPeerLinksIncludedWithoutDesiredPlane();
     TestRuntimePayloadIncludesKvCacheBytes();
     TestPlaneScopedNodesIgnoreForeignRuntimeStatus();
     TestPlanePayloadExposesExecutionNodeTargets();

@@ -709,6 +709,7 @@ nlohmann::json DashboardService::BuildPayload(
                                            : json(nullptr)},
   };
   payload["self_services"] = BuildSelfServicesPayload(store, stale_after_seconds);
+  payload["peer_links"] = BuildPeerLinksPayload(store.LoadHostPeerLinks());
   if (!view.desired_state.has_value()) {
     payload["plane"] = nullptr;
     payload["planes"] = json::array();
@@ -813,7 +814,6 @@ nlohmann::json DashboardService::BuildPayload(
   payload["webgateway"] = PlaneBrowsingService().BuildStatusPayload(
       *view.desired_state,
       selected_plane_state);
-  payload["peer_links"] = BuildPeerLinksPayload(store.LoadHostPeerLinks());
 
   const auto latest_assignments_by_node =
       BuildLatestPlaneAssignmentsByNode(
