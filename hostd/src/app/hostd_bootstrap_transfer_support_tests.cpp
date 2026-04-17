@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "app/hostd_bootstrap_transfer_support.h"
 
@@ -64,6 +65,19 @@ class RecordingHostdBackend final : public naim::hostd::HostdBackend {
   nlohmann::json LoadModelArtifactManifest(
       const std::string&,
       int) override {
+    return nlohmann::json::object();
+  }
+
+  nlohmann::json RequestFileTransferTicket(
+      const std::string&,
+      const std::string&,
+      const std::vector<std::string>&) override {
+    return nlohmann::json::object();
+  }
+
+  nlohmann::json ValidateFileTransferTicket(
+      const std::string&,
+      const std::string&) override {
     return nlohmann::json::object();
   }
 
