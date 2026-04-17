@@ -20,6 +20,7 @@ describe("model library uploader helpers", () => {
     expect(
       detectModelSourceFormat([
         "https://huggingface.co/example/model/config.json",
+        "https://huggingface.co/example/model/chat_template.jinja",
         "https://huggingface.co/example/model/tokenizer.json",
         "https://huggingface.co/example/model/model-00001-of-00002.safetensors",
         "https://huggingface.co/example/model/model-00002-of-00002.safetensors",

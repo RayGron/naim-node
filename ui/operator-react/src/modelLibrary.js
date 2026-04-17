@@ -1,4 +1,5 @@
 export const MODEL_LIBRARY_FORMAT_OPTIONS = [
+  { value: "source", label: "Source files" },
   { value: "gguf", label: "GGUF" },
   { value: "safetensors", label: "safetensors" },
 ];
@@ -45,7 +46,8 @@ export function detectModelSourceFormat(value) {
     if (
       normalized.endsWith(".json") ||
       normalized.endsWith(".model") ||
-      normalized.endsWith(".txt")
+      normalized.endsWith(".txt") ||
+      normalized.endsWith(".jinja")
     ) {
       continue;
     }

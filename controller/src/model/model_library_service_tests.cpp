@@ -332,6 +332,69 @@ int main() {
 	        found_remote_storage_item,
 	        "completed storage-node downloads should remain visible without controller-local files");
 
+    const fs::path storage_safetensors_source = src_root / "storage-model.safetensors";
+    const fs::path storage_chat_template = src_root / "chat_template.jinja";
+    {
+      std::ofstream out(storage_safetensors_source);
+      out << "raw-storage-safetensors";
+    }
+    {
+      std::ofstream out(storage_chat_template);
+      out << "{{ messages }}";
+    }
+    const auto storage_raw_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "google/gemma-raw-storage"},
+                {"target_node_name", "storage-node-a"},
+                {"target_subdir", "raw-gemma"},
+                {"source_urls",
+                 nlohmann::json::array(
+                     {FileUrlForPath(storage_chat_template),
+                      FileUrlForPath(storage_safetensors_source)})},
+                {"format", "source"},
+            }));
+    Expect(
+        storage_raw_response.status_code == 202,
+        "storage node should accept raw source safetensors downloads");
+    const auto storage_raw_job_id =
+        nlohmann::json::parse(storage_raw_response.body).at("job").at("id").get<std::string>();
+    const auto storage_raw_job = store.LoadModelLibraryDownloadJob(storage_raw_job_id);
+    Expect(storage_raw_job.has_value(), "raw storage job should be persisted");
+    Expect(
+        storage_raw_job->detected_source_format == "safetensors",
+        "raw storage job should detect safetensors bundles with chat templates");
+    Expect(
+        storage_raw_job->desired_output_format == "safetensors",
+        "source format should resolve to safetensors output for raw storage jobs");
+    Expect(
+        storage_raw_job->staging_directory.empty(),
+        "raw storage safetensors download should not create a conversion staging directory");
+    Expect(
+        storage_raw_job->target_paths.size() == 2 &&
+            storage_raw_job->target_paths.front().find("chat_template.jinja") != std::string::npos &&
+            storage_raw_job->target_paths.back().find("storage-model.safetensors") != std::string::npos,
+        "raw storage job should retain source filenames as target paths");
+    const auto raw_storage_assignments =
+        store.LoadHostAssignments(
+            std::make_optional<std::string>("storage-node-a"),
+            naim::HostAssignmentStatus::Pending);
+    Expect(
+        std::any_of(
+            raw_storage_assignments.begin(),
+            raw_storage_assignments.end(),
+            [&](const naim::HostAssignment& assignment) {
+              return assignment.assignment_type == "model-library-download" &&
+                     assignment.desired_state_json.find(storage_raw_job_id) !=
+                         std::string::npos &&
+                     assignment.desired_state_json.find("storage-model.safetensors") !=
+                         std::string::npos;
+            }),
+        "raw storage safetensors download should enqueue a hostd download assignment");
+
 	    const auto low_capacity_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(

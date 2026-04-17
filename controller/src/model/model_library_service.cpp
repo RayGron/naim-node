@@ -337,8 +337,21 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     source_urls.push_back(source_url);
   }
   const std::string detected_source_format = DetectModelSourceFormat(source_urls);
-  const std::string desired_output_format = NormalizeModelOutputFormat(
-      body.value("format", detected_source_format));
+  std::string requested_output_format = body.value("format", detected_source_format);
+  {
+    std::string normalized_request = requested_output_format;
+    std::transform(
+        normalized_request.begin(),
+        normalized_request.end(),
+        normalized_request.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (normalized_request == "source" || normalized_request == "raw" ||
+        normalized_request == "original" || normalized_request == "no-conversion" ||
+        normalized_request == "none") {
+      requested_output_format = detected_source_format;
+    }
+  }
+  const std::string desired_output_format = NormalizeModelOutputFormat(requested_output_format);
   const std::vector<std::string> quantizations;
   const bool keep_base_gguf = true;
   naim::ControllerStore store(db_path);
@@ -424,7 +437,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
-             {"message", "format must be gguf or safetensors"}},
+             {"message", "format must be gguf, safetensors, or source"}},
         {});
   }
   if (detected_source_format == "gguf" && desired_output_format != "gguf") {

@@ -5273,8 +5273,8 @@ function App() {
           ))}
         </select>
         <div className="plane-form-section-meta">
-          GGUF conversion now retains only the base GGUF. Use the Quantization tab for
-          post-download quantization variants.
+          Source files keeps safetensors bundles unchanged. GGUF conversion retains only the
+          base GGUF. Use the Quantization tab for post-download quantization variants.
         </div>
         <div className="toolbar">
           <button

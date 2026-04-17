@@ -34,7 +34,7 @@ constexpr std::array<std::string_view, 5> kKnownQuantizations = {
 
 bool IsHfAuxiliaryConversionFile(const std::string& lowered_filename) {
   return lowered_filename.ends_with(".json") || lowered_filename.ends_with(".model") ||
-         lowered_filename.ends_with(".txt");
+         lowered_filename.ends_with(".txt") || lowered_filename.ends_with(".jinja");
 }
 
 std::filesystem::path JoinNormalized(
