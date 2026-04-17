@@ -1267,6 +1267,26 @@ body {
   cursor: pointer;
 }
 
+.node-card-main {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  gap: 10px;
+}
+
+.node-card:hover,
+.node-card:focus-within {
+  border-color: rgba(120, 190, 255, 0.34);
+  box-shadow: 0 0 0 1px rgba(120, 190, 255, 0.14), var(--panel-glow);
+}
+
 .plane-card-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1630,6 +1650,12 @@ body {
   font-size: 0.9rem;
 }
 
+.role-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .summary-card,
 .instance-card,
 .node-card,
@@ -1940,6 +1966,12 @@ body {
 
 .quantization-modal {
   width: min(720px, calc(100vw - 48px));
+  display: grid;
+  gap: 16px;
+}
+
+.node-overview-modal {
+  width: min(980px, calc(100vw - 48px));
   display: grid;
   gap: 16px;
 }

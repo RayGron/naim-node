@@ -1806,6 +1806,7 @@ function App() {
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
   const [hostdHosts, setHostdHosts] = useState([]);
+  const [selectedHostNodeName, setSelectedHostNodeName] = useState("");
   const [diskState, setDiskState] = useState(null);
   const [rolloutState, setRolloutState] = useState(null);
   const [rebalancePlan, setRebalancePlan] = useState(null);
@@ -3265,6 +3266,9 @@ function App() {
   const nodeItems = dashboard?.nodes || [];
   const observationItems = hostObservationItemsFromPayload(hostObservations);
   const globalObservationItems = hostObservationItemsFromPayload(globalHostObservations);
+  const dashboardHostItems = buildFleetHostItems(globalObservationItems);
+  const selectedHostOverview =
+    dashboardHostItems.find((host) => host?.node_name === selectedHostNodeName) || null;
   const assignmentItems = dashboard?.assignments?.by_node || [];
   const rolloutItems = rolloutState?.actions || [];
   const rebalanceItems = rebalancePlan?.rebalance_plan || [];
@@ -3943,7 +3947,7 @@ function App() {
     setSelectedTab("status");
   }
 
-  function renderHostCards(hostItems) {
+  function buildFleetHostItems(hostItems) {
     const registeredByNode = new Map(
       (hostdHosts || [])
         .filter((host) => host?.node_name)
@@ -3976,7 +3980,67 @@ function App() {
       }
       return String(left?.node_name || "").localeCompare(String(right?.node_name || ""));
     });
+    return items;
+  }
 
+  function nodeRoleLabels(host) {
+    const registry = host?.registry || host || {};
+    const capacity = registry?.capacity_summary || {};
+    const roles = [];
+    if (String(registry?.derived_role || "").toLowerCase() === "worker") {
+      roles.push("worker");
+    }
+    if (
+      registry?.storage_role_enabled === true ||
+      String(registry?.derived_role || "").toLowerCase() === "storage"
+    ) {
+      roles.push("storage");
+    }
+    if (roles.length === 0 && Number(capacity.gpu_count || 0) > 0) {
+      roles.push("gpu-capable");
+    }
+    if (roles.length === 0 && registry?.registration_state === "registered") {
+      roles.push("registered");
+    }
+    return roles.length > 0 ? roles : ["unclassified"];
+  }
+
+  function rolePillClass(role) {
+    if (role === "worker") {
+      return "is-healthy";
+    }
+    if (role === "storage") {
+      return "is-warning";
+    }
+    if (role === "unclassified") {
+      return "is-muted";
+    }
+    return "is-booting";
+  }
+
+  function renderNodeRoleBadges(host) {
+    return (
+      <div className="role-badges">
+        {nodeRoleLabels(host).map((role) => (
+          <span className={`tag ${rolePillClass(role)}`} key={`${host?.node_name}:${role}`}>
+            {role}
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  function openHostOverview(nodeName) {
+    if (nodeName) {
+      setSelectedHostNodeName(nodeName);
+    }
+  }
+
+  function closeHostOverview() {
+    setSelectedHostNodeName("");
+  }
+
+  function renderHostCards(items) {
     return (
       <div className="plane-list">
         {items.map((host) => {
@@ -3985,52 +4049,43 @@ function App() {
           const runtimeAvailable = host?.runtime_status?.available === true;
           const runtimePhase = host?.runtime_status?.phase || "pending";
           const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
-          const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
-          const totalMemoryBytes = Number(cpu.total_memory_bytes || 0);
-          const gpuTempCount = Number(gpu.temperature_device_count || 0);
-          const gpuDeviceCount = Number(gpu.device_count || 0);
           const registry = host?.registry || null;
+          const storageCapacity = registry?.capacity_summary || {};
+          const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
+          const totalMemoryBytes = Number(cpu.total_memory_bytes || storageCapacity.total_memory_bytes || 0);
+          const gpuDeviceCount = Number(gpu.device_count || storageCapacity.gpu_count || 0);
           const storageEnabled = registry?.storage_role_enabled === true;
           const storageEligible = registry?.storage_role_eligible !== false;
           const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
           const canManageStorageRole = authState.user?.role === "admin";
           const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
           const directLanPeers = lanPeers.filter((peer) => peer?.tcp_reachable === true);
+          const storageTotalBytes = Number(storageCapacity.storage_total_bytes || 0);
+          const storageFreeBytes = Number(storageCapacity.storage_free_bytes || 0);
           return (
             <article className="node-card" key={host?.node_name || host?.observed_at}>
-              <div className="card-row">
-                <strong>{host?.node_name || "unknown-host"}</strong>
-                <div className={`pill ${indicatorClass}`}>
-                  {statusDot(indicatorClass)}
-                  <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+              <button
+                className="node-card-main"
+                type="button"
+                onClick={() => openHostOverview(host?.node_name)}
+                aria-label={`open node overview for ${host?.node_name || "unknown host"}`}
+              >
+                <div className="card-row">
+                  <strong>{host?.node_name || "unknown-host"}</strong>
+                  <div className={`pill ${indicatorClass}`}>
+                    {statusDot(indicatorClass)}
+                    <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+                  </div>
                 </div>
-              </div>
+                {renderNodeRoleBadges(host)}
+              </button>
               <div className="metric-grid">
-                <div className="metric-row"><span>Status</span><strong>{host?.status || "n/a"}</strong></div>
-                <div className="metric-row"><span>Runtime</span><strong>{runtimePhase}</strong></div>
-                <div className="metric-row"><span>Launch ready</span><strong>{yesNo(runtimeAvailable)}</strong></div>
-                <div className="metric-row"><span>CPU temp</span><strong>{cpu.temperature_available ? formatTemperature(cpu.max_temperature_c ?? cpu.temperature_c) : "n/a"}</strong></div>
-                <div className="metric-row"><span>GPU temp</span><strong>{gpuTempCount > 0 ? formatTemperature(gpu.hottest_temperature_c) : "n/a"}</strong></div>
                 <div className="metric-row"><span>GPU count</span><strong>{gpuDeviceCount || "n/a"}</strong></div>
                 <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
-                <div className="metric-row"><span>Storage role</span><strong>{storageEnabled ? "enabled" : "disabled"}</strong></div>
-                <div className="metric-row"><span>Storage root</span><strong>{registry?.capacity_summary?.storage_root || "n/a"}</strong></div>
+                <div className="metric-row"><span>Storage</span><strong>{storageTotalBytes > 0 ? `${compactBytes(storageFreeBytes)} free` : "n/a"}</strong></div>
                 <div className="metric-row"><span>LAN peers</span><strong>{lanPeers.length > 0 ? `${directLanPeers.length}/${lanPeers.length} direct` : "n/a"}</strong></div>
                 <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at)}</strong></div>
               </div>
-              {lanPeers.length > 0 ? (
-                <div className="metric-grid">
-                  {lanPeers.slice(0, 4).map((peer) => (
-                    <div className="metric-row" key={`${host?.node_name}:${peer?.peer_node_name}`}>
-                      <span>{peer?.peer_node_name || "peer"}</span>
-                      <strong>
-                        {peer?.tcp_reachable ? "direct" : peer?.seen_udp ? "partial" : "stale"}
-                        {peer?.peer_endpoint ? ` / ${peer.peer_endpoint}` : ""}
-                      </strong>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
               {registry ? (
                 <div className="toolbar">
                   <button
@@ -4057,6 +4112,128 @@ function App() {
             </article>
           );
         })}
+      </div>
+    );
+  }
+
+  function renderHostOverviewModal(host) {
+    if (!host) {
+      return null;
+    }
+    const registry = host?.registry || host || {};
+    const cpu = host?.cpu_telemetry?.summary || {};
+    const gpu = host?.gpu_telemetry?.summary || {};
+    const capacity = registry?.capacity_summary || {};
+    const runtimeAvailable = host?.runtime_status?.available === true;
+    const runtimePhase = host?.runtime_status?.phase || "pending";
+    const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
+    const storageEnabled = registry?.storage_role_enabled === true;
+    const storageEligible = registry?.storage_role_eligible !== false;
+    const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
+    const canManageStorageRole = authState.user?.role === "admin";
+    const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+    const gpuDeviceCount = Number(gpu.device_count || capacity.gpu_count || 0);
+    const totalMemoryBytes = Number(cpu.total_memory_bytes || capacity.total_memory_bytes || 0);
+    const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
+    const storageTotalBytes = Number(capacity.storage_total_bytes || 0);
+    const storageFreeBytes = Number(capacity.storage_free_bytes || 0);
+    const showStorageDetails = storageEnabled || storageEligible || storageTotalBytes > 0;
+
+    return (
+      <div className="modal-backdrop" role="presentation" onClick={closeHostOverview}>
+        <section
+          className="modal-card node-overview-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`node overview ${host?.node_name || "unknown-host"}`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="card-row">
+            <div>
+              <h2>{host?.node_name || "unknown-host"}</h2>
+              {renderNodeRoleBadges(host)}
+            </div>
+            <div className={`pill ${indicatorClass}`}>
+              {statusDot(indicatorClass)}
+              <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+            </div>
+          </div>
+          <div className="metric-grid">
+            <div className="metric-row"><span>Registration</span><strong>{registry?.registration_state || "n/a"}</strong></div>
+            <div className="metric-row"><span>Session</span><strong>{registry?.session_state || "n/a"}</strong></div>
+            <div className="metric-row"><span>Runtime</span><strong>{runtimePhase}</strong></div>
+            <div className="metric-row"><span>Launch ready</span><strong>{yesNo(runtimeAvailable)}</strong></div>
+            <div className="metric-row"><span>Derived role</span><strong>{registry?.derived_role || "n/a"}</strong></div>
+            <div className="metric-row"><span>Role reason</span><strong>{registry?.role_reason || "n/a"}</strong></div>
+            <div className="metric-row"><span>Execution</span><strong>{registry?.execution_mode || "n/a"}</strong></div>
+            <div className="metric-row"><span>Transport</span><strong>{registry?.transport_mode || "n/a"}</strong></div>
+            <div className="metric-row"><span>Advertised</span><strong>{registry?.advertised_address || "n/a"}</strong></div>
+            <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at || registry?.last_heartbeat_at)}</strong></div>
+          </div>
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Capacity</h3>
+              <span className="subpanel-meta">Host inventory and live telemetry for this node.</span>
+            </div>
+            <div className="metric-grid">
+              <div className="metric-row"><span>GPU count</span><strong>{gpuDeviceCount || "n/a"}</strong></div>
+              {gpuDeviceCount > 0 ? (
+                <>
+                  <div className="metric-row"><span>GPU temp</span><strong>{Number(gpu.temperature_device_count || 0) > 0 ? formatTemperature(gpu.hottest_temperature_c) : "n/a"}</strong></div>
+                  <div className="metric-row"><span>GPU VRAM</span><strong>{Number(gpu.total_vram_mb || 0) > 0 ? `${formatDashboardMegabytesMbGb(gpu.used_vram_mb)} / ${formatDashboardMegabytesMbGb(gpu.total_vram_mb)}` : "n/a"}</strong></div>
+                </>
+              ) : null}
+              <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
+              <div className="metric-row"><span>CPU temp</span><strong>{cpu.temperature_available ? formatTemperature(cpu.max_temperature_c ?? cpu.temperature_c) : "n/a"}</strong></div>
+              {showStorageDetails ? (
+                <>
+                  <div className="metric-row"><span>Storage role</span><strong>{storageEnabled ? "enabled" : "disabled"}</strong></div>
+                  <div className="metric-row"><span>Storage root</span><strong>{capacity.storage_root || "n/a"}</strong></div>
+                  <div className="metric-row"><span>Storage total</span><strong>{storageTotalBytes > 0 ? compactBytes(storageTotalBytes) : "n/a"}</strong></div>
+                  <div className="metric-row"><span>Storage free</span><strong>{storageFreeBytes > 0 ? compactBytes(storageFreeBytes) : "n/a"}</strong></div>
+                </>
+              ) : null}
+            </div>
+          </section>
+          {lanPeers.length > 0 ? (
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>LAN peers</h3>
+                <span className="subpanel-meta">Direct transfer visibility reported by this node.</span>
+              </div>
+              <div className="metric-grid">
+                {lanPeers.map((peer) => (
+                  <div className="metric-row" key={`${host?.node_name}:${peer?.peer_node_name}`}>
+                    <span>{peer?.peer_node_name || "peer"}</span>
+                    <strong>
+                      {peer?.tcp_reachable ? "direct" : peer?.seen_udp ? "partial" : "stale"}
+                      {peer?.peer_endpoint ? ` / ${peer.peer_endpoint}` : ""}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          <div className="toolbar">
+            {registry?.node_name ? (
+              <button
+                className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
+                type="button"
+                disabled={
+                  storageBusy ||
+                  !canManageStorageRole ||
+                  (!storageEnabled && !storageEligible)
+                }
+                onClick={() => setHostStorageRole(registry, !storageEnabled)}
+              >
+                {storageEnabled ? "Disable storage" : "Enable storage"}
+              </button>
+            ) : null}
+            <button className="ghost-button" type="button" onClick={closeHostOverview}>
+              Close
+            </button>
+          </div>
+        </section>
       </div>
     );
   }
@@ -6649,23 +6826,6 @@ function App() {
 
               <section className="subpanel dashboard-services-panel">
                 <div className="subpanel-header">
-                  <h3>Naim node services</h3>
-                  <span className="subpanel-meta">
-                    {`${dashboardSelfServiceSummary.total} services / ${dashboardSelfServiceSummary.warning + dashboardSelfServiceSummary.critical} degraded`}
-                  </span>
-                </div>
-                {dashboardSelfServices.length === 0 ? (
-                  <EmptyState
-                    title="No self-service status"
-                    detail="Waiting for controller-side service telemetry."
-                  />
-                ) : (
-                  renderSelfServiceCards(dashboardSelfServices)
-                )}
-              </section>
-
-              <section className="subpanel dashboard-services-panel">
-                <div className="subpanel-header">
                   <h3>LAN peer links</h3>
                   <span className="subpanel-meta">
                     {`${peerLinkSummary.direct || 0} direct / ${peerLinkSummary.partial || 0} partial / ${peerLinkSummary.stale || 0} stale`}
@@ -6704,15 +6864,15 @@ function App() {
 
               <section className="subpanel dashboard-hosts-panel">
                 <div className="subpanel-header">
-                  <h3>Hosts</h3>
+                  <h3>Naim nodes</h3>
                   <span className="subpanel-meta">
-                    Observed hosts with runtime, temperature, GPU, and memory posture.
+                    Registered and observed nodes with roles, capacity, LAN peers, and hostd heartbeat.
                   </span>
                 </div>
-                {globalObservationItems.length === 0 && hostdHosts.length === 0 ? (
+                {dashboardHostItems.length === 0 ? (
                   <EmptyState title="No connected hosts" detail="Waiting for hostd registration or telemetry." />
                 ) : (
-                  renderHostCards(globalObservationItems)
+                  renderHostCards(dashboardHostItems)
                 )}
               </section>
 
@@ -6741,6 +6901,7 @@ function App() {
         )}
       </main>
       {renderDashboardPlaneDetailModal()}
+      {renderHostOverviewModal(selectedHostOverview)}
       <TelemetryChartDialog
         chart={{
           ...telemetryChart,
