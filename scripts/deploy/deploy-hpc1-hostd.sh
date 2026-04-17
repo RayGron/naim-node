@@ -329,6 +329,11 @@ if [[ -f docker-compose.yml ]]; then
   cp docker-compose.yml "docker-compose.yml.bak-$(date +%Y%m%d-%H%M%S)"
 fi
 
+if ! findmnt -T "${shared_root}" -n -o TARGET | grep -Fx "${shared_root}" >/dev/null; then
+  sudo mount --bind "${shared_root}" "${shared_root}"
+fi
+sudo mount --make-rshared "${shared_root}"
+
 nvidia_runtime=""
 nvidia_env=""
 nvidia_mount=""
@@ -384,7 +389,11 @@ ${nvidia_env}
       - /var/run/docker.sock:/var/run/docker.sock
 ${nvidia_mount}
       - ${hostd_root}:${hostd_root}
-      - ${shared_root}:${shared_root}
+      - type: bind
+        source: ${shared_root}
+        target: ${shared_root}
+        bind:
+          propagation: rshared
 YAML
 
 sudo chmod 0700 "${hostd_root}" "${hostd_root}/install-state"
