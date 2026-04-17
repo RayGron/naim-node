@@ -7,6 +7,7 @@
   --panel-surface-strong: linear-gradient(180deg, rgba(15, 38, 70, 0.98), rgba(5, 17, 34, 0.96));
   --card-surface: linear-gradient(180deg, rgba(10, 28, 53, 0.98), rgba(4, 14, 29, 0.96));
   --surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --panel-blur: blur(8px) saturate(1.05);
   --panel-border: rgba(111, 182, 255, 0.18);
   --panel-glow: 0 24px 48px rgba(0, 0, 0, 0.34);
   --text: #eef6ff;
@@ -107,6 +108,16 @@ body {
   background: var(--card-surface);
   border: 1px solid var(--panel-border);
   box-shadow: var(--surface-highlight), 0 14px 34px rgba(0, 0, 0, 0.28);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .hero,
+  .modal-card,
+  .summary-card,
+  .side-menu-item {
+    backdrop-filter: var(--panel-blur);
+    -webkit-backdrop-filter: var(--panel-blur);
+  }
 }
 
 .hero {
