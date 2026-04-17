@@ -3229,6 +3229,15 @@ function App() {
         dashboardBrowsingSummary?.reason || "pending"
       }`
     : "disabled";
+  const peerLinkSummary = dashboard?.peer_links?.summary || {
+    total: 0,
+    direct: 0,
+    partial: 0,
+    stale: 0,
+  };
+  const peerLinkItems = Array.isArray(dashboard?.peer_links?.items)
+    ? dashboard.peer_links.items
+    : [];
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
   const interactionReady = interactionStatus?.ready === true;
   const nodeItems = dashboard?.nodes || [];
@@ -3963,6 +3972,8 @@ function App() {
           const storageEligible = registry?.storage_role_eligible !== false;
           const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
           const canManageStorageRole = authState.user?.role === "admin";
+          const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+          const directLanPeers = lanPeers.filter((peer) => peer?.tcp_reachable === true);
           return (
             <article className="node-card" key={host?.node_name || host?.observed_at}>
               <div className="card-row">
@@ -3982,8 +3993,22 @@ function App() {
                 <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
                 <div className="metric-row"><span>Storage role</span><strong>{storageEnabled ? "enabled" : "disabled"}</strong></div>
                 <div className="metric-row"><span>Storage root</span><strong>{registry?.capacity_summary?.storage_root || "n/a"}</strong></div>
+                <div className="metric-row"><span>LAN peers</span><strong>{lanPeers.length > 0 ? `${directLanPeers.length}/${lanPeers.length} direct` : "n/a"}</strong></div>
                 <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at)}</strong></div>
               </div>
+              {lanPeers.length > 0 ? (
+                <div className="metric-grid">
+                  {lanPeers.slice(0, 4).map((peer) => (
+                    <div className="metric-row" key={`${host?.node_name}:${peer?.peer_node_name}`}>
+                      <span>{peer?.peer_node_name || "peer"}</span>
+                      <strong>
+                        {peer?.tcp_reachable ? "direct" : peer?.seen_udp ? "partial" : "stale"}
+                        {peer?.peer_endpoint ? ` / ${peer.peer_endpoint}` : ""}
+                      </strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {registry ? (
                 <div className="toolbar">
                   <button
@@ -6614,6 +6639,44 @@ function App() {
                   />
                 ) : (
                   renderSelfServiceCards(dashboardSelfServices)
+                )}
+              </section>
+
+              <section className="subpanel dashboard-services-panel">
+                <div className="subpanel-header">
+                  <h3>LAN peer links</h3>
+                  <span className="subpanel-meta">
+                    {`${peerLinkSummary.direct || 0} direct / ${peerLinkSummary.partial || 0} partial / ${peerLinkSummary.stale || 0} stale`}
+                  </span>
+                </div>
+                {peerLinkItems.length === 0 ? (
+                  <EmptyState
+                    title="No LAN peers"
+                    detail="Waiting for hostd peer discovery telemetry."
+                  />
+                ) : (
+                  <div className="plane-list">
+                    {peerLinkItems.slice(0, 8).map((link) => (
+                      <article
+                        className="node-card"
+                        key={`${link?.observer_node_name}:${link?.peer_node_name}`}
+                      >
+                        <div className="card-row">
+                          <strong>{link?.observer_node_name || "node"} to {link?.peer_node_name || "peer"}</strong>
+                          <div className={`pill ${link?.state === "direct" ? "is-healthy" : link?.state === "partial" ? "is-warning" : "is-muted"}`}>
+                            {statusDot(link?.state === "direct" ? "is-healthy" : link?.state === "partial" ? "is-warning" : "is-muted")}
+                            <span>{link?.state || "unknown"}</span>
+                          </div>
+                        </div>
+                        <div className="metric-grid">
+                          <div className="metric-row"><span>Endpoint</span><strong>{link?.peer_endpoint || "n/a"}</strong></div>
+                          <div className="metric-row"><span>Remote</span><strong>{link?.remote_address || "n/a"}</strong></div>
+                          <div className="metric-row"><span>Interface</span><strong>{link?.local_interface || "n/a"}</strong></div>
+                          <div className="metric-row"><span>RTT</span><strong>{link?.rtt_ms ? `${link.rtt_ms} ms` : "n/a"}</strong></div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 )}
               </section>
 

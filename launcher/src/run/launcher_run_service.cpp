@@ -10,6 +10,8 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #if !defined(_WIN32)
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -19,6 +21,7 @@
 #include "naim/core/platform_compat.h"
 #include "naim/security/crypto_utils.h"
 #include "naim/state/sqlite_store.h"
+#include "run/hostd_peer_service.h"
 
 namespace naim::launcher {
 
@@ -70,6 +73,33 @@ bool SetEnvVar(const std::string& key, const std::string& value) {
 #else
   return ::setenv(key.c_str(), value.c_str(), 1) == 0;
 #endif
+}
+
+std::string LoadStorageRootFromNodeConfig(const std::optional<std::string>& config_path) {
+  std::optional<std::filesystem::path> resolved = config_path;
+  if (!resolved.has_value()) {
+    if (const char* env_path = std::getenv("NAIM_NODE_CONFIG_PATH");
+        env_path != nullptr && *env_path != '\0') {
+      resolved = env_path;
+    }
+  }
+  if (!resolved.has_value() || !std::filesystem::exists(*resolved)) {
+    return "/var/lib/naim";
+  }
+  std::ifstream input(*resolved);
+  const auto parsed = nlohmann::json::parse(input, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    return "/var/lib/naim";
+  }
+  if (parsed.contains("paths") && parsed.at("paths").is_object() &&
+      parsed.at("paths").contains("storage_root") &&
+      parsed.at("paths").at("storage_root").is_string()) {
+    return parsed.at("paths").at("storage_root").get<std::string>();
+  }
+  if (parsed.contains("storage_root") && parsed.at("storage_root").is_string()) {
+    return parsed.at("storage_root").get<std::string>();
+  }
+  return "/var/lib/naim";
 }
 
 }  // namespace
@@ -266,6 +296,8 @@ int LauncherRunService::RunHostd(
           .value_or(loaded_config && loaded_config->hostd.state_root.has_value()
                         ? loaded_config->hostd.state_root->string()
                         : install_layout_resolver_.DefaultHostdStateRoot().string());
+  options.storage_root =
+      LoadStorageRootFromNodeConfig(command_line.FindFlagValue("--config"));
   options.host_private_key_path =
       command_line.FindFlagValue("--host-private-key")
           .value_or(loaded_config && loaded_config->hostd.host_private_key.has_value()
@@ -338,6 +370,11 @@ int LauncherRunService::RunHostdLoop(
   std::cout
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
   auto next_inventory_report_at = std::chrono::steady_clock::now();
+  HostdPeerService peer_service(options);
+  peer_service.Start();
+  if (peer_service.enabled()) {
+    std::cout << "peer_discovery=enabled\n";
+  }
 
   while (!signal_manager.stop_requested()) {
     std::vector<std::string> apply_args = {
@@ -413,6 +450,7 @@ int LauncherRunService::RunHostdLoop(
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   }
+  peer_service.Stop();
   return 0;
 }
 

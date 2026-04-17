@@ -1,13 +1,19 @@
 #include "app/hostd_bootstrap_model_support.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 
+#include <netdb.h>
+
+#include "naim/core/platform_compat.h"
 #include "naim/security/crypto_utils.h"
 
 namespace naim::hostd {
@@ -19,6 +25,120 @@ namespace {
 constexpr std::uintmax_t kControllerRelayedChunkBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr int kControllerRelayedChunkPollAttempts = 600;
 constexpr std::chrono::milliseconds kControllerRelayedChunkPollInterval(500);
+
+struct PeerHttpResponse {
+  int status_code = 0;
+  std::string body;
+};
+
+struct PeerEndpoint {
+  std::string raw;
+  std::string host;
+  int port = 29999;
+};
+
+PeerEndpoint ParsePeerEndpoint(std::string endpoint) {
+  PeerEndpoint parsed;
+  parsed.raw = endpoint;
+  if (endpoint.rfind("http://", 0) == 0) {
+    endpoint = endpoint.substr(7);
+  }
+  const std::size_t slash = endpoint.find('/');
+  if (slash != std::string::npos) {
+    endpoint = endpoint.substr(0, slash);
+  }
+  const std::size_t colon = endpoint.rfind(':');
+  if (colon == std::string::npos) {
+    parsed.host = endpoint;
+  } else {
+    parsed.host = endpoint.substr(0, colon);
+    parsed.port = std::stoi(endpoint.substr(colon + 1));
+  }
+  if (parsed.host.empty()) {
+    throw std::runtime_error("invalid peer endpoint: " + parsed.raw);
+  }
+  return parsed;
+}
+
+PeerHttpResponse SendPeerHttpRequest(
+    const std::string& endpoint,
+    const std::string& path,
+    const nlohmann::json& payload) {
+  const PeerEndpoint target = ParsePeerEndpoint(endpoint);
+  naim::platform::EnsureSocketsInitialized();
+  addrinfo hints{};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* results = nullptr;
+  const std::string port_text = std::to_string(target.port);
+  const int lookup = getaddrinfo(target.host.c_str(), port_text.c_str(), &hints, &results);
+  if (lookup != 0) {
+    throw std::runtime_error("failed to resolve peer endpoint: " + target.raw);
+  }
+  naim::platform::SocketHandle fd = naim::platform::kInvalidSocket;
+  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
+    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+    if (!naim::platform::IsSocketValid(fd)) {
+      continue;
+    }
+    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
+      break;
+    }
+    naim::platform::CloseSocket(fd);
+    fd = naim::platform::kInvalidSocket;
+  }
+  freeaddrinfo(results);
+  if (!naim::platform::IsSocketValid(fd)) {
+    throw std::runtime_error("failed to connect to peer endpoint: " + target.raw);
+  }
+  const std::string body = payload.dump();
+  std::ostringstream request;
+  request << "POST " << path << " HTTP/1.1\r\n";
+  request << "Host: " << target.host << ":" << target.port << "\r\n";
+  request << "Connection: close\r\n";
+  request << "Content-Type: application/json\r\n";
+  request << "Content-Length: " << body.size() << "\r\n\r\n";
+  request << body;
+  const std::string request_text = request.str();
+  const char* data = request_text.data();
+  std::size_t remaining = request_text.size();
+  while (remaining > 0) {
+    const ssize_t written = send(fd, data, remaining, 0);
+    if (written <= 0) {
+      naim::platform::CloseSocket(fd);
+      throw std::runtime_error("failed to write peer request");
+    }
+    data += written;
+    remaining -= static_cast<std::size_t>(written);
+  }
+  std::string response_text;
+  std::array<char, 8192> buffer{};
+  while (true) {
+    const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
+    if (read_count < 0) {
+      naim::platform::CloseSocket(fd);
+      throw std::runtime_error("failed to read peer response");
+    }
+    if (read_count == 0) {
+      break;
+    }
+    response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+  }
+  naim::platform::CloseSocket(fd);
+  const std::size_t headers_end = response_text.find("\r\n\r\n");
+  const std::string headers =
+      headers_end == std::string::npos ? response_text : response_text.substr(0, headers_end);
+  PeerHttpResponse response;
+  std::istringstream status(headers.substr(0, headers.find("\r\n")));
+  std::string version;
+  status >> version >> response.status_code;
+  response.body =
+      headers_end == std::string::npos ? std::string{} : response_text.substr(headers_end + 4);
+  if (response.status_code >= 400) {
+    throw std::runtime_error("peer request failed with status " + std::to_string(response.status_code));
+  }
+  return response;
+}
 
 std::optional<std::uintmax_t> JsonUintmax(const nlohmann::json& payload, const std::string& key) {
   if (!payload.contains(key) || !payload.at(key).is_number_unsigned()) {
@@ -194,50 +314,98 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
       assignment_id,
       "acquiring-model",
       "Acquiring model",
-      "Requesting bootstrap model manifest from storage node " +
+      "Checking direct LAN transfer from storage node " +
           *bootstrap_model.source_node_name + ".",
       20,
       state.plane_name,
       node_name);
 
-  const nlohmann::json manifest_request = backend->RequestModelArtifactManifest(
-      node_name,
-      *bootstrap_model.source_node_name,
-      source_paths);
-  if (manifest_request.value("status", std::string{}) != "queued") {
-    throw std::runtime_error(
-        "controller did not queue model artifact manifest relay: " +
-        manifest_request.value("message", std::string("unknown error")));
-  }
-  const int manifest_assignment_id = manifest_request.value("assignment_id", 0);
-  if (manifest_assignment_id <= 0) {
-    throw std::runtime_error("controller returned invalid model artifact manifest assignment id");
-  }
-
   nlohmann::json manifest = nlohmann::json::object();
   bool manifest_ready = false;
-  for (int attempt = 0; attempt < kControllerRelayedChunkPollAttempts; ++attempt) {
-    const nlohmann::json poll =
-        backend->LoadModelArtifactManifest(node_name, manifest_assignment_id);
-    const std::string status = poll.value("status", std::string{});
-    if (status == "failed" || status == "superseded") {
-      throw std::runtime_error(
-          "model artifact manifest relay failed: " +
-          poll.value("status_message", std::string("unknown error")));
-    }
-    if (status == "applied") {
-      manifest = poll.contains("progress") && poll.at("progress").is_object()
-                     ? poll.at("progress")
-                     : nlohmann::json::object();
-      if (manifest.value("phase", std::string{}) != "manifest-ready" ||
-          !manifest.contains("files") ||
-          !manifest.at("files").is_array()) {
-        throw std::runtime_error("model artifact manifest relay applied without manifest payload");
+  bool use_peer_direct = false;
+  std::string peer_ticket_id;
+  std::string peer_endpoint;
+  try {
+    const nlohmann::json ticket = backend->RequestFileTransferTicket(
+        node_name,
+        *bootstrap_model.source_node_name,
+        source_paths);
+    if (ticket.value("status", std::string{}) == "issued") {
+      peer_ticket_id = ticket.value("ticket_id", std::string{});
+      peer_endpoint = ticket.value("source_endpoint", std::string{});
+      const PeerHttpResponse peer_manifest = SendPeerHttpRequest(
+          peer_endpoint,
+          "/peer/v1/files/manifest",
+          nlohmann::json{{"ticket_id", peer_ticket_id}, {"source_paths", source_paths}});
+      manifest = nlohmann::json::parse(peer_manifest.body);
+      if (manifest.value("phase", std::string{}) == "manifest-ready" &&
+          manifest.contains("files") &&
+          manifest.at("files").is_array()) {
+        manifest_ready = true;
+        use_peer_direct = true;
       }
-      manifest_ready = true;
-      break;
     }
-    std::this_thread::sleep_for(kControllerRelayedChunkPollInterval);
+  } catch (const std::exception& error) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        "acquiring-model",
+        "Acquiring model",
+        "Direct LAN transfer is unavailable; falling back to controller relay: " +
+            std::string(error.what()),
+        20,
+        state.plane_name,
+        node_name);
+  }
+
+  if (!manifest_ready) {
+    PublishAssignmentProgress(
+        backend,
+        assignment_id,
+        "acquiring-model",
+        "Acquiring model",
+        "Requesting bootstrap model manifest from storage node " +
+            *bootstrap_model.source_node_name + ".",
+        20,
+        state.plane_name,
+        node_name);
+    const nlohmann::json manifest_request = backend->RequestModelArtifactManifest(
+        node_name,
+        *bootstrap_model.source_node_name,
+        source_paths);
+    if (manifest_request.value("status", std::string{}) != "queued") {
+      throw std::runtime_error(
+          "controller did not queue model artifact manifest relay: " +
+          manifest_request.value("message", std::string("unknown error")));
+    }
+    const int manifest_assignment_id = manifest_request.value("assignment_id", 0);
+    if (manifest_assignment_id <= 0) {
+      throw std::runtime_error("controller returned invalid model artifact manifest assignment id");
+    }
+
+    for (int attempt = 0; attempt < kControllerRelayedChunkPollAttempts; ++attempt) {
+      const nlohmann::json poll =
+          backend->LoadModelArtifactManifest(node_name, manifest_assignment_id);
+      const std::string status = poll.value("status", std::string{});
+      if (status == "failed" || status == "superseded") {
+        throw std::runtime_error(
+            "model artifact manifest relay failed: " +
+            poll.value("status_message", std::string("unknown error")));
+      }
+      if (status == "applied") {
+        manifest = poll.contains("progress") && poll.at("progress").is_object()
+                       ? poll.at("progress")
+                       : nlohmann::json::object();
+        if (manifest.value("phase", std::string{}) != "manifest-ready" ||
+            !manifest.contains("files") ||
+            !manifest.at("files").is_array()) {
+          throw std::runtime_error("model artifact manifest relay applied without manifest payload");
+        }
+        manifest_ready = true;
+        break;
+      }
+      std::this_thread::sleep_for(kControllerRelayedChunkPollInterval);
+    }
   }
   if (!manifest_ready) {
     throw std::runtime_error("timed out waiting for model artifact manifest relay");
@@ -360,6 +528,54 @@ bool HostdBootstrapModelSupport::TryAcquireControllerRelayedBootstrapModel(
     std::uintmax_t offset = 0;
     bool eof = false;
     while (!eof) {
+      if (use_peer_direct) {
+        const std::uintmax_t expected_size =
+            JsonUintmax(files[file_index], "size_bytes").value_or(0);
+        const PeerHttpResponse peer_chunk = SendPeerHttpRequest(
+            peer_endpoint,
+            "/peer/v1/files/chunk",
+            nlohmann::json{
+                {"ticket_id", peer_ticket_id},
+                {"source_path", source_path},
+                {"offset", offset},
+                {"max_bytes", kControllerRelayedChunkBytes},
+            });
+        if (peer_chunk.body.empty() && offset < expected_size) {
+          throw std::runtime_error("direct LAN transfer returned an empty non-final chunk");
+        }
+        if (!peer_chunk.body.empty()) {
+          output.write(peer_chunk.body.data(), static_cast<std::streamsize>(peer_chunk.body.size()));
+          if (!output.good()) {
+            throw std::runtime_error("failed to write bootstrap model direct target: " + temp_path);
+          }
+        }
+        const std::uintmax_t next_offset = offset + peer_chunk.body.size();
+        aggregate_done += next_offset - offset;
+        offset = next_offset;
+        eof = offset >= expected_size || peer_chunk.body.size() < kControllerRelayedChunkBytes;
+        int percent = 60;
+        if (aggregate_total > 0) {
+          percent = 20 + static_cast<int>(
+                             (static_cast<double>(aggregate_done) / aggregate_total) * 40.0);
+          percent = std::clamp(percent, 20, 60);
+        }
+        const std::optional<std::uintmax_t> aggregate_total_progress =
+            aggregate_total > 0 ? std::optional<std::uintmax_t>(aggregate_total)
+                                : std::nullopt;
+        PublishAssignmentProgress(
+            backend,
+            assignment_id,
+            "acquiring-model",
+            "Acquiring model",
+            "Copying bootstrap model directly from storage node " +
+                *bootstrap_model.source_node_name + " over LAN.",
+            percent,
+            state.plane_name,
+            node_name,
+            aggregate_done,
+            aggregate_total_progress);
+        continue;
+      }
       const nlohmann::json request = backend->RequestModelArtifactChunk(
           node_name,
           *bootstrap_model.source_node_name,

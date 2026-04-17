@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -11,6 +12,7 @@
 #include "infra/controller_action.h"
 
 #include "naim/security/crypto_utils.h"
+#include "naim/runtime/runtime_status.h"
 #include "naim/state/models.h"
 #include "naim/state/sqlite_store.h"
 
@@ -19,6 +21,9 @@ using nlohmann::json;
 namespace {
 
 constexpr std::uintmax_t kMaxModelArtifactChunkBytes = 4ULL * 1024ULL * 1024ULL;
+constexpr std::uintmax_t kMaxPeerTransferChunkBytes = 64ULL * 1024ULL * 1024ULL;
+constexpr int kPeerLinkFreshSeconds = 120;
+constexpr int kTransferTicketTtlSeconds = 600;
 
 bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
   return path.rfind(prefix, 0) == 0;
@@ -48,6 +53,126 @@ json ParseJsonBody(const HttpRequest& request) {
     return json::object();
   }
   return json::parse(request.body);
+}
+
+bool SqlTimestampIsFresh(const HostdHttpSupport& support, const std::string& timestamp, int seconds) {
+  if (timestamp.empty()) {
+    return false;
+  }
+  const auto age = support.timestamp_age_seconds(timestamp);
+  return age.has_value() && *age >= 0 && *age <= seconds;
+}
+
+std::string PeerLinkState(
+    const HostdHttpSupport& support,
+    const naim::HostPeerLinkRecord& link,
+    const std::optional<naim::HostPeerLinkRecord>& reverse_link) {
+  const bool fresh = SqlTimestampIsFresh(support, link.last_probe_at, kPeerLinkFreshSeconds) ||
+                     SqlTimestampIsFresh(support, link.last_seen_at, kPeerLinkFreshSeconds);
+  const bool reverse_fresh =
+      reverse_link.has_value() &&
+      (SqlTimestampIsFresh(support, reverse_link->last_probe_at, kPeerLinkFreshSeconds) ||
+       SqlTimestampIsFresh(support, reverse_link->last_seen_at, kPeerLinkFreshSeconds));
+  if (fresh && reverse_fresh && link.tcp_reachable && reverse_link->tcp_reachable) {
+    return "direct";
+  }
+  if (fresh) {
+    return "partial";
+  }
+  return "stale";
+}
+
+json BuildPeerLinkPayload(
+    const HostdHttpSupport& support,
+    const naim::HostPeerLinkRecord& link,
+    const std::optional<naim::HostPeerLinkRecord>& reverse_link) {
+  const std::string state = PeerLinkState(support, link, reverse_link);
+  return json{
+      {"observer_node_name", link.observer_node_name},
+      {"peer_node_name", link.peer_node_name},
+      {"peer_endpoint", link.peer_endpoint.empty() ? json(nullptr) : json(link.peer_endpoint)},
+      {"local_interface", link.local_interface.empty() ? json(nullptr) : json(link.local_interface)},
+      {"remote_address", link.remote_address.empty() ? json(nullptr) : json(link.remote_address)},
+      {"seen_udp", link.seen_udp},
+      {"tcp_reachable", link.tcp_reachable},
+      {"same_lan", state == "direct"},
+      {"state", state},
+      {"rtt_ms", link.rtt_ms > 0 ? json(link.rtt_ms) : json(nullptr)},
+      {"last_seen_at", link.last_seen_at.empty() ? json(nullptr) : json(link.last_seen_at)},
+      {"last_probe_at", link.last_probe_at.empty() ? json(nullptr) : json(link.last_probe_at)},
+      {"updated_at", link.updated_at.empty() ? json(nullptr) : json(link.updated_at)},
+  };
+}
+
+void UpsertPeerLinksFromObservation(
+    naim::ControllerStore* store,
+    const naim::HostObservation& observation) {
+  if (store == nullptr || observation.network_telemetry_json.empty()) {
+    return;
+  }
+  const auto parsed =
+      json::parse(observation.network_telemetry_json, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    return;
+  }
+  const auto network = naim::DeserializeNetworkTelemetryJson(
+      observation.network_telemetry_json);
+  for (const auto& peer : network.peer_discovery) {
+    if (peer.peer_node_name.empty() || peer.peer_node_name == observation.node_name) {
+      continue;
+    }
+    naim::HostPeerLinkRecord link;
+    link.observer_node_name = observation.node_name;
+    link.peer_node_name = peer.peer_node_name;
+    link.peer_endpoint = peer.peer_endpoint;
+    link.local_interface = peer.local_interface;
+    link.remote_address = peer.remote_address;
+    link.seen_udp = peer.seen_udp;
+    link.tcp_reachable = peer.tcp_reachable;
+    link.rtt_ms = peer.rtt_ms;
+    link.last_seen_at = peer.last_seen_at.empty() ? observation.heartbeat_at : peer.last_seen_at;
+    link.last_probe_at = peer.last_probe_at.empty() ? observation.heartbeat_at : peer.last_probe_at;
+    store->UpsertHostPeerLink(link);
+  }
+}
+
+json BuildPeerLinksPayload(
+    const HostdHttpSupport& support,
+    const std::vector<naim::HostPeerLinkRecord>& links) {
+  std::map<std::pair<std::string, std::string>, naim::HostPeerLinkRecord> by_direction;
+  for (const auto& link : links) {
+    by_direction[{link.observer_node_name, link.peer_node_name}] = link;
+  }
+  json items = json::array();
+  int direct_count = 0;
+  int partial_count = 0;
+  int stale_count = 0;
+  for (const auto& link : links) {
+    const auto reverse_it =
+        by_direction.find({link.peer_node_name, link.observer_node_name});
+    const std::optional<naim::HostPeerLinkRecord> reverse =
+        reverse_it == by_direction.end()
+            ? std::nullopt
+            : std::optional<naim::HostPeerLinkRecord>(reverse_it->second);
+    json item = BuildPeerLinkPayload(support, link, reverse);
+    const std::string state = item.value("state", std::string{});
+    if (state == "direct") {
+      ++direct_count;
+    } else if (state == "partial") {
+      ++partial_count;
+    } else {
+      ++stale_count;
+    }
+    items.push_back(std::move(item));
+  }
+  return json{
+      {"items", std::move(items)},
+      {"summary",
+       json{{"total", links.size()},
+            {"direct", direct_count},
+            {"partial", partial_count},
+            {"stale", stale_count}}},
+  };
 }
 
 std::string BuildHostRequestAad(
@@ -383,6 +508,15 @@ std::optional<HttpResponse> HostdHttpService::HandleRequest(
   if (request.path == "/api/v1/hostd/hosts") {
     return HandleHosts(db_path, request);
   }
+  if (request.path == "/api/v1/hostd/peer-links") {
+    return HandlePeerLinks(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/file-transfer-tickets") {
+    return HandleFileTransferTickets(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/file-transfer-tickets/validate") {
+    return HandleFileTransferTicketValidate(db_path, request);
+  }
   if (StartsWithPathPrefix(request.path, "/api/v1/hostd/hosts/")) {
     return HandleHostPath(db_path, request);
   }
@@ -707,6 +841,193 @@ HttpResponse HostdHttpService::HandleHosts(
         200,
         context.MakeHostRegistryService().BuildPayload(
             FindQueryStringValue(request, "node")));
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandlePeerLinks(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "GET") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto node_name = FindQueryStringValue(request, "node");
+    const auto links = context.store().LoadHostPeerLinks(node_name, std::nullopt);
+    json payload = BuildPeerLinksPayload(support_, links);
+    payload["service"] = "naim-controller";
+    payload["node_name"] = node_name.has_value() ? json(*node_name) : json(nullptr);
+    return context.Json(200, payload);
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleFileTransferTickets(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "file-transfer-tickets/create");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    const std::string source_node_name =
+        body.value("source_node_name", std::string{});
+    if (requester_node_name != host.node_name || source_node_name.empty()) {
+      return context.Json(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "invalid requester_node_name or source_node_name"}});
+    }
+    std::vector<std::string> source_paths;
+    for (const auto& value : body.value("source_paths", json::array())) {
+      if (value.is_string()) {
+        const std::string path = std::filesystem::path(value.get<std::string>())
+                                     .lexically_normal()
+                                     .string();
+        if (path.empty() || path.front() != '/') {
+          return context.Json(
+              400,
+              json{{"status", "bad_request"},
+                   {"message", "source_paths must be absolute"}});
+        }
+        source_paths.push_back(path);
+      }
+    }
+    if (source_paths.empty()) {
+      return context.Json(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "source_paths must not be empty"}});
+    }
+    const auto forward_links =
+        context.store().LoadHostPeerLinks(requester_node_name, source_node_name);
+    const auto reverse_links =
+        context.store().LoadHostPeerLinks(source_node_name, requester_node_name);
+    std::optional<naim::HostPeerLinkRecord> forward =
+        forward_links.empty() ? std::nullopt
+                              : std::optional<naim::HostPeerLinkRecord>(forward_links.front());
+    std::optional<naim::HostPeerLinkRecord> reverse =
+        reverse_links.empty() ? std::nullopt
+                              : std::optional<naim::HostPeerLinkRecord>(reverse_links.front());
+    if (!forward.has_value() ||
+        PeerLinkState(support_, *forward, reverse) != "direct") {
+      return context.EncryptedResponse(
+          &host,
+          "file-transfer-tickets/create",
+          json{{"service", "naim-controller"},
+               {"status", "not_available"},
+               {"message", "source node is not directly reachable over LAN"}});
+    }
+    naim::FileTransferTicketRecord ticket;
+    ticket.ticket_id = naim::RandomTokenBase64(32);
+    ticket.source_node_name = source_node_name;
+    ticket.requester_node_name = requester_node_name;
+    ticket.source_paths_json = json(source_paths).dump();
+    ticket.expires_at = support_.sql_timestamp_after_seconds(kTransferTicketTtlSeconds);
+    ticket.max_chunk_bytes = kMaxPeerTransferChunkBytes;
+    context.store().InsertFileTransferTicket(ticket);
+    return context.EncryptedResponse(
+        &host,
+        "file-transfer-tickets/create",
+        json{{"service", "naim-controller"},
+             {"status", "issued"},
+             {"ticket_id", ticket.ticket_id},
+             {"source_node_name", ticket.source_node_name},
+             {"requester_node_name", ticket.requester_node_name},
+             {"source_paths", source_paths},
+             {"source_endpoint", forward->peer_endpoint},
+             {"expires_at", ticket.expires_at},
+             {"max_chunk_bytes", ticket.max_chunk_bytes}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleFileTransferTicketValidate(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "file-transfer-tickets/validate");
+    const std::string ticket_id = body.value("ticket_id", std::string{});
+    const auto ticket = context.store().LoadFileTransferTicket(ticket_id);
+    if (!ticket.has_value() || ticket->source_node_name != host.node_name) {
+      return context.EncryptedResponse(
+          &host,
+          "file-transfer-tickets/validate",
+          json{{"service", "naim-controller"},
+               {"status", "denied"},
+               {"message", "ticket not found for this source node"}});
+    }
+    const auto expiry_age = support_.timestamp_age_seconds(ticket->expires_at);
+    if (!expiry_age.has_value() || *expiry_age >= 0) {
+      return context.EncryptedResponse(
+          &host,
+          "file-transfer-tickets/validate",
+          json{{"service", "naim-controller"},
+               {"status", "expired"},
+               {"message", "ticket expired"}});
+    }
+    context.store().MarkFileTransferTicketValidated(
+        ticket->ticket_id,
+        support_.utc_now_sql_timestamp());
+    json source_paths = json::parse(ticket->source_paths_json, nullptr, false);
+    if (!source_paths.is_array()) {
+      source_paths = json::array();
+    }
+    return context.EncryptedResponse(
+        &host,
+        "file-transfer-tickets/validate",
+        json{{"service", "naim-controller"},
+             {"status", "valid"},
+             {"ticket_id", ticket->ticket_id},
+             {"source_node_name", ticket->source_node_name},
+             {"requester_node_name", ticket->requester_node_name},
+             {"source_paths", source_paths},
+             {"expires_at", ticket->expires_at},
+             {"max_chunk_bytes", ticket->max_chunk_bytes}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,
@@ -1690,6 +2011,7 @@ HttpResponse HostdHttpService::HandleObservations(
                {"message", "node mismatch for host observation"}});
     }
     context.store().UpsertHostObservation(observation);
+    UpsertPeerLinksFromObservation(&context.store(), observation);
     if (auto current = context.store().LoadRegisteredHost(observation.node_name);
         current.has_value()) {
       const auto inventory = BuildInventorySummary(*current, observation);

@@ -131,6 +131,11 @@ json HostRegistryService::BuildPayload(
   naim::ControllerStore store(db_path_);
   store.Initialize();
   const auto observations = store.LoadHostObservations(node_name);
+  const auto all_peer_links = store.LoadHostPeerLinks();
+  std::map<std::string, std::vector<naim::HostPeerLinkRecord>> peer_links_by_node;
+  for (const auto& link : all_peer_links) {
+    peer_links_by_node[link.observer_node_name].push_back(link);
+  }
   std::map<std::string, naim::HostObservation> observation_by_node;
   for (const auto& observation : observations) {
     observation_by_node[observation.node_name] = observation;
@@ -157,6 +162,25 @@ json HostRegistryService::BuildPayload(
     json planes = json::array();
     for (const auto& plane_name_value : plane_participation) {
       planes.push_back(plane_name_value);
+    }
+    json lan_peers = json::array();
+    if (const auto peer_it = peer_links_by_node.find(host.node_name);
+        peer_it != peer_links_by_node.end()) {
+      for (const auto& link : peer_it->second) {
+        lan_peers.push_back(json{
+            {"peer_node_name", link.peer_node_name},
+            {"peer_endpoint", link.peer_endpoint.empty() ? json(nullptr) : json(link.peer_endpoint)},
+            {"local_interface",
+             link.local_interface.empty() ? json(nullptr) : json(link.local_interface)},
+            {"remote_address",
+             link.remote_address.empty() ? json(nullptr) : json(link.remote_address)},
+            {"seen_udp", link.seen_udp},
+            {"tcp_reachable", link.tcp_reachable},
+            {"rtt_ms", link.rtt_ms > 0 ? json(link.rtt_ms) : json(nullptr)},
+            {"last_seen_at", link.last_seen_at.empty() ? json(nullptr) : json(link.last_seen_at)},
+            {"last_probe_at", link.last_probe_at.empty() ? json(nullptr) : json(link.last_probe_at)},
+        });
+      }
     }
     items.push_back(json{
         {"node_name", host.node_name},
@@ -209,6 +233,7 @@ json HostRegistryService::BuildPayload(
                                         : json(nullptr)},
          }},
         {"plane_participation", planes},
+        {"lan_peers", std::move(lan_peers)},
         {"updated_at", host.updated_at},
     });
   }

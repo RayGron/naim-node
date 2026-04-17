@@ -344,9 +344,15 @@ services:
     container_name: naim-hostd
     restart: unless-stopped
     privileged: true
+    network_mode: host
 ${nvidia_runtime}
     environment:
       NAIM_NODE_CONFIG_PATH: ${hostd_root}/naim-node-config.json
+      NAIM_HOSTD_PEER_ENABLED: "yes"
+      NAIM_HOSTD_PEER_PORT: "29999"
+      NAIM_HOSTD_DISCOVERY_MODE: udp-multicast
+      NAIM_HOSTD_DISCOVERY_GROUP: 239.255.42.42
+      NAIM_HOSTD_DISCOVERY_PORT: "29998"
 ${nvidia_env}
     command:
       - run

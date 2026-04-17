@@ -263,6 +263,38 @@ void InitializeSchema(
       "public_key_base64 TEXT NOT NULL DEFAULT ''");
   Exec(
       db,
+      "CREATE TABLE IF NOT EXISTS host_peer_links("
+      "observer_node_name TEXT NOT NULL,"
+      "peer_node_name TEXT NOT NULL,"
+      "peer_endpoint TEXT NOT NULL DEFAULT '',"
+      "local_interface TEXT NOT NULL DEFAULT '',"
+      "remote_address TEXT NOT NULL DEFAULT '',"
+      "seen_udp INTEGER NOT NULL DEFAULT 0,"
+      "tcp_reachable INTEGER NOT NULL DEFAULT 0,"
+      "rtt_ms INTEGER NOT NULL DEFAULT 0,"
+      "last_seen_at TEXT NOT NULL DEFAULT '',"
+      "last_probe_at TEXT NOT NULL DEFAULT '',"
+      "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "PRIMARY KEY(observer_node_name, peer_node_name)"
+      ");");
+  Exec(
+      db,
+      "CREATE INDEX IF NOT EXISTS idx_host_peer_links_peer "
+      "ON host_peer_links(peer_node_name, observer_node_name);");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS file_transfer_tickets("
+      "ticket_id TEXT PRIMARY KEY,"
+      "source_node_name TEXT NOT NULL,"
+      "requester_node_name TEXT NOT NULL,"
+      "source_paths_json TEXT NOT NULL DEFAULT '[]',"
+      "expires_at TEXT NOT NULL,"
+      "max_chunk_bytes INTEGER NOT NULL DEFAULT 0,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "last_validated_at TEXT NOT NULL DEFAULT ''"
+      ");");
+  Exec(
+      db,
       "CREATE TABLE IF NOT EXISTS interaction_sessions("
       "session_id TEXT PRIMARY KEY,"
       "plane_name TEXT NOT NULL,"

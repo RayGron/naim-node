@@ -145,6 +145,31 @@ nlohmann::json HttpHostdBackend::LoadModelArtifactManifest(
       "model-artifacts/manifest/poll");
 }
 
+nlohmann::json HttpHostdBackend::RequestFileTransferTicket(
+    const std::string& requester_node_name,
+    const std::string& source_node_name,
+    const std::vector<std::string>& source_paths) {
+  EnsureSession(requester_node_name, "requesting LAN file transfer ticket");
+  return SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/file-transfer-tickets",
+      nlohmann::json{
+          {"requester_node_name", requester_node_name},
+          {"source_node_name", source_node_name},
+          {"source_paths", source_paths},
+      },
+      "file-transfer-tickets/create");
+}
+
+nlohmann::json HttpHostdBackend::ValidateFileTransferTicket(
+    const std::string& source_node_name,
+    const std::string& ticket_id) {
+  EnsureSession(source_node_name, "validating LAN file transfer ticket");
+  return SendEncryptedControllerJsonRequest(
+      "/api/v1/hostd/file-transfer-tickets/validate",
+      nlohmann::json{{"ticket_id", ticket_id}},
+      "file-transfer-tickets/validate");
+}
+
 void HttpHostdBackend::UpsertHostObservation(const naim::HostObservation& observation) {
   EnsureSession(observation.node_name, "uploading observation");
   SendEncryptedControllerJsonRequest(

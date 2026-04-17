@@ -13,6 +13,7 @@
 #include "naim/state/registered_host_repository.h"
 #include "naim/state/scheduler_repository.h"
 #include "naim/state/skills_factory_repository.h"
+#include "naim/state/sqlite_statement.h"
 #include "naim/state/sqlite_store.h"
 #include "naim/state/sqlite_store_schema.h"
 #include "naim/state/sqlite_store_support.h"
@@ -36,6 +37,7 @@ using sqlite_store_support::AsSqlite;
 using sqlite_store_support::AvailabilityOverrideFromStatement;
 using sqlite_store_support::EnsureColumn;
 using sqlite_store_support::Exec;
+using sqlite_store_support::ToColumnText;
 
 constexpr const char* kBootstrapSql = R"SQL(
 PRAGMA journal_mode=WAL;
@@ -93,6 +95,35 @@ CREATE TABLE IF NOT EXISTS registered_hosts (
     last_heartbeat_at TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS host_peer_links (
+    observer_node_name TEXT NOT NULL,
+    peer_node_name TEXT NOT NULL,
+    peer_endpoint TEXT NOT NULL DEFAULT '',
+    local_interface TEXT NOT NULL DEFAULT '',
+    remote_address TEXT NOT NULL DEFAULT '',
+    seen_udp INTEGER NOT NULL DEFAULT 0,
+    tcp_reachable INTEGER NOT NULL DEFAULT 0,
+    rtt_ms INTEGER NOT NULL DEFAULT 0,
+    last_seen_at TEXT NOT NULL DEFAULT '',
+    last_probe_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(observer_node_name, peer_node_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_host_peer_links_peer
+    ON host_peer_links(peer_node_name, observer_node_name);
+
+CREATE TABLE IF NOT EXISTS file_transfer_tickets (
+    ticket_id TEXT PRIMARY KEY,
+    source_node_name TEXT NOT NULL,
+    requester_node_name TEXT NOT NULL,
+    source_paths_json TEXT NOT NULL DEFAULT '[]',
+    expires_at TEXT NOT NULL,
+    max_chunk_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_validated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -624,6 +655,140 @@ std::optional<RegisteredHostRecord> ControllerStore::LoadRegisteredHost(
 std::vector<RegisteredHostRecord> ControllerStore::LoadRegisteredHosts(
     const std::optional<std::string>& node_name) const {
   return RegisteredHostRepository(AsSqlite(db_)).LoadRegisteredHosts(node_name);
+}
+
+void ControllerStore::UpsertHostPeerLink(const HostPeerLinkRecord& link) {
+  SqliteStatement statement(
+      AsSqlite(db_),
+      "INSERT INTO host_peer_links("
+      "observer_node_name, peer_node_name, peer_endpoint, local_interface, remote_address,"
+      "seen_udp, tcp_reachable, rtt_ms, last_seen_at, last_probe_at, updated_at"
+      ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP)"
+      " ON CONFLICT(observer_node_name, peer_node_name) DO UPDATE SET"
+      " peer_endpoint = excluded.peer_endpoint,"
+      " local_interface = excluded.local_interface,"
+      " remote_address = excluded.remote_address,"
+      " seen_udp = excluded.seen_udp,"
+      " tcp_reachable = excluded.tcp_reachable,"
+      " rtt_ms = excluded.rtt_ms,"
+      " last_seen_at = excluded.last_seen_at,"
+      " last_probe_at = excluded.last_probe_at,"
+      " updated_at = CURRENT_TIMESTAMP;");
+  statement.BindText(1, link.observer_node_name);
+  statement.BindText(2, link.peer_node_name);
+  statement.BindText(3, link.peer_endpoint);
+  statement.BindText(4, link.local_interface);
+  statement.BindText(5, link.remote_address);
+  statement.BindInt(6, link.seen_udp ? 1 : 0);
+  statement.BindInt(7, link.tcp_reachable ? 1 : 0);
+  statement.BindInt(8, link.rtt_ms);
+  statement.BindText(9, link.last_seen_at);
+  statement.BindText(10, link.last_probe_at);
+  statement.StepDone();
+}
+
+std::vector<HostPeerLinkRecord> ControllerStore::LoadHostPeerLinks(
+    const std::optional<std::string>& observer_node_name,
+    const std::optional<std::string>& peer_node_name) const {
+  std::string sql =
+      "SELECT observer_node_name, peer_node_name, peer_endpoint, local_interface,"
+      " remote_address, seen_udp, tcp_reachable, rtt_ms, last_seen_at, last_probe_at,"
+      " updated_at FROM host_peer_links";
+  std::vector<std::string> clauses;
+  if (observer_node_name.has_value()) {
+    clauses.push_back("observer_node_name = ?" + std::to_string(clauses.size() + 1));
+  }
+  if (peer_node_name.has_value()) {
+    clauses.push_back("peer_node_name = ?" + std::to_string(clauses.size() + 1));
+  }
+  if (!clauses.empty()) {
+    sql += " WHERE ";
+    for (std::size_t index = 0; index < clauses.size(); ++index) {
+      if (index > 0) {
+        sql += " AND ";
+      }
+      sql += clauses[index];
+    }
+  }
+  sql += " ORDER BY observer_node_name ASC, peer_node_name ASC;";
+
+  SqliteStatement statement(AsSqlite(db_), sql);
+  int bind_index = 1;
+  if (observer_node_name.has_value()) {
+    statement.BindText(bind_index++, *observer_node_name);
+  }
+  if (peer_node_name.has_value()) {
+    statement.BindText(bind_index++, *peer_node_name);
+  }
+
+  std::vector<HostPeerLinkRecord> links;
+  while (statement.StepRow()) {
+    HostPeerLinkRecord link;
+    link.observer_node_name = ToColumnText(statement.raw(), 0);
+    link.peer_node_name = ToColumnText(statement.raw(), 1);
+    link.peer_endpoint = ToColumnText(statement.raw(), 2);
+    link.local_interface = ToColumnText(statement.raw(), 3);
+    link.remote_address = ToColumnText(statement.raw(), 4);
+    link.seen_udp = sqlite3_column_int(statement.raw(), 5) != 0;
+    link.tcp_reachable = sqlite3_column_int(statement.raw(), 6) != 0;
+    link.rtt_ms = sqlite3_column_int(statement.raw(), 7);
+    link.last_seen_at = ToColumnText(statement.raw(), 8);
+    link.last_probe_at = ToColumnText(statement.raw(), 9);
+    link.updated_at = ToColumnText(statement.raw(), 10);
+    links.push_back(std::move(link));
+  }
+  return links;
+}
+
+void ControllerStore::InsertFileTransferTicket(const FileTransferTicketRecord& ticket) {
+  SqliteStatement statement(
+      AsSqlite(db_),
+      "INSERT INTO file_transfer_tickets("
+      "ticket_id, source_node_name, requester_node_name, source_paths_json, expires_at,"
+      "max_chunk_bytes"
+      ") VALUES (?1, ?2, ?3, ?4, ?5, ?6);");
+  statement.BindText(1, ticket.ticket_id);
+  statement.BindText(2, ticket.source_node_name);
+  statement.BindText(3, ticket.requester_node_name);
+  statement.BindText(4, ticket.source_paths_json);
+  statement.BindText(5, ticket.expires_at);
+  statement.BindInt(6, static_cast<int>(ticket.max_chunk_bytes));
+  statement.StepDone();
+}
+
+std::optional<FileTransferTicketRecord> ControllerStore::LoadFileTransferTicket(
+    const std::string& ticket_id) const {
+  SqliteStatement statement(
+      AsSqlite(db_),
+      "SELECT ticket_id, source_node_name, requester_node_name, source_paths_json,"
+      " expires_at, max_chunk_bytes, created_at, last_validated_at"
+      " FROM file_transfer_tickets WHERE ticket_id = ?1;");
+  statement.BindText(1, ticket_id);
+  if (!statement.StepRow()) {
+    return std::nullopt;
+  }
+  FileTransferTicketRecord ticket;
+  ticket.ticket_id = ToColumnText(statement.raw(), 0);
+  ticket.source_node_name = ToColumnText(statement.raw(), 1);
+  ticket.requester_node_name = ToColumnText(statement.raw(), 2);
+  ticket.source_paths_json = ToColumnText(statement.raw(), 3);
+  ticket.expires_at = ToColumnText(statement.raw(), 4);
+  ticket.max_chunk_bytes = static_cast<std::uintmax_t>(sqlite3_column_int64(statement.raw(), 5));
+  ticket.created_at = ToColumnText(statement.raw(), 6);
+  ticket.last_validated_at = ToColumnText(statement.raw(), 7);
+  return ticket;
+}
+
+bool ControllerStore::MarkFileTransferTicketValidated(
+    const std::string& ticket_id,
+    const std::string& validated_at) {
+  SqliteStatement statement(
+      AsSqlite(db_),
+      "UPDATE file_transfer_tickets SET last_validated_at = ?2 WHERE ticket_id = ?1;");
+  statement.BindText(1, ticket_id);
+  statement.BindText(2, validated_at);
+  statement.StepDone();
+  return sqlite3_changes(AsSqlite(db_)) > 0;
 }
 
 int ControllerStore::LoadUserCount() const {

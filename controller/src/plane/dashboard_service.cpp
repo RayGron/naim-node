@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <set>
@@ -38,6 +39,56 @@ struct NodeDemandSummary {
   int desired_disk_count = 0;
   std::set<std::string> plane_names;
 };
+
+json BuildPeerLinksPayload(const std::vector<naim::HostPeerLinkRecord>& links) {
+  std::map<std::pair<std::string, std::string>, naim::HostPeerLinkRecord> by_direction;
+  for (const auto& link : links) {
+    by_direction[{link.observer_node_name, link.peer_node_name}] = link;
+  }
+  json items = json::array();
+  int direct_count = 0;
+  int partial_count = 0;
+  int stale_count = 0;
+  for (const auto& link : links) {
+    const auto reverse_it =
+        by_direction.find({link.peer_node_name, link.observer_node_name});
+    const bool direct = reverse_it != by_direction.end() &&
+                        link.tcp_reachable &&
+                        reverse_it->second.tcp_reachable;
+    const std::string state = direct ? "direct" : (link.seen_udp ? "partial" : "stale");
+    if (state == "direct") {
+      ++direct_count;
+    } else if (state == "partial") {
+      ++partial_count;
+    } else {
+      ++stale_count;
+    }
+    items.push_back(json{
+        {"observer_node_name", link.observer_node_name},
+        {"peer_node_name", link.peer_node_name},
+        {"peer_endpoint", link.peer_endpoint.empty() ? json(nullptr) : json(link.peer_endpoint)},
+        {"local_interface",
+         link.local_interface.empty() ? json(nullptr) : json(link.local_interface)},
+        {"remote_address",
+         link.remote_address.empty() ? json(nullptr) : json(link.remote_address)},
+        {"seen_udp", link.seen_udp},
+        {"tcp_reachable", link.tcp_reachable},
+        {"same_lan", direct},
+        {"state", state},
+        {"rtt_ms", link.rtt_ms > 0 ? json(link.rtt_ms) : json(nullptr)},
+        {"last_seen_at", link.last_seen_at.empty() ? json(nullptr) : json(link.last_seen_at)},
+        {"last_probe_at", link.last_probe_at.empty() ? json(nullptr) : json(link.last_probe_at)},
+    });
+  }
+  return json{
+      {"items", std::move(items)},
+      {"summary",
+       json{{"total", links.size()},
+            {"direct", direct_count},
+            {"partial", partial_count},
+            {"stale", stale_count}}},
+  };
+}
 
 ObservedPlaneRuntimeSummary SummarizeObservedPlaneRuntime(
     const naim::HostObservation& observation,
@@ -762,6 +813,7 @@ nlohmann::json DashboardService::BuildPayload(
   payload["webgateway"] = PlaneBrowsingService().BuildStatusPayload(
       *view.desired_state,
       selected_plane_state);
+  payload["peer_links"] = BuildPeerLinksPayload(store.LoadHostPeerLinks());
 
   const auto latest_assignments_by_node =
       BuildLatestPlaneAssignmentsByNode(

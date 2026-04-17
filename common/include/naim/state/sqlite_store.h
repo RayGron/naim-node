@@ -200,6 +200,31 @@ struct RegisteredHostRecord {
   std::string updated_at;
 };
 
+struct HostPeerLinkRecord {
+  std::string observer_node_name;
+  std::string peer_node_name;
+  std::string peer_endpoint;
+  std::string local_interface;
+  std::string remote_address;
+  bool seen_udp = false;
+  bool tcp_reachable = false;
+  int rtt_ms = 0;
+  std::string last_seen_at;
+  std::string last_probe_at;
+  std::string updated_at;
+};
+
+struct FileTransferTicketRecord {
+  std::string ticket_id;
+  std::string source_node_name;
+  std::string requester_node_name;
+  std::string source_paths_json = "[]";
+  std::string expires_at;
+  std::uintmax_t max_chunk_bytes = 0;
+  std::string created_at;
+  std::string last_validated_at;
+};
+
 struct UserRecord {
   int id = 0;
   std::string username;
@@ -393,6 +418,16 @@ class ControllerStore {
   std::optional<RegisteredHostRecord> LoadRegisteredHost(const std::string& node_name) const;
   std::vector<RegisteredHostRecord> LoadRegisteredHosts(
       const std::optional<std::string>& node_name = std::nullopt) const;
+  void UpsertHostPeerLink(const HostPeerLinkRecord& link);
+  std::vector<HostPeerLinkRecord> LoadHostPeerLinks(
+      const std::optional<std::string>& observer_node_name = std::nullopt,
+      const std::optional<std::string>& peer_node_name = std::nullopt) const;
+  void InsertFileTransferTicket(const FileTransferTicketRecord& ticket);
+  std::optional<FileTransferTicketRecord> LoadFileTransferTicket(
+      const std::string& ticket_id) const;
+  bool MarkFileTransferTicketValidated(
+      const std::string& ticket_id,
+      const std::string& validated_at);
   int LoadUserCount() const;
   std::optional<UserRecord> LoadUserById(int user_id) const;
   std::optional<UserRecord> LoadUserByUsername(const std::string& username) const;

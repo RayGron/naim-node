@@ -15,6 +15,8 @@
 #include <string>
 #include <thread>
 
+#include <nlohmann/json.hpp>
+
 #if !defined(_WIN32)
 #include <dlfcn.h>
 #include <sys/statvfs.h>
@@ -159,6 +161,71 @@ std::optional<std::string> ReadTrimmedFile(const fs::path& path) {
     value.pop_back();
   }
   return value;
+}
+
+std::map<std::string, std::vector<std::string>> LoadInterfaceAddresses(
+    const HostdCommandSupport& command_support) {
+  std::map<std::string, std::vector<std::string>> addresses_by_interface;
+#if defined(_WIN32)
+  (void)command_support;
+#else
+  const std::string output =
+      command_support.RunCommandCapture("ip -o -4 addr show 2>/dev/null || true");
+  std::istringstream lines(output);
+  std::string line;
+  while (std::getline(lines, line)) {
+    std::istringstream fields(line);
+    std::string index;
+    std::string interface_name;
+    std::string family;
+    std::string address;
+    fields >> index >> interface_name >> family >> address;
+    if (interface_name.empty() || family != "inet" || address.empty()) {
+      continue;
+    }
+    if (!interface_name.empty() && interface_name.back() == ':') {
+      interface_name.pop_back();
+    }
+    addresses_by_interface[interface_name].push_back(address);
+  }
+#endif
+  return addresses_by_interface;
+}
+
+std::vector<naim::PeerDiscoveryTelemetry> LoadPeerDiscoveryTelemetry(
+    const std::string& state_root) {
+  std::vector<naim::PeerDiscoveryTelemetry> peers;
+  if (state_root.empty()) {
+    return peers;
+  }
+  const fs::path peer_path = fs::path(state_root) / "peer-discovery.json";
+  std::ifstream input(peer_path);
+  if (!input.is_open()) {
+    return peers;
+  }
+  const auto payload = nlohmann::json::parse(input, nullptr, false);
+  if (payload.is_discarded() || !payload.is_object()) {
+    return peers;
+  }
+  for (const auto& value : payload.value("peers", nlohmann::json::array())) {
+    if (!value.is_object()) {
+      continue;
+    }
+    naim::PeerDiscoveryTelemetry peer;
+    peer.peer_node_name = value.value("peer_node_name", std::string{});
+    peer.peer_endpoint = value.value("peer_endpoint", std::string{});
+    peer.local_interface = value.value("local_interface", std::string{});
+    peer.remote_address = value.value("remote_address", std::string{});
+    peer.seen_udp = value.value("seen_udp", false);
+    peer.tcp_reachable = value.value("tcp_reachable", false);
+    peer.rtt_ms = value.value("rtt_ms", 0);
+    peer.last_seen_at = value.value("last_seen_at", std::string{});
+    peer.last_probe_at = value.value("last_probe_at", std::string{});
+    if (!peer.peer_node_name.empty()) {
+      peers.push_back(std::move(peer));
+    }
+  }
+  return peers;
 }
 
 std::uint64_t ReadUint64FileOrZero(const fs::path& path) {
@@ -958,11 +1025,13 @@ naim::CpuTelemetrySnapshot HostdSystemTelemetryCollector::CollectCpuTelemetry() 
   return snapshot;
 }
 
-naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTelemetry() const {
+naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTelemetry(
+    const std::string& state_root) const {
   naim::NetworkTelemetrySnapshot snapshot;
   snapshot.contract_version = 1;
   snapshot.source = "sysfs";
   snapshot.collected_at = CurrentTimestampString();
+  snapshot.peer_discovery = LoadPeerDiscoveryTelemetry(state_root);
 
   const fs::path net_root("/sys/class/net");
   if (!fs::exists(net_root)) {
@@ -971,6 +1040,7 @@ naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTele
     return snapshot;
   }
 
+  const auto addresses_by_interface = LoadInterfaceAddresses(command_support_);
   for (const auto& entry : fs::directory_iterator(net_root)) {
     if (!entry.is_directory() && !entry.is_symlink()) {
       continue;
@@ -988,6 +1058,10 @@ naim::NetworkTelemetrySnapshot HostdSystemTelemetryCollector::CollectNetworkTele
     interface.rx_bytes = ReadUint64FileOrZero(entry.path() / "statistics" / "rx_bytes");
     interface.tx_bytes = ReadUint64FileOrZero(entry.path() / "statistics" / "tx_bytes");
     interface.loopback = interface.interface_name == "lo";
+    if (const auto address_it = addresses_by_interface.find(interface.interface_name);
+        address_it != addresses_by_interface.end()) {
+      interface.addresses = address_it->second;
+    }
     snapshot.interfaces.push_back(std::move(interface));
   }
 

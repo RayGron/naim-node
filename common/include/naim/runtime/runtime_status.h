@@ -88,9 +88,22 @@ struct NetworkInterfaceTelemetry {
   std::string interface_name;
   std::string oper_state;
   std::string link_state;
+  std::vector<std::string> addresses;
   std::uint64_t rx_bytes = 0;
   std::uint64_t tx_bytes = 0;
   bool loopback = false;
+};
+
+struct PeerDiscoveryTelemetry {
+  std::string peer_node_name;
+  std::string peer_endpoint;
+  std::string local_interface;
+  std::string remote_address;
+  bool seen_udp = false;
+  bool tcp_reachable = false;
+  int rtt_ms = 0;
+  std::string last_seen_at;
+  std::string last_probe_at;
 };
 
 struct NetworkTelemetrySnapshot {
@@ -99,6 +112,7 @@ struct NetworkTelemetrySnapshot {
   std::string source;
   std::string collected_at;
   std::vector<NetworkInterfaceTelemetry> interfaces;
+  std::vector<PeerDiscoveryTelemetry> peer_discovery;
 };
 
 struct CpuTelemetrySnapshot {

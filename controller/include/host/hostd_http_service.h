@@ -25,6 +25,15 @@ class HostdHttpService {
   HttpResponse HandleHosts(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse HandlePeerLinks(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleFileTransferTickets(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleFileTransferTicketValidate(
+      const std::string& db_path,
+      const HttpRequest& request) const;
   HttpResponse HandleHostPath(
       const std::string& db_path,
       const HttpRequest& request) const;

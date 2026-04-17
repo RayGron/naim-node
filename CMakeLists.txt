@@ -1309,12 +1309,18 @@ add_executable(
   launcher/src/platform/launcher_path_resolver.cpp
   launcher/src/platform/process_runner.cpp
   launcher/src/platform/signal_manager.cpp
+  launcher/src/run/hostd_peer_service.cpp
   launcher/src/run/launcher_run_service.cpp
+  hostd/src/app/hostd_controller_transport_support.cpp
+  hostd/src/backend/http_hostd_backend.cpp
   launcher/src/main.cpp
   launcher/src/app/launcher_app.cpp
 )
-target_include_directories(naim-node PRIVATE launcher/include)
+target_include_directories(naim-node PRIVATE launcher/include hostd/include)
 target_link_libraries(naim-node PRIVATE naim-common)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(naim-node PRIVATE Threads::Threads)
+endif()
 naim_enable_strict_warnings(naim-node)
 
 if(NOT WIN32)

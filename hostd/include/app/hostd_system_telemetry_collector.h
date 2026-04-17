@@ -25,7 +25,8 @@ class HostdSystemTelemetryCollector final {
       const std::string& storage_root) const;
 
   naim::CpuTelemetrySnapshot CollectCpuTelemetry() const;
-  naim::NetworkTelemetrySnapshot CollectNetworkTelemetry() const;
+  naim::NetworkTelemetrySnapshot CollectNetworkTelemetry(
+      const std::string& state_root) const;
 
  private:
   HostdCommandSupport command_support_;

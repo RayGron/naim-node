@@ -40,6 +40,13 @@ class HostdBackend {
   virtual nlohmann::json LoadModelArtifactManifest(
       const std::string& requester_node_name,
       int assignment_id) = 0;
+  virtual nlohmann::json RequestFileTransferTicket(
+      const std::string& requester_node_name,
+      const std::string& source_node_name,
+      const std::vector<std::string>& source_paths) = 0;
+  virtual nlohmann::json ValidateFileTransferTicket(
+      const std::string& source_node_name,
+      const std::string& ticket_id) = 0;
   virtual void UpsertHostObservation(const naim::HostObservation& observation) = 0;
   virtual void AppendEvent(const naim::EventRecord& event) = 0;
   virtual void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) = 0;

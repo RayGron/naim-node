@@ -54,6 +54,19 @@ nlohmann::json LocalDbHostdBackend::LoadModelArtifactManifest(
   throw std::runtime_error("model artifact manifest relay requires a controller backend");
 }
 
+nlohmann::json LocalDbHostdBackend::RequestFileTransferTicket(
+    const std::string&,
+    const std::string&,
+    const std::vector<std::string>&) {
+  return nlohmann::json{{"status", "not_available"}};
+}
+
+nlohmann::json LocalDbHostdBackend::ValidateFileTransferTicket(
+    const std::string&,
+    const std::string&) {
+  return nlohmann::json{{"status", "denied"}};
+}
+
 void LocalDbHostdBackend::UpsertHostObservation(const naim::HostObservation& observation) {
   store_.UpsertHostObservation(observation);
 }

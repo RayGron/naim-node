@@ -75,7 +75,7 @@ naim::HostObservation HostdObservedStateSnapshotBuilder::BuildObservedStateSnaps
   }
   observation.disk_telemetry_json = naim::SerializeDiskTelemetryJson(disk_snapshot);
   observation.network_telemetry_json = naim::SerializeNetworkTelemetryJson(
-      system_telemetry_collector_.CollectNetworkTelemetry());
+      system_telemetry_collector_.CollectNetworkTelemetry(state_root));
   observation.cpu_telemetry_json = naim::SerializeCpuTelemetryJson(
       system_telemetry_collector_.CollectCpuTelemetry());
 

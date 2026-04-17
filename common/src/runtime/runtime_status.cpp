@@ -220,10 +220,15 @@ DiskTelemetrySnapshot DiskTelemetrySnapshotFromJson(const json& value) {
 }
 
 json ToJson(const NetworkInterfaceTelemetry& interface) {
+  json addresses = json::array();
+  for (const auto& address : interface.addresses) {
+    addresses.push_back(address);
+  }
   return json{
       {"interface_name", interface.interface_name},
       {"oper_state", interface.oper_state},
       {"link_state", interface.link_state},
+      {"addresses", std::move(addresses)},
       {"rx_bytes", interface.rx_bytes},
       {"tx_bytes", interface.tx_bytes},
       {"loopback", interface.loopback},
@@ -235,10 +240,43 @@ NetworkInterfaceTelemetry NetworkInterfaceTelemetryFromJson(const json& value) {
   interface.interface_name = value.value("interface_name", std::string{});
   interface.oper_state = value.value("oper_state", std::string{});
   interface.link_state = value.value("link_state", std::string{});
+  for (const auto& address : value.value("addresses", json::array())) {
+    if (address.is_string()) {
+      interface.addresses.push_back(address.get<std::string>());
+    }
+  }
   interface.rx_bytes = value.value("rx_bytes", static_cast<std::uint64_t>(0));
   interface.tx_bytes = value.value("tx_bytes", static_cast<std::uint64_t>(0));
   interface.loopback = value.value("loopback", false);
   return interface;
+}
+
+json ToJson(const PeerDiscoveryTelemetry& peer) {
+  return json{
+      {"peer_node_name", peer.peer_node_name},
+      {"peer_endpoint", peer.peer_endpoint},
+      {"local_interface", peer.local_interface},
+      {"remote_address", peer.remote_address},
+      {"seen_udp", peer.seen_udp},
+      {"tcp_reachable", peer.tcp_reachable},
+      {"rtt_ms", peer.rtt_ms},
+      {"last_seen_at", peer.last_seen_at},
+      {"last_probe_at", peer.last_probe_at},
+  };
+}
+
+PeerDiscoveryTelemetry PeerDiscoveryTelemetryFromJson(const json& value) {
+  PeerDiscoveryTelemetry peer;
+  peer.peer_node_name = value.value("peer_node_name", std::string{});
+  peer.peer_endpoint = value.value("peer_endpoint", std::string{});
+  peer.local_interface = value.value("local_interface", std::string{});
+  peer.remote_address = value.value("remote_address", std::string{});
+  peer.seen_udp = value.value("seen_udp", false);
+  peer.tcp_reachable = value.value("tcp_reachable", false);
+  peer.rtt_ms = value.value("rtt_ms", 0);
+  peer.last_seen_at = value.value("last_seen_at", std::string{});
+  peer.last_probe_at = value.value("last_probe_at", std::string{});
+  return peer;
 }
 
 json ToJson(const NetworkTelemetrySnapshot& snapshot) {
@@ -246,12 +284,17 @@ json ToJson(const NetworkTelemetrySnapshot& snapshot) {
   for (const auto& interface : snapshot.interfaces) {
     interfaces.push_back(ToJson(interface));
   }
+  json peers = json::array();
+  for (const auto& peer : snapshot.peer_discovery) {
+    peers.push_back(ToJson(peer));
+  }
   return json{
       {"contract_version", snapshot.contract_version},
       {"degraded", snapshot.degraded},
       {"source", snapshot.source},
       {"collected_at", snapshot.collected_at},
       {"interfaces", std::move(interfaces)},
+      {"peer_discovery", std::move(peers)},
   };
 }
 
@@ -264,6 +307,11 @@ NetworkTelemetrySnapshot NetworkTelemetrySnapshotFromJson(const json& value) {
   for (const auto& interface : value.value("interfaces", json::array())) {
     if (interface.is_object()) {
       snapshot.interfaces.push_back(NetworkInterfaceTelemetryFromJson(interface));
+    }
+  }
+  for (const auto& peer : value.value("peer_discovery", json::array())) {
+    if (peer.is_object()) {
+      snapshot.peer_discovery.push_back(PeerDiscoveryTelemetryFromJson(peer));
     }
   }
   return snapshot;

@@ -44,6 +44,13 @@ class HttpHostdBackend final : public HostdBackend {
   nlohmann::json LoadModelArtifactManifest(
       const std::string& requester_node_name,
       int assignment_id) override;
+  nlohmann::json RequestFileTransferTicket(
+      const std::string& requester_node_name,
+      const std::string& source_node_name,
+      const std::vector<std::string>& source_paths) override;
+  nlohmann::json ValidateFileTransferTicket(
+      const std::string& source_node_name,
+      const std::string& ticket_id) override;
   void UpsertHostObservation(const naim::HostObservation& observation) override;
   void AppendEvent(const naim::EventRecord& event) override;
   void UpsertDiskRuntimeState(const naim::DiskRuntimeState& state) override;
