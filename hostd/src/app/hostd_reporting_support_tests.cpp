@@ -16,7 +16,7 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-class RecordingHostdBackend final : public naim::hostd::HostdBackend {
+class RecordingHostdBackend : public naim::hostd::HostdBackend {
  public:
   std::optional<int> updated_assignment_id;
   nlohmann::json updated_progress = nlohmann::json::object();
@@ -70,6 +70,19 @@ class RecordingHostdBackend final : public naim::hostd::HostdBackend {
     return nlohmann::json::object();
   }
 
+  nlohmann::json RequestFileTransferTicket(
+      const std::string&,
+      const std::string&,
+      const std::vector<std::string>&) override {
+    return nlohmann::json::object();
+  }
+
+  nlohmann::json ValidateFileTransferTicket(
+      const std::string&,
+      const std::string&) override {
+    return nlohmann::json::object();
+  }
+
   void UpsertHostObservation(const naim::HostObservation&) override {}
 
   void AppendEvent(const naim::EventRecord& event) override {
@@ -82,6 +95,15 @@ class RecordingHostdBackend final : public naim::hostd::HostdBackend {
       const std::string&,
       const std::string&) override {
     return std::nullopt;
+  }
+};
+
+class ThrowingProgressHostdBackend final : public RecordingHostdBackend {
+ public:
+  bool UpdateHostAssignmentProgress(
+      int,
+      const nlohmann::json&) override {
+    throw std::runtime_error("transient progress update failure");
   }
 };
 
@@ -126,6 +148,11 @@ int main() {
       Expect(
           backend.updated_progress.at("phase").get<std::string>() == "apply",
           "PublishAssignmentProgress should ignore empty assignment id");
+    }
+
+    {
+      ThrowingProgressHostdBackend backend;
+      support.PublishAssignmentProgress(&backend, 43, nlohmann::json{{"phase", "apply"}});
     }
 
     {
@@ -190,6 +217,7 @@ int main() {
 
     std::cout << "ok: hostd-reporting-support-progress-payload\n";
     std::cout << "ok: hostd-reporting-support-publish-progress\n";
+    std::cout << "ok: hostd-reporting-support-progress-best-effort\n";
     std::cout << "ok: hostd-reporting-support-append-event\n";
     std::cout << "ok: hostd-reporting-support-parse-tagged-csv\n";
     std::cout << "ok: hostd-reporting-support-build-observation\n";
