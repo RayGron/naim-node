@@ -54,6 +54,14 @@ naim_deploy_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 : "${NAIM_HOSTD_POLL_INTERVAL_SEC:=${NAIM_WORKER_POLL_INTERVAL_SEC}}"
 : "${NAIM_HOSTD_INVENTORY_SCAN_INTERVAL_SEC:=${NAIM_WORKER_INVENTORY_SCAN_INTERVAL_SEC}}"
 : "${NAIM_HOSTD_ENABLE_NVIDIA:=${NAIM_WORKER_ENABLE_NVIDIA}}"
+: "${NAIM_CONTROLLER_INTERNAL_HOST:=}"
+if [[ -z "${NAIM_CONTROLLER_INTERNAL_HOST}" ]]; then
+  naim_controller_internal_host="${NAIM_HOSTD_CONTROLLER_URL#*://}"
+  naim_controller_internal_host="${naim_controller_internal_host%%/*}"
+  naim_controller_internal_host="${naim_controller_internal_host%%:*}"
+  : "${NAIM_CONTROLLER_INTERNAL_HOST:=${naim_controller_internal_host}}"
+  unset naim_controller_internal_host
+fi
 
 naim_image() {
   local image_name="$1"

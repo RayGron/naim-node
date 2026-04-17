@@ -310,6 +310,7 @@ remote_hpc1_bash \
   "${NAIM_HOSTD_POLL_INTERVAL_SEC}" \
   "${NAIM_HOSTD_INVENTORY_SCAN_INTERVAL_SEC}" \
   "${NAIM_HOSTD_ENABLE_NVIDIA}" \
+  "${NAIM_CONTROLLER_INTERNAL_HOST}" \
   "${compose_skip_pull}" <<'REMOTE'
 set -euo pipefail
 hostd_image="$1"
@@ -320,7 +321,8 @@ node_name="$5"
 poll_interval_sec="$6"
 inventory_scan_interval_sec="$7"
 enable_nvidia="$8"
-skip_pull="$9"
+controller_internal_host="$9"
+skip_pull="${10}"
 
 cd "${hostd_root}"
 if [[ -f docker-compose.yml ]]; then
@@ -353,6 +355,7 @@ ${nvidia_runtime}
       NAIM_HOSTD_DISCOVERY_MODE: udp-multicast
       NAIM_HOSTD_DISCOVERY_GROUP: 239.255.42.42
       NAIM_HOSTD_DISCOVERY_PORT: "29998"
+      NAIM_CONTROLLER_INTERNAL_HOST: ${controller_internal_host}
 ${nvidia_env}
     command:
       - run
