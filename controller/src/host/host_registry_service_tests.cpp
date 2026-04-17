@@ -160,10 +160,13 @@ void TestDerivesStorageRole() {
   const json item = LoadSingleHostPayload(
       "storage-node",
       0,
-      16ULL * kGiB,
+      128ULL * kGiB,
       200ULL * kGiB);
   Expect(item.at("derived_role").get<std::string>() == "storage", "expected storage role");
   Expect(item.at("role_eligible").get<bool>(), "storage role should be eligible");
+  Expect(
+      item.at("role_reason").get<std::string>() == "eligible: no gpu, disk > 100 GB",
+      "storage reason should not include a RAM threshold");
 }
 
 void TestDerivesWorkerRole() {
@@ -171,25 +174,35 @@ void TestDerivesWorkerRole() {
   const json item = LoadSingleHostPayload(
       "worker-node",
       2,
-      128ULL * kGiB,
+      32ULL * kGiB,
       500ULL * kGiB);
   Expect(item.at("derived_role").get<std::string>() == "worker", "expected worker role");
   Expect(item.at("role_eligible").get<bool>(), "worker role should be eligible");
+  Expect(
+      item.at("role_reason").get<std::string>() ==
+          "eligible: gpu >= 1, ram >= 32 GB, disk > 100 GB",
+      "worker role should use 32 GB RAM threshold");
+  Expect(
+      item.at("storage_role_eligible").get<bool>(),
+      "worker with storage capacity should also be storage-role eligible");
 }
 
 void TestDerivesIneligibleRole() {
   constexpr std::uint64_t kGiB = 1024ULL * 1024ULL * 1024ULL;
   const json item = LoadSingleHostPayload(
       "ineligible-node",
-      0,
-      48ULL * kGiB,
+      1,
+      16ULL * kGiB,
       200ULL * kGiB);
   Expect(item.at("derived_role").get<std::string>() == "ineligible", "expected ineligible role");
   Expect(
       item.at("role_reason").get<std::string>() ==
-          "no gpu and ram outside storage threshold",
-      "expected ineligible reason for mid-range RAM");
+          "gpu present but ram < 32 GB",
+      "expected ineligible reason for low worker RAM");
   Expect(!item.at("role_eligible").get<bool>(), "ineligible role should not be eligible");
+  Expect(
+      !item.at("storage_role_eligible").get<bool>(),
+      "ineligible node should not be storage-role eligible");
 }
 
 void TestResetOnboardingIssuesNewKeyAndClearsIdentity() {

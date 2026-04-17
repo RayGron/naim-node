@@ -87,32 +87,36 @@ HostInventorySummary BuildInventorySummary(
   return summary;
 }
 
-std::pair<std::string, std::string> DeriveRole(const HostInventorySummary& summary) {
-  constexpr std::uint64_t kMinDiskBytes = 100ULL * 1024ULL * 1024ULL * 1024ULL;
-  constexpr std::uint64_t kStorageRamBytes = 32ULL * 1024ULL * 1024ULL * 1024ULL;
-  constexpr std::uint64_t kWorkerRamBytes = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kStorageRoleMinDiskBytes =
+    100ULL * 1024ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kWorkerMinRamBytes =
+    32ULL * 1024ULL * 1024ULL * 1024ULL;
 
+std::pair<std::string, std::string> DeriveRole(const HostInventorySummary& summary) {
   if (summary.gpu_count == 0 &&
-      summary.total_memory_bytes > 0 &&
-      summary.total_memory_bytes < kStorageRamBytes &&
-      summary.storage_total_bytes > kMinDiskBytes) {
-    return {"storage", "eligible: no gpu, ram < 32 GB, disk > 100 GB"};
+      summary.storage_total_bytes > kStorageRoleMinDiskBytes) {
+    return {"storage", "eligible: no gpu, disk > 100 GB"};
   }
   if (summary.gpu_count >= 1 &&
-      summary.total_memory_bytes >= kWorkerRamBytes &&
-      summary.storage_total_bytes > kMinDiskBytes) {
-    return {"worker", "eligible: gpu >= 1, ram >= 64 GB, disk > 100 GB"};
+      summary.total_memory_bytes >= kWorkerMinRamBytes &&
+      summary.storage_total_bytes > kStorageRoleMinDiskBytes) {
+    return {"worker", "eligible: gpu >= 1, ram >= 32 GB, disk > 100 GB"};
   }
-  if (summary.storage_total_bytes <= kMinDiskBytes) {
+  if (summary.storage_total_bytes <= kStorageRoleMinDiskBytes) {
     return {"ineligible", "disk <= 100 GB"};
   }
-  if (summary.gpu_count == 0 && summary.total_memory_bytes >= kStorageRamBytes) {
-    return {"ineligible", "no gpu and ram outside storage threshold"};
-  }
-  if (summary.gpu_count >= 1 && summary.total_memory_bytes < kWorkerRamBytes) {
-    return {"ineligible", "gpu present but ram < 64 GB"};
+  if (summary.gpu_count >= 1 && summary.total_memory_bytes < kWorkerMinRamBytes) {
+    return {"ineligible", "gpu present but ram < 32 GB"};
   }
   return {"ineligible", "inventory does not match storage or worker role"};
+}
+
+bool IsStorageRoleEligible(
+    const HostInventorySummary& inventory,
+    const std::string& derived_role) {
+  return !inventory.storage_root.empty() &&
+         inventory.storage_total_bytes > kStorageRoleMinDiskBytes &&
+         (derived_role == "storage" || derived_role == "worker");
 }
 
 }  // namespace
@@ -169,7 +173,7 @@ json HostRegistryService::BuildPayload(
         {"role_eligible", derived_role == "storage" || derived_role == "worker"},
         {"storage_role_enabled", host.storage_role_enabled},
         {"storage_role_eligible",
-         inventory.has_storage_capacity && !inventory.storage_root.empty()},
+         IsStorageRoleEligible(inventory, derived_role)},
         {"role_reason", role_reason.empty() ? json(nullptr) : json(role_reason)},
         {"last_inventory_scan_at",
          host.last_inventory_scan_at.empty() ? json(nullptr) : json(host.last_inventory_scan_at)},
@@ -403,10 +407,12 @@ nlohmann::json HostRegistryService::SetHostStorageRolePayload(
           ? std::nullopt
           : std::optional<naim::HostObservation>(observations.front());
   const auto inventory = BuildInventorySummary(*host, observation);
-  if (enabled && (!inventory.has_storage_capacity || inventory.storage_root.empty())) {
+  const std::string derived_role =
+      host->derived_role.empty() ? DeriveRole(inventory).first : host->derived_role;
+  if (enabled && !IsStorageRoleEligible(inventory, derived_role)) {
     throw std::runtime_error(
         "registered host '" + node_name +
-        "' does not advertise a usable storage_root with storage capacity");
+        "' is not eligible for storage role");
   }
 
   const bool previous_enabled = host->storage_role_enabled;

@@ -277,30 +277,26 @@ HostInventorySummary BuildInventorySummary(
   return summary;
 }
 
-std::pair<std::string, std::string> DeriveRole(const HostInventorySummary& summary) {
-  constexpr std::uint64_t kMinDiskBytes = 100ULL * 1024ULL * 1024ULL * 1024ULL;
-  constexpr std::uint64_t kStorageRamBytes = 32ULL * 1024ULL * 1024ULL * 1024ULL;
-  constexpr std::uint64_t kWorkerRamBytes = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kStorageRoleMinDiskBytes =
+    100ULL * 1024ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kWorkerMinRamBytes =
+    32ULL * 1024ULL * 1024ULL * 1024ULL;
 
+std::pair<std::string, std::string> DeriveRole(const HostInventorySummary& summary) {
   if (summary.gpu_count == 0 &&
-      summary.total_memory_bytes > 0 &&
-      summary.total_memory_bytes < kStorageRamBytes &&
-      summary.storage_total_bytes > kMinDiskBytes) {
-    return {"storage", "eligible: no gpu, ram < 32 GB, disk > 100 GB"};
+      summary.storage_total_bytes > kStorageRoleMinDiskBytes) {
+    return {"storage", "eligible: no gpu, disk > 100 GB"};
   }
   if (summary.gpu_count >= 1 &&
-      summary.total_memory_bytes >= kWorkerRamBytes &&
-      summary.storage_total_bytes > kMinDiskBytes) {
-    return {"worker", "eligible: gpu >= 1, ram >= 64 GB, disk > 100 GB"};
+      summary.total_memory_bytes >= kWorkerMinRamBytes &&
+      summary.storage_total_bytes > kStorageRoleMinDiskBytes) {
+    return {"worker", "eligible: gpu >= 1, ram >= 32 GB, disk > 100 GB"};
   }
-  if (summary.storage_total_bytes <= kMinDiskBytes) {
+  if (summary.storage_total_bytes <= kStorageRoleMinDiskBytes) {
     return {"ineligible", "disk <= 100 GB"};
   }
-  if (summary.gpu_count == 0 && summary.total_memory_bytes >= kStorageRamBytes) {
-    return {"ineligible", "no gpu and ram outside storage threshold"};
-  }
-  if (summary.gpu_count >= 1 && summary.total_memory_bytes < kWorkerRamBytes) {
-    return {"ineligible", "gpu present but ram < 64 GB"};
+  if (summary.gpu_count >= 1 && summary.total_memory_bytes < kWorkerMinRamBytes) {
+    return {"ineligible", "gpu present but ram < 32 GB"};
   }
   return {"ineligible", "inventory does not match storage or worker role"};
 }

@@ -67,8 +67,12 @@ At a high level:
 
 Canonical node-role rules are currently:
 
-- `Storage`: no GPU, RAM `< 32 GB`, disk `> 100 GB`
-- `Worker`: one or more GPUs, RAM `>= 64 GB`, disk `> 100 GB`
+- `Storage`: no GPU, disk `> 100 GB`
+- `Worker`: one or more GPUs, RAM `>= 32 GB`, disk `> 100 GB`
+
+Storage capability is tracked separately from the single `derived_role`, so a `Worker` with
+sufficient storage can also be storage-role eligible and operate in both roles when that storage
+role is enabled.
 
 Nodes that do not meet either rule stay connected and observable, but they are not eligible for
 role-dependent placement until a later scan changes their inventory classification.

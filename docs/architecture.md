@@ -50,12 +50,14 @@ Canonical role rules:
 
 - `Storage`
   - no GPU
-  - RAM `< 32 GB`
   - disk capacity `> 100 GB`
 - `Worker`
   - one or more GPUs
-  - RAM `>= 64 GB`
+  - RAM `>= 32 GB`
   - disk capacity `> 100 GB`
+
+Storage capability is tracked independently from the single `derived_role`. A node can therefore
+be derived as `Worker` and also be storage-role eligible when it has sufficient storage capacity.
 
 Nodes that do not match either rule remain connected and observable, but they are not eligible for
 role-dependent placement until later scans show a matching inventory.
