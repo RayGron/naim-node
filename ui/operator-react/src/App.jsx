@@ -41,7 +41,8 @@ import {
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
-const MODEL_LIBRARY_ACTIVE_POLL_MS = 1000;
+const MODEL_LIBRARY_ACTIVE_POLL_MS = 3000;
+const MODEL_LIBRARY_BACKGROUND_POLL_MS = 10000;
 const EVENT_LIMIT = 24;
 const MODEL_LIBRARY_PAGE_SIZE = 24;
 const MODEL_LIBRARY_JOB_PAGE_SIZE = 8;
@@ -2034,11 +2035,13 @@ function App() {
     try {
       const payload = await fetchJson(modelLibraryPath());
       const nextJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
-      setModelLibrary({
-        items: Array.isArray(payload.items) ? payload.items : [],
-        roots: Array.isArray(payload.roots) ? payload.roots : [],
-        jobs: nextJobs,
-        nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
+      startTransition(() => {
+        setModelLibrary({
+          items: Array.isArray(payload.items) ? payload.items : [],
+          roots: Array.isArray(payload.roots) ? payload.roots : [],
+          jobs: nextJobs,
+          nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
+        });
       });
       setModelJobPage((current) => {
         const nextPageCount = Math.max(
@@ -3085,24 +3088,25 @@ function App() {
     return () => clearInterval(timer);
   }, [authState.authenticated, selectedPlane]);
 
+  const hasActiveModelJobsForPolling = Array.isArray(modelLibrary.jobs)
+    ? modelLibrary.jobs.some((job) => {
+        const status = String(job?.status || "").toLowerCase();
+        return status === "queued" || status === "running" || status === "stopping";
+      })
+    : false;
+
   useEffect(() => {
     if (!authState.authenticated) {
       return undefined;
     }
-    const hasActiveModelJobs = Array.isArray(modelLibrary.jobs)
-      ? modelLibrary.jobs.some((job) => {
-          const status = String(job?.status || "").toLowerCase();
-          return status === "queued" || status === "running" || status === "stopping";
-        })
-      : false;
-    if (!hasActiveModelJobs) {
+    if (!hasActiveModelJobsForPolling) {
       return undefined;
     }
     const timer = setInterval(() => {
       refreshModelLibrary().catch(() => {});
-    }, MODEL_LIBRARY_ACTIVE_POLL_MS);
+    }, selectedPage === "models" ? MODEL_LIBRARY_ACTIVE_POLL_MS : MODEL_LIBRARY_BACKGROUND_POLL_MS);
     return () => clearInterval(timer);
-  }, [authState.authenticated, modelLibrary.jobs]);
+  }, [authState.authenticated, hasActiveModelJobsForPolling, selectedPage]);
 
   useEffect(() => {
     if (!authState.authenticated || !selectedPlane) {
