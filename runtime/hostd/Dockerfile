@@ -6,6 +6,7 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       bash \
       ca-certificates \
+      curl \
       docker.io \
       iproute2 \
       tini \
