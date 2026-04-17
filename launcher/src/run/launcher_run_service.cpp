@@ -1,6 +1,8 @@
 #include "run/launcher_run_service.h"
 
 #include <chrono>
+#include <cerrno>
+#include <csignal>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +17,7 @@
 #if !defined(_WIN32)
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -48,6 +51,53 @@ bool IsIpv4Address(const std::string& candidate) {
   }
   return octet_count == 4;
 }
+
+#if !defined(_WIN32)
+int ProcessExitCodeFromStatus(int status) {
+  if (WIFEXITED(status)) {
+    return WEXITSTATUS(status);
+  }
+  if (WIFSIGNALED(status)) {
+    return 128 + WTERMSIG(status);
+  }
+  return 1;
+}
+
+std::optional<int> PollChildExitCode(pid_t pid) {
+  int status = 0;
+  const pid_t result = waitpid(pid, &status, WNOHANG);
+  if (result == 0) {
+    return std::nullopt;
+  }
+  if (result == pid) {
+    return ProcessExitCodeFromStatus(status);
+  }
+  if (result < 0 && errno == ECHILD) {
+    return 0;
+  }
+  return 1;
+}
+
+void StopChildProcess(pid_t pid) {
+  if (pid <= 0) {
+    return;
+  }
+  if (PollChildExitCode(pid).has_value()) {
+    return;
+  }
+  kill(pid, SIGTERM);
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    if (PollChildExitCode(pid).has_value()) {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  kill(pid, SIGKILL);
+  while (!PollChildExitCode(pid).has_value()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+}
+#endif
 
 bool IsPrivateIpv4Address(const std::string& candidate) {
   if (!IsIpv4Address(candidate)) {
@@ -376,8 +426,8 @@ int LauncherRunService::RunHostdLoop(
     std::cout << "peer_discovery=enabled\n";
   }
 
-  while (!signal_manager.stop_requested()) {
-    std::vector<std::string> apply_args = {
+  const auto build_apply_args = [&]() {
+    std::vector<std::string> args = {
         hostd_binary.string(),
         "apply-next-assignment",
         "--node",
@@ -390,66 +440,108 @@ int LauncherRunService::RunHostdLoop(
         options.compose_mode,
     };
     if (!options.controller_url.empty()) {
-      apply_args.insert(apply_args.end(), {"--controller", options.controller_url});
+      args.insert(args.end(), {"--controller", options.controller_url});
       if (!options.controller_fingerprint.empty()) {
-        apply_args.insert(
-            apply_args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+        args.insert(args.end(), {"--controller-fingerprint", options.controller_fingerprint});
       }
       if (!options.onboarding_key.empty()) {
-        apply_args.insert(apply_args.end(), {"--onboarding-key", options.onboarding_key});
+        args.insert(args.end(), {"--onboarding-key", options.onboarding_key});
       }
       if (!options.host_private_key_path.empty()) {
-        apply_args.insert(
-            apply_args.end(), {"--host-private-key", options.host_private_key_path.string()});
+        args.insert(args.end(), {"--host-private-key", options.host_private_key_path.string()});
       }
     } else {
-      apply_args.insert(apply_args.end(), {"--db", options.db_path.string()});
+      args.insert(args.end(), {"--db", options.db_path.string()});
     }
-    const int apply_code = process_runner_.RunCommand(apply_args);
+    return args;
+  };
+
+  const auto build_report_args = [&]() {
+    std::vector<std::string> args = {
+        hostd_binary.string(),
+        "report-observed-state",
+        "--node",
+        options.node_name,
+        "--state-root",
+        options.state_root.string(),
+    };
+    if (!options.controller_url.empty()) {
+      args.insert(args.end(), {"--controller", options.controller_url});
+      if (!options.controller_fingerprint.empty()) {
+        args.insert(args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+      }
+      if (!options.onboarding_key.empty()) {
+        args.insert(args.end(), {"--onboarding-key", options.onboarding_key});
+      }
+      if (!options.host_private_key_path.empty()) {
+        args.insert(args.end(), {"--host-private-key", options.host_private_key_path.string()});
+      }
+    } else {
+      args.insert(args.end(), {"--db", options.db_path.string()});
+    }
+    return args;
+  };
+
+  const auto run_report_if_due = [&]() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_inventory_report_at) {
+      return;
+    }
+    const int report_code = process_runner_.RunCommand(build_report_args());
+    if (report_code != 0) {
+      std::cerr << "naim-node: hostd report-observed-state exit=" << report_code << "\n";
+    }
+    next_inventory_report_at =
+        now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
+  };
+
+#if !defined(_WIN32)
+  pid_t apply_pid = -1;
+  const auto reap_apply_if_finished = [&]() {
+    if (apply_pid <= 0) {
+      return;
+    }
+    const std::optional<int> apply_code = PollChildExitCode(apply_pid);
+    if (!apply_code.has_value()) {
+      return;
+    }
+    if (*apply_code != 0) {
+      std::cerr << "naim-node: hostd apply-next-assignment exit=" << *apply_code << "\n";
+    }
+    apply_pid = -1;
+  };
+#endif
+
+  while (!signal_manager.stop_requested()) {
+#if defined(_WIN32)
+    const int apply_code = process_runner_.RunCommand(build_apply_args());
     if (apply_code != 0) {
       std::cerr << "naim-node: hostd apply-next-assignment exit=" << apply_code << "\n";
     }
-
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= next_inventory_report_at) {
-      std::vector<std::string> report_args = {
-          hostd_binary.string(),
-          "report-observed-state",
-          "--node",
-          options.node_name,
-          "--state-root",
-          options.state_root.string(),
-      };
-      if (!options.controller_url.empty()) {
-        report_args.insert(report_args.end(), {"--controller", options.controller_url});
-        if (!options.controller_fingerprint.empty()) {
-          report_args.insert(
-              report_args.end(), {"--controller-fingerprint", options.controller_fingerprint});
-        }
-        if (!options.onboarding_key.empty()) {
-          report_args.insert(report_args.end(), {"--onboarding-key", options.onboarding_key});
-        }
-        if (!options.host_private_key_path.empty()) {
-          report_args.insert(
-              report_args.end(), {"--host-private-key", options.host_private_key_path.string()});
-        }
-      } else {
-        report_args.insert(report_args.end(), {"--db", options.db_path.string()});
-      }
-      const int report_code = process_runner_.RunCommand(report_args);
-      if (report_code != 0) {
-        std::cerr << "naim-node: hostd report-observed-state exit=" << report_code << "\n";
-      }
-      next_inventory_report_at =
-          now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
+#else
+    reap_apply_if_finished();
+    if (apply_pid <= 0) {
+      apply_pid = static_cast<pid_t>(process_runner_.SpawnCommand(build_apply_args()));
     }
+#endif
+
+    run_report_if_due();
 
     for (int second = 0;
          second < options.poll_interval_sec && !signal_manager.stop_requested();
          ++second) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
+#if !defined(_WIN32)
+      reap_apply_if_finished();
+#endif
+      run_report_if_due();
     }
   }
+#if !defined(_WIN32)
+  if (apply_pid > 0) {
+    StopChildProcess(apply_pid);
+  }
+#endif
   peer_service.Stop();
   return 0;
 }
