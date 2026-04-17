@@ -166,8 +166,16 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   runtime.gateway_plan_ready = true;
   const auto target =
       ParseInteractionTarget(runtime.gateway_listen, desired_state.gateway.listen_port);
-  runtime.gateway_ready = ProbeControllerTargetOk(target, "/health");
-  runtime.inference_ready = ProbeControllerTargetOk(target, "/v1/models");
+  const bool observed_gateway_ready = runtime.gateway_ready;
+  const bool observed_inference_ready = runtime.inference_ready;
+  runtime.gateway_ready =
+      ProbeControllerTargetOk(target, "/health") ||
+      observed_gateway_ready ||
+      infer_status->ready;
+  runtime.inference_ready =
+      ProbeControllerTargetOk(target, "/v1/models") ||
+      observed_inference_ready ||
+      infer_status->ready;
   const bool replica_topology_ready =
       replica_summary.expected_replica_groups == 0 ||
       (desired_state.inference.runtime_engine == "llama.cpp" &&

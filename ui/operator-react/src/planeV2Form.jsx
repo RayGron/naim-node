@@ -227,7 +227,7 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
   const sourceQuantization = inferModelQuantization(modelItem);
   const appEnv = {
     CYPHER_ACTION_AUDIT_LOG_FILE: "/naim/private/action-audit.log",
-    CYPHER_API_BASE: "http://controller.internal:18080/api/v1/planes/lt-cypher-ai/interaction",
+    CYPHER_API_BASE: "http://infer-lt-cypher-ai:18084/v1",
     CYPHER_CONTROLLER_SESSION_FILE: "/naim/private/controller-session-token",
     CYPHER_MARKET_MEMORY_DB_FILE: "/naim/private/market-memory.sqlite",
     CYPHER_PLANE_API_BASE: "http://controller.internal:18080/api/v1/planes/lt-cypher-ai",
