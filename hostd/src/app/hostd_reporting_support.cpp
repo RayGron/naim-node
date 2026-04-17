@@ -54,7 +54,12 @@ void HostdReportingSupport::PublishAssignmentProgress(
   if (backend == nullptr || !assignment_id.has_value()) {
     return;
   }
-  backend->UpdateHostAssignmentProgress(*assignment_id, progress);
+  try {
+    backend->UpdateHostAssignmentProgress(*assignment_id, progress);
+  } catch (...) {
+    // Progress is telemetry. A transient controller/session failure must not abort
+    // long-running downloads or leave the transfer future waiting for curl forever.
+  }
 }
 
 void HostdReportingSupport::AppendHostdEvent(

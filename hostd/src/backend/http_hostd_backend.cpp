@@ -1,7 +1,9 @@
 #include "backend/http_hostd_backend.h"
 
+#include <chrono>
 #include <ctime>
 #include <stdexcept>
+#include <thread>
 
 #include "naim/security/crypto_utils.h"
 
@@ -78,6 +80,7 @@ bool HttpHostdBackend::TransitionClaimedHostAssignment(
 bool HttpHostdBackend::UpdateHostAssignmentProgress(
     const int assignment_id,
     const nlohmann::json& progress) {
+  EnsureSession(configured_node_name_, "updating assignment progress");
   SendEncryptedControllerJsonRequest(
       "/api/v1/hostd/assignments/" + std::to_string(assignment_id) + "/progress",
       progress,
@@ -431,19 +434,24 @@ nlohmann::json HttpHostdBackend::RetryOnRecoverableSessionError(
     const std::string& message_type,
     const char* recovery_status_message,
     Fn&& fn) {
-  try {
-    return fn();
-  } catch (const std::exception& error) {
-    if (session_node_name_.empty() ||
-        message_type == "session/heartbeat" ||
-        !IsRecoverableSessionErrorMessage(error.what())) {
-      throw;
+  constexpr int kMaxAttempts = 5;
+  for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+    try {
+      return fn();
+    } catch (const std::exception& error) {
+      if (session_node_name_.empty() ||
+          message_type == "session/heartbeat" ||
+          !IsRecoverableSessionErrorMessage(error.what()) ||
+          attempt + 1 >= kMaxAttempts) {
+        throw;
+      }
+      const std::string node_name = session_node_name_;
+      ResetSessionState();
+      EnsureSession(node_name, recovery_status_message);
+      std::this_thread::sleep_for(std::chrono::milliseconds(25 * (attempt + 1)));
     }
-    const std::string node_name = session_node_name_;
-    ResetSessionState();
-    EnsureSession(node_name, recovery_status_message);
-    return fn();
   }
+  throw std::runtime_error("unreachable host session retry state");
 }
 
 }  // namespace naim::hostd
