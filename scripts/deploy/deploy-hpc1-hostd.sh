@@ -207,13 +207,15 @@ if [[ -n "${onboarding_key}" ]]; then
     "${NAIM_HOSTD_ROOT}" \
     "${NAIM_HOSTD_SHARED_ROOT}" \
     "${NAIM_HOSTD_CONTROLLER_URL}" \
-    "${NAIM_HOSTD_NODE}" <<'REMOTE'
+    "${NAIM_HOSTD_NODE}" \
+    "${NAIM_HOSTD_ENABLE_NVIDIA}" <<'REMOTE'
 set -euo pipefail
 hostd_image="$1"
 hostd_root="$2"
 shared_root="$3"
 controller_url="$4"
 node_name="$5"
+enable_nvidia="$6"
 onboarding_key="$(cat)"
 
 docker run --rm \
@@ -242,15 +244,23 @@ cat > "${hostd_root}/naim-node-config.json" <<JSON
 }
 JSON
 
-docker run --rm \
-  --privileged \
-  --runtime nvidia \
-  -e NVIDIA_VISIBLE_DEVICES=all \
-  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro \
-  -v "${hostd_root}:${hostd_root}" \
-  -v "${shared_root}:${shared_root}" \
+docker_run_args=(
+  --rm
+  --privileged
+  -v /var/run/docker.sock:/var/run/docker.sock
+  -v "${hostd_root}:${hostd_root}"
+  -v "${shared_root}:${shared_root}"
+)
+if [[ "${enable_nvidia}" == "yes" ]]; then
+  docker_run_args+=(
+    --runtime nvidia
+    -e NVIDIA_VISIBLE_DEVICES=all
+    -e NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    -v /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
+  )
+fi
+
+docker run "${docker_run_args[@]}" \
   --entrypoint /runtime/bin/naim-hostd \
   "${hostd_image}" \
   report-observed-state \
