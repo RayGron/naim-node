@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   detectModelSourceFormat,
+  modelLibraryJobProgress,
   normalizeModelDownloadSourceUrls,
   shouldShowGgufConversionOptions,
 } from "./modelLibrary.js";
@@ -40,5 +41,27 @@ describe("model library uploader helpers", () => {
     expect(shouldShowGgufConversionOptions("safetensors", "gguf")).toBe(true);
     expect(shouldShowGgufConversionOptions("gguf", "gguf")).toBe(false);
     expect(shouldShowGgufConversionOptions("safetensors", "safetensors")).toBe(false);
+  });
+
+  it("calculates progress for acquiring model download jobs", () => {
+    expect(
+      modelLibraryJobProgress({
+        status: "running",
+        phase: "acquiring-model",
+        bytes_done: 25,
+        bytes_total: 100,
+      }),
+    ).toBe(25);
+  });
+
+  it("does not report progress without a valid byte total", () => {
+    expect(
+      modelLibraryJobProgress({
+        status: "running",
+        phase: "acquiring-model",
+        bytes_done: 25,
+        bytes_total: null,
+      }),
+    ).toBe(null);
   });
 });

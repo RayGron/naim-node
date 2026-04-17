@@ -26,6 +26,7 @@ import {
   MODEL_LIBRARY_GGUF_QUANTIZATIONS,
   MODEL_LIBRARY_QUANTIZATION_FILTERS,
   formatModelLibraryDisplayName,
+  modelLibraryJobProgress,
   normalizeModelDownloadSourceUrls,
   normalizeModelLibraryItemQuantization,
   normalizeModelLibraryJobKind,
@@ -449,23 +450,6 @@ function modelLibraryJobStatusClass(status) {
     default:
       return "is-booting";
   }
-}
-
-function modelLibraryJobProgress(job) {
-  if (String(job?.phase || "").toLowerCase() !== "running") {
-    return null;
-  }
-  const bytesDone = Number(job?.bytes_done ?? 0);
-  const bytesTotal = Number(job?.bytes_total ?? NaN);
-  if (
-    !Number.isFinite(bytesDone) ||
-    !Number.isFinite(bytesTotal) ||
-    bytesTotal <= 0 ||
-    bytesTotal < bytesDone
-  ) {
-    return null;
-  }
-  return Math.max(0, Math.min(100, (bytesDone / bytesTotal) * 100));
 }
 
 function modelLibraryJobProgressLabel(job) {
