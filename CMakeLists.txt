@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.22)
 option(NAIM_SKIP_VCPKG_TOOLCHAIN "Skip automatic vcpkg toolchain detection" OFF)
 set(NAIM_CUDA_NVCC_JOBS "2" CACHE STRING
     "Maximum number of concurrent nvcc compile jobs for ggml-cuda when using Ninja")
+option(NAIM_CONTROLLER_BUILD_LLAMA_QUANTIZE
+       "Build llama-quantize before naim-controller for local model conversion tooling"
+       OFF)
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
 set(NAIM_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
 set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
@@ -1234,7 +1237,7 @@ target_compile_definitions(
     NAIM_LLAMA_CPP_SOURCE_TREE="${llama_cpp_SOURCE_DIR}"
     NAIM_LLAMA_CPP_RUNTIME_OUTPUT_DIR="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
 )
-if(TARGET llama-quantize)
+if(NAIM_CONTROLLER_BUILD_LLAMA_QUANTIZE AND TARGET llama-quantize)
   add_dependencies(naim-controller llama-quantize)
 endif()
 if(WIN32)

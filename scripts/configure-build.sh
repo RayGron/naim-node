@@ -222,6 +222,11 @@ if [[ -n "${openmp_root}" ]]; then
     "-DOpenMP_libomp_LIBRARY=${openmp_library}"
   )
 fi
+if [[ -n "${NAIM_CMAKE_ARGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  extra_cmake_args=(${NAIM_CMAKE_ARGS})
+  cmake_args+=("${extra_cmake_args[@]}")
+fi
 
 "${cmake_exe}" "${cmake_args[@]}"
 
