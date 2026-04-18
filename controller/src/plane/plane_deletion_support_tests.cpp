@@ -196,13 +196,21 @@ int main() {
       Expect(
           store.UpdatePlaneAppliedGeneration("plane-c", 4),
           "plane-c applied generation should update");
-      store.UpsertHostObservation(BuildHostObservation("plane-c", "node-c", 4));
       store.ReplaceHostAssignments(
           {BuildHostAssignment(
               "plane-c",
               "node-c",
               4,
               naim::HostAssignmentStatus::Claimed)});
+      const auto inserted_assignments =
+          store.LoadHostAssignments(std::nullopt, std::nullopt, "plane-c");
+      Expect(inserted_assignments.size() == 1, "plane-c should have one inserted assignment");
+      store.UpsertHostObservation(BuildHostObservation(
+          "plane-c",
+          "node-c",
+          4,
+          naim::HostObservationStatus::Applied,
+          inserted_assignments.front().id));
 
       const auto result = reconciliation_service.Reconcile(store, "plane-c");
       const auto assignment = store.LoadHostAssignments(
@@ -213,6 +221,75 @@ int main() {
       Expect(
           assignment.front().status == naim::HostAssignmentStatus::Applied,
           "plane-c claimed assignment should become applied");
+    }
+
+    {
+      naim::ControllerStore store(db_path.string());
+      store.Initialize();
+      const naim::controller::HostAssignmentReconciliationService reconciliation_service;
+
+      store.ReplaceDesiredState(BuildDesiredState("plane-c-foreign", {"node-c-foreign"}), 2);
+      Expect(
+          store.UpdatePlaneAppliedGeneration("plane-c-foreign", 2),
+          "plane-c-foreign applied generation should update");
+      store.ReplaceHostAssignments(
+          {BuildHostAssignment(
+              "plane-c-foreign",
+              "node-c-foreign",
+              2,
+              naim::HostAssignmentStatus::Claimed)});
+      const auto inserted_assignments =
+          store.LoadHostAssignments(std::nullopt, std::nullopt, "plane-c-foreign");
+      Expect(inserted_assignments.size() == 1, "plane-c-foreign should have one assignment");
+      store.UpsertHostObservation(BuildHostObservation(
+          "other-plane",
+          "node-c-foreign",
+          99,
+          naim::HostObservationStatus::Applied,
+          inserted_assignments.front().id));
+
+      const auto result = reconciliation_service.Reconcile(store, "plane-c-foreign");
+      const auto assignment = store.LoadHostAssignments(
+          std::nullopt, std::nullopt, "plane-c-foreign");
+      Expect(
+          result.applied == 0,
+          "controller should not use another plane observation for claimed assignment");
+      Expect(assignment.size() == 1, "plane-c-foreign should still have one assignment");
+      Expect(
+          assignment.front().status == naim::HostAssignmentStatus::Claimed,
+          "foreign-observation claimed assignment should remain claimed");
+    }
+
+    {
+      naim::ControllerStore store(db_path.string());
+      store.Initialize();
+      const naim::controller::HostAssignmentReconciliationService reconciliation_service;
+
+      store.ReplaceDesiredState(BuildDesiredState("plane-c-no-assignment-id", {"node-c-no-id"}), 2);
+      Expect(
+          store.UpdatePlaneAppliedGeneration("plane-c-no-assignment-id", 2),
+          "plane-c-no-assignment-id applied generation should update");
+      store.ReplaceHostAssignments(
+          {BuildHostAssignment(
+              "plane-c-no-assignment-id",
+              "node-c-no-id",
+              2,
+              naim::HostAssignmentStatus::Claimed)});
+      store.UpsertHostObservation(BuildHostObservation(
+          "plane-c-no-assignment-id",
+          "node-c-no-id",
+          2));
+
+      const auto result = reconciliation_service.Reconcile(store, "plane-c-no-assignment-id");
+      const auto assignment = store.LoadHostAssignments(
+          std::nullopt, std::nullopt, "plane-c-no-assignment-id");
+      Expect(
+          result.applied == 0,
+          "controller should require a matching last assignment id before reconciliation");
+      Expect(assignment.size() == 1, "plane-c-no-assignment-id should still have one assignment");
+      Expect(
+          assignment.front().status == naim::HostAssignmentStatus::Claimed,
+          "missing-assignment-id claimed assignment should remain claimed");
     }
 
     {

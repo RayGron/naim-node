@@ -129,13 +129,12 @@ bool HostAssignmentReconciliationService::ShouldMarkClaimedAssignmentApplied(
   if (!plane.has_value() || plane->applied_generation < assignment.desired_generation) {
     return false;
   }
-  if (!observation.has_value()) {
-    return true;
-  }
-  if (observation->status == naim::HostObservationStatus::Failed) {
+  if (!observation.has_value() ||
+      observation->plane_name != assignment.plane_name ||
+      observation->status == naim::HostObservationStatus::Failed) {
     return false;
   }
-  if (observation->last_assignment_id.has_value() &&
+  if (!observation->last_assignment_id.has_value() ||
       *observation->last_assignment_id < assignment.id) {
     return false;
   }
