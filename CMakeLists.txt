@@ -106,8 +106,17 @@ set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
 # architecture-specific 12Xa targets. CMake's native CUDA detection reports
 # RTX PRO 6000 Blackwell as plain sm_120, which makes ptxas reject those
 # kernels. Keep native detection opt-in and let llama.cpp choose its supported
-# explicit CUDA architecture list by default.
+# explicit CUDA architecture list by default. For host-specific images, set
+# NAIM_CUDA_ARCHITECTURES explicitly, for example 120a-real on hpc1.
+set(NAIM_CUDA_ARCHITECTURES "" CACHE STRING
+    "Explicit CUDA architectures for ggml-cuda builds; empty lets llama.cpp choose defaults")
 option(NAIM_CUDA_NATIVE "Prefer native CUDA architectures for ggml-cuda builds" OFF)
+if(NAIM_CUDA_ARCHITECTURES)
+  set(NAIM_CUDA_NATIVE OFF CACHE BOOL "" FORCE)
+  set(CMAKE_CUDA_ARCHITECTURES
+      "${NAIM_CUDA_ARCHITECTURES}"
+      CACHE STRING "Explicit CUDA architectures for naim ggml-cuda builds" FORCE)
+endif()
 set(GGML_NATIVE ${NAIM_CUDA_NATIVE} CACHE BOOL "" FORCE)
 set(GGML_RPC ON CACHE BOOL "" FORCE)
 
@@ -176,6 +185,7 @@ if(NOT _naim_cuda_available)
 endif()
 set(GGML_CUDA ON CACHE BOOL "" FORCE)
 message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
+message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
 
 if(NAIM_LLAMA_CPP_SOURCE_DIR AND EXISTS "${NAIM_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
   FetchContent_Declare(
