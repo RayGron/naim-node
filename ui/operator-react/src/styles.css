@@ -62,6 +62,11 @@ body,
   margin: 0;
 }
 
+html,
+body {
+  overflow-x: hidden;
+}
+
 body {
   color: var(--text);
   font-family: var(--font-body);
@@ -616,16 +621,19 @@ body {
 .field-label {
   color: var(--text-dim);
   font-size: 0.9rem;
+  min-width: 0;
 }
 
 .text-input {
   width: 100%;
+  min-width: 0;
   border-radius: 12px;
   border: 1px solid rgba(120, 190, 255, 0.2);
   background: rgba(4, 15, 31, 0.78);
   color: var(--text);
   padding: 12px 14px;
   font: inherit;
+  overflow-wrap: break-word;
 }
 
 .text-input:focus {
@@ -641,6 +649,7 @@ body {
 
 .editor-textarea {
   width: 100%;
+  min-width: 0;
   min-height: 460px;
   resize: vertical;
   border-radius: 14px;
@@ -666,6 +675,7 @@ body {
   display: grid;
   gap: 14px;
   margin-bottom: 16px;
+  min-width: 0;
   padding: 16px;
   border-radius: 16px;
   border: 1px solid rgba(120, 190, 255, 0.16);
@@ -676,6 +686,7 @@ body {
   display: grid;
   gap: 4px;
   padding-top: 4px;
+  min-width: 0;
 }
 
 .plane-form-section-copy {
@@ -683,6 +694,7 @@ body {
   color: var(--text-dim);
   font-size: 0.95rem;
   line-height: 1.5;
+  overflow-wrap: break-word;
 }
 
 .plane-form-section-meta {
@@ -695,6 +707,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  min-width: 0;
 }
 
 .plane-advanced-section {
@@ -731,6 +744,7 @@ body {
 .plane-form-toggle {
   display: grid;
   gap: 8px;
+  min-width: 0;
   padding: 12px 14px;
   border-radius: 14px;
   border: 1px solid rgba(120, 190, 255, 0.14);
@@ -972,22 +986,25 @@ body {
 .plane-form-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  min-width: 0;
 }
 
 .plane-form-grid-wide {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
 }
 
 .plane-features-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  min-width: 0;
 }
 
 .plane-form-builder .field-label {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .field-label-title,
@@ -995,6 +1012,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .field-label-inline {
@@ -1134,6 +1153,7 @@ body {
 .model-library-picker {
   display: grid;
   gap: 8px;
+  min-width: 0;
   border: 1px solid rgba(120, 190, 255, 0.16);
   border-radius: 14px;
   background: rgba(4, 15, 31, 0.58);
@@ -1143,7 +1163,7 @@ body {
 .model-library-picker-head,
 .model-library-picker-row {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr) minmax(0, 0.8fr);
+  grid-template-columns: minmax(12rem, 0.9fr) minmax(8rem, 0.7fr) minmax(16rem, 1.6fr);
   gap: 12px;
   align-items: start;
 }
@@ -1185,7 +1205,8 @@ body {
 .model-library-picker-row strong,
 .model-library-picker-row span {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .model-library-picker-row span {
@@ -1210,8 +1231,9 @@ body {
 .plane-form-row {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
   align-items: center;
+  min-width: 0;
 }
 
 .plane-form-row .ghost-button {
@@ -1963,8 +1985,25 @@ body {
 }
 
 .plane-editor-modal {
+  width: min(1180px, calc(100vw - 48px));
   display: grid;
   gap: 14px;
+  min-width: 0;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+}
+
+.plane-editor-modal > .plane-form-builder {
+  min-height: 0;
+}
+
+.plane-editor-modal > .toolbar:last-child {
+  position: sticky;
+  bottom: -20px;
+  z-index: 2;
+  margin: 0 -20px -20px;
+  padding: 14px 20px 20px;
+  border-top: 1px solid rgba(120, 190, 255, 0.14);
+  background: rgba(6, 18, 39, 0.98);
 }
 
 .plane-detail-modal {
@@ -2089,6 +2128,15 @@ body {
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .model-library-picker-head,
+  .model-library-picker-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-library-picker-head {
+    display: none;
+  }
 }
 
 @media (max-width: 640px) {
@@ -2104,6 +2152,12 @@ body {
     width: calc(100vw - 28px);
     max-height: calc(100vh - 28px);
     padding: 16px;
+  }
+
+  .plane-editor-modal > .toolbar:last-child {
+    bottom: -16px;
+    margin: 0 -16px -16px;
+    padding: 12px 16px 16px;
   }
 
   .summary-grid {

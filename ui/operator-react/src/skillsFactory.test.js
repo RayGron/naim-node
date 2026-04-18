@@ -242,6 +242,58 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(desiredState.app.node).toBeUndefined();
   });
 
+  it("serializes and reparses worker-prepared library model selection", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "ux-plane-smoke";
+    form.modelRef = "Qwen/Qwen3.5-9B-Q8_0";
+    form.materializationMode = "prepare_on_worker";
+    form.materializationLocalPath =
+      "/mnt/array/naim/storage/gguf/Qwen/Qwen3.5-9B-Q8_0/Qwen3.5-9B-Q8_0.gguf";
+    form.materializationSourceNodeName = "storage1";
+    form.materializationSourcePaths = [
+      "/mnt/array/naim/storage/gguf/Qwen/Qwen3.5-9B-Q8_0/Qwen3.5-9B-Q8_0.gguf",
+    ];
+    form.materializationSourceFormat = "gguf";
+    form.materializationSourceQuantization = "Q8_0";
+    form.modelQuantization = "Q8_0";
+    form.modelTargetFilename = "Qwen3.5-9B-Q8_0.gguf";
+    form.servedModelName = "ux-plane-smoke-qwen";
+    form.servedModelNameManual = true;
+    form.executionNode = "hpc1";
+    form.workerGpuDevice = "1";
+    form.gatewayPort = 18284;
+    form.inferencePort = 18294;
+
+    const validation = validatePlaneV2Form(form);
+    expect(validation.errors).toEqual([]);
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.model).toMatchObject({
+      source: {
+        type: "library",
+        ref: "Qwen/Qwen3.5-9B-Q8_0",
+      },
+      served_model_name: "ux-plane-smoke-qwen",
+      materialization: {
+        mode: "prepare_on_worker",
+        source_node_name: "storage1",
+        source_format: "gguf",
+        source_quantization: "Q8_0",
+        quantization: "Q8_0",
+      },
+      target_filename: "Qwen3.5-9B-Q8_0.gguf",
+    });
+    expect(desiredState.network.gateway_port).toBe(18284);
+    expect(desiredState.network.inference_port).toBe(18294);
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.modelRef).toBe("Qwen/Qwen3.5-9B-Q8_0");
+    expect(reparsed.materializationSourceNodeName).toBe("storage1");
+    expect(reparsed.materializationSourcePaths).toEqual(form.materializationSourcePaths);
+    expect(reparsed.modelQuantization).toBe("Q8_0");
+    expect(reparsed.workerGpuDevice).toBe("1");
+  });
+
   it("validates required execution-node fields for external app host", () => {
     const form = buildNewPlaneFormState();
     form.modelPath = "/models/qwen";

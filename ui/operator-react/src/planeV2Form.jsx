@@ -215,14 +215,19 @@ function findLtCypherModelItem(items) {
   const rows = Array.isArray(items) ? items : [];
   return rows.find((item) => {
     const text = normalizeSearchText([item?.name, item?.model_id, item?.path, ...modelLibraryPaths(item)].join(" "));
-    return text.includes("gemma") && text.includes("31b") && (text.includes("q8") || text.includes("q8_0"));
+    return (
+      text.includes("qwen") &&
+      text.includes("3.6") &&
+      text.includes("35b") &&
+      (text.includes("q8") || text.includes("q8_0"))
+    );
   }) || null;
 }
 
 function applyLtCypherPresetToForm(form, modelLibraryItems) {
   const modelItem = findLtCypherModelItem(modelLibraryItems);
   const sourcePaths = modelLibraryPaths(modelItem);
-  const fallbackSourcePath = "/mnt/array/naim/storage/gguf/Google/Gemma-4-31B-it/Gemma-4-31B-it-Q8_0.gguf";
+  const fallbackSourcePath = "/mnt/array/naim/storage/gguf/Qwen/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-Q8_0.gguf";
   const sourcePath = String(modelItem?.path || sourcePaths[0] || fallbackSourcePath).trim();
   const sourceFormat = inferModelFormat(modelItem) || "gguf";
   const sourceQuantization = inferModelQuantization(modelItem) || "Q8_0";
@@ -247,7 +252,7 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
     browsingEnabled: false,
     browserSessionEnabled: false,
     modelSourceType: "library",
-    modelRef: modelItem?.model_id || modelItem?.name || "Google/Gemma-4-31B-it",
+    modelRef: modelItem?.model_id || modelItem?.name || "Qwen/Qwen3.6-35B-A3B",
     modelPath: sourcePath,
     materializationMode: "prepare_on_worker",
     materializationLocalPath: sourcePath,
@@ -261,9 +266,9 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
     modelWritebackEnabled: false,
     modelWritebackIfMissing: true,
     modelWritebackTargetNodeName: modelItem?.node_name || "storage1",
-    servedModelName: "gemma-4-31b-it-jex",
+    servedModelName: "qwen3.6-35b-a3b-jex",
     servedModelNameManual: true,
-    modelTargetFilename: "Gemma-4-31B-it.gguf",
+    modelTargetFilename: "Qwen3.6-35B-A3B-Q8_0.gguf",
     modelSha256: modelItem?.sha256 || "",
     systemPrompt: LT_CYPHER_SYSTEM_PROMPT,
     thinkingEnabled: false,
@@ -1946,7 +1951,7 @@ export function PlaneV2FormBuilder({
             Deploy preset
           </InfoLabel>
           <p className="plane-form-section-copy">
-            Use this for a clean lt-cypher-ai run: Gemma-4-31B-it Q8 from storage1, hpc1 GPU 0, app on 127.0.0.1:18110, public base path /.
+            Use this for a clean lt-cypher-ai run: Qwen3.6-35B-A3B Q8 from storage1, hpc1 GPU 0, app on 127.0.0.1:18110, public base path /.
           </p>
         </div>
         <SectionActions>
