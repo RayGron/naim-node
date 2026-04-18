@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "http/controller_http_transport.h"
+#include "naim/state/sqlite_store.h"
 #include "skills/plane_skills_target_resolver.h"
 
 namespace naim::controller {
@@ -451,7 +452,47 @@ std::vector<std::string> ParseStringArray(const nlohmann::json& value) {
   return result;
 }
 
-std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
+std::vector<ContextualSkillCandidate> LoadControllerCatalogCandidates(
+    const std::string& db_path,
+    const DesiredState& desired_state,
+    bool include_internal) {
+  if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
+    return {};
+  }
+  if (db_path.empty()) {
+    return {};
+  }
+
+  ControllerStore store(db_path);
+  store.Initialize();
+  std::vector<ContextualSkillCandidate> candidates;
+  for (const auto& skill_id : desired_state.skills->factory_skill_ids) {
+    const auto canonical = store.LoadSkillsFactorySkill(skill_id);
+    if (!canonical.has_value()) {
+      continue;
+    }
+    const auto binding = store.LoadPlaneSkillBinding(
+        desired_state.plane_name,
+        skill_id);
+    if (binding.has_value() && !binding->enabled) {
+      continue;
+    }
+    if (canonical->internal && !include_internal) {
+      continue;
+    }
+    candidates.push_back(ContextualSkillCandidate{
+        canonical->id,
+        canonical->name,
+        canonical->description,
+        canonical->content,
+        canonical->match_terms,
+        canonical->internal,
+    });
+  }
+  return candidates;
+}
+
+std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidatesFromRuntime(
     const DesiredState& desired_state,
     bool include_internal) {
   if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
@@ -509,6 +550,18 @@ std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
     });
   }
   return candidates;
+}
+
+std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
+    const std::string& db_path,
+    const DesiredState& desired_state,
+    bool include_internal) {
+  auto candidates =
+      LoadControllerCatalogCandidates(db_path, desired_state, include_internal);
+  if (!candidates.empty()) {
+    return candidates;
+  }
+  return LoadPlaneLocalCandidatesFromRuntime(desired_state, include_internal);
 }
 
 int ScoreCandidate(
@@ -675,8 +728,10 @@ ContextualSkillSelection PlaneSkillContextualResolverService::Resolve(
 
   const auto prompt_text = ExtractPromptText(payload);
   const bool include_internal = ExtractIncludeInternal(payload);
-  const auto candidates =
-      LoadPlaneLocalCandidates(resolution.desired_state, include_internal);
+  const auto candidates = LoadPlaneLocalCandidates(
+      db_path,
+      resolution.desired_state,
+      include_internal);
   selection.candidate_count = static_cast<int>(candidates.size());
   if (prompt_text.empty() || candidates.empty()) {
     return selection;

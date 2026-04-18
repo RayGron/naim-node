@@ -2416,9 +2416,12 @@ int main() {
                               {"content",
                                "Please debug this regression and find the root cause."}}})}});
       Expect(
-          selection.mode == "none" && selection.candidate_count == 0,
-          "resolver should ignore controller catalog entries that are not present in runtime skillsd");
-      std::cout << "ok: contextual-resolver-requires-runtime-skill-copy" << '\n';
+          selection.mode == "contextual" &&
+              selection.candidate_count == 1 &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "code-agent-root-cause-debug",
+          "resolver should use controller catalog entries when runtime skillsd is remote or unreachable");
+      std::cout << "ok: contextual-resolver-uses-controller-catalog" << '\n';
     }
 
     {
@@ -2530,6 +2533,57 @@ int main() {
               .empty(),
           "conversation session_id alone should not resolve skills");
       std::cout << "ok: interaction-session-id-does-not-force-skills" << '\n';
+    }
+
+    {
+      const std::string db_path = MakeTempDbPath();
+      fs::remove(db_path);
+      naim::ControllerStore store(db_path);
+      store.Initialize();
+      auto desired_state = BuildDesiredState(
+          "interaction-plane", {"lt-jex-market-asset-report"});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", 9).instances;
+      naim::SkillsFactorySkillRecord record;
+      record.id = "lt-jex-market-asset-report";
+      record.name = "asset-market-report";
+      record.description = "Use for current state reports of one tracked asset.";
+      record.content = "Use factual market data and separate venue-specific data.";
+      record.match_terms = {"ситуация по bnb", "текущий срез", "current asset report"};
+      store.UpsertSkillsFactorySkill(record);
+
+      naim::controller::PlaneSkillsService skills_service;
+      naim::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"},
+                     {"content", "Какая сейчас ситуация по BNB? Текущий срез."}}})},
+      };
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.db_path = db_path;
+      resolution.desired_state = desired_state;
+
+      const auto error =
+          skills_service.ResolveInteractionSkills(resolution, &request_context);
+      Expect(
+          !error.has_value(),
+          "interaction skills should resolve from controller catalog when runtime endpoint is unreachable");
+      const auto applied = request_context.payload.at(
+          naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey);
+      Expect(
+          applied.is_array() && applied.size() == 1 &&
+              applied.front().at("id").get<std::string>() ==
+                  "lt-jex-market-asset-report",
+          "controller catalog fallback should apply selected market skill metadata");
+      Expect(
+          ContainsLiteral(
+              request_context.payload.at(
+                  naim::controller::PlaneSkillsService::kSystemInstructionPayloadKey)
+                  .get<std::string>(),
+              "Use factual market data"),
+          "controller catalog fallback should inject skill instructions");
+      std::cout << "ok: interaction-skills-fallback-to-controller-catalog" << '\n';
     }
 
     {
