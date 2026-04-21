@@ -89,7 +89,7 @@ bool IsLiveRuntimePhase(const std::string& phase) {
   return phase == "starting" || phase == "running" || phase == "stopping";
 }
 
-comet::RuntimeStatus BuildRuntimeStatus(
+naim::RuntimeStatus BuildRuntimeStatus(
     const RuntimeConfig& config,
     const std::string& backend,
     const std::string& phase,
@@ -161,7 +161,7 @@ void SaveDoctorFailureStatus(
     const std::string& backend,
     const std::string& reason,
     const std::string& detail) {
-  comet::RuntimeStatus status =
+  naim::RuntimeStatus status =
       BuildRuntimeStatus(config, backend, "planned", false, false, 0, "");
   status.status_reason = reason;
   status.failure_detail = detail;
@@ -169,7 +169,7 @@ void SaveDoctorFailureStatus(
   status.gateway_ready = false;
   status.launch_ready = false;
   status.ready = false;
-  comet::SaveRuntimeStatusJson(status, BuildControlPaths(config).runtime_status_path.string());
+  naim::SaveRuntimeStatusJson(status, BuildControlPaths(config).runtime_status_path.string());
 }
 
 json BuildGatewayPayload(const RuntimeConfig& config) {
