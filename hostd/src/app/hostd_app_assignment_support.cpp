@@ -816,6 +816,7 @@ void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
       << " -v " << quote(service_root.string()) << ":/naim/knowledge"
       << " -e " << quote("NAIM_KNOWLEDGE_SERVICE_ID=" + service_id)
       << " -e " << quote("NAIM_NODE_NAME=" + node_name)
+      << " -e " << quote("NAIM_KNOWLEDGE_LISTEN_HOST=0.0.0.0")
       << " -e " << quote("NAIM_KNOWLEDGE_PORT=" + std::to_string(port))
       << " -e " << quote("NAIM_KNOWLEDGE_DB_PATH=/naim/knowledge/knowledge.sqlite")
       << " -e " << quote("NAIM_KNOWLEDGE_STATUS_PATH=/naim/knowledge/runtime-status.json")
