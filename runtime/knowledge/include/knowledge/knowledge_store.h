@@ -1,19 +1,22 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include <sqlite3.h>
-
 #include "naim/knowledge/knowledge_types.h"
+
+namespace rocksdb {
+class DB;
+}
 
 namespace naim::knowledge_runtime {
 
 class KnowledgeStore final {
  public:
-  explicit KnowledgeStore(std::filesystem::path db_path);
+  explicit KnowledgeStore(std::filesystem::path store_path);
   ~KnowledgeStore();
 
   KnowledgeStore(const KnowledgeStore&) = delete;
@@ -45,6 +48,8 @@ class KnowledgeStore final {
   nlohmann::json GraphNeighborhood(const nlohmann::json& payload) const;
   nlohmann::json CatalogUpsert(const nlohmann::json& payload);
   nlohmann::json CatalogQuery(const nlohmann::json& payload) const;
+  nlohmann::json QueryRoute(const nlohmann::json& payload) const;
+  nlohmann::json ReconcileDailyReplicaSchedules(const nlohmann::json& payload);
 
  private:
   std::string UtcNow() const;
@@ -65,8 +70,8 @@ class KnowledgeStore final {
   static std::string NormalizeTerm(const std::string& value);
   static std::string MarkdownEscape(const std::string& value);
 
-  std::filesystem::path db_path_;
-  sqlite3* db_ = nullptr;
+  std::filesystem::path store_path_;
+  std::unique_ptr<rocksdb::DB> db_;
 };
 
 }  // namespace naim::knowledge_runtime

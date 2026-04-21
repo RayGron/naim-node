@@ -60,7 +60,7 @@ struct CapsuleManifest {
   std::string capsule_id;
   std::string plane_id;
   int schema_version = 1;
-  std::string storage_engine = "sqlite";
+  std::string storage_engine = "rocksdb";
   std::string storage_profile = "naim-knowledge-capsule-v1";
   int base_event_seq = 0;
   std::string created_at;

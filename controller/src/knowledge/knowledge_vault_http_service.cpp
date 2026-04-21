@@ -43,6 +43,7 @@ std::optional<HttpResponse> KnowledgeVaultHttpService::HandleRequest(
         suffix.rfind("/relations", 0) == 0 ||
         suffix.rfind("/search", 0) == 0 ||
         suffix.rfind("/context", 0) == 0 ||
+        suffix.rfind("/query-route", 0) == 0 ||
         suffix.rfind("/source-ingest", 0) == 0 ||
         suffix.rfind("/capsules", 0) == 0 ||
         suffix.rfind("/overlays", 0) == 0 ||

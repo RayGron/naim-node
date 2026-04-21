@@ -29,14 +29,14 @@ KnowledgeServer::ApiError::ApiError(int status, std::string code, std::string me
     : std::runtime_error(std::move(message)), status_(status), code_(std::move(code)) {}
 
 KnowledgeServer::KnowledgeServer(KnowledgeRuntimeConfig config)
-    : config_(std::move(config)), store_(config_.db_path) {}
+    : config_(std::move(config)), store_(config_.store_path) {}
 
 KnowledgeServer::~KnowledgeServer() {
   RequestStop();
 }
 
 int KnowledgeServer::Run() {
-  std::filesystem::create_directories(config_.db_path.parent_path());
+  std::filesystem::create_directories(config_.store_path);
   std::filesystem::create_directories(config_.status_path.parent_path());
   SetReadyFile(false);
   store_.Open();
@@ -230,6 +230,9 @@ HttpResponse KnowledgeServer::HandlePost(const HttpRequest& request) {
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "context") {
     return BuildJsonResponse(200, store_.Context(ParseJsonBody(request)));
   }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "query-route") {
+    return BuildJsonResponse(200, store_.QueryRoute(ParseJsonBody(request)));
+  }
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "source-ingest") {
     return BuildJsonResponse(200, store_.IngestSource(ParseJsonBody(request)));
   }
@@ -246,6 +249,10 @@ HttpResponse KnowledgeServer::HandlePost(const HttpRequest& request) {
   if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "replica-merges" &&
       parts[2] == "run-due") {
     return BuildJsonResponse(200, store_.RunScheduledReplicaMerges(ParseJsonBody(request)));
+  }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "replica-merges" &&
+      parts[2] == "reconcile-daily") {
+    return BuildJsonResponse(200, store_.ReconcileDailyReplicaSchedules(ParseJsonBody(request)));
   }
   if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "replica-merges" &&
       parts[2] == "trigger") {

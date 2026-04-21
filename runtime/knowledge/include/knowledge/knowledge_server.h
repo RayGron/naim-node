@@ -14,7 +14,7 @@ namespace naim::knowledge_runtime {
 struct KnowledgeRuntimeConfig {
   std::string service_id = "kv_default";
   std::string node_name = "unknown";
-  std::filesystem::path db_path = "/naim/knowledge/knowledge.sqlite";
+  std::filesystem::path store_path = "/naim/knowledge/store";
   std::filesystem::path status_path = "/naim/knowledge/status.json";
   std::filesystem::path ready_path = "/tmp/naim-ready";
   std::string listen_host = "127.0.0.1";

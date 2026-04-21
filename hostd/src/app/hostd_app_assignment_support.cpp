@@ -141,9 +141,10 @@ bool IsAllowedKnowledgeVaultProxyPath(const std::string& method, const std::stri
   }
   if (method == "POST" &&
       (route == "/v1/blocks" || route == "/v1/relations" || route == "/v1/search" ||
-       route == "/v1/context" || route == "/v1/source-ingest" || route == "/v1/capsules" ||
+       route == "/v1/context" || route == "/v1/query-route" || route == "/v1/source-ingest" || route == "/v1/capsules" ||
        route == "/v1/overlays" || route == "/v1/replica-merges/trigger" ||
        route == "/v1/replica-merges/schedule" || route == "/v1/replica-merges/run-due" ||
+       route == "/v1/replica-merges/reconcile-daily" ||
        route == "/v1/repair" || route == "/v1/markdown-export" ||
        route == "/v1/markdown-import" ||
        route == "/v1/graph-neighborhood" || route == "/v1/catalog")) {
@@ -829,7 +830,7 @@ void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
       << " -e " << quote("NAIM_NODE_NAME=" + node_name)
       << " -e " << quote("NAIM_KNOWLEDGE_LISTEN_HOST=0.0.0.0")
       << " -e " << quote("NAIM_KNOWLEDGE_PORT=" + std::to_string(port))
-      << " -e " << quote("NAIM_KNOWLEDGE_DB_PATH=/naim/knowledge/knowledge.sqlite")
+      << " -e " << quote("NAIM_KNOWLEDGE_STORE_PATH=/naim/knowledge/store")
       << " -e " << quote("NAIM_KNOWLEDGE_STATUS_PATH=/naim/knowledge/runtime-status.json")
       << " " << quote(image);
   if (!command_support_.RunCommandOk(run_command.str())) {

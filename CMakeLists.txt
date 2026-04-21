@@ -229,6 +229,7 @@ endif()
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(RocksDB CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 naim_configure_cef_support()
@@ -307,6 +308,7 @@ target_link_libraries(
   naim-knowledge-store-tests
   PRIVATE
     naim-common
+    RocksDB::rocksdb
 )
 naim_enable_strict_warnings(naim-knowledge-store-tests)
 
@@ -1449,6 +1451,7 @@ if(NOT WIN32)
     naim-knowledged
     PRIVATE
       naim-common
+      RocksDB::rocksdb
       Threads::Threads
   )
   if(WIN32)
