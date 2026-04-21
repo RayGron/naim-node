@@ -8,12 +8,12 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::hostd {
+namespace naim::hostd {
 namespace {
 
 using nlohmann::json;
 
-constexpr const char* kDefaultNodeConfigRelativePath = "config/comet-node-config.json";
+constexpr const char* kDefaultNodeConfigRelativePath = "config/naim-node-config.json";
 
 }  // namespace
 
@@ -42,7 +42,7 @@ std::optional<std::string> NodeConfigLoader::FindNodeConfigPath(const char* argv
   return std::nullopt;
 }
 
-CometNodeConfig NodeConfigLoader::Load(
+NaimNodeConfig NodeConfigLoader::Load(
     const std::optional<std::string>& config_arg,
     const char* argv0) const {
   std::optional<std::filesystem::path> config_path;
@@ -51,7 +51,7 @@ CometNodeConfig NodeConfigLoader::Load(
   if (config_arg.has_value()) {
     config_path = *config_arg;
     explicit_path = true;
-  } else if (const char* env_path = std::getenv("COMET_NODE_CONFIG_PATH");
+  } else if (const char* env_path = std::getenv("NAIM_NODE_CONFIG_PATH");
              env_path != nullptr && *env_path != '\0') {
     config_path = env_path;
     explicit_path = true;
@@ -66,7 +66,7 @@ CometNodeConfig NodeConfigLoader::Load(
   if (!std::filesystem::exists(*config_path)) {
     if (explicit_path) {
       throw std::runtime_error(
-          "comet node config file not found: " + config_path->string());
+          "naim node config file not found: " + config_path->string());
     }
     return {};
   }
@@ -74,26 +74,26 @@ CometNodeConfig NodeConfigLoader::Load(
   std::ifstream input(*config_path);
   if (!input.is_open()) {
     throw std::runtime_error(
-        "failed to open comet node config file '" + config_path->string() + "'");
+        "failed to open naim node config file '" + config_path->string() + "'");
   }
 
   const json value = json::parse(input, nullptr, true, true);
   if (!value.is_object()) {
     throw std::runtime_error(
-        "comet node config must be a JSON object: " + config_path->string());
+        "naim node config must be a JSON object: " + config_path->string());
   }
 
-  CometNodeConfig config;
+  NaimNodeConfig config;
   if (value.contains("paths")) {
     if (!value.at("paths").is_object()) {
       throw std::runtime_error(
-          "comet node config field 'paths' must be an object: " + config_path->string());
+          "naim node config field 'paths' must be an object: " + config_path->string());
     }
     const auto& paths = value.at("paths");
     if (paths.contains("storage_root")) {
       if (!paths.at("storage_root").is_string()) {
         throw std::runtime_error(
-            "comet node config field 'paths.storage_root' must be a string: " +
+            "naim node config field 'paths.storage_root' must be a string: " +
             config_path->string());
       }
       config.storage_root = paths.at("storage_root").get<std::string>();
@@ -101,7 +101,7 @@ CometNodeConfig NodeConfigLoader::Load(
   } else if (value.contains("storage_root")) {
     if (!value.at("storage_root").is_string()) {
       throw std::runtime_error(
-          "comet node config field 'storage_root' must be a string: " +
+          "naim node config field 'storage_root' must be a string: " +
           config_path->string());
     }
     config.storage_root = value.at("storage_root").get<std::string>();
@@ -110,4 +110,4 @@ CometNodeConfig NodeConfigLoader::Load(
   return config;
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

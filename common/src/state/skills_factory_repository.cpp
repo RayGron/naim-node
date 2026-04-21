@@ -1,12 +1,12 @@
-#include "comet/state/skills_factory_repository.h"
+#include "naim/state/skills_factory_repository.h"
 
 #include <string>
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -146,19 +146,19 @@ void SkillsFactoryRepository::UpsertPlaneSkillBinding(const PlaneSkillBindingRec
   Statement statement(
       db_,
       "INSERT INTO plane_skill_bindings("
-      "plane_name, skill_id, enabled, session_ids_json, comet_links_json, created_at, updated_at"
+      "plane_name, skill_id, enabled, session_ids_json, naim_links_json, created_at, updated_at"
       ") VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7) "
       "ON CONFLICT(plane_name, skill_id) DO UPDATE SET "
       "enabled = excluded.enabled, "
       "session_ids_json = excluded.session_ids_json, "
-      "comet_links_json = excluded.comet_links_json, "
+      "naim_links_json = excluded.naim_links_json, "
       "created_at = excluded.created_at, "
       "updated_at = excluded.updated_at;");
   statement.BindText(1, binding.plane_name);
   statement.BindText(2, binding.skill_id);
   statement.BindInt(3, binding.enabled ? 1 : 0);
   statement.BindText(4, SerializeStringArray(binding.session_ids));
-  statement.BindText(5, SerializeStringArray(binding.comet_links));
+  statement.BindText(5, SerializeStringArray(binding.naim_links));
   statement.BindText(6, binding.created_at);
   statement.BindText(7, binding.updated_at);
   statement.StepDone();
@@ -169,7 +169,7 @@ std::optional<PlaneSkillBindingRecord> SkillsFactoryRepository::LoadPlaneSkillBi
     const std::string& skill_id) const {
   Statement statement(
       db_,
-      "SELECT plane_name, skill_id, enabled, session_ids_json, comet_links_json, created_at, "
+      "SELECT plane_name, skill_id, enabled, session_ids_json, naim_links_json, created_at, "
       "updated_at "
       "FROM plane_skill_bindings WHERE plane_name = ?1 AND skill_id = ?2;");
   statement.BindText(1, plane_name);
@@ -184,7 +184,7 @@ std::vector<PlaneSkillBindingRecord> SkillsFactoryRepository::LoadPlaneSkillBind
     const std::optional<std::string>& plane_name,
     const std::optional<std::string>& skill_id) const {
   std::string sql =
-      "SELECT plane_name, skill_id, enabled, session_ids_json, comet_links_json, created_at, "
+      "SELECT plane_name, skill_id, enabled, session_ids_json, naim_links_json, created_at, "
       "updated_at FROM plane_skill_bindings";
   int bind_index = 1;
   bool has_where = false;
@@ -263,10 +263,10 @@ PlaneSkillBindingRecord SkillsFactoryRepository::ReadPlaneSkillBinding(sqlite3_s
   binding.skill_id = ToColumnText(statement, 1);
   binding.enabled = sqlite3_column_int(statement, 2) != 0;
   binding.session_ids = DeserializeStringArray(ToColumnText(statement, 3));
-  binding.comet_links = DeserializeStringArray(ToColumnText(statement, 4));
+  binding.naim_links = DeserializeStringArray(ToColumnText(statement, 4));
   binding.created_at = ToColumnText(statement, 5);
   binding.updated_at = ToColumnText(statement, 6);
   return binding;
 }
 
-}  // namespace comet
+}  // namespace naim

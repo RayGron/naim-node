@@ -41,13 +41,13 @@ std::optional<std::string> LoadControllerTargetConfig() {
   const char* xdg_config_home = std::getenv("XDG_CONFIG_HOME");
   std::filesystem::path config_path;
   if (xdg_config_home != nullptr && *xdg_config_home != '\0') {
-    config_path = std::filesystem::path(xdg_config_home) / "comet" / "controller";
+    config_path = std::filesystem::path(xdg_config_home) / "naim" / "controller";
   } else {
     const char* home = std::getenv("HOME");
     if (home == nullptr || *home == '\0') {
       return std::nullopt;
     }
-    config_path = std::filesystem::path(home) / ".config" / "comet" / "controller";
+    config_path = std::filesystem::path(home) / ".config" / "naim" / "controller";
   }
   if (!std::filesystem::exists(config_path)) {
     return std::nullopt;
@@ -73,7 +73,7 @@ std::optional<std::string> ResolveControllerTarget(
   if (explicit_target.has_value()) {
     return explicit_target;
   }
-  if (const char* env_target = std::getenv("COMET_CONTROLLER");
+  if (const char* env_target = std::getenv("NAIM_CONTROLLER");
       env_target != nullptr && *env_target != '\0') {
     return std::string(env_target);
   }
@@ -81,7 +81,7 @@ std::optional<std::string> ResolveControllerTarget(
 }
 
 nlohmann::json SendControllerJsonRequest(
-    const comet::controller::ControllerEndpointTarget& target,
+    const naim::controller::ControllerEndpointTarget& target,
     const std::string& method,
     const std::string& path,
     const std::vector<std::pair<std::string, std::string>>& params) {

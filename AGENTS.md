@@ -1,5 +1,5 @@
-Do not store reports, audits, benchmark notes, or validation writeups in `comet-node`.
+Do not store reports, audits, benchmark notes, or validation writeups in `naim-node`.
 
-Write them in the `comet-docs` repository under:
+Write them in the `naim-docs` repository under:
 
-- `/Users/vladislavhalasiuk/Projects/Repos/comet-docs/references/`
+- `/Users/vladislavhalasiuk/Projects/Repos/naim-docs/references/`

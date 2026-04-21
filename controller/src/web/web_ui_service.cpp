@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -67,6 +67,19 @@ std::string ResolvedDockerCommand() {
   throw std::runtime_error("no working Docker CLI found for web-ui lifecycle");
 }
 
+std::string ResolvedComposeCommand() {
+  static const std::string resolved = []() {
+    if (std::system("docker compose version >/dev/null 2>&1") == 0) {
+      return std::string("docker compose");
+    }
+    if (CommandExists("docker-compose")) {
+      return std::string("docker-compose");
+    }
+    return ResolvedDockerCommand() + " compose";
+  }();
+  return resolved;
+}
+
 void RunCommandOrThrow(const std::string& command) {
   const int exit_code = std::system(command.c_str());
   if (exit_code != 0) {
@@ -119,12 +132,12 @@ std::string RenderComposeYaml(
     const std::string& controller_upstream) {
   std::ostringstream out;
   out << "services:\n";
-  out << "  comet-web-ui:\n";
+  out << "  naim-web-ui:\n";
   out << "    image: " << image << "\n";
-  out << "    container_name: comet-web-ui\n";
+  out << "    container_name: naim-web-ui\n";
   out << "    restart: unless-stopped\n";
   out << "    environment:\n";
-  out << "      COMET_CONTROLLER_UPSTREAM: " << controller_upstream << "\n";
+  out << "      NAIM_CONTROLLER_UPSTREAM: " << controller_upstream << "\n";
   out << "    security_opt:\n";
   out << "      - apparmor=unconfined\n";
   out << "    ports:\n";
@@ -140,8 +153,8 @@ bool ComposeRunning(const std::string& web_ui_root) {
     return false;
   }
   const std::string command =
-      ResolvedDockerCommand() + " compose -f " + ShellQuote(compose_path) +
-      " ps --services --status running | grep -Fx 'comet-web-ui' >/dev/null 2>&1";
+      ResolvedComposeCommand() + " -f " + ShellQuote(compose_path) +
+      " ps --services --status running | grep -Fx 'naim-web-ui' >/dev/null 2>&1";
   return std::system(command.c_str()) == 0;
 }
 
@@ -159,11 +172,11 @@ std::string WebUiService::DefaultWebUiRoot() {
 }
 
 std::string WebUiService::DefaultWebUiImage() {
-  return "comet/web-ui:dev";
+  return "naim/web-ui:dev";
 }
 
 std::string WebUiService::DefaultControllerUpstream() {
-  if (const char* upstream = std::getenv("COMET_CONTROLLER_INTERNAL_UPSTREAM");
+  if (const char* upstream = std::getenv("NAIM_CONTROLLER_INTERNAL_UPSTREAM");
       upstream != nullptr && *upstream != '\0') {
     return upstream;
   }
@@ -213,18 +226,18 @@ int WebUiService::Ensure(
   };
   if (compose_mode == WebUiComposeMode::Exec) {
     RunCommandOrThrow(
-        ResolvedDockerCommand() + " compose -f " + ShellQuote(compose_path) + " up -d");
+        ResolvedComposeCommand() + " -f " + ShellQuote(compose_path) + " up -d");
     state["running"] = true;
     state["status"] = "running";
   }
   SaveStateJson(web_ui_root, state);
 
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   event_sink_(
       store,
       "ensured",
-      "materialized comet-web-ui sidecar",
+      "materialized naim-web-ui sidecar",
       json{
           {"web_ui_root", web_ui_root},
           {"listen_port", listen_port},
@@ -274,7 +287,7 @@ int WebUiService::Stop(
   const std::string compose_path = ComposePath(web_ui_root);
   if (compose_mode == WebUiComposeMode::Exec && std::filesystem::exists(compose_path)) {
     RunCommandOrThrow(
-        ResolvedDockerCommand() + " compose -f " + ShellQuote(compose_path) +
+        ResolvedComposeCommand() + " -f " + ShellQuote(compose_path) +
         " down --remove-orphans");
   }
   RemoveFileIfExists(compose_path);
@@ -285,12 +298,12 @@ int WebUiService::Stop(
   state["status"] = "stopped";
   SaveStateJson(web_ui_root, state);
 
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   event_sink_(
       store,
       "stopped",
-      "stopped comet-web-ui sidecar",
+      "stopped naim-web-ui sidecar",
       json{
           {"web_ui_root", web_ui_root},
           {"compose_mode", compose_mode == WebUiComposeMode::Exec ? "exec" : "skip"},
@@ -304,4 +317,4 @@ int WebUiService::Stop(
   return 0;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

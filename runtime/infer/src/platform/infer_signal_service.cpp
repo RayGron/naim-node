@@ -2,7 +2,7 @@
 
 #include <csignal>
 
-namespace comet::infer {
+namespace naim::infer {
 
 InferSignalService* InferSignalService::instance_ = nullptr;
 
@@ -30,4 +30,4 @@ void InferSignalService::HandleSignal(int) {
   }
 }
 
-}  // namespace comet::infer
+}  // namespace naim::infer

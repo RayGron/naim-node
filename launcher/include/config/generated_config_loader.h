@@ -6,7 +6,7 @@
 
 #include "config/install_layout.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace fs = std::filesystem;
 
@@ -25,6 +25,7 @@ struct GeneratedControllerConfig {
 struct GeneratedHostdConfig {
   std::optional<std::string> node_name;
   std::optional<std::string> controller_url;
+  std::optional<std::string> onboarding_key;
   std::optional<std::string> transport_mode;
   std::optional<std::string> execution_mode;
   std::optional<std::string> listen_address;
@@ -34,6 +35,7 @@ struct GeneratedHostdConfig {
   std::optional<fs::path> host_private_key;
   std::optional<fs::path> host_public_key;
   std::optional<std::string> trusted_controller_fingerprint;
+  std::optional<int> inventory_scan_interval_sec;
 };
 
 struct GeneratedConfig {
@@ -52,4 +54,4 @@ class GeneratedConfigLoader {
   const InstallLayoutResolver& install_layout_resolver_;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

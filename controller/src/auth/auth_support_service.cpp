@@ -15,7 +15,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "comet/security/crypto_utils.h"
+#include "naim/security/crypto_utils.h"
 
 using nlohmann::json;
 
@@ -123,11 +123,11 @@ std::optional<std::string> FindBearerToken(const HttpRequest& request) {
 }
 
 std::optional<std::string> FindControllerSessionToken(const HttpRequest& request) {
-  if (const auto header_token = FindHeaderString(request, "x-comet-session-token");
+  if (const auto header_token = FindHeaderString(request, "x-naim-session-token");
       header_token.has_value()) {
     return header_token;
   }
-  if (const auto cookie_token = FindCookieValue(request, "comet.sid"); cookie_token.has_value()) {
+  if (const auto cookie_token = FindCookieValue(request, "naim.sid"); cookie_token.has_value()) {
     return cookie_token;
   }
   return FindBearerToken(request);
@@ -224,7 +224,7 @@ std::optional<std::filesystem::path> ReadProcessArgv0Path() {
 }
 
 std::filesystem::path ResolveWebAuthnHelperPath() {
-  if (const auto env = GetEnvString("COMET_WEBAUTHN_HELPER"); env.has_value()) {
+  if (const auto env = GetEnvString("NAIM_WEBAUTHN_HELPER"); env.has_value()) {
     return std::filesystem::path(*env);
   }
   std::vector<std::filesystem::path> roots;
@@ -246,7 +246,7 @@ std::filesystem::path ResolveWebAuthnHelperPath() {
       path = parent;
     }
   };
-  if (const auto repo_root = GetEnvString("COMET_REPO_ROOT"); repo_root.has_value()) {
+  if (const auto repo_root = GetEnvString("NAIM_REPO_ROOT"); repo_root.has_value()) {
     append_ancestors(std::filesystem::path(*repo_root));
   }
   append_ancestors(std::filesystem::current_path());
@@ -272,9 +272,9 @@ std::filesystem::path ResolveWebAuthnHelperPath() {
 
 }  // namespace
 
-std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>>
+std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>
 AuthSupportService::AuthenticateControllerUserSession(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const HttpRequest& request,
     const std::optional<std::string>& session_kind) const {
   const auto token = FindControllerSessionToken(request);
@@ -293,8 +293,8 @@ AuthSupportService::AuthenticateControllerUserSession(
   return std::make_pair(*user, *session);
 }
 
-std::optional<comet::UserRecord> AuthSupportService::RequireControllerAdminUser(
-    comet::ControllerStore& store,
+std::optional<naim::UserRecord> AuthSupportService::RequireControllerAdminUser(
+    naim::ControllerStore& store,
     const HttpRequest& request) const {
   const auto session = AuthenticateControllerUserSession(store, request);
   if (!session.has_value() || session->first.role != "admin") {
@@ -304,21 +304,21 @@ std::optional<comet::UserRecord> AuthSupportService::RequireControllerAdminUser(
 }
 
 std::string AuthSupportService::ResolveWebAuthnRpId(const HttpRequest& request) const {
-  if (const auto env = GetEnvString("COMET_WEBAUTHN_RP_ID"); env.has_value()) {
+  if (const auto env = GetEnvString("NAIM_WEBAUTHN_RP_ID"); env.has_value()) {
     return *env;
   }
   return HostWithoutPort(RequestHostHeader(request));
 }
 
 std::string AuthSupportService::ResolveWebAuthnOrigin(const HttpRequest& request) const {
-  if (const auto env = GetEnvString("COMET_WEBAUTHN_ORIGIN"); env.has_value()) {
+  if (const auto env = GetEnvString("NAIM_WEBAUTHN_ORIGIN"); env.has_value()) {
     return *env;
   }
   return RequestScheme(request) + "://" + RequestHostHeader(request);
 }
 
 std::string AuthSupportService::ResolveWebAuthnRpName() const {
-  return GetEnvString("COMET_WEBAUTHN_RP_NAME").value_or("comet-node");
+  return GetEnvString("NAIM_WEBAUTHN_RP_NAME").value_or("naim-node");
 }
 
 json AuthSupportService::RunWebAuthnHelper(
@@ -326,7 +326,7 @@ json AuthSupportService::RunWebAuthnHelper(
     const json& payload) const {
   const std::filesystem::path temp_dir =
       std::filesystem::temp_directory_path() /
-      ("comet-webauthn-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
+      ("naim-webauthn-" + SanitizeTokenForPath(naim::RandomTokenBase64(12)));
   std::filesystem::create_directories(temp_dir);
   const std::filesystem::path input_path = temp_dir / "input.json";
   const std::filesystem::path output_path = temp_dir / "output.json";
@@ -336,7 +336,7 @@ json AuthSupportService::RunWebAuthnHelper(
       std::ofstream out(input_path);
       out << payload.dump();
     }
-    const std::string node_bin = GetEnvString("COMET_NODE_BIN").value_or("node");
+    const std::string node_bin = GetEnvString("NAIM_NODE_BIN").value_or("node");
     const std::string command =
         EscapeShellArg(node_bin) + " " +
         EscapeShellArg(ResolveWebAuthnHelperPath().string()) + " " +
@@ -373,7 +373,7 @@ json AuthSupportService::RunWebAuthnHelper(
 std::string AuthSupportService::SessionCookieHeader(
     const std::string& token,
     const HttpRequest& request) const {
-  std::string value = "comet.sid=" + token + "; Path=/; HttpOnly; SameSite=Strict";
+  std::string value = "naim.sid=" + token + "; Path=/; HttpOnly; SameSite=Strict";
   if (RequestScheme(request) == "https") {
     value += "; Secure";
   }
@@ -382,7 +382,7 @@ std::string AuthSupportService::SessionCookieHeader(
 
 std::string AuthSupportService::ClearSessionCookieHeader(const HttpRequest& request) const {
   std::string value =
-      "comet.sid=; Path=/; HttpOnly; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
+      "naim.sid=; Path=/; HttpOnly; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
   if (RequestScheme(request) == "https") {
     value += "; Secure";
   }
@@ -390,13 +390,13 @@ std::string AuthSupportService::ClearSessionCookieHeader(const HttpRequest& requ
 }
 
 std::string AuthSupportService::CreateControllerSession(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     int user_id,
     const std::string& session_kind,
     const std::string& plane_name) const {
   const std::string now = UtcNowSqlTimestamp();
-  const std::string token = comet::RandomTokenBase64(32);
-  store.InsertAuthSession(comet::AuthSessionRecord{
+  const std::string token = naim::RandomTokenBase64(32);
+  store.InsertAuthSession(naim::AuthSessionRecord{
       token,
       user_id,
       session_kind,
@@ -417,7 +417,7 @@ std::string AuthSupportService::BuildSshChallengeMessage(
     const std::string& plane_name,
     const std::string& challenge_token,
     const std::string& expires_at) const {
-  return "comet-plane-auth\n" + username + "\n" + plane_name + "\n" +
+  return "naim-plane-auth\n" + username + "\n" + plane_name + "\n" +
          challenge_token + "\n" + expires_at + "\n";
 }
 
@@ -438,7 +438,7 @@ std::string AuthSupportService::ComputeSshPublicKeyFingerprint(
     const std::string& public_key) const {
   const std::filesystem::path temp_dir =
       std::filesystem::temp_directory_path() /
-      ("comet-ssh-key-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
+      ("naim-ssh-key-" + SanitizeTokenForPath(naim::RandomTokenBase64(12)));
   std::filesystem::create_directories(temp_dir);
   const std::filesystem::path key_path = temp_dir / "key.pub";
   try {
@@ -483,7 +483,7 @@ bool AuthSupportService::VerifySshDetachedSignature(
     const std::string& signature) const {
   const std::filesystem::path temp_dir =
       std::filesystem::temp_directory_path() /
-      ("comet-ssh-verify-" + SanitizeTokenForPath(comet::RandomTokenBase64(12)));
+      ("naim-ssh-verify-" + SanitizeTokenForPath(naim::RandomTokenBase64(12)));
   std::filesystem::create_directories(temp_dir);
   const std::filesystem::path allowed_signers_path = temp_dir / "allowed_signers";
   const std::filesystem::path message_path = temp_dir / "message.txt";
@@ -505,7 +505,7 @@ bool AuthSupportService::VerifySshDetachedSignature(
         "ssh-keygen -Y verify"
         " -f " + EscapeShellArg(allowed_signers_path.string()) +
         " -I " + EscapeShellArg(username) +
-        " -n " + EscapeShellArg("comet-plane-auth") +
+        " -n " + EscapeShellArg("naim-plane-auth") +
         " -s " + EscapeShellArg(signature_path.string()) +
         " < " + EscapeShellArg(message_path.string()) +
         " >/dev/null 2>/dev/null";
@@ -584,9 +584,9 @@ void AuthSupportService::CleanupExpiredPendingAuthFlows() const {
   }
 }
 
-std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>>
+std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>
 AuthSupportService::AuthenticateProtectedPlaneRequest(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const HttpRequest& request,
     const std::string& plane_name) const {
   if (const auto web_session =

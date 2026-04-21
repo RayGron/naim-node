@@ -9,7 +9,7 @@
 #include "worker_signal_service.h"
 #include "worker_status_service.h"
 
-namespace comet::worker {
+namespace naim::worker {
 
 class WorkerEngineHost final {
  public:
@@ -36,4 +36,4 @@ class WorkerEngineHost final {
   std::optional<pid_t> child_pid_;
 };
 
-}  // namespace comet::worker
+}  // namespace naim::worker

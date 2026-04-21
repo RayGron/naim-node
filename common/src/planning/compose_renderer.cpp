@@ -1,4 +1,4 @@
-#include "comet/planning/compose_renderer.h"
+#include "naim/planning/compose_renderer.h"
 
 #include <algorithm>
 #include <cctype>
@@ -6,7 +6,7 @@
 #include <string_view>
 #include <vector>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -161,9 +161,9 @@ void RenderCommand(
 std::string RenderComposeYaml(const NodeComposePlan& plan) {
   std::ostringstream out;
   const std::string mesh_network_key = "plane-mesh";
-  const std::string mesh_network_name = "comet-" + plan.plane_name + "-mesh";
+  const std::string mesh_network_name = "naim-" + plan.plane_name + "-mesh";
 
-  out << "name: comet-" << plan.plane_name << "-" << plan.node_name << "\n";
+  out << "name: naim-" << plan.plane_name << "-" << plan.node_name << "\n";
   out << "services:\n";
 
   for (const auto& service : plan.services) {
@@ -279,4 +279,4 @@ std::string RenderComposeYaml(const NodeComposePlan& plan) {
   return out.str();
 }
 
-}  // namespace comet
+}  // namespace naim

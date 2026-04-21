@@ -8,5 +8,5 @@
   "preemptible": true,
   "memory_cap_mb": 4096,
   "private_disk_gb": 10,
-  "image": "comet/worker-runtime:dev"
+  "image": "naim/worker-runtime:dev"
 }

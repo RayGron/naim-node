@@ -8,7 +8,7 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneBrowsingService final {
  public:
@@ -30,4 +30,4 @@ class PlaneBrowsingService final {
       std::string* error_message) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

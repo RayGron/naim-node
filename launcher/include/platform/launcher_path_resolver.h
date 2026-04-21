@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class LauncherPathResolver {
  public:
@@ -13,4 +13,4 @@ class LauncherPathResolver {
       const std::string& binary_name) const;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

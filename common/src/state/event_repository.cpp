@@ -1,8 +1,8 @@
-#include "comet/state/event_repository.h"
+#include "naim/state/event_repository.h"
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -131,4 +131,4 @@ EventRecord EventRepository::ReadEvent(sqlite3_stmt* statement) {
   };
 }
 
-}  // namespace comet
+}  // namespace naim

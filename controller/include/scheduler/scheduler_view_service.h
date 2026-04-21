@@ -8,8 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
 enum class SchedulerRolloutPhase {
   Planned,
@@ -36,7 +36,7 @@ struct RolloutLifecycleEntry {
 
 struct RebalancePlanEntry {
   std::string worker_name;
-  comet::PlacementMode placement_mode = comet::PlacementMode::Manual;
+  naim::PlacementMode placement_mode = naim::PlacementMode::Manual;
   std::string current_node_name;
   std::string current_gpu_device;
   std::string target_node_name;
@@ -102,18 +102,18 @@ struct RebalanceLoopStatusSummary {
 };
 
 struct SchedulerRuntimeView {
-  std::optional<comet::SchedulerPlaneRuntime> plane_runtime;
-  std::map<std::string, comet::SchedulerWorkerRuntime> worker_runtime_by_name;
-  std::map<std::string, comet::SchedulerNodeRuntime> node_runtime_by_name;
+  std::optional<naim::SchedulerPlaneRuntime> plane_runtime;
+  std::map<std::string, naim::SchedulerWorkerRuntime> worker_runtime_by_name;
+  std::map<std::string, naim::SchedulerNodeRuntime> node_runtime_by_name;
 };
 
 struct RolloutActionsViewData {
   std::string db_path;
   std::optional<std::string> plane_name;
   std::optional<std::string> node_name;
-  std::optional<comet::DesiredState> desired_state;
+  std::optional<naim::DesiredState> desired_state;
   std::optional<int> desired_generation;
-  std::vector<comet::RolloutActionRecord> actions;
+  std::vector<naim::RolloutActionRecord> actions;
   std::optional<SchedulerRuntimeView> scheduler_runtime;
   std::vector<RolloutLifecycleEntry> lifecycle;
   std::size_t gated_worker_count = 0;
@@ -125,7 +125,7 @@ struct RebalancePlanViewData {
   std::optional<std::string> plane_name;
   std::optional<std::string> node_name;
   int stale_after_seconds = 0;
-  std::optional<comet::DesiredState> desired_state;
+  std::optional<naim::DesiredState> desired_state;
   int desired_generation = 0;
   std::vector<RebalancePlanEntry> rebalance_entries;
   RebalanceControllerGateSummary controller_gate_summary;

@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace comet::worker {
+namespace naim::worker {
 
 struct WorkerConfig {
   std::string plane_name;
@@ -27,4 +27,4 @@ struct WorkerConfig {
   int graceful_stop_timeout_sec = 15;
 };
 
-}  // namespace comet::worker
+}  // namespace naim::worker

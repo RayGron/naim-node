@@ -144,6 +144,19 @@ std::optional<HttpResponse> ModelLibraryHttpService::HandleRequest(
   }
 
   if (request.path == "/api/v1/model-library/jobs") {
+    if (request.method == "GET") {
+      try {
+        return support_.build_json_response(
+            200, support_.model_library_service().BuildJobsPayload(db_path), {});
+      } catch (const std::exception& error) {
+        return support_.build_json_response(
+            500,
+            json{{"status", "internal_error"},
+                 {"message", error.what()},
+                 {"path", request.path}},
+            {});
+      }
+    }
     if (request.method != "DELETE") {
       return support_.build_json_response(
           405, json{{"status", "method_not_allowed"}}, {});

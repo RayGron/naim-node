@@ -2,4 +2,4 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-exec "${script_dir}/comet-devtool.sh" benchmark-data-parallel-throughput "$@"
+exec "${script_dir}/naim-devtool.sh" benchmark-data-parallel-throughput "$@"

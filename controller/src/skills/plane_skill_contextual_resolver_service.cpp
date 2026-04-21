@@ -11,8 +11,10 @@
 #include <utility>
 
 #include "http/controller_http_transport.h"
+#include "naim/state/sqlite_store.h"
+#include "skills/plane_skills_target_resolver.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -29,50 +31,6 @@ constexpr int kMinimumContextualScore = 6;
 constexpr std::size_t kMaximumSelectedSkills = 3;
 constexpr int kSecondaryScoreGapLimit = 3;
 constexpr int kSecondaryScorePercentOfTop = 85;
-
-std::vector<std::pair<std::string, std::string>> DefaultJsonHeaders() {
-  return {{"Content-Type", "application/json"}};
-}
-
-std::string NormalizeControllerTargetHost(const PublishedPort& port) {
-  if (port.host_ip.empty() || port.host_ip == "0.0.0.0") {
-    return "127.0.0.1";
-  }
-  return port.host_ip;
-}
-
-const InstanceSpec* FindSkillsInstance(const DesiredState& desired_state) {
-  const auto it = std::find_if(
-      desired_state.instances.begin(),
-      desired_state.instances.end(),
-      [](const InstanceSpec& instance) {
-        return instance.role == InstanceRole::Skills;
-      });
-  if (it == desired_state.instances.end()) {
-    return nullptr;
-  }
-  return &*it;
-}
-
-std::optional<ControllerEndpointTarget> ResolvePlaneLocalSkillsTarget(
-    const DesiredState& desired_state) {
-  const auto* skills = FindSkillsInstance(desired_state);
-  if (skills == nullptr) {
-    return std::nullopt;
-  }
-  const auto published = std::find_if(
-      skills->published_ports.begin(),
-      skills->published_ports.end(),
-      [](const PublishedPort& port) { return port.host_port > 0; });
-  if (published == skills->published_ports.end()) {
-    return std::nullopt;
-  }
-  ControllerEndpointTarget target;
-  target.host = NormalizeControllerTargetHost(*published);
-  target.port = published->host_port;
-  target.raw = "http://" + target.host + ":" + std::to_string(target.port);
-  return target;
-}
 
 std::string NormalizeSkillText(const std::string& value) {
   auto next_code_point = [](const std::string& input, std::size_t* offset) {
@@ -494,14 +452,54 @@ std::vector<std::string> ParseStringArray(const nlohmann::json& value) {
   return result;
 }
 
-std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
+std::vector<ContextualSkillCandidate> LoadControllerCatalogCandidates(
+    const std::string& db_path,
+    const DesiredState& desired_state,
+    bool include_internal) {
+  if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
+    return {};
+  }
+  if (db_path.empty()) {
+    return {};
+  }
+
+  ControllerStore store(db_path);
+  store.Initialize();
+  std::vector<ContextualSkillCandidate> candidates;
+  for (const auto& skill_id : desired_state.skills->factory_skill_ids) {
+    const auto canonical = store.LoadSkillsFactorySkill(skill_id);
+    if (!canonical.has_value()) {
+      continue;
+    }
+    const auto binding = store.LoadPlaneSkillBinding(
+        desired_state.plane_name,
+        skill_id);
+    if (binding.has_value() && !binding->enabled) {
+      continue;
+    }
+    if (canonical->internal && !include_internal) {
+      continue;
+    }
+    candidates.push_back(ContextualSkillCandidate{
+        canonical->id,
+        canonical->name,
+        canonical->description,
+        canonical->content,
+        canonical->match_terms,
+        canonical->internal,
+    });
+  }
+  return candidates;
+}
+
+std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidatesFromRuntime(
     const DesiredState& desired_state,
     bool include_internal) {
   if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
     return {};
   }
 
-  const auto target = ResolvePlaneLocalSkillsTarget(desired_state);
+  const auto target = PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(desired_state);
   if (!target.has_value()) {
     return {};
   }
@@ -509,7 +507,11 @@ std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
   HttpResponse response;
   try {
     response = SendControllerHttpRequest(
-        *target, "GET", "/v1/skills", "", DefaultJsonHeaders());
+        *target,
+        "GET",
+        "/v1/skills",
+        "",
+        PlaneSkillsTargetResolver::DefaultJsonHeaders());
   } catch (const std::exception&) {
     return {};
   }
@@ -548,6 +550,18 @@ std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
     });
   }
   return candidates;
+}
+
+std::vector<ContextualSkillCandidate> LoadPlaneLocalCandidates(
+    const std::string& db_path,
+    const DesiredState& desired_state,
+    bool include_internal) {
+  auto candidates =
+      LoadControllerCatalogCandidates(db_path, desired_state, include_internal);
+  if (!candidates.empty()) {
+    return candidates;
+  }
+  return LoadPlaneLocalCandidatesFromRuntime(desired_state, include_internal);
 }
 
 int ScoreCandidate(
@@ -714,8 +728,10 @@ ContextualSkillSelection PlaneSkillContextualResolverService::Resolve(
 
   const auto prompt_text = ExtractPromptText(payload);
   const bool include_internal = ExtractIncludeInternal(payload);
-  const auto candidates =
-      LoadPlaneLocalCandidates(resolution.desired_state, include_internal);
+  const auto candidates = LoadPlaneLocalCandidates(
+      db_path,
+      resolution.desired_state,
+      include_internal);
   selection.candidate_count = static_cast<int>(candidates.size());
   if (prompt_text.empty() || candidates.empty()) {
     return selection;
@@ -799,4 +815,4 @@ nlohmann::json PlaneSkillContextualResolverService::BuildDebugPayload(
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

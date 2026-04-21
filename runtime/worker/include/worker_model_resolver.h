@@ -8,7 +8,7 @@
 
 #include "worker_config.h"
 
-namespace comet::worker {
+namespace naim::worker {
 
 class WorkerModelResolver final {
  public:
@@ -22,4 +22,4 @@ class WorkerModelResolver final {
   static std::optional<std::string> ResolveGgufPath(const std::string& path_text);
 };
 
-}  // namespace comet::worker
+}  // namespace naim::worker

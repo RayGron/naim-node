@@ -2,7 +2,7 @@
 
 #include "scheduler/scheduler_http_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerSchedulerServiceFactory final : public ISchedulerServiceFactory {
  public:
@@ -11,4 +11,4 @@ class ControllerSchedulerServiceFactory final : public ISchedulerServiceFactory 
       const std::string& artifacts_root) const override;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

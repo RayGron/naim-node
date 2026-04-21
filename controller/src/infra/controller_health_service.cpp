@@ -4,22 +4,22 @@
 #include <optional>
 #include <string>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 
 json ControllerHealthService::BuildPayload(const std::string& db_path) const {
   json payload{
       {"status", "ok"},
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"db_exists", std::filesystem::exists(db_path)},
   };
 
   try {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto generation = store.LoadDesiredGeneration();
     const auto desired_state = store.LoadDesiredState();
@@ -39,4 +39,4 @@ json ControllerHealthService::BuildPayload(const std::string& db_path) const {
   return payload;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

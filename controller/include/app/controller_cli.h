@@ -6,7 +6,7 @@
 #include "app/controller_command_line.h"
 #include "app/controller_service_interfaces.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerCli {
  public:
@@ -37,4 +37,4 @@ class ControllerCli {
   IControllerServeService& serve_service_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

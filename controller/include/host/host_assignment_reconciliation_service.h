@@ -5,9 +5,9 @@
 #include <string>
 #include <vector>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class HostAssignmentReconciliationService {
  public:
@@ -21,32 +21,32 @@ class HostAssignmentReconciliationService {
   };
 
   Result Reconcile(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const std::optional<std::string>& plane_name = std::nullopt) const;
 
  private:
   Result ReconcilePlane(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const std::string& plane_name,
-      const std::vector<comet::HostAssignment>& claimed_assignments,
-      const std::vector<comet::HostObservation>& observations) const;
-  std::vector<comet::HostAssignment> LoadClaimedApplyAssignments(
-      comet::ControllerStore& store,
+      const std::vector<naim::HostAssignment>& claimed_assignments,
+      const std::vector<naim::HostObservation>& observations) const;
+  std::vector<naim::HostAssignment> LoadClaimedApplyAssignments(
+      naim::ControllerStore& store,
       const std::optional<std::string>& plane_name) const;
   std::vector<std::string> BuildPlaneNames(
-      const std::vector<comet::HostAssignment>& claimed_assignments) const;
-  std::map<std::string, comet::HostAssignment> BuildLatestAssignmentsByNode(
-      const std::vector<comet::HostAssignment>& assignments) const;
-  std::optional<comet::HostObservation> FindObservationForNode(
-      const std::vector<comet::HostObservation>& observations,
+      const std::vector<naim::HostAssignment>& claimed_assignments) const;
+  std::map<std::string, naim::HostAssignment> BuildLatestAssignmentsByNode(
+      const std::vector<naim::HostAssignment>& assignments) const;
+  std::optional<naim::HostObservation> FindObservationForNode(
+      const std::vector<naim::HostObservation>& observations,
       const std::string& node_name) const;
   bool ShouldSupersedeClaimedAssignment(
-      const comet::HostAssignment& assignment,
-      const std::map<std::string, comet::HostAssignment>& latest_assignments_by_node) const;
+      const naim::HostAssignment& assignment,
+      const std::map<std::string, naim::HostAssignment>& latest_assignments_by_node) const;
   bool ShouldMarkClaimedAssignmentApplied(
-      const comet::HostAssignment& assignment,
-      const std::optional<comet::PlaneRecord>& plane,
-      const std::optional<comet::HostObservation>& observation) const;
+      const naim::HostAssignment& assignment,
+      const std::optional<naim::PlaneRecord>& plane,
+      const std::optional<naim::HostObservation>& observation) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

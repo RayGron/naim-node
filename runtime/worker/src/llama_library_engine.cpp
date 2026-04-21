@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace comet::worker {
+namespace naim::worker {
 
 class LlamaLibraryEngine::Impl {};
 
@@ -166,4 +166,4 @@ void LlamaLibraryEngine::Tick() {
   throw std::runtime_error("llama.cpp worker engine tick requested while disabled");
 }
 
-}  // namespace comet::worker
+}  // namespace naim::worker

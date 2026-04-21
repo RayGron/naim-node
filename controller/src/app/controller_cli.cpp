@@ -4,7 +4,7 @@
 
 #include "web/web_ui_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerCli::ControllerCli(
     const ControllerCommandLine& command_line,
@@ -258,7 +258,7 @@ std::optional<int> ControllerCli::TryRun() const {
     return assignment_orchestration_service_.SetNodeAvailability(
         command_line_.db().value_or("var/controller.sqlite"),
         *requested_node_name,
-        comet::ParseNodeAvailability(*requested_availability),
+        naim::ParseNodeAvailability(*requested_availability),
         command_line_.message());
   }
 
@@ -330,6 +330,35 @@ std::optional<int> ControllerCli::TryRun() const {
         command_line_.message());
   }
 
+  if (command == "reset-hostd-onboarding") {
+    const auto node_name = command_line_.node();
+    if (!node_name.has_value()) {
+      return MissingRequired("--node");
+    }
+    return host_registry_service_.ResetHostOnboarding(
+        *node_name,
+        command_line_.message());
+  }
+
+  if (command == "set-hostd-storage-role") {
+    const auto node_name = command_line_.node();
+    if (!node_name.has_value()) {
+      return MissingRequired("--node");
+    }
+    const auto status = command_line_.status();
+    if (!status.has_value()) {
+      return MissingRequired("--status");
+    }
+    if (*status != "enabled" && *status != "disabled") {
+      std::cerr << "error: --status must be enabled or disabled\n";
+      return 1;
+    }
+    return host_registry_service_.SetHostStorageRole(
+        *node_name,
+        *status == "enabled",
+        command_line_.message());
+  }
+
   if (command == "ensure-web-ui") {
     return web_ui_service_.Ensure(
         WebUiService::ResolveWebUiRoot(command_line_.web_ui_root()),
@@ -357,4 +386,4 @@ int ControllerCli::MissingRequired(const char* option_name) const {
   return 1;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

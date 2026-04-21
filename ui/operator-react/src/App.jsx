@@ -26,6 +26,7 @@ import {
   MODEL_LIBRARY_GGUF_QUANTIZATIONS,
   MODEL_LIBRARY_QUANTIZATION_FILTERS,
   formatModelLibraryDisplayName,
+  modelLibraryJobProgress,
   normalizeModelDownloadSourceUrls,
   normalizeModelLibraryItemQuantization,
   normalizeModelLibraryJobKind,
@@ -42,6 +43,7 @@ import {
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
 const MODEL_LIBRARY_ACTIVE_POLL_MS = 1000;
+const MODEL_LIBRARY_BACKGROUND_POLL_MS = 10000;
 const EVENT_LIMIT = 24;
 const MODEL_LIBRARY_PAGE_SIZE = 24;
 const MODEL_LIBRARY_JOB_PAGE_SIZE = 8;
@@ -83,6 +85,12 @@ function fetchJson(path, init = {}) {
   });
 }
 
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function planePath(planeName, suffix = "") {
   const encoded = encodeURIComponent(planeName);
   return suffix
@@ -92,6 +100,14 @@ function planePath(planeName, suffix = "") {
 
 function modelLibraryPath(suffix = "") {
   return suffix ? `/api/v1/model-library/${suffix}` : "/api/v1/model-library";
+}
+
+function modelLibraryJobsPath() {
+  return "/api/v1/model-library/jobs";
+}
+
+function hostdHostsPath(nodeName = "") {
+  return queryPath("/api/v1/hostd/hosts", { node: nodeName });
 }
 
 function skillsFactoryPath(suffix = "") {
@@ -357,7 +373,7 @@ function buildEmptySkillForm() {
     internal: false,
     enabled: true,
     sessionIdsText: "",
-    cometLinksText: "",
+    naimLinksText: "",
   };
 }
 
@@ -440,23 +456,6 @@ function modelLibraryJobStatusClass(status) {
     default:
       return "is-booting";
   }
-}
-
-function modelLibraryJobProgress(job) {
-  if (String(job?.phase || "").toLowerCase() !== "running") {
-    return null;
-  }
-  const bytesDone = Number(job?.bytes_done ?? 0);
-  const bytesTotal = Number(job?.bytes_total ?? NaN);
-  if (
-    !Number.isFinite(bytesDone) ||
-    !Number.isFinite(bytesTotal) ||
-    bytesTotal <= 0 ||
-    bytesTotal < bytesDone
-  ) {
-    return null;
-  }
-  return Math.max(0, Math.min(100, (bytesDone / bytesTotal) * 100));
 }
 
 function modelLibraryJobProgressLabel(job) {
@@ -784,14 +783,14 @@ function bootstrapModelTargetPath(desiredState) {
     return bootstrapModel.local_path;
   }
   if (Array.isArray(bootstrapModel.source_urls) && bootstrapModel.source_urls.length > 1) {
-    return `${desiredState?.inference?.model_cache_dir || desiredState?.inference?.gguf_cache_dir || "/comet/shared/models/cache"}/multipart`;
+    return `${desiredState?.inference?.model_cache_dir || desiredState?.inference?.gguf_cache_dir || "/naim/shared/models/cache"}/multipart`;
   }
   const targetFilename =
     bootstrapModel.target_filename ||
     bootstrapModel.local_path?.split("/").pop() ||
     bootstrapModel.source_url?.split("/").pop() ||
     "model.gguf";
-  return `${desiredState?.inference?.gguf_cache_dir || "/comet/shared/models/gguf"}/${targetFilename}`;
+  return `${desiredState?.inference?.gguf_cache_dir || "/naim/shared/models/gguf"}/${targetFilename}`;
 }
 
 function bootstrapModelSourceLabel(bootstrapModel) {
@@ -897,13 +896,13 @@ function hostObservationItemsFromPayload(payload) {
 
 function instanceRole(instance) {
   const subrole =
-    instance?.labels?.["comet.subrole"] ||
-    instance?.environment?.COMET_INSTANCE_SUBROLE ||
+    instance?.labels?.["naim.subrole"] ||
+    instance?.environment?.NAIM_INSTANCE_SUBROLE ||
     "";
   if (subrole === "aggregator") {
     return "aggregator";
   }
-  const upstreams = instance?.environment?.COMET_REPLICA_UPSTREAMS || "";
+  const upstreams = instance?.environment?.NAIM_REPLICA_UPSTREAMS || "";
   if ((instance?.kind === "infer" || instance?.role === "infer") && upstreams) {
     return "aggregator";
   }
@@ -1089,8 +1088,11 @@ export function PlaneEditorDialog({
   onClose,
   onSave,
   modelLibraryItems,
+  hostdHosts,
+  peerLinks,
   skillsFactoryItems,
   skillsFactoryGroups = [],
+  onResetLtCypherDeployment,
 }) {
   if (!dialog.open) {
     return null;
@@ -1170,8 +1172,11 @@ export function PlaneEditorDialog({
             setDialog={setDialog}
             languageOptions={CHAT_LANGUAGE_OPTIONS}
             modelLibraryItems={modelLibraryItems || []}
+            hostdHosts={hostdHosts || []}
+            peerLinks={peerLinks || null}
             skillsFactoryItems={skillsFactoryItems || []}
             skillsFactoryGroups={skillsFactoryGroups || []}
+            onResetLtCypherDeployment={onResetLtCypherDeployment}
           />
         ) : null}
         {showFormBuilder ? (
@@ -1366,7 +1371,7 @@ function SkillsDialog({
                     </div>
                     <div className="metric-grid compact-metric-grid">
                       <div className="metric-row"><span>Sessions</span><strong>{Array.isArray(item.session_ids) ? item.session_ids.length : 0}</strong></div>
-                      <div className="metric-row"><span>Links</span><strong>{Array.isArray(item.comet_links) ? item.comet_links.length : 0}</strong></div>
+                      <div className="metric-row"><span>Links</span><strong>{Array.isArray(item.naim_links) ? item.naim_links.length : 0}</strong></div>
                       <div className="metric-row"><span>Updated</span><strong>{formatTimestamp(item.updated_at)}</strong></div>
                     </div>
                     <div className="toolbar">
@@ -1437,11 +1442,11 @@ function SkillsDialog({
                 />
               </label>
               <label className="field-label">
-                <span className="field-label-title">Comet links</span>
+                <span className="field-label-title">Naim links</span>
                 <textarea
                   className="editor-textarea"
-                  value={form.cometLinksText}
-                  onChange={(event) => onFormChange("cometLinksText", event.target.value)}
+                  value={form.naimLinksText}
+                  onChange={(event) => onFormChange("naimLinksText", event.target.value)}
                   rows={6}
                 />
               </label>
@@ -1815,12 +1820,14 @@ function App() {
   const [dashboard, setDashboard] = useState(null);
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
+  const [hostdHosts, setHostdHosts] = useState([]);
+  const [selectedHostNodeName, setSelectedHostNodeName] = useState("");
   const [diskState, setDiskState] = useState(null);
   const [rolloutState, setRolloutState] = useState(null);
   const [rebalancePlan, setRebalancePlan] = useState(null);
   const [events, setEvents] = useState([]);
   const [interactionStatus, setInteractionStatus] = useState(null);
-  const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [] });
+  const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [], nodes: [] });
   const [skillsFactory, setSkillsFactory] = useState({
     items: [],
     groups: [],
@@ -1859,6 +1866,7 @@ function App() {
   const [modelDownloadForm, setModelDownloadForm] = useState({
     modelId: "",
     targetRoot: "",
+    targetNodeName: "",
     targetSubdir: "",
     sourceUrls: "",
     format: "unknown",
@@ -1913,12 +1921,13 @@ function App() {
     setDashboard(null);
     setHostObservations(null);
     setGlobalHostObservations(null);
+    setHostdHosts([]);
     setDiskState(null);
     setRolloutState(null);
     setRebalancePlan(null);
     setEvents([]);
     setInteractionStatus(null);
-    setModelLibrary({ items: [], roots: [], jobs: [] });
+    setModelLibrary({ items: [], roots: [], jobs: [], nodes: [] });
     setModelsTab("library");
     setSkillsFactory({
       items: [],
@@ -2030,10 +2039,39 @@ function App() {
     try {
       const payload = await fetchJson(modelLibraryPath());
       const nextJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
-      setModelLibrary({
-        items: Array.isArray(payload.items) ? payload.items : [],
-        roots: Array.isArray(payload.roots) ? payload.roots : [],
-        jobs: nextJobs,
+      startTransition(() => {
+        setModelLibrary({
+          items: Array.isArray(payload.items) ? payload.items : [],
+          roots: Array.isArray(payload.roots) ? payload.roots : [],
+          jobs: nextJobs,
+          nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
+        });
+      });
+      setModelJobPage((current) => {
+        const nextPageCount = Math.max(
+          1,
+          Math.ceil(nextJobs.length / MODEL_LIBRARY_JOB_PAGE_SIZE),
+        );
+        return Math.min(current, nextPageCount - 1);
+      });
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async function refreshModelLibraryJobs() {
+    try {
+      const payload = await fetchJson(modelLibraryJobsPath());
+      const nextJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+      startTransition(() => {
+        setModelLibrary((current) => ({
+          ...current,
+          jobs: nextJobs,
+        }));
       });
       setModelJobPage((current) => {
         const nextPageCount = Math.max(
@@ -2092,10 +2130,12 @@ function App() {
           stale_after: 30,
         }),
       );
+      const hostdHostsRequest = fetchJson(hostdHostsPath());
       if (!planeName) {
-        const [dashboardPayload, globalHostObservationsPayload] = await Promise.all([
+        const [dashboardPayload, globalHostObservationsPayload, hostdHostsPayload] = await Promise.all([
           fetchJson(queryPath("/api/v1/dashboard", { stale_after: 30 })),
           globalHostObservationsRequest,
+          hostdHostsRequest,
         ]);
         const globalObservationItems = hostObservationItemsFromPayload(
           globalHostObservationsPayload,
@@ -2105,6 +2145,7 @@ function App() {
         setDashboard(dashboardPayload);
         setHostObservations(null);
         setGlobalHostObservations(globalHostObservationsPayload);
+        setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
         setMetricHistory((current) =>
           appendMetricHistory(
             current,
@@ -2135,6 +2176,7 @@ function App() {
         rebalancePayload,
         eventsPayload,
         interactionPayload,
+        hostdHostsPayload,
       ] = await Promise.all([
         fetchJson(planePath(planeName)),
         fetchJson(planePath(planeName, "dashboard")),
@@ -2160,12 +2202,14 @@ function App() {
           }),
         ),
         fetchJson(interactionPath(planeName, "status")),
+        hostdHostsRequest,
       ]);
 
       setPlaneDetail(planePayload);
       setDashboard(dashboardPayload);
       setHostObservations(hostObservationsPayload);
       setGlobalHostObservations(globalHostObservationsPayload);
+      setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
       setDiskState(diskPayload);
       setRolloutState(rolloutPayload);
       setRebalancePlan(rebalancePayload);
@@ -2425,7 +2469,10 @@ function App() {
 
   async function enqueueModelLibraryDownload() {
     const sourceUrls = normalizeModelDownloadSourceUrls(modelDownloadForm.sourceUrls);
-    if (!modelDownloadForm.targetRoot.trim() || sourceUrls.length === 0) {
+    if (
+      (!modelDownloadForm.targetRoot.trim() && !modelDownloadForm.targetNodeName.trim()) ||
+      sourceUrls.length === 0
+    ) {
       return;
     }
     setModelLibraryBusy("download");
@@ -2437,7 +2484,8 @@ function App() {
         },
         body: JSON.stringify({
           model_id: modelDownloadForm.modelId.trim() || undefined,
-          target_root: modelDownloadForm.targetRoot.trim(),
+          target_root: modelDownloadForm.targetRoot.trim() || undefined,
+          target_node_name: modelDownloadForm.targetNodeName.trim() || undefined,
           target_subdir: modelDownloadForm.targetSubdir.trim() || undefined,
           source_urls: sourceUrls,
           format: modelDownloadForm.format,
@@ -2453,6 +2501,31 @@ function App() {
       await refreshAll(selectedPlane);
     } finally {
       setModelLibraryBusy("");
+    }
+  }
+
+  async function setHostStorageRole(host, enabled) {
+    const nodeName = host?.node_name;
+    if (!nodeName) {
+      return;
+    }
+    setActionBusy(`storage-role:${nodeName}`);
+    try {
+      await fetchJson(`/api/v1/hostd/hosts/${encodeURIComponent(nodeName)}/storage-role`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          enabled,
+          message: enabled
+            ? "storage role enabled from web ui"
+            : "storage role disabled from web ui",
+        }),
+      });
+      await Promise.all([refreshAll(selectedPlane), refreshModelLibrary()]);
+    } finally {
+      setActionBusy("");
     }
   }
 
@@ -2609,6 +2682,50 @@ function App() {
         startedAt: new Date().toISOString(),
       });
       await refreshAll(planeName);
+    } catch (error) {
+      setApiError(error.message || String(error));
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function resetLtCypherDeployment() {
+    const planeName = "lt-cypher-ai";
+    const confirmed = window.confirm(
+      "Reset failed lt-cypher-ai deployment? This deletes only the plane/runtime state and waits for controller cleanup. Model-library artifacts and prepared caches are preserved.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setActionBusy("reset-lt-cypher-ai");
+    setApiError("");
+    try {
+      startTransition(() => {
+        setSelectedPlane(planeName);
+        setSelectedPage("dashboard");
+      });
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        try {
+          await fetchJson(planePath(planeName), { method: "DELETE" });
+        } catch (error) {
+          if (error?.status === 404) {
+            break;
+          }
+          throw error;
+        }
+        await delay(1500);
+        const payload = await fetchJson("/api/v1/planes");
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        if (!items.some((item) => item.name === planeName)) {
+          break;
+        }
+      }
+      setPendingOperation({
+        kind: "delete",
+        planeName,
+        startedAt: new Date().toISOString(),
+      });
+      await refreshAll("");
     } catch (error) {
       setApiError(error.message || String(error));
     } finally {
@@ -3045,24 +3162,29 @@ function App() {
     return () => clearInterval(timer);
   }, [authState.authenticated, selectedPlane]);
 
+  const hasActiveModelJobsForPolling = Array.isArray(modelLibrary.jobs)
+    ? modelLibrary.jobs.some((job) => {
+        const status = String(job?.status || "").toLowerCase();
+        return status === "queued" || status === "running" || status === "stopping";
+      })
+    : false;
+
   useEffect(() => {
     if (!authState.authenticated) {
       return undefined;
     }
-    const hasActiveModelJobs = Array.isArray(modelLibrary.jobs)
-      ? modelLibrary.jobs.some((job) => {
-          const status = String(job?.status || "").toLowerCase();
-          return status === "queued" || status === "running" || status === "stopping";
-        })
-      : false;
-    if (!hasActiveModelJobs) {
+    if (!hasActiveModelJobsForPolling) {
       return undefined;
     }
     const timer = setInterval(() => {
+      if (selectedPage === "models") {
+        refreshModelLibraryJobs().catch(() => {});
+        return;
+      }
       refreshModelLibrary().catch(() => {});
-    }, MODEL_LIBRARY_ACTIVE_POLL_MS);
+    }, selectedPage === "models" ? MODEL_LIBRARY_ACTIVE_POLL_MS : MODEL_LIBRARY_BACKGROUND_POLL_MS);
     return () => clearInterval(timer);
-  }, [authState.authenticated, modelLibrary.jobs]);
+  }, [authState.authenticated, hasActiveModelJobsForPolling, selectedPage]);
 
   useEffect(() => {
     if (!authState.authenticated || !selectedPlane) {
@@ -3189,11 +3311,23 @@ function App() {
         dashboardBrowsingSummary?.reason || "pending"
       }`
     : "disabled";
+  const peerLinkSummary = dashboard?.peer_links?.summary || {
+    total: 0,
+    direct: 0,
+    partial: 0,
+    stale: 0,
+  };
+  const peerLinkItems = Array.isArray(dashboard?.peer_links?.items)
+    ? dashboard.peer_links.items
+    : [];
   const chatLanguageOptions = supportedChatLanguageOptions(desiredState, interactionStatus);
   const interactionReady = interactionStatus?.ready === true;
   const nodeItems = dashboard?.nodes || [];
   const observationItems = hostObservationItemsFromPayload(hostObservations);
   const globalObservationItems = hostObservationItemsFromPayload(globalHostObservations);
+  const dashboardHostItems = buildFleetHostItems(globalObservationItems);
+  const selectedHostOverview =
+    dashboardHostItems.find((host) => host?.node_name === selectedHostNodeName) || null;
   const assignmentItems = dashboard?.assignments?.by_node || [];
   const rolloutItems = rolloutState?.actions || [];
   const rebalanceItems = rebalancePlan?.rebalance_plan || [];
@@ -3303,6 +3437,14 @@ function App() {
   const activeModelCount = Array.isArray(modelLibrary.items) ? modelLibrary.items.length : 0;
   const visibleModelItems = (modelLibrary.items || []).slice(0, visibleModelCount);
   const hasMoreModelItems = activeModelCount > visibleModelCount;
+  const modelLibraryNodes = Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : [];
+  const storageModelNodes = modelLibraryNodes.filter(
+    (node) =>
+      node?.storage_role_enabled === true &&
+      node?.registration_state === "registered" &&
+      node?.session_state === "connected" &&
+      node?.storage_root,
+  );
   const modelLibraryJobs = Array.isArray(modelLibrary.jobs) ? modelLibrary.jobs : [];
   const downloadModelJobs = modelLibraryJobs.filter(
     (job) => normalizeModelLibraryJobKind(job?.job_kind) === "download",
@@ -3450,7 +3592,7 @@ function App() {
         content: skill.content || "",
         enabled: skill.enabled !== false,
         sessionIdsText: renderLineSeparatedValues(skill.session_ids),
-        cometLinksText: renderLineSeparatedValues(skill.comet_links),
+        naimLinksText: renderLineSeparatedValues(skill.naim_links),
       },
       error: "",
     }));
@@ -3477,7 +3619,7 @@ function App() {
       content: String(skillsDialog.form?.content || "").trim(),
       enabled: Boolean(skillsDialog.form?.enabled),
       session_ids: parseLineSeparatedValues(skillsDialog.form?.sessionIdsText),
-      comet_links: parseLineSeparatedValues(skillsDialog.form?.cometLinksText),
+      naim_links: parseLineSeparatedValues(skillsDialog.form?.naimLinksText),
     };
     if (!payload.name || !payload.description || !payload.content) {
       setSkillsDialog((current) => ({
@@ -3601,7 +3743,7 @@ function App() {
         internal: skill.internal === true,
         enabled: true,
         sessionIdsText: "",
-        cometLinksText: "",
+        naimLinksText: "",
       },
       selectedGroupPath: skill.group_path || current.selectedGroupPath,
       error: "",
@@ -3864,8 +4006,32 @@ function App() {
     setSelectedTab("status");
   }
 
-  function renderHostCards(hostItems) {
-    const items = [...(hostItems || [])].sort((left, right) => {
+  function buildFleetHostItems(hostItems) {
+    const registeredByNode = new Map(
+      (hostdHosts || [])
+        .filter((host) => host?.node_name)
+        .map((host) => [host.node_name, host]),
+    );
+    const mergedByNode = new Map();
+    for (const host of hostItems || []) {
+      if (host?.node_name) {
+        mergedByNode.set(host.node_name, {
+          ...host,
+          registry: registeredByNode.get(host.node_name) || null,
+        });
+      }
+    }
+    for (const host of hostdHosts || []) {
+      if (host?.node_name && !mergedByNode.has(host.node_name)) {
+        mergedByNode.set(host.node_name, {
+          node_name: host.node_name,
+          status: host.session_state || host.registration_state || "registered",
+          heartbeat_at: host.last_heartbeat_at || host.last_session_at,
+          registry: host,
+        });
+      }
+    }
+    const items = [...mergedByNode.values()].sort((left, right) => {
       const leftReady = left?.runtime_status?.available === true ? 0 : 1;
       const rightReady = right?.runtime_status?.available === true ? 0 : 1;
       if (leftReady !== rightReady) {
@@ -3873,7 +4039,67 @@ function App() {
       }
       return String(left?.node_name || "").localeCompare(String(right?.node_name || ""));
     });
+    return items;
+  }
 
+  function nodeRoleLabels(host) {
+    const registry = host?.registry || host || {};
+    const capacity = registry?.capacity_summary || {};
+    const roles = [];
+    if (String(registry?.derived_role || "").toLowerCase() === "worker") {
+      roles.push("worker");
+    }
+    if (
+      registry?.storage_role_enabled === true ||
+      String(registry?.derived_role || "").toLowerCase() === "storage"
+    ) {
+      roles.push("storage");
+    }
+    if (roles.length === 0 && Number(capacity.gpu_count || 0) > 0) {
+      roles.push("gpu-capable");
+    }
+    if (roles.length === 0 && registry?.registration_state === "registered") {
+      roles.push("registered");
+    }
+    return roles.length > 0 ? roles : ["unclassified"];
+  }
+
+  function rolePillClass(role) {
+    if (role === "worker") {
+      return "is-healthy";
+    }
+    if (role === "storage") {
+      return "is-warning";
+    }
+    if (role === "unclassified") {
+      return "is-muted";
+    }
+    return "is-booting";
+  }
+
+  function renderNodeRoleBadges(host) {
+    return (
+      <div className="role-badges">
+        {nodeRoleLabels(host).map((role) => (
+          <span className={`tag ${rolePillClass(role)}`} key={`${host?.node_name}:${role}`}>
+            {role}
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  function openHostOverview(nodeName) {
+    if (nodeName) {
+      setSelectedHostNodeName(nodeName);
+    }
+  }
+
+  function closeHostOverview() {
+    setSelectedHostNodeName("");
+  }
+
+  function renderHostCards(items) {
     return (
       <div className="plane-list">
         {items.map((host) => {
@@ -3882,32 +4108,191 @@ function App() {
           const runtimeAvailable = host?.runtime_status?.available === true;
           const runtimePhase = host?.runtime_status?.phase || "pending";
           const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
+          const registry = host?.registry || null;
+          const storageCapacity = registry?.capacity_summary || {};
           const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
-          const totalMemoryBytes = Number(cpu.total_memory_bytes || 0);
-          const gpuTempCount = Number(gpu.temperature_device_count || 0);
-          const gpuDeviceCount = Number(gpu.device_count || 0);
+          const totalMemoryBytes = Number(cpu.total_memory_bytes || storageCapacity.total_memory_bytes || 0);
+          const gpuDeviceCount = Number(gpu.device_count || storageCapacity.gpu_count || 0);
+          const storageEnabled = registry?.storage_role_enabled === true;
+          const storageEligible = registry?.storage_role_eligible !== false;
+          const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
+          const canManageStorageRole = authState.user?.role === "admin";
+          const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+          const directLanPeers = lanPeers.filter((peer) => peer?.tcp_reachable === true);
+          const storageTotalBytes = Number(storageCapacity.storage_total_bytes || 0);
+          const storageFreeBytes = Number(storageCapacity.storage_free_bytes || 0);
           return (
             <article className="node-card" key={host?.node_name || host?.observed_at}>
-              <div className="card-row">
-                <strong>{host?.node_name || "unknown-host"}</strong>
-                <div className={`pill ${indicatorClass}`}>
-                  {statusDot(indicatorClass)}
-                  <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+              <button
+                className="node-card-main"
+                type="button"
+                onClick={() => openHostOverview(host?.node_name)}
+                aria-label={`open node overview for ${host?.node_name || "unknown host"}`}
+              >
+                <div className="card-row">
+                  <strong>{host?.node_name || "unknown-host"}</strong>
+                  <div className={`pill ${indicatorClass}`}>
+                    {statusDot(indicatorClass)}
+                    <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+                  </div>
                 </div>
-              </div>
+                {renderNodeRoleBadges(host)}
+              </button>
               <div className="metric-grid">
-                <div className="metric-row"><span>Status</span><strong>{host?.status || "n/a"}</strong></div>
-                <div className="metric-row"><span>Runtime</span><strong>{runtimePhase}</strong></div>
-                <div className="metric-row"><span>Launch ready</span><strong>{yesNo(runtimeAvailable)}</strong></div>
-                <div className="metric-row"><span>CPU temp</span><strong>{cpu.temperature_available ? formatTemperature(cpu.max_temperature_c ?? cpu.temperature_c) : "n/a"}</strong></div>
-                <div className="metric-row"><span>GPU temp</span><strong>{gpuTempCount > 0 ? formatTemperature(gpu.hottest_temperature_c) : "n/a"}</strong></div>
                 <div className="metric-row"><span>GPU count</span><strong>{gpuDeviceCount || "n/a"}</strong></div>
                 <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
+                <div className="metric-row"><span>Storage</span><strong>{storageTotalBytes > 0 ? `${compactBytes(storageFreeBytes)} free` : "n/a"}</strong></div>
+                <div className="metric-row"><span>LAN peers</span><strong>{lanPeers.length > 0 ? `${directLanPeers.length}/${lanPeers.length} direct` : "n/a"}</strong></div>
                 <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at)}</strong></div>
               </div>
+              {registry ? (
+                <div className="toolbar">
+                  <button
+                    className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
+                    type="button"
+                    disabled={
+                      storageBusy ||
+                      !canManageStorageRole ||
+                      (!storageEnabled && !storageEligible)
+                    }
+                    onClick={() => setHostStorageRole(registry, !storageEnabled)}
+                    title={
+                      !canManageStorageRole
+                        ? "Admin role required"
+                        : storageEligible
+                        ? "Toggle model storage role"
+                        : "Host has not reported a usable storage root yet"
+                    }
+                  >
+                    {storageEnabled ? "Disable storage" : "Enable storage"}
+                  </button>
+                </div>
+              ) : null}
             </article>
           );
         })}
+      </div>
+    );
+  }
+
+  function renderHostOverviewModal(host) {
+    if (!host) {
+      return null;
+    }
+    const registry = host?.registry || host || {};
+    const cpu = host?.cpu_telemetry?.summary || {};
+    const gpu = host?.gpu_telemetry?.summary || {};
+    const capacity = registry?.capacity_summary || {};
+    const runtimeAvailable = host?.runtime_status?.available === true;
+    const runtimePhase = host?.runtime_status?.phase || "pending";
+    const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
+    const storageEnabled = registry?.storage_role_enabled === true;
+    const storageEligible = registry?.storage_role_eligible !== false;
+    const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
+    const canManageStorageRole = authState.user?.role === "admin";
+    const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
+    const gpuDeviceCount = Number(gpu.device_count || capacity.gpu_count || 0);
+    const totalMemoryBytes = Number(cpu.total_memory_bytes || capacity.total_memory_bytes || 0);
+    const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
+    const storageTotalBytes = Number(capacity.storage_total_bytes || 0);
+    const storageFreeBytes = Number(capacity.storage_free_bytes || 0);
+    const showStorageDetails = storageEnabled || storageEligible || storageTotalBytes > 0;
+
+    return (
+      <div className="modal-backdrop" role="presentation" onClick={closeHostOverview}>
+        <section
+          className="modal-card node-overview-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`node overview ${host?.node_name || "unknown-host"}`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="card-row">
+            <div>
+              <h2>{host?.node_name || "unknown-host"}</h2>
+              {renderNodeRoleBadges(host)}
+            </div>
+            <div className={`pill ${indicatorClass}`}>
+              {statusDot(indicatorClass)}
+              <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+            </div>
+          </div>
+          <div className="metric-grid">
+            <div className="metric-row"><span>Registration</span><strong>{registry?.registration_state || "n/a"}</strong></div>
+            <div className="metric-row"><span>Session</span><strong>{registry?.session_state || "n/a"}</strong></div>
+            <div className="metric-row"><span>Runtime</span><strong>{runtimePhase}</strong></div>
+            <div className="metric-row"><span>Launch ready</span><strong>{yesNo(runtimeAvailable)}</strong></div>
+            <div className="metric-row"><span>Derived role</span><strong>{registry?.derived_role || "n/a"}</strong></div>
+            <div className="metric-row"><span>Role reason</span><strong>{registry?.role_reason || "n/a"}</strong></div>
+            <div className="metric-row"><span>Execution</span><strong>{registry?.execution_mode || "n/a"}</strong></div>
+            <div className="metric-row"><span>Transport</span><strong>{registry?.transport_mode || "n/a"}</strong></div>
+            <div className="metric-row"><span>Advertised</span><strong>{registry?.advertised_address || "n/a"}</strong></div>
+            <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at || registry?.last_heartbeat_at)}</strong></div>
+          </div>
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Capacity</h3>
+              <span className="subpanel-meta">Host inventory and live telemetry for this node.</span>
+            </div>
+            <div className="metric-grid">
+              <div className="metric-row"><span>GPU count</span><strong>{gpuDeviceCount || "n/a"}</strong></div>
+              {gpuDeviceCount > 0 ? (
+                <>
+                  <div className="metric-row"><span>GPU temp</span><strong>{Number(gpu.temperature_device_count || 0) > 0 ? formatTemperature(gpu.hottest_temperature_c) : "n/a"}</strong></div>
+                  <div className="metric-row"><span>GPU VRAM</span><strong>{Number(gpu.total_vram_mb || 0) > 0 ? `${formatDashboardMegabytesMbGb(gpu.used_vram_mb)} / ${formatDashboardMegabytesMbGb(gpu.total_vram_mb)}` : "n/a"}</strong></div>
+                </>
+              ) : null}
+              <div className="metric-row"><span>Memory</span><strong>{totalMemoryBytes > 0 ? `${compactBytes(usedMemoryBytes)} / ${compactBytes(totalMemoryBytes)}` : "n/a"}</strong></div>
+              <div className="metric-row"><span>CPU temp</span><strong>{cpu.temperature_available ? formatTemperature(cpu.max_temperature_c ?? cpu.temperature_c) : "n/a"}</strong></div>
+              {showStorageDetails ? (
+                <>
+                  <div className="metric-row"><span>Storage role</span><strong>{storageEnabled ? "enabled" : "disabled"}</strong></div>
+                  <div className="metric-row"><span>Storage root</span><strong>{capacity.storage_root || "n/a"}</strong></div>
+                  <div className="metric-row"><span>Storage total</span><strong>{storageTotalBytes > 0 ? compactBytes(storageTotalBytes) : "n/a"}</strong></div>
+                  <div className="metric-row"><span>Storage free</span><strong>{storageFreeBytes > 0 ? compactBytes(storageFreeBytes) : "n/a"}</strong></div>
+                </>
+              ) : null}
+            </div>
+          </section>
+          {lanPeers.length > 0 ? (
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <h3>LAN peers</h3>
+                <span className="subpanel-meta">Direct transfer visibility reported by this node.</span>
+              </div>
+              <div className="metric-grid">
+                {lanPeers.map((peer) => (
+                  <div className="metric-row" key={`${host?.node_name}:${peer?.peer_node_name}`}>
+                    <span>{peer?.peer_node_name || "peer"}</span>
+                    <strong>
+                      {peer?.tcp_reachable ? "direct" : peer?.seen_udp ? "partial" : "stale"}
+                      {peer?.peer_endpoint ? ` / ${peer.peer_endpoint}` : ""}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          <div className="toolbar">
+            {registry?.node_name ? (
+              <button
+                className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
+                type="button"
+                disabled={
+                  storageBusy ||
+                  !canManageStorageRole ||
+                  (!storageEnabled && !storageEligible)
+                }
+                onClick={() => setHostStorageRole(registry, !storageEnabled)}
+              >
+                {storageEnabled ? "Disable storage" : "Enable storage"}
+              </button>
+            ) : null}
+            <button className="ghost-button" type="button" onClick={closeHostOverview}>
+              Close
+            </button>
+          </div>
+        </section>
       </div>
     );
   }
@@ -5055,8 +5440,31 @@ function App() {
             setModelDownloadForm((current) => ({ ...current, targetRoot: event.target.value }))
           }
           placeholder="/abs/path/to/model/library"
+          disabled={Boolean(modelDownloadForm.targetNodeName)}
           spellCheck="false"
         />
+        <label className="field-label" htmlFor="model-target-node">
+          Storage node
+        </label>
+        <select
+          id="model-target-node"
+          className="text-input"
+          value={modelDownloadForm.targetNodeName}
+          onChange={(event) =>
+            setModelDownloadForm((current) => ({
+              ...current,
+              targetNodeName: event.target.value,
+              targetRoot: event.target.value ? "" : current.targetRoot,
+            }))
+          }
+        >
+          <option value="">Manual target root</option>
+          {storageModelNodes.map((node) => (
+            <option key={node.node_name} value={node.node_name}>
+              {node.node_name} - {node.storage_root}
+            </option>
+          ))}
+        </select>
         <label className="field-label" htmlFor="model-target-subdir">
           Target subdir
         </label>
@@ -5125,8 +5533,8 @@ function App() {
           ))}
         </select>
         <div className="plane-form-section-meta">
-          GGUF conversion now retains only the base GGUF. Use the Quantization tab for
-          post-download quantization variants.
+          Source files keeps safetensors bundles unchanged. GGUF conversion retains only the
+          base GGUF. Use the Quantization tab for post-download quantization variants.
         </div>
         <div className="toolbar">
           <button
@@ -5134,7 +5542,8 @@ function App() {
             type="button"
             disabled={
               modelLibraryBusy !== "" ||
-              !modelDownloadForm.targetRoot.trim() ||
+              (!modelDownloadForm.targetRoot.trim() &&
+                !modelDownloadForm.targetNodeName.trim()) ||
               !modelDownloadForm.sourceUrls.trim()
             }
             onClick={enqueueModelLibraryDownload}
@@ -6190,7 +6599,7 @@ function App() {
       <div className="starfield" aria-hidden="true" />
       <header className="hero">
         <div className="hero-copy">
-          <div className="eyebrow">Comet Operator Interface</div>
+          <div className="eyebrow">Naim Operator Interface</div>
           <h1>Constellation Control</h1>
           <p className="hero-text">
             Multi-plane control surface for lifecycle, rollout pressure, runtime
@@ -6478,32 +6887,53 @@ function App() {
 
               <section className="subpanel dashboard-services-panel">
                 <div className="subpanel-header">
-                  <h3>Comet node services</h3>
+                  <h3>LAN peer links</h3>
                   <span className="subpanel-meta">
-                    {`${dashboardSelfServiceSummary.total} services / ${dashboardSelfServiceSummary.warning + dashboardSelfServiceSummary.critical} degraded`}
+                    {`${peerLinkSummary.direct || 0} direct / ${peerLinkSummary.partial || 0} partial / ${peerLinkSummary.stale || 0} stale`}
                   </span>
                 </div>
-                {dashboardSelfServices.length === 0 ? (
+                {peerLinkItems.length === 0 ? (
                   <EmptyState
-                    title="No self-service status"
-                    detail="Waiting for controller-side service telemetry."
+                    title="No LAN peers"
+                    detail="Waiting for hostd peer discovery telemetry."
                   />
                 ) : (
-                  renderSelfServiceCards(dashboardSelfServices)
+                  <div className="plane-list">
+                    {peerLinkItems.slice(0, 8).map((link) => (
+                      <article
+                        className="node-card"
+                        key={`${link?.observer_node_name}:${link?.peer_node_name}`}
+                      >
+                        <div className="card-row">
+                          <strong>{link?.observer_node_name || "node"} to {link?.peer_node_name || "peer"}</strong>
+                          <div className={`pill ${link?.state === "direct" ? "is-healthy" : link?.state === "partial" ? "is-warning" : "is-muted"}`}>
+                            {statusDot(link?.state === "direct" ? "is-healthy" : link?.state === "partial" ? "is-warning" : "is-muted")}
+                            <span>{link?.state || "unknown"}</span>
+                          </div>
+                        </div>
+                        <div className="metric-grid">
+                          <div className="metric-row"><span>Endpoint</span><strong>{link?.peer_endpoint || "n/a"}</strong></div>
+                          <div className="metric-row"><span>Remote</span><strong>{link?.remote_address || "n/a"}</strong></div>
+                          <div className="metric-row"><span>Interface</span><strong>{link?.local_interface || "n/a"}</strong></div>
+                          <div className="metric-row"><span>RTT</span><strong>{link?.rtt_ms ? `${link.rtt_ms} ms` : "n/a"}</strong></div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 )}
               </section>
 
               <section className="subpanel dashboard-hosts-panel">
                 <div className="subpanel-header">
-                  <h3>Hosts</h3>
+                  <h3>Naim nodes</h3>
                   <span className="subpanel-meta">
-                    Observed hosts with runtime, temperature, GPU, and memory posture.
+                    Registered and observed nodes with roles, capacity, LAN peers, and hostd heartbeat.
                   </span>
                 </div>
-                {globalObservationItems.length === 0 ? (
-                  <EmptyState title="No observed hosts" detail="Waiting for host telemetry to arrive." />
+                {dashboardHostItems.length === 0 ? (
+                  <EmptyState title="No connected hosts" detail="Waiting for hostd registration or telemetry." />
                 ) : (
-                  renderHostCards(globalObservationItems)
+                  renderHostCards(dashboardHostItems)
                 )}
               </section>
 
@@ -6532,6 +6962,7 @@ function App() {
         )}
       </main>
       {renderDashboardPlaneDetailModal()}
+      {renderHostOverviewModal(selectedHostOverview)}
       <TelemetryChartDialog
         chart={{
           ...telemetryChart,
@@ -6565,8 +6996,11 @@ function App() {
         }
         onSave={savePlaneDialog}
         modelLibraryItems={modelLibrary.items || []}
+        hostdHosts={hostdHosts || []}
+        peerLinks={dashboard?.peer_links || null}
         skillsFactoryItems={skillsFactory.items || []}
         skillsFactoryGroups={skillsFactory.groups || []}
+        onResetLtCypherDeployment={resetLtCypherDeployment}
       />
       <SkillsDialog
         dialog={skillsDialog}

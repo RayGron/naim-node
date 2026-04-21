@@ -7,12 +7,12 @@
 #include <nlohmann/json.hpp>
 
 #include "app/controller_service_interfaces.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 using HostRegistryEventSink = std::function<void(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& event_type,
     const std::string& message,
     const nlohmann::json& payload,
@@ -36,9 +36,27 @@ class HostRegistryService : public IHostRegistryService {
       const std::string& public_key_base64,
       const std::optional<std::string>& status_message) const override;
 
+  nlohmann::json ResetHostOnboardingPayload(
+      const std::string& node_name,
+      const std::optional<std::string>& status_message) const;
+
+  int ResetHostOnboarding(
+      const std::string& node_name,
+      const std::optional<std::string>& status_message) const override;
+
+  nlohmann::json SetHostStorageRolePayload(
+      const std::string& node_name,
+      bool enabled,
+      const std::optional<std::string>& status_message) const;
+
+  int SetHostStorageRole(
+      const std::string& node_name,
+      bool enabled,
+      const std::optional<std::string>& status_message) const override;
+
  private:
   std::string db_path_;
   HostRegistryEventSink event_sink_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

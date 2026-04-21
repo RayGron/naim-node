@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "browsing/plane_browsing_service.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 #include "skills/plane_skill_catalog_service.h"
 #include "skills/plane_skills_service.h"
 
@@ -21,7 +21,7 @@ bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
 
 PlaneHttpService::PlaneHttpService(
     PlaneHttpSupport support,
-    comet::controller::PlaneSkillCatalogService plane_skill_catalog_service)
+    naim::controller::PlaneSkillCatalogService plane_skill_catalog_service)
     : support_(std::move(support)),
       plane_skill_catalog_service_(std::move(plane_skill_catalog_service)) {}
 
@@ -198,7 +198,7 @@ HttpResponse PlaneHttpService::HandlePlanePath(
             return support_.build_json_response(
                 405, json{{"status", "method_not_allowed"}}, {});
           }
-          comet::ControllerStore store(db_path);
+          naim::ControllerStore store(db_path);
           store.Initialize();
           const auto desired_state = store.LoadDesiredState(plane_name);
           if (!desired_state.has_value()) {
@@ -209,12 +209,12 @@ HttpResponse PlaneHttpService::HandlePlanePath(
                      {"path", request.path}},
                 {});
           }
-          comet::controller::PlaneInteractionResolution resolution;
+          naim::controller::PlaneInteractionResolution resolution;
           resolution.db_path = db_path;
           resolution.desired_state = *desired_state;
           return support_.build_json_response(
               200,
-              comet::controller::PlaneSkillsService().BuildContextResolutionPayload(
+              naim::controller::PlaneSkillsService().BuildContextResolutionPayload(
                   db_path,
                   resolution,
                   support_.parse_json_request_body(request)),
@@ -318,7 +318,7 @@ HttpResponse PlaneHttpService::HandlePlanePath(
       const std::string path_suffix =
           remainder.substr(webgateway_pos + std::string("/webgateway").size());
       try {
-        comet::ControllerStore store(db_path);
+        naim::ControllerStore store(db_path);
         store.Initialize();
         const auto desired_state = store.LoadDesiredState(plane_name);
         if (!desired_state.has_value()) {
@@ -332,7 +332,7 @@ HttpResponse PlaneHttpService::HandlePlanePath(
         const auto plane = store.LoadPlane(plane_name);
         const std::optional<std::string> plane_state =
             plane.has_value() ? std::optional<std::string>(plane->state) : std::nullopt;
-        const comet::controller::PlaneBrowsingService browsing_service;
+        const naim::controller::PlaneBrowsingService browsing_service;
         if (path_suffix.empty() || path_suffix == "/" || path_suffix == "/status") {
           if (request.method != "GET") {
             return support_.build_json_response(

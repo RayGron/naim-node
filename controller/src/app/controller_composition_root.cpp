@@ -6,7 +6,7 @@
 #include "app/controller_read_model_support.h"
 #include "app/controller_serve_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerCompositionRoot::ControllerCompositionRoot(
     std::string db_path,
@@ -103,4 +103,4 @@ ControllerCli ControllerCompositionRoot::BuildCli(const ControllerCommandLine& c
       *this);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

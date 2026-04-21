@@ -8,29 +8,29 @@ HttpResponse AuthHttpSupport::BuildJsonResponse(
     int status_code,
     const nlohmann::json& payload,
     const std::map<std::string, std::string>& headers) const {
-  return comet::controller::composition_support::BuildJsonResponse(
+  return naim::controller::composition_support::BuildJsonResponse(
       status_code,
       payload,
       headers);
 }
 
-nlohmann::json AuthHttpSupport::BuildUserPayload(const comet::UserRecord& user) const {
+nlohmann::json AuthHttpSupport::BuildUserPayload(const naim::UserRecord& user) const {
   return auth_payload_service_.BuildUserPayload(user);
 }
 
 nlohmann::json AuthHttpSupport::BuildInvitePayload(
-    const comet::RegistrationInviteRecord& invite) const {
+    const naim::RegistrationInviteRecord& invite) const {
   return auth_payload_service_.BuildInvitePayload(invite);
 }
 
 nlohmann::json AuthHttpSupport::BuildSshKeyPayload(
-    const comet::UserSshKeyRecord& ssh_key) const {
+    const naim::UserSshKeyRecord& ssh_key) const {
   return auth_payload_service_.BuildSshKeyPayload(ssh_key);
 }
 
-std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>>
+std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>
 AuthHttpSupport::AuthenticateControllerUserSession(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const HttpRequest& request) const {
   return auth_support_.AuthenticateControllerUserSession(
       store,
@@ -38,8 +38,8 @@ AuthHttpSupport::AuthenticateControllerUserSession(
       std::optional<std::string>("web"));
 }
 
-std::optional<comet::UserRecord> AuthHttpSupport::RequireControllerAdminUser(
-    comet::ControllerStore& store,
+std::optional<naim::UserRecord> AuthHttpSupport::RequireControllerAdminUser(
+    naim::ControllerStore& store,
     const HttpRequest& request) const {
   return auth_support_.RequireControllerAdminUser(store, request);
 }
@@ -73,7 +73,7 @@ std::string AuthHttpSupport::ClearSessionCookieHeader(const HttpRequest& request
 }
 
 std::string AuthHttpSupport::CreateControllerSession(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     int user_id,
     const std::string& session_kind,
     const std::string& plane_name) const {
@@ -81,15 +81,15 @@ std::string AuthHttpSupport::CreateControllerSession(
 }
 
 std::string AuthHttpSupport::UtcNowSqlTimestamp() const {
-  return comet::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
+  return naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
 }
 
 std::string AuthHttpSupport::SqlTimestampAfterSeconds(int seconds) const {
-  return comet::controller::ControllerTimeSupport::SqlTimestampAfterSeconds(seconds);
+  return naim::controller::ControllerTimeSupport::SqlTimestampAfterSeconds(seconds);
 }
 
 std::string AuthHttpSupport::Trim(const std::string& value) const {
-  return comet::controller::composition_support::Trim(value);
+  return naim::controller::composition_support::Trim(value);
 }
 
 std::string AuthHttpSupport::BuildSshChallengeMessage(

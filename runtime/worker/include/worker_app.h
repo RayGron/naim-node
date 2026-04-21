@@ -1,6 +1,6 @@
 #pragma once
 
-namespace comet::worker {
+namespace naim::worker {
 
 class WorkerApp final {
  public:
@@ -12,4 +12,4 @@ class WorkerApp final {
   int Run();
 };
 
-}  // namespace comet::worker
+}  // namespace naim::worker

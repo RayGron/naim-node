@@ -13,7 +13,7 @@
 class ModelLibrarySupport final {
  public:
   explicit ModelLibrarySupport(
-      const comet::controller::ControllerRequestSupport& request_support);
+      const naim::controller::ControllerRequestSupport& request_support);
 
   HttpResponse build_json_response(
       int status_code,
@@ -26,5 +26,5 @@ class ModelLibrarySupport final {
   std::string utc_now_sql_timestamp() const;
 
  private:
-  const comet::controller::ControllerRequestSupport& request_support_;
+  const naim::controller::ControllerRequestSupport& request_support_;
 };

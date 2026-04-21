@@ -13,7 +13,7 @@
 #include "scheduler/scheduler_http_service.h"
 #include "skills/skills_factory_http_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class AuthHttpRouteHandler final : public IControllerHttpRouteHandler {
  public:
@@ -111,4 +111,4 @@ class SchedulerHttpRouteHandler final : public IControllerHttpRouteHandler {
   SchedulerHttpService& service_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

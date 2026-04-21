@@ -11,7 +11,7 @@
 
 #include "runtime/infer_runtime_types.h"
 
-namespace comet::infer {
+namespace naim::infer {
 
 class LlamaLibraryEngine final {
  public:
@@ -45,4 +45,4 @@ class LlamaLibraryEngine final {
   std::mutex mutex_;
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

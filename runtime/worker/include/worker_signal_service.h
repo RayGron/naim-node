@@ -2,7 +2,7 @@
 
 #include <atomic>
 
-namespace comet::worker {
+namespace naim::worker {
 
 class WorkerSignalService final {
  public:
@@ -22,4 +22,4 @@ class WorkerSignalService final {
   std::atomic<bool> stop_requested_{false};
 };
 
-}  // namespace comet::worker
+}  // namespace naim::worker

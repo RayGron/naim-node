@@ -1,17 +1,17 @@
-#include "comet/state/desired_state_repository.h"
+#include "naim/state/desired_state_repository.h"
 
 #include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
 
-#include "comet/state/desired_state_sqlite_codec.h"
-#include "comet/state/plane_repository.h"
-#include "comet/state/sqlite_statement.h"
-#include "comet/state/sqlite_store_support.h"
-#include "comet/state/state_json.h"
+#include "naim/state/desired_state_sqlite_codec.h"
+#include "naim/state/plane_repository.h"
+#include "naim/state/sqlite_statement.h"
+#include "naim/state/sqlite_store_support.h"
+#include "naim/state/state_json.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -22,7 +22,7 @@ using sqlite_store_support::ToOptionalColumnInt;
 
 void EnsureControlRoot(DesiredState* state) {
   if (state != nullptr && state->control_root.empty()) {
-    state->control_root = "/comet/shared/control/" + state->plane_name;
+    state->control_root = "/naim/shared/control/" + state->plane_name;
   }
 }
 
@@ -437,7 +437,7 @@ void DesiredStateRepository::ReplaceDesiredState(
       statement.BindText(2, state.plane_shared_disk_name);
       statement.BindText(
           3,
-          state.control_root.empty() ? "/comet/shared/control/" + state.plane_name
+          state.control_root.empty() ? "/naim/shared/control/" + state.plane_name
                                      : state.control_root);
       statement.BindText(4, ToString(state.plane_mode));
       statement.BindText(
@@ -666,4 +666,4 @@ std::optional<int> DesiredStateRepository::LoadRebalanceIteration(
   return PlaneRepository(db_).LoadPlaneRebalanceIteration(plane_name);
 }
 
-}  // namespace comet
+}  // namespace naim

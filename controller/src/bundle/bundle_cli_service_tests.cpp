@@ -12,10 +12,10 @@
 #include "plane/desired_state_policy_service.h"
 #include "plane/plane_realization_service.h"
 
-#include "comet/state/state_json.h"
-#include "comet/state/desired_state_v2_renderer.h"
-#include "comet/state/desired_state_v2_validator.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/state_json.h"
+#include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/desired_state_v2_validator.h"
+#include "naim/state/sqlite_store.h"
 
 namespace fs = std::filesystem;
 
@@ -29,7 +29,7 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DesiredState BuildRenderedState(int max_num_seqs) {
+naim::DesiredState BuildRenderedState(int max_num_seqs) {
   const json desired_state_v2{
       {"version", 2},
       {"plane_name", "apply-runtime-overrides"},
@@ -63,8 +63,8 @@ comet::DesiredState BuildRenderedState(int max_num_seqs) {
              {{{"node", "gpu-hostd"}, {"gpu_device", "0"}}})}}},
       {"app", {{"enabled", false}}},
   };
-  comet::DesiredStateV2Validator::ValidateOrThrow(desired_state_v2);
-  return comet::DesiredStateV2Renderer::Render(desired_state_v2);
+  naim::DesiredStateV2Validator::ValidateOrThrow(desired_state_v2);
+  return naim::DesiredStateV2Renderer::Render(desired_state_v2);
 }
 
 }  // namespace
@@ -72,20 +72,20 @@ comet::DesiredState BuildRenderedState(int max_num_seqs) {
 int main() {
   try {
     const fs::path temp_root =
-        fs::temp_directory_path() / "comet-bundle-cli-service-tests";
+        fs::temp_directory_path() / "naim-bundle-cli-service-tests";
     const fs::path db_path = temp_root / "controller.sqlite";
     const fs::path artifacts_root = temp_root / "artifacts";
     std::error_code error;
     fs::remove_all(temp_root, error);
     fs::create_directories(artifacts_root);
 
-    comet::controller::ControllerRuntimeSupportService runtime_support;
-    comet::controller::ControllerPrintService print_service(runtime_support);
-    comet::controller::DesiredStatePolicyService desired_state_policy_service;
-    comet::controller::PlaneRealizationService plane_realization_service(
+    naim::controller::ControllerRuntimeSupportService runtime_support;
+    naim::controller::ControllerPrintService print_service(runtime_support);
+    naim::controller::DesiredStatePolicyService desired_state_policy_service;
+    naim::controller::PlaneRealizationService plane_realization_service(
         &runtime_support,
         300);
-    comet::controller::BundleCliService bundle_cli_service(
+    naim::controller::BundleCliService bundle_cli_service(
         print_service,
         desired_state_policy_service,
         plane_realization_service,
@@ -108,7 +108,7 @@ int main() {
             "test-state-24") == 0,
         "second apply should succeed");
 
-    comet::ControllerStore store(db_path.string());
+    naim::ControllerStore store(db_path.string());
     store.Initialize();
     const auto stored_state = store.LoadDesiredState("apply-runtime-overrides");
     Expect(stored_state.has_value(), "stored desired state should exist");
@@ -126,7 +126,7 @@ int main() {
         "stored desired state should preserve updated gpu_memory_utilization");
 
     const auto serialized_v2 =
-        nlohmann::json::parse(comet::SerializeDesiredStateV2Json(*stored_state));
+        nlohmann::json::parse(naim::SerializeDesiredStateV2Json(*stored_state));
     Expect(
         serialized_v2.at("runtime").at("max_num_seqs").get<int>() == 24,
         "projected desired-state.v2 should preserve updated max_num_seqs");

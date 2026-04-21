@@ -12,10 +12,10 @@ artifacts_root="${3:-}"
 service_name="${4:-webgateway-${plane_name}}"
 
 if [[ -z "${artifacts_root}" ]]; then
-  if [[ -d "/var/lib/comet-node/hostd-state/artifacts" ]]; then
-    artifacts_root="/var/lib/comet-node/hostd-state/artifacts"
+  if [[ -d "/var/lib/naim-node/hostd-state/artifacts" ]]; then
+    artifacts_root="/var/lib/naim-node/hostd-state/artifacts"
   else
-    artifacts_root="/var/lib/comet-node/artifacts"
+    artifacts_root="/var/lib/naim-node/artifacts"
   fi
 fi
 

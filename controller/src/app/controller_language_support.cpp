@@ -2,7 +2,7 @@
 
 #include <cctype>
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string ControllerLanguageSupport::NormalizeLanguageCode(const std::string& value) {
   std::string normalized;
@@ -35,7 +35,7 @@ std::string ControllerLanguageSupport::LanguageLabel(const std::string& code) {
 }
 
 std::optional<std::string> ControllerLanguageSupport::ResolveInteractionPreferredLanguage(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const nlohmann::json& payload) {
   if (payload.contains("preferred_language") &&
       payload.at("preferred_language").is_string()) {
@@ -52,7 +52,7 @@ std::optional<std::string> ControllerLanguageSupport::ResolveInteractionPreferre
 }
 
 std::string ControllerLanguageSupport::BuildLanguageInstruction(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::optional<std::string>& preferred_language) {
   const std::string no_reasoning_instruction =
       " Do not output chain-of-thought, hidden reasoning, analysis traces, or <think> blocks. Output only the final user-facing answer.";
@@ -77,4 +77,4 @@ std::string ControllerLanguageSupport::BuildLanguageInstruction(
          no_reasoning_instruction;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

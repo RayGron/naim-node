@@ -13,7 +13,7 @@
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 namespace {
 
 std::atomic<bool>* g_controller_http_server_stop_requested = nullptr;
@@ -83,7 +83,7 @@ void ControllerHttpServer::InstallSignalHandlers(
 }
 
 std::string ControllerHttpServer::BuildSseEventName(
-    const comet::EventRecord& event) {
+    const naim::EventRecord& event) {
   if (!event.category.empty() && !event.event_type.empty()) {
     return event.category + "." + event.event_type;
   }
@@ -115,7 +115,7 @@ void ControllerHttpServer::StreamEventsSse(
 
   auto last_keepalive = std::chrono::steady_clock::now();
   while (!state->stop_requested.load()) {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto events = store.LoadEvents(
         stream_request.plane_name,
@@ -150,12 +150,12 @@ void ControllerHttpServer::StreamEventsSse(
       last_keepalive = now;
     }
 
-    comet::platform::PollFd fd_state{};
+    naim::platform::PollFd fd_state{};
     fd_state.fd = client_fd;
     fd_state.events = POLLIN | POLLERR | POLLHUP;
-    const int poll_result = comet::platform::Poll(&fd_state, 1, 1000);
+    const int poll_result = naim::platform::Poll(&fd_state, 1, 1000);
     if (poll_result < 0) {
-      if (comet::platform::LastSocketErrorWasInterrupted()) {
+      if (naim::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
       break;
@@ -183,13 +183,13 @@ int ControllerHttpServer::Serve(const Config& config) {
   state->stop_requested.store(false);
   InstallSignalHandlers(&state->stop_requested);
 
-  comet::ControllerStore store(config.db_path);
+  naim::ControllerStore store(config.db_path);
   store.Initialize();
 
   const SocketHandle listen_fd = ControllerNetworkManager::CreateListenSocket(
       config.listen_host,
       config.listen_port);
-  std::cout << "comet-controller serve\n";
+  std::cout << "naim-controller serve\n";
   std::cout << "listen=" << config.listen_host << ":" << config.listen_port
             << "\n";
   std::cout << "db=" << config.db_path << "\n";
@@ -201,13 +201,13 @@ int ControllerHttpServer::Serve(const Config& config) {
   std::cout.flush();
 
   while (!state->stop_requested.load()) {
-    comet::platform::PollFd fd_state{};
+    naim::platform::PollFd fd_state{};
     fd_state.fd = listen_fd;
     fd_state.events = POLLIN;
-    const int poll_result = comet::platform::Poll(&fd_state, 1, 250);
+    const int poll_result = naim::platform::Poll(&fd_state, 1, 250);
     if (poll_result < 0) {
       if (state->stop_requested.load() ||
-          comet::platform::LastSocketErrorWasInterrupted()) {
+          naim::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
       const std::string error = ControllerNetworkManager::SocketErrorMessage();
@@ -222,9 +222,9 @@ int ControllerHttpServer::Serve(const Config& config) {
     }
 
     const SocketHandle client_fd = accept(listen_fd, nullptr, nullptr);
-    if (!comet::platform::IsSocketValid(client_fd)) {
+    if (!naim::platform::IsSocketValid(client_fd)) {
       if (state->stop_requested.load() ||
-          comet::platform::LastSocketErrorWasInterrupted()) {
+          naim::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
       const std::string error = ControllerNetworkManager::SocketErrorMessage();
@@ -313,4 +313,4 @@ int ControllerHttpServer::Serve(const Config& config) {
   return 0;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -3,9 +3,9 @@
 #include "app/controller_composition_support.h"
 
 ReadModelHttpSupport::ReadModelHttpSupport(
-    const comet::controller::ReadModelService& read_model_service,
+    const naim::controller::ReadModelService& read_model_service,
     const SchedulerViewService& scheduler_view_service,
-    const comet::controller::StateAggregateLoader& state_aggregate_loader,
+    const naim::controller::StateAggregateLoader& state_aggregate_loader,
     int stale_after_seconds)
     : read_model_service_(read_model_service),
       scheduler_view_service_(scheduler_view_service),
@@ -16,7 +16,7 @@ HttpResponse ReadModelHttpSupport::build_json_response(
     int status_code,
     const nlohmann::json& payload,
     const std::map<std::string, std::string>& headers) const {
-  return comet::controller::composition_support::BuildJsonResponse(
+  return naim::controller::composition_support::BuildJsonResponse(
       status_code,
       payload,
       headers);
@@ -25,20 +25,20 @@ HttpResponse ReadModelHttpSupport::build_json_response(
 std::optional<std::string> ReadModelHttpSupport::find_query_string(
     const HttpRequest& request,
     const std::string& key) const {
-  return comet::controller::composition_support::FindQueryString(request, key);
+  return naim::controller::composition_support::FindQueryString(request, key);
 }
 
 std::optional<int> ReadModelHttpSupport::find_query_int(
     const HttpRequest& request,
     const std::string& key) const {
-  return comet::controller::composition_support::FindQueryInt(request, key);
+  return naim::controller::composition_support::FindQueryInt(request, key);
 }
 
 int ReadModelHttpSupport::default_stale_after_seconds() const {
   return stale_after_seconds_;
 }
 
-const comet::controller::ReadModelService* ReadModelHttpSupport::read_model_service() const {
+const naim::controller::ReadModelService* ReadModelHttpSupport::read_model_service() const {
   return &read_model_service_;
 }
 

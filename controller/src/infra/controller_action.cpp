@@ -3,7 +3,7 @@
 #include <iostream>
 #include <sstream>
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerActionResult RunControllerActionResult(
     const std::string& action_name,
@@ -34,4 +34,4 @@ int EmitControllerActionResult(const ControllerActionResult& result) {
   return result.exit_code;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

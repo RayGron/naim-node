@@ -3,7 +3,7 @@
 #include <map>
 #include <string>
 
-namespace comet::infer {
+namespace naim::infer {
 
 struct SimpleResponse {
   int status_code = 200;
@@ -23,4 +23,4 @@ struct UpstreamTarget {
   int port = 80;
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

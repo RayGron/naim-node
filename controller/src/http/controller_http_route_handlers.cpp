@@ -1,6 +1,6 @@
 #include "http/controller_http_route_handlers.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 AuthHttpRouteHandler::AuthHttpRouteHandler(AuthHttpService& service) : service_(service) {}
 
@@ -79,4 +79,4 @@ std::optional<HttpResponse> SchedulerHttpRouteHandler::TryHandle(
   return service_.HandleRequest(db_path, default_artifacts_root, request);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

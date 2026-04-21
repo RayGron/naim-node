@@ -2,7 +2,7 @@
 
 #include <iostream>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdObservationService::HostdObservationService(
     const IHostdBackendFactory& backend_factory,
@@ -24,7 +24,7 @@ void HostdObservationService::ShowRuntimeStatus(
 
 void HostdObservationService::ReportObservedState(
     HostdBackend& backend,
-    const comet::HostObservation& observation,
+    const naim::HostObservation& observation,
     const std::string& source_label) const {
   backend.UpsertHostObservation(observation);
   support_.AppendHostdEvent(
@@ -33,7 +33,7 @@ void HostdObservationService::ReportObservedState(
       "reported",
       source_label,
       nlohmann::json{
-          {"status", comet::ToString(observation.status)},
+          {"status", naim::ToString(observation.status)},
           {"applied_generation",
            observation.applied_generation.has_value() ? nlohmann::json(*observation.applied_generation)
                                                       : nlohmann::json(nullptr)},
@@ -51,7 +51,7 @@ void HostdObservationService::ReportObservedState(
   std::cout << source_label << "\n";
   std::cout << "backend=hostd-control\n";
   std::cout << "node=" << observation.node_name << "\n";
-  std::cout << "status=" << comet::ToString(observation.status) << "\n";
+  std::cout << "status=" << naim::ToString(observation.status) << "\n";
   if (!observation.plane_name.empty()) {
     std::cout << "plane=" << observation.plane_name << "\n";
   }
@@ -71,21 +71,27 @@ void HostdObservationService::ReportLocalObservedState(
     const std::optional<std::string>& controller_url,
     const std::optional<std::string>& host_private_key_path,
     const std::optional<std::string>& controller_fingerprint,
+    const std::optional<std::string>& onboarding_key,
     const std::string& node_name,
+    const std::string& storage_root,
     const std::string& state_root) const {
   auto backend = backend_factory_.CreateBackend(
       db_path,
       controller_url,
       host_private_key_path,
-      controller_fingerprint);
+      controller_fingerprint,
+      onboarding_key,
+      node_name,
+      storage_root);
   ReportObservedState(
       *backend,
       support_.BuildObservedStateSnapshot(
           node_name,
+          storage_root,
           state_root,
-          comet::HostObservationStatus::Idle,
+          naim::HostObservationStatus::Idle,
           "manual heartbeat"),
       "hostd report-observed-state");
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

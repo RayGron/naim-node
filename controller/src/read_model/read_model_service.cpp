@@ -1,253 +1,16 @@
 #include "read_model/read_model_service.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <stdexcept>
 #include <utility>
 
-#include "comet/state/sqlite_store.h"
-#include "comet/state/state_json.h"
+#include "naim/state/sqlite_store.h"
+#include "naim/state/state_json.h"
 
 using nlohmann::json;
 
-namespace comet::controller {
-
-namespace {
-
-bool MatchesPlaneInstanceName(
-    const std::string& instance_name,
-    const std::string& plane_name,
-    const std::set<std::string>& plane_instance_names) {
-  if (plane_name.empty()) {
-    return true;
-  }
-  if (!plane_instance_names.empty()) {
-    return plane_instance_names.find(instance_name) != plane_instance_names.end();
-  }
-
-  const std::vector<std::string> prefixes = {
-      "infer-",
-      "worker-",
-      "skills-",
-      "app-",
-      "webgateway-",
-      "browsing-",
-  };
-  for (const auto& prefix : prefixes) {
-    const std::string stem = prefix + plane_name;
-    if (instance_name == stem || instance_name.rfind(stem + "-", 0) == 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-std::set<std::string> CollectPlaneInstanceNames(
-    const comet::DesiredState& observed_state,
-    const std::string& plane_name) {
-  std::set<std::string> names;
-  for (const auto& instance : observed_state.instances) {
-    if (instance.plane_name == plane_name) {
-      names.insert(instance.name);
-    }
-  }
-  return names;
-}
-
-comet::DesiredState FilterObservedStateForPlane(
-    const comet::DesiredState& observed_state,
-    const std::string& plane_name) {
-  comet::DesiredState filtered = observed_state;
-  filtered.plane_name = plane_name;
-
-  filtered.disks.erase(
-      std::remove_if(
-          filtered.disks.begin(),
-          filtered.disks.end(),
-          [&](const comet::DiskSpec& disk) { return disk.plane_name != plane_name; }),
-      filtered.disks.end());
-  filtered.instances.erase(
-      std::remove_if(
-          filtered.instances.begin(),
-          filtered.instances.end(),
-          [&](const comet::InstanceSpec& instance) {
-            return instance.plane_name != plane_name;
-          }),
-      filtered.instances.end());
-
-  const auto plane_instance_names = CollectPlaneInstanceNames(filtered, plane_name);
-  filtered.worker_group.members.erase(
-      std::remove_if(
-          filtered.worker_group.members.begin(),
-          filtered.worker_group.members.end(),
-          [&](const comet::WorkerGroupMemberSpec& member) {
-            return !MatchesPlaneInstanceName(
-                member.name, plane_name, plane_instance_names) &&
-                   !MatchesPlaneInstanceName(
-                       member.infer_instance_name, plane_name, plane_instance_names);
-          }),
-      filtered.worker_group.members.end());
-  filtered.runtime_gpu_nodes.erase(
-      std::remove_if(
-          filtered.runtime_gpu_nodes.begin(),
-          filtered.runtime_gpu_nodes.end(),
-          [&](const comet::RuntimeGpuNode& gpu_node) {
-            return !MatchesPlaneInstanceName(
-                gpu_node.name, plane_name, plane_instance_names);
-          }),
-      filtered.runtime_gpu_nodes.end());
-
-  std::set<std::string> plane_node_names;
-  for (const auto& instance : filtered.instances) {
-    if (!instance.node_name.empty()) {
-      plane_node_names.insert(instance.node_name);
-    }
-  }
-  for (const auto& disk : filtered.disks) {
-    if (!disk.node_name.empty()) {
-      plane_node_names.insert(disk.node_name);
-    }
-  }
-  if (!plane_node_names.empty()) {
-    filtered.nodes.erase(
-        std::remove_if(
-            filtered.nodes.begin(),
-            filtered.nodes.end(),
-            [&](const comet::NodeInventory& node) {
-              return plane_node_names.find(node.name) == plane_node_names.end();
-            }),
-        filtered.nodes.end());
-  }
-
-  filtered.worker_group.expected_workers = static_cast<int>(std::count_if(
-      filtered.worker_group.members.begin(),
-      filtered.worker_group.members.end(),
-      [](const comet::WorkerGroupMemberSpec& member) { return member.enabled; }));
-  if (!MatchesPlaneInstanceName(
-          filtered.worker_group.infer_instance_name, plane_name, plane_instance_names)) {
-    const auto infer_it = std::find_if(
-        filtered.instances.begin(),
-        filtered.instances.end(),
-        [](const comet::InstanceSpec& instance) {
-          return instance.role == comet::InstanceRole::Infer;
-        });
-    filtered.worker_group.infer_instance_name =
-        infer_it != filtered.instances.end() ? infer_it->name : std::string{};
-  }
-
-  const auto shared_disk_it = std::find_if(
-      filtered.disks.begin(),
-      filtered.disks.end(),
-      [](const comet::DiskSpec& disk) { return disk.kind == comet::DiskKind::PlaneShared; });
-  filtered.plane_shared_disk_name =
-      shared_disk_it != filtered.disks.end() ? shared_disk_it->name : std::string{};
-
-  return filtered;
-}
-
-std::optional<comet::DesiredState> ParseObservedStateForPlane(
-    const comet::HostObservation& observation,
-    const std::optional<std::string>& plane_name) {
-  if (observation.observed_state_json.empty()) {
-    return std::nullopt;
-  }
-
-  const auto observed_state =
-      comet::DeserializeDesiredStateJson(observation.observed_state_json);
-  if (!plane_name.has_value()) {
-    return observed_state;
-  }
-
-  const auto filtered = FilterObservedStateForPlane(observed_state, *plane_name);
-  if (observed_state.plane_name == *plane_name || !filtered.instances.empty() ||
-      !filtered.disks.empty() || !filtered.worker_group.members.empty() ||
-      !filtered.runtime_gpu_nodes.empty()) {
-    return filtered;
-  }
-  return std::nullopt;
-}
-
-std::optional<comet::RuntimeStatus> FilterRuntimeStatusForPlane(
-    const std::optional<comet::RuntimeStatus>& runtime_status,
-    const std::optional<std::string>& plane_name,
-    const std::set<std::string>& plane_instance_names) {
-  if (!runtime_status.has_value() || !plane_name.has_value()) {
-    return runtime_status;
-  }
-  if (!runtime_status->plane_name.empty() && runtime_status->plane_name != *plane_name) {
-    return std::nullopt;
-  }
-  if (!runtime_status->instance_name.empty() &&
-      !MatchesPlaneInstanceName(
-          runtime_status->instance_name, *plane_name, plane_instance_names)) {
-    return std::nullopt;
-  }
-  return runtime_status;
-}
-
-std::vector<comet::RuntimeProcessStatus> FilterInstanceRuntimeStatusesForPlane(
-    const std::vector<comet::RuntimeProcessStatus>& statuses,
-    const std::optional<std::string>& plane_name,
-    const std::set<std::string>& plane_instance_names) {
-  if (!plane_name.has_value()) {
-    return statuses;
-  }
-
-  std::vector<comet::RuntimeProcessStatus> filtered;
-  for (const auto& status : statuses) {
-    if (MatchesPlaneInstanceName(
-            status.instance_name, *plane_name, plane_instance_names)) {
-      filtered.push_back(status);
-    }
-  }
-  return filtered;
-}
-
-std::optional<comet::GpuTelemetrySnapshot> FilterGpuTelemetryForPlane(
-    const std::optional<comet::GpuTelemetrySnapshot>& snapshot,
-    const std::optional<std::string>& plane_name,
-    const std::set<std::string>& plane_instance_names) {
-  if (!snapshot.has_value() || !plane_name.has_value()) {
-    return snapshot;
-  }
-
-  comet::GpuTelemetrySnapshot filtered = *snapshot;
-  for (auto& device : filtered.devices) {
-    device.processes.erase(
-        std::remove_if(
-            device.processes.begin(),
-            device.processes.end(),
-            [&](const comet::GpuProcessTelemetry& process) {
-              return process.instance_name != "unknown" &&
-                     !MatchesPlaneInstanceName(
-                         process.instance_name, *plane_name, plane_instance_names);
-            }),
-        device.processes.end());
-  }
-  return filtered;
-}
-
-std::optional<comet::DiskTelemetrySnapshot> FilterDiskTelemetryForPlane(
-    const std::optional<comet::DiskTelemetrySnapshot>& snapshot,
-    const std::optional<std::string>& plane_name) {
-  if (!snapshot.has_value() || !plane_name.has_value()) {
-    return snapshot;
-  }
-
-  comet::DiskTelemetrySnapshot filtered = *snapshot;
-  filtered.items.erase(
-      std::remove_if(
-          filtered.items.begin(),
-          filtered.items.end(),
-          [&](const comet::DiskTelemetryRecord& item) {
-            return item.plane_name != *plane_name;
-          }),
-      filtered.items.end());
-  return filtered;
-}
-
-}  // namespace
+namespace naim::controller {
 
 ReadModelService::ReadModelService() = default;
 
@@ -256,7 +19,7 @@ ReadModelService::ReadModelService(
     : runtime_support_service_(std::move(runtime_support_service)) {}
 
 json ReadModelService::BuildEventPayloadItem(
-    const comet::EventRecord& event) const {
+    const naim::EventRecord& event) const {
   json payload = json::object();
   if (!event.payload_json.empty()) {
     try {
@@ -288,69 +51,16 @@ json ReadModelService::BuildEventPayloadItem(
   };
 }
 
-bool ReadModelService::ObservationMatchesPlane(
-    const comet::HostObservation& observation,
-    const std::string& plane_name) const {
-  if (observation.plane_name == plane_name) {
-    return true;
-  }
-  if (observation.observed_state_json.empty()) {
-    return false;
-  }
-
-  const auto observed_state =
-      comet::DeserializeDesiredStateJson(observation.observed_state_json);
-  if (observed_state.plane_name == plane_name) {
-    return true;
-  }
-  for (const auto& disk : observed_state.disks) {
-    if (disk.plane_name == plane_name) {
-      return true;
-    }
-  }
-  for (const auto& instance : observed_state.instances) {
-    if (instance.plane_name == plane_name) {
-      return true;
-    }
-  }
-  try {
-    const auto instance_statuses =
-        runtime_support_service_.ParseInstanceRuntimeStatuses(observation);
-    for (const auto& status : instance_statuses) {
-      const std::string worker_prefix = "worker-" + plane_name + "-";
-      if (status.instance_name == "infer-" + plane_name ||
-          status.instance_name == "worker-" + plane_name ||
-          status.instance_name.rfind(worker_prefix, 0) == 0) {
-        return true;
-      }
-    }
-  } catch (const std::exception&) {
-  }
-  return false;
-}
-
-std::vector<comet::HostObservation> ReadModelService::FilterHostObservationsForPlane(
-    const std::vector<comet::HostObservation>& observations,
-    const std::string& plane_name) const {
-  std::vector<comet::HostObservation> result;
-  for (const auto& observation : observations) {
-    if (ObservationMatchesPlane(observation, plane_name)) {
-      result.push_back(observation);
-    }
-  }
-  return result;
-}
-
 json ReadModelService::BuildHostAssignmentsPayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   json assignments = json::array();
   for (const auto& assignment : store.LoadHostAssignments(node_name)) {
-    const comet::DesiredState desired_node_state =
-        comet::DeserializeDesiredStateJson(assignment.desired_state_json);
+    const naim::DesiredState desired_node_state =
+        naim::DeserializeDesiredStateJson(assignment.desired_state_json);
     assignments.push_back(json{
         {"id", assignment.id},
         {"node_name", assignment.node_name},
@@ -359,7 +69,7 @@ json ReadModelService::BuildHostAssignmentsPayload(
         {"attempt_count", assignment.attempt_count},
         {"max_attempts", assignment.max_attempts},
         {"assignment_type", assignment.assignment_type},
-        {"status", comet::ToString(assignment.status)},
+        {"status", naim::ToString(assignment.status)},
         {"status_message", assignment.status_message},
         {"progress",
          (!assignment.progress_json.empty() && assignment.progress_json != "{}")
@@ -371,7 +81,7 @@ json ReadModelService::BuildHostAssignmentsPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
       {"assignments", assignments},
@@ -383,42 +93,45 @@ json ReadModelService::BuildHostObservationsPayload(
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name,
     int stale_after_seconds) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto observations =
       plane_name.has_value()
-          ? FilterHostObservationsForPlane(
+          ? plane_observation_matcher_.FilterHostObservationsForPlane(
                 store.LoadHostObservations(node_name), *plane_name)
           : store.LoadHostObservations(node_name);
 
   json items = json::array();
   for (const auto& observation : observations) {
-    const auto observed_state = ParseObservedStateForPlane(observation, plane_name);
+    const auto observed_state =
+        plane_observation_matcher_.ParseObservedStateForPlane(observation, plane_name);
     const auto plane_instance_names =
         plane_name.has_value() && observed_state.has_value()
-            ? CollectPlaneInstanceNames(*observed_state, *plane_name)
+            ? plane_observation_matcher_.CollectPlaneInstanceNames(
+                  *observed_state, *plane_name)
             : std::set<std::string>{};
-    const auto runtime_status = FilterRuntimeStatusForPlane(
+    const auto runtime_status = plane_observation_matcher_.FilterRuntimeStatusForPlane(
         runtime_support_service_.ParseRuntimeStatus(observation),
         plane_name,
         plane_instance_names);
-    const auto telemetry = FilterGpuTelemetryForPlane(
+    const auto telemetry = plane_observation_matcher_.FilterGpuTelemetryForPlane(
         runtime_support_service_.ParseGpuTelemetry(observation),
         plane_name,
         plane_instance_names);
     const auto cpu_telemetry = runtime_support_service_.ParseCpuTelemetry(observation);
-    const auto instance_statuses = FilterInstanceRuntimeStatusesForPlane(
+    const auto instance_statuses =
+        plane_observation_matcher_.FilterInstanceRuntimeStatusesForPlane(
         runtime_support_service_.ParseInstanceRuntimeStatuses(observation),
         plane_name,
         plane_instance_names);
-    const auto disk_telemetry = FilterDiskTelemetryForPlane(
+    const auto disk_telemetry = plane_observation_matcher_.FilterDiskTelemetryForPlane(
         runtime_support_service_.ParseDiskTelemetry(observation),
         plane_name);
     const auto network_telemetry =
         runtime_support_service_.ParseNetworkTelemetry(observation);
 
     const auto build_runtime_status_payload =
-        [&](const std::optional<comet::RuntimeStatus>& status) -> json {
+        [&](const std::optional<naim::RuntimeStatus>& status) -> json {
       if (!status.has_value()) {
         return json{
             {"contract_version", 1},
@@ -429,12 +142,12 @@ json ReadModelService::BuildHostObservationsPayload(
       return json{
           {"contract_version", 1},
           {"available", true},
-          {"runtime", json::parse(comet::SerializeRuntimeStatusJson(*status))},
+          {"runtime", json::parse(naim::SerializeRuntimeStatusJson(*status))},
       };
     };
 
     const auto build_instance_runtime_payload =
-        [&](const std::vector<comet::RuntimeProcessStatus>& statuses) -> json {
+        [&](const std::vector<naim::RuntimeProcessStatus>& statuses) -> json {
       int ready_count = 0;
       int gpu_bound_count = 0;
       int running_count = 0;
@@ -462,12 +175,12 @@ json ReadModelService::BuildHostObservationsPayload(
           {"items",
            statuses.empty()
                ? json::array()
-               : json::parse(comet::SerializeRuntimeStatusListJson(statuses))},
+               : json::parse(naim::SerializeRuntimeStatusListJson(statuses))},
       };
     };
 
     const auto build_gpu_telemetry_payload =
-        [&](const std::optional<comet::GpuTelemetrySnapshot>& snapshot) -> json {
+        [&](const std::optional<naim::GpuTelemetrySnapshot>& snapshot) -> json {
       if (!snapshot.has_value()) {
         return json{
             {"contract_version", 1},
@@ -545,12 +258,12 @@ json ReadModelService::BuildHostObservationsPayload(
                {"hottest_temperature_c", hottest_temperature_c},
            }},
           {"devices",
-           json::parse(comet::SerializeGpuTelemetryJson(*snapshot)).at("devices")},
+           json::parse(naim::SerializeGpuTelemetryJson(*snapshot)).at("devices")},
       };
     };
 
     const auto build_disk_telemetry_payload =
-        [&](const std::optional<comet::DiskTelemetrySnapshot>& snapshot) -> json {
+        [&](const std::optional<naim::DiskTelemetrySnapshot>& snapshot) -> json {
       if (!snapshot.has_value()) {
         return json{
             {"contract_version", 1},
@@ -649,12 +362,12 @@ json ReadModelService::BuildHostObservationsPayload(
                {"io_error_counter_count", io_error_counter_count},
            }},
           {"items",
-           json::parse(comet::SerializeDiskTelemetryJson(*snapshot)).at("items")},
+           json::parse(naim::SerializeDiskTelemetryJson(*snapshot)).at("items")},
       };
     };
 
     const auto build_network_telemetry_payload =
-        [&](const std::optional<comet::NetworkTelemetrySnapshot>& snapshot) -> json {
+        [&](const std::optional<naim::NetworkTelemetrySnapshot>& snapshot) -> json {
       if (!snapshot.has_value()) {
         return json{
             {"contract_version", 1},
@@ -707,13 +420,13 @@ json ReadModelService::BuildHostObservationsPayload(
                {"tx_bytes", tx_bytes},
            }},
           {"interfaces",
-           json::parse(comet::SerializeNetworkTelemetryJson(*snapshot)).at(
+           json::parse(naim::SerializeNetworkTelemetryJson(*snapshot)).at(
                "interfaces")},
       };
     };
 
     const auto build_cpu_telemetry_payload =
-        [&](const std::optional<comet::CpuTelemetrySnapshot>& snapshot) -> json {
+        [&](const std::optional<naim::CpuTelemetrySnapshot>& snapshot) -> json {
       if (!snapshot.has_value()) {
         return json{
             {"contract_version", 1},
@@ -762,7 +475,7 @@ json ReadModelService::BuildHostObservationsPayload(
                {"available_memory_bytes", snapshot->available_memory_bytes},
                {"used_memory_bytes", snapshot->used_memory_bytes},
            }},
-          {"snapshot", json::parse(comet::SerializeCpuTelemetryJson(*snapshot))},
+          {"snapshot", json::parse(naim::SerializeCpuTelemetryJson(*snapshot))},
       };
     };
 
@@ -771,7 +484,7 @@ json ReadModelService::BuildHostObservationsPayload(
         {"plane_name",
          observation.plane_name.empty() ? json(nullptr)
                                         : json(observation.plane_name)},
-        {"status", comet::ToString(observation.status)},
+        {"status", naim::ToString(observation.status)},
         {"status_message", observation.status_message},
         {"heartbeat_at", observation.heartbeat_at},
     };
@@ -792,7 +505,7 @@ json ReadModelService::BuildHostObservationsPayload(
 
     if (observed_state.has_value()) {
       entry["observed_state"] =
-          json::parse(comet::SerializeDesiredStateJson(*observed_state));
+          json::parse(naim::SerializeDesiredStateJson(*observed_state));
     } else {
       entry["observed_state"] = nullptr;
     }
@@ -809,7 +522,7 @@ json ReadModelService::BuildHostObservationsPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
@@ -822,7 +535,7 @@ json ReadModelService::BuildHostHealthPayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     int stale_after_seconds) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state = store.LoadDesiredState();
   const auto observations = store.LoadHostObservations(node_name);
@@ -830,7 +543,7 @@ json ReadModelService::BuildHostHealthPayload(
       runtime_support_service_.BuildAvailabilityOverrideMap(
           store.LoadNodeAvailabilityOverrides(node_name));
 
-  std::map<std::string, comet::HostObservation> observation_by_node;
+  std::map<std::string, naim::HostObservation> observation_by_node;
   for (const auto& observation : observations) {
     observation_by_node.emplace(observation.node_name, observation);
   }
@@ -862,7 +575,7 @@ json ReadModelService::BuildHostHealthPayload(
     json item{
         {"node_name", current_node_name},
         {"availability",
-         comet::ToString(
+         naim::ToString(
              runtime_support_service_.ResolveNodeAvailability(
                  availability_override_map,
                  current_node_name))},
@@ -882,7 +595,7 @@ json ReadModelService::BuildHostHealthPayload(
     const std::string health =
         runtime_support_service_.HealthFromAge(age_seconds, stale_after_seconds);
     item["health"] = health;
-    item["status"] = comet::ToString(observation_it->second.status);
+    item["status"] = naim::ToString(observation_it->second.status);
     item["age_seconds"] =
         age_seconds.has_value() ? json(*age_seconds) : json(nullptr);
     item["heartbeat_at"] = observation_it->second.heartbeat_at;
@@ -915,7 +628,7 @@ json ReadModelService::BuildHostHealthPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
       {"stale_after_seconds", stale_after_seconds},
@@ -933,14 +646,14 @@ json ReadModelService::BuildDiskStatePayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name,
     const std::optional<std::string>& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state = plane_name.has_value()
                                  ? store.LoadDesiredState(*plane_name)
                                  : store.LoadDesiredState();
 
   json payload{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
@@ -957,10 +670,10 @@ json ReadModelService::BuildDiskStatePayload(
   const auto runtime_states =
       desired_state.has_value()
           ? store.LoadDiskRuntimeStates(desired_state->plane_name, node_name)
-          : std::vector<comet::DiskRuntimeState>{};
+          : std::vector<naim::DiskRuntimeState>{};
   const auto observations =
       plane_name.has_value()
-          ? FilterHostObservationsForPlane(
+          ? plane_observation_matcher_.FilterHostObservationsForPlane(
                 store.LoadHostObservations(node_name), *plane_name)
           : store.LoadHostObservations(node_name);
 
@@ -968,13 +681,13 @@ json ReadModelService::BuildDiskStatePayload(
   payload["desired_generation"] =
       desired_generation.has_value() ? json(*desired_generation) : json(nullptr);
 
-  std::map<std::string, comet::DiskRuntimeState> runtime_by_key;
+  std::map<std::string, naim::DiskRuntimeState> runtime_by_key;
   for (const auto& runtime_state : runtime_states) {
     runtime_by_key.emplace(
         runtime_state.disk_name + "@" + runtime_state.node_name,
         runtime_state);
   }
-  std::map<std::string, comet::DiskTelemetryRecord> telemetry_by_key;
+  std::map<std::string, naim::DiskTelemetryRecord> telemetry_by_key;
   for (const auto& observation : observations) {
     const auto disk_telemetry =
         runtime_support_service_.ParseDiskTelemetry(observation);
@@ -993,7 +706,7 @@ json ReadModelService::BuildDiskStatePayload(
     }
     json item{
         {"disk_name", disk.name},
-        {"kind", comet::ToString(disk.kind)},
+        {"kind", naim::ToString(disk.kind)},
         {"plane_name", disk.plane_name},
         {"owner_name", disk.owner_name},
         {"node_name", disk.node_name},
@@ -1119,7 +832,7 @@ json ReadModelService::BuildEventsPayload(
     const std::optional<std::string>& worker_name,
     const std::optional<std::string>& category,
     int limit) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   json items = json::array();
@@ -1133,7 +846,7 @@ json ReadModelService::BuildEventsPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
@@ -1148,7 +861,7 @@ json ReadModelService::BuildEventsPayload(
 json ReadModelService::BuildNodeAvailabilityPayload(
     const std::string& db_path,
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto overrides = store.LoadNodeAvailabilityOverrides(node_name);
 
@@ -1156,7 +869,7 @@ json ReadModelService::BuildNodeAvailabilityPayload(
   for (const auto& override_record : overrides) {
     items.push_back(json{
         {"node_name", override_record.node_name},
-        {"availability", comet::ToString(override_record.availability)},
+        {"availability", naim::ToString(override_record.availability)},
         {"status_message",
          override_record.status_message.empty()
              ? json(nullptr)
@@ -1169,11 +882,11 @@ json ReadModelService::BuildNodeAvailabilityPayload(
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
       {"items", items},
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

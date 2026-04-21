@@ -6,11 +6,11 @@
 #include "interaction/interaction_payload_builder.h"
 #include "skills/plane_skills_service.h"
 
-namespace comet::controller::http_service_support {
+namespace naim::controller::http_service_support {
 
 namespace {
 
-using SocketHandle = comet::platform::SocketHandle;
+using SocketHandle = naim::platform::SocketHandle;
 
 }  // namespace
 
@@ -36,7 +36,7 @@ InteractionHttpService CreateInteractionHttpService(
 
 HostdHttpService CreateHostdHttpService() {
   return HostdHttpService(HostdHttpSupport(
-      [](comet::ControllerStore& store,
+      [](naim::ControllerStore& store,
          const std::string& event_type,
          const std::string& message,
          const nlohmann::json& payload,
@@ -71,4 +71,4 @@ ModelLibraryHttpService CreateModelLibraryHttpService(
   return ModelLibraryHttpService(ModelLibraryHttpSupport(model_library_service));
 }
 
-}  // namespace comet::controller::http_service_support
+}  // namespace naim::controller::http_service_support

@@ -2,7 +2,7 @@
 
 ## Summary
 
-`SkillsFactory` is the controller-owned canonical catalog for Skills in `comet-node`.
+`SkillsFactory` is the controller-owned canonical catalog for Skills in `naim-node`.
 
 - Canonical skill content is stored once in controller SQLite.
 - Plane `skills-<plane>` SQLite remains a runtime copy used by request-time resolution.
@@ -10,7 +10,7 @@
 - Plane-local binding metadata stays plane-scoped:
   - `enabled`
   - `session_ids[]`
-  - `comet_links[]`
+  - `naim_links[]`
 
 ## Controller APIs
 
@@ -113,7 +113,7 @@ Interaction behavior:
 
 - if `skill_ids[]` is present and non-empty, explicit selection takes precedence
 - otherwise `auto_skills` defaults to `true`
-- when `auto_skills=true`, `comet-node` may auto-select a bounded set of relevant enabled
+- when `auto_skills=true`, `naim-node` may auto-select a bounded set of relevant enabled
   plane-local skills
 - when `auto_skills=false`, contextual resolution is skipped
 

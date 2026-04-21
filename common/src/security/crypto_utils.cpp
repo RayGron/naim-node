@@ -1,8 +1,9 @@
-#include "comet/security/crypto_utils.h"
+#include "naim/security/crypto_utils.h"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -13,7 +14,7 @@
 
 #include <sodium.h>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -117,6 +118,17 @@ SigningKeypair GenerateSigningKeypair() {
   };
 }
 
+std::string DerivePublicKeyBase64(const std::string& private_key_base64) {
+  EnsureCrypto();
+  const auto private_key =
+      DecodeFixedSizeBase64(private_key_base64, "private key", crypto_sign_SECRETKEYBYTES);
+  std::array<unsigned char, crypto_sign_PUBLICKEYBYTES> public_key{};
+  if (crypto_sign_ed25519_sk_to_pk(public_key.data(), private_key.data()) != 0) {
+    throw std::runtime_error("failed to derive public key from private key");
+  }
+  return EncodeBase64(public_key.data(), public_key.size());
+}
+
 std::string ComputeKeyFingerprintHex(const std::string& public_key_base64) {
   EnsureCrypto();
   const auto public_key =
@@ -136,6 +148,16 @@ std::string RandomTokenBase64(int byte_count) {
   return EncodeBase64(bytes.data(), bytes.size());
 }
 
+std::string EncodeBytesBase64(const std::vector<unsigned char>& bytes) {
+  EnsureCrypto();
+  return EncodeBase64(bytes.data(), bytes.size());
+}
+
+std::vector<unsigned char> DecodeBytesBase64(const std::string& text) {
+  EnsureCrypto();
+  return DecodeBase64(text, "bytes");
+}
+
 std::string ComputeSha256Hex(const std::string& value) {
   EnsureCrypto();
   std::array<unsigned char, crypto_hash_sha256_BYTES> digest{};
@@ -143,6 +165,30 @@ std::string ComputeSha256Hex(const std::string& value) {
       digest.data(),
       DataOrNull(value),
       value.size());
+  return ToHex(digest.data(), digest.size());
+}
+
+std::string ComputeFileSha256Hex(const std::string& path) {
+  EnsureCrypto();
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open file for sha256: " + path);
+  }
+  crypto_hash_sha256_state context;
+  crypto_hash_sha256_init(&context);
+  std::array<char, 1024 * 1024> buffer{};
+  while (input.good()) {
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count > 0) {
+      crypto_hash_sha256_update(
+          &context,
+          reinterpret_cast<const unsigned char*>(buffer.data()),
+          static_cast<unsigned long long>(count));
+    }
+  }
+  std::array<unsigned char, crypto_hash_sha256_BYTES> digest{};
+  crypto_hash_sha256_final(&context, digest.data());
   return ToHex(digest.data(), digest.size());
 }
 
@@ -280,4 +326,4 @@ std::string DecryptEnvelopeBase64(
   return std::string(plaintext.begin(), plaintext.end());
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -13,7 +13,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::infer::model_cache_support {
+namespace naim::infer::model_cache_support {
 
 namespace fs = std::filesystem;
 using control_support::BuildControlPaths;
@@ -115,7 +115,7 @@ void PreloadModel(
       args.runtime_model_path.empty() ? local_model_path.string() : args.runtime_model_path;
   const fs::path marker_root =
       local_model_path.has_extension() ? local_model_path.parent_path() : local_model_path;
-  const fs::path marker_path = marker_root / ".comet-model-cache.json";
+  const fs::path marker_path = marker_root / ".naim-model-cache.json";
   const auto paths = BuildControlPaths(config);
   json registry = LoadRegistry(config);
   const json existing = FindCachedEntry(registry, args.alias, local_model_path.string());
@@ -170,7 +170,7 @@ int CacheStatus(
   const fs::path local_model_path(ExpandUserPath(args.local_model_path));
   const fs::path marker_root =
       local_model_path.has_extension() ? local_model_path.parent_path() : local_model_path;
-  const fs::path marker_path = marker_root / ".comet-model-cache.json";
+  const fs::path marker_path = marker_root / ".naim-model-cache.json";
   const json registry = LoadRegistry(config);
   const json entry = FindCachedEntry(registry, args.alias, local_model_path.string());
   std::cout << "cache-status:\n";
@@ -297,4 +297,4 @@ void SwitchModel(
   SaveJsonFile(BuildControlPaths(config).active_model_path, active_model);
 }
 
-}  // namespace comet::infer::model_cache_support
+}  // namespace naim::infer::model_cache_support

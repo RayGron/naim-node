@@ -5,7 +5,7 @@
 
 #include "runtime/infer_runtime_types.h"
 
-namespace comet::infer::replica_support {
+namespace naim::infer::replica_support {
 
 struct ReplicaTopology {
   std::string data_parallel_mode = "off";
@@ -25,4 +25,4 @@ struct ReplicaTopology {
 
 ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config);
 
-}  // namespace comet::infer::replica_support
+}  // namespace naim::infer::replica_support

@@ -2,14 +2,14 @@
 
 #include <stdexcept>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace fs = std::filesystem;
 
 fs::path LauncherPathResolver::ResolveSelfPath(const char* argv0) const {
-  const std::string executable_path = comet::platform::ExecutablePath();
+  const std::string executable_path = naim::platform::ExecutablePath();
   if (!executable_path.empty()) {
     return fs::path(executable_path);
   }
@@ -26,4 +26,4 @@ fs::path LauncherPathResolver::ResolveSiblingBinary(
   return sibling;
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

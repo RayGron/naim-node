@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller::read_model_support {
+namespace naim::controller::read_model_support {
 
 BundleHttpService CreateBundleHttpService(const IBundleCliService& bundle_cli_service);
 
@@ -27,4 +27,4 @@ ReadModelCliService CreateReadModelCliService(
     int stale_after_seconds,
     int stable_samples_required);
 
-}  // namespace comet::controller::read_model_support
+}  // namespace naim::controller::read_model_support

@@ -1,61 +1,114 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
-#include <nlohmann/json.hpp>
-
+#include "app/hostd_bootstrap_active_model_support.h"
+#include "app/hostd_bootstrap_model_artifact_support.h"
+#include "app/hostd_bootstrap_transfer_support.h"
+#include "app/hostd_command_support.h"
+#include "app/hostd_file_support.h"
+#include "app/hostd_reporting_support.h"
 #include "backend/hostd_backend.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdBootstrapModelSupport final {
  public:
-  using ProgressPayloadBuilder = std::function<nlohmann::json(
+  HostdBootstrapModelSupport(
+      const HostdBootstrapModelArtifactSupport& artifact_support,
+      const HostdBootstrapActiveModelSupport& active_model_support,
+      const HostdBootstrapTransferSupport& transfer_support,
+      const HostdCommandSupport& command_support,
+      const HostdFileSupport& file_support,
+      const HostdReportingSupport& reporting_support);
+
+  void BootstrapPlaneModelIfNeeded(
+      const naim::DesiredState& state,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const;
+
+ private:
+  void PublishAssignmentProgress(
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id,
       const std::string& phase,
       const std::string& title,
       const std::string& detail,
       int percent,
       const std::string& plane_name,
       const std::string& node_name,
-      const std::optional<std::uintmax_t>& bytes_done,
-      const std::optional<std::uintmax_t>& bytes_total)>;
-
-  struct Deps {
-    std::function<const comet::DiskSpec*(const comet::DesiredState&, const std::string&)>
-        find_plane_shared_disk_for_node;
-    std::function<std::string(const comet::DiskSpec&, const std::string&, const std::string&)>
-        shared_disk_host_path_for_container_path;
-    std::function<std::optional<std::string>(
-        const comet::DesiredState&,
-        const std::string&,
-        const std::string&)> control_file_path_for_node;
-    std::function<std::string(const comet::DesiredState&)> require_single_node_name;
-    std::function<std::string(const std::string&)> run_command_capture;
-    std::function<std::string(const std::string&)> shell_quote;
-    std::function<std::string(const std::string&)> normalize_lowercase;
-    std::function<std::string(const std::string&)> trim;
-    std::function<void(const std::string&, const std::string&)> write_text_file;
-    std::function<void(const std::string&)> remove_file_if_exists;
-    std::function<void(const std::string&)> ensure_parent_directory;
-    ProgressPayloadBuilder build_assignment_progress_payload;
-    std::function<void(HostdBackend*, const std::optional<int>&, const nlohmann::json&)>
-        publish_assignment_progress;
-  };
-
-  explicit HostdBootstrapModelSupport(Deps deps);
-
-  void BootstrapPlaneModelIfNeeded(
-      const comet::DesiredState& state,
+      const std::optional<std::uintmax_t>& bytes_done = std::nullopt,
+      const std::optional<std::uintmax_t>& bytes_total = std::nullopt) const;
+  bool TryUseReferenceBootstrapModel(
+      const naim::DesiredState& state,
       const std::string& node_name,
+      const naim::BootstrapModelSpec& bootstrap_model,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const;
+  bool TryAcquireControllerRelayedBootstrapModel(
+      const naim::DesiredState& state,
+      const std::string& node_name,
+      const naim::BootstrapModelSpec& bootstrap_model,
+      const std::string& target_path,
+      bool write_active_model,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const;
+  bool TryPrepareWorkerBootstrapModel(
+      const naim::DesiredState& state,
+      const std::string& node_name,
+      const naim::BootstrapModelSpec& bootstrap_model,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const;
+  bool TryWriteBackPreparedModel(
+      const naim::DesiredState& state,
+      const std::string& node_name,
+      const naim::BootstrapModelSpec& bootstrap_model,
+      const std::string& prepared_path,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const;
+  bool TryUseSharedBootstrapFromOtherNode(
+      const naim::DesiredState& state,
+      const std::string& node_name,
+      const std::vector<HostdBootstrapModelArtifact>& artifacts,
+      const std::string& target_path,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const;
+  std::optional<std::uintmax_t> ExpectedArtifactSize(
+      const HostdBootstrapModelArtifact& artifact) const;
+  bool IsArtifactAlreadyPresent(const HostdBootstrapModelArtifact& artifact) const;
+  std::optional<std::uintmax_t> ComputeAggregateExpectedSize(
+      const std::vector<HostdBootstrapModelArtifact>& artifacts,
+      bool& already_present) const;
+  void AcquireArtifactsIfNeeded(
+      const naim::DesiredState& state,
+      const std::string& node_name,
+      const std::vector<HostdBootstrapModelArtifact>& artifacts,
+      const std::optional<std::uintmax_t>& aggregate_total,
+      bool already_present,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const;
+  void VerifyBootstrapChecksumIfNeeded(
+      const naim::DesiredState& state,
+      const std::string& node_name,
+      const naim::BootstrapModelSpec& bootstrap_model,
+      const std::vector<HostdBootstrapModelArtifact>& artifacts,
+      const std::string& target_path,
+      bool already_present,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const;
+  static bool HasBootstrapSource(const naim::BootstrapModelSpec& bootstrap_model);
 
- private:
-  Deps deps_;
+  const HostdBootstrapModelArtifactSupport& artifact_support_;
+  const HostdBootstrapActiveModelSupport& active_model_support_;
+  const HostdBootstrapTransferSupport& transfer_support_;
+  const HostdCommandSupport& command_support_;
+  const HostdFileSupport& file_support_;
+  const HostdReportingSupport& reporting_support_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -4,9 +4,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/desired_state_v2_projector.h"
-#include "comet/state/desired_state_v2_renderer.h"
-#include "comet/state/desired_state_v2_validator.h"
+#include "naim/state/desired_state_v2_projector.h"
+#include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/desired_state_v2_validator.h"
 
 namespace {
 
@@ -19,10 +19,10 @@ void Expect(bool condition, const std::string& message) {
 }
 
 void ExpectRoundTrip(const json& source, const std::string& name) {
-  const auto rendered = comet::DesiredStateV2Renderer::Render(source);
-  const auto projected = comet::DesiredStateV2Projector::Project(rendered);
-  comet::DesiredStateV2Validator::ValidateOrThrow(projected);
-  const auto rerendered = comet::DesiredStateV2Renderer::Render(projected);
+  const auto rendered = naim::DesiredStateV2Renderer::Render(source);
+  const auto projected = naim::DesiredStateV2Projector::Project(rendered);
+  naim::DesiredStateV2Validator::ValidateOrThrow(projected);
+  const auto rerendered = naim::DesiredStateV2Renderer::Render(projected);
 
   Expect(rerendered.plane_name == rendered.plane_name, name + ": plane_name mismatch");
   Expect(rerendered.plane_mode == rendered.plane_mode, name + ": plane_mode mismatch");
@@ -43,6 +43,30 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(rerendered.bootstrap_model->target_filename ==
                rendered.bootstrap_model->target_filename,
            name + ": target_filename mismatch");
+    Expect(rerendered.bootstrap_model->source_node_name ==
+               rendered.bootstrap_model->source_node_name,
+           name + ": source_node_name mismatch");
+    Expect(rerendered.bootstrap_model->source_paths ==
+               rendered.bootstrap_model->source_paths,
+           name + ": source_paths mismatch");
+    Expect(rerendered.bootstrap_model->source_format ==
+               rendered.bootstrap_model->source_format,
+           name + ": source_format mismatch");
+    Expect(rerendered.bootstrap_model->desired_output_format ==
+               rendered.bootstrap_model->desired_output_format,
+           name + ": desired_output_format mismatch");
+    Expect(rerendered.bootstrap_model->quantization ==
+               rendered.bootstrap_model->quantization,
+           name + ": quantization mismatch");
+    Expect(rerendered.bootstrap_model->keep_source ==
+               rendered.bootstrap_model->keep_source,
+           name + ": keep_source mismatch");
+    Expect(rerendered.bootstrap_model->writeback_enabled ==
+               rendered.bootstrap_model->writeback_enabled,
+           name + ": writeback_enabled mismatch");
+    Expect(rerendered.bootstrap_model->writeback_target_node_name ==
+               rendered.bootstrap_model->writeback_target_node_name,
+           name + ": writeback_target_node_name mismatch");
     Expect(rerendered.bootstrap_model->source_urls == rendered.bootstrap_model->source_urls,
            name + ": source_urls mismatch");
   }
@@ -182,6 +206,36 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
   std::cout << "ok-roundtrip: " << name << '\n';
 }
 
+void ExpectExecutionNodeProjection(const json& source, const std::string& name) {
+  const auto rendered = naim::DesiredStateV2Renderer::Render(source);
+  const auto projected = naim::DesiredStateV2Projector::Project(rendered);
+  naim::DesiredStateV2Validator::ValidateOrThrow(projected);
+
+  Expect(projected.contains("placement"), name + ": placement block missing");
+  Expect(!projected.contains("topology"), name + ": topology must be suppressed");
+  if (projected.contains("infer")) {
+    Expect(!projected.at("infer").contains("node"), name + ": infer.node must be suppressed");
+  }
+  if (projected.contains("worker")) {
+    Expect(!projected.at("worker").contains("node"), name + ": worker.node must be suppressed");
+    Expect(
+        !projected.at("worker").contains("assignments"),
+        name + ": worker.assignments must be suppressed");
+  }
+  if (projected.contains("app")) {
+    Expect(!projected.at("app").contains("node"), name + ": app.node must be suppressed");
+  }
+  if (projected.contains("skills")) {
+    Expect(!projected.at("skills").contains("node"), name + ": skills.node must be suppressed");
+  }
+  if (projected.contains("webgateway")) {
+    Expect(
+        !projected.at("webgateway").contains("node"),
+        name + ": webgateway.node must be suppressed");
+  }
+  std::cout << "ok-execution-node: " << name << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -299,7 +353,7 @@ int main() {
                   json::array({{{"name", "private-data"},
                                  {"type", "persistent"},
                                  {"size_gb", 8},
-                                 {"mount_path", "/comet/private"},
+                                 {"mount_path", "/naim/private"},
                                  {"access", "rw"}}})},
              }},
         },
@@ -398,6 +452,36 @@ int main() {
     ExpectRoundTrip(
         json{
             {"version", 2},
+            {"plane_name", "llm-prepare-on-worker"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "library"}, {"ref", "Qwen/Qwen3"}, {"path", "/storage/qwen"}}},
+                 {"materialization",
+                  {{"mode", "prepare_on_worker"},
+                   {"local_path", "/storage/qwen"},
+                   {"source_node_name", "storage-a"},
+                   {"source_paths", json::array({"/storage/qwen"})},
+                   {"source_format", "model-directory"},
+                   {"desired_output_format", "gguf"},
+                   {"quantization", "Q4_K_M"},
+                   {"keep_source", false},
+                   {"writeback",
+                    {{"enabled", true},
+                     {"if_missing", true},
+                     {"target_node_name", "storage-a"}}}}},
+                 {"served_model_name", "qwen-worker-prepared"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "llm-prepare-on-worker");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
             {"plane_name", "llm-with-browsing"},
             {"plane_mode", "llm"},
             {"model",
@@ -414,7 +498,7 @@ int main() {
                  {"enabled", true},
                  {"node", "browse-hostd"},
                  {"image", "example/webgateway:dev"},
-                 {"env", {{"COMET_WEBGATEWAY_DEBUG", "1"}}},
+                 {"env", {{"NAIM_WEBGATEWAY_DEBUG", "1"}}},
                  {"policy",
                   {{"browser_session_enabled", true},
                    {"rendered_browser_enabled", false},
@@ -440,6 +524,28 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "llm-with-browsing");
+
+    ExpectExecutionNodeProjection(
+        json{
+            {"version", 2},
+            {"plane_name", "execution-node-clean"},
+            {"plane_mode", "llm"},
+            {"placement",
+             {{"execution_node", "worker-node-a"},
+              {"app_host", {{"address", "10.0.0.15"}, {"ssh_key_path", "/tmp/id_ed25519"}}}}},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-placement-clean"},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+            {"skills", {{"enabled", true}, {"image", "example/skills:dev"}}},
+        },
+        "execution-node-clean");
 
     return 0;
   } catch (const std::exception& ex) {

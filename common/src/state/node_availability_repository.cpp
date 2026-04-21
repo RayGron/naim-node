@@ -1,11 +1,11 @@
-#include "comet/state/node_availability_repository.h"
+#include "naim/state/node_availability_repository.h"
 
 #include <string>
 
-#include "comet/state/sqlite_statement.h"
-#include "comet/state/sqlite_store_support.h"
+#include "naim/state/sqlite_statement.h"
+#include "naim/state/sqlite_store_support.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -68,4 +68,4 @@ std::vector<NodeAvailabilityOverride> NodeAvailabilityRepository::LoadNodeAvaila
   return overrides;
 }
 
-}  // namespace comet
+}  // namespace naim

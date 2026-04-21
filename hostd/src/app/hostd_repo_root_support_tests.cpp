@@ -36,8 +36,8 @@ void Touch(const std::filesystem::path& path, const std::string& contents = {}) 
   output << contents;
 }
 
-comet::DesiredState BuildDesiredState(const std::string& plane_name) {
-  comet::DesiredState state;
+naim::DesiredState BuildDesiredState(const std::string& plane_name) {
+  naim::DesiredState state;
   state.plane_name = plane_name;
   return state;
 }
@@ -48,14 +48,14 @@ int main() {
   try {
     namespace fs = std::filesystem;
     const fs::path temp_root =
-        fs::temp_directory_path() / "comet-hostd-repo-root-support-tests";
+        fs::temp_directory_path() / "naim-hostd-repo-root-support-tests";
     std::error_code cleanup_error;
     fs::remove_all(temp_root, cleanup_error);
 
-    const fs::path repo_root = temp_root / "backups" / "baal" / "repos" / "comet-node";
+    const fs::path repo_root = temp_root / "backups" / "baal" / "repos" / "naim-node";
     const fs::path plane_root = temp_root / "backups" / "baal" / "repos" / "lt-cypher-ai";
     const fs::path build_root =
-        temp_root / "backups" / "baal" / "builds" / "comet-node-build" / "linux" / "x64";
+        temp_root / "backups" / "baal" / "builds" / "naim-node-build" / "linux" / "x64";
     const fs::path artifacts_root = temp_root / "artifacts";
 
     Touch(repo_root / "scripts" / "build-runtime-images.sh", "#!/bin/sh\n");
@@ -67,12 +67,13 @@ int main() {
 
     {
       CurrentPathGuard guard(build_root);
-      const auto repo = comet::hostd::appsupport::DetectCometRepoRoot();
+      const naim::hostd::HostdRepoRootSupport support;
+      const auto repo = support.DetectNaimRepoRoot();
       Expect(repo.has_value(), "repo root should be detected from split builds/repos layout");
       Expect(repo->lexically_normal() == repo_root.lexically_normal(),
-             "detected repo root should match repos/comet-node");
+             "detected repo root should match repos/naim-node");
 
-      const auto plane_script = comet::hostd::appsupport::ResolvePlaneOwnedPath(
+      const auto plane_script = support.ResolvePlaneOwnedPath(
           BuildDesiredState("lt-cypher-ai"),
           "deploy/scripts/post-deploy.sh",
           artifacts_root.string());
@@ -82,7 +83,7 @@ int main() {
               (plane_root / "deploy" / "scripts" / "post-deploy.sh").lexically_normal(),
           "sibling plane hook path should match");
 
-      const auto artifact_script = comet::hostd::appsupport::ResolvePlaneOwnedPath(
+      const auto artifact_script = support.ResolvePlaneOwnedPath(
           BuildDesiredState("lt-cypher-ai"),
           "bundle://deploy/scripts/artifact-hook.sh",
           artifacts_root.string());

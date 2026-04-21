@@ -9,7 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace comet::browsing {
+namespace naim::browsing {
 
 CommandResult RunCommandCapture(const CommandRequest& request) {
   if (request.args.empty()) {
@@ -92,4 +92,4 @@ CommandResult RunCommandCapture(const CommandRequest& request) {
   return result;
 }
 
-}  // namespace comet::browsing
+}  // namespace naim::browsing

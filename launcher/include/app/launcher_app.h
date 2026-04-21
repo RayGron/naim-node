@@ -1,6 +1,6 @@
 #pragma once
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class LauncherApp final {
  public:
@@ -16,4 +16,4 @@ class LauncherApp final {
   char** argv_;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

@@ -4,15 +4,15 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneDashboardSkillsSummaryService final {
  public:
   static nlohmann::json BuildPayload(
-      const comet::DesiredState& desired_state,
-      const std::vector<comet::PlaneSkillBindingRecord>& bindings);
+      const naim::DesiredState& desired_state,
+      const std::vector<naim::PlaneSkillBindingRecord>& bindings);
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

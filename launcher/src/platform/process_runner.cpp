@@ -14,9 +14,9 @@
 #include <unistd.h>
 #endif
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 namespace {
 
 std::string ShellEscape(const std::string& value) {
@@ -48,7 +48,7 @@ int ProcessRunner::RunShellCommand(const std::string& command) const {
 }
 
 std::string ProcessRunner::CaptureShellOutput(const std::string& command) const {
-  FILE* pipe = comet::platform::OpenPipe(command.c_str(), "r");
+  FILE* pipe = naim::platform::OpenPipe(command.c_str(), "r");
   if (pipe == nullptr) {
     return "";
   }
@@ -57,7 +57,7 @@ std::string ProcessRunner::CaptureShellOutput(const std::string& command) const 
   while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
     output += buffer.data();
   }
-  comet::platform::ClosePipe(pipe);
+  naim::platform::ClosePipe(pipe);
   return output;
 }
 
@@ -148,4 +148,4 @@ int ProcessRunner::SpawnCommand(const std::vector<std::string>& args) const {
 #endif
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

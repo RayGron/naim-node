@@ -14,7 +14,7 @@ std::optional<std::string> ResolveControllerTarget(
     const std::optional<std::string>& db_arg);
 
 nlohmann::json SendControllerJsonRequest(
-    const comet::controller::ControllerEndpointTarget& target,
+    const naim::controller::ControllerEndpointTarget& target,
     const std::string& method,
     const std::string& path,
     const std::vector<std::pair<std::string, std::string>>& params = {});

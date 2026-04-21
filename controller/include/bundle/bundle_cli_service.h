@@ -12,12 +12,12 @@
 #include "plane/desired_state_policy_service.h"
 #include "plane/plane_realization_service.h"
 
-#include "comet/planning/execution_plan.h"
-#include "comet/state/models.h"
-#include "comet/planning/scheduling_policy.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/planning/execution_plan.h"
+#include "naim/state/models.h"
+#include "naim/planning/scheduling_policy.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class BundleCliService : public IBundleCliService {
  public:
@@ -54,7 +54,7 @@ class BundleCliService : public IBundleCliService {
       const std::string& artifacts_root) const override;
   int ApplyDesiredState(
       const std::string& db_path,
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::string& artifacts_root,
       const std::string& source_label) const;
   int ApplyStateFile(
@@ -81,7 +81,7 @@ class BundleCliService : public IBundleCliService {
 
  private:
   void AppendEvent(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const std::string& category,
       const std::string& event_type,
       const std::string& message,
@@ -101,4 +101,4 @@ class BundleCliService : public IBundleCliService {
   int default_stale_after_seconds_ = 300;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

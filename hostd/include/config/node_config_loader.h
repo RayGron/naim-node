@@ -3,15 +3,15 @@
 #include <optional>
 #include <string>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
-struct CometNodeConfig {
-  std::string storage_root = "/var/lib/comet";
+struct NaimNodeConfig {
+  std::string storage_root = "/var/lib/naim";
 };
 
 class NodeConfigLoader {
  public:
-  CometNodeConfig Load(
+  NaimNodeConfig Load(
       const std::optional<std::string>& config_arg,
       const char* argv0) const;
 
@@ -19,4 +19,4 @@ class NodeConfigLoader {
   std::optional<std::string> FindNodeConfigPath(const char* argv0) const;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

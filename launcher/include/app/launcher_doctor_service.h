@@ -6,7 +6,7 @@
 
 #include "platform/process_runner.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class LauncherDoctorService {
  public:
@@ -18,4 +18,4 @@ class LauncherDoctorService {
   const ProcessRunner& process_runner_;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

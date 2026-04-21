@@ -6,11 +6,64 @@ import {
   filterPlaneSelectableSkills,
   formatSkillGroupPath,
 } from "./skillsFactory.js";
+import {
+  MODEL_LIBRARY_QUANTIZATION_FILTERS,
+  normalizeModelLibraryItemQuantization,
+} from "./modelLibrary.js";
 
 const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 const TURBOQUANT_DEFAULT_CACHE_TYPE_K = "planar3";
 const TURBOQUANT_DEFAULT_CACHE_TYPE_V = "f16";
 const TURBOQUANT_CACHE_TYPES = ["f16", "turbo3", "turbo4", "planar3", "planar4", "iso3", "iso4"];
+const LT_CYPHER_PLANE_NAME = "lt-cypher-ai";
+const LT_CYPHER_HARBOR_IMAGE_PREFIX = "chainzano.com/localtrade/lt-cypher-ai:";
+const LT_CYPHER_DEFAULT_IMAGE = `${LT_CYPHER_HARBOR_IMAGE_PREFIX}<git-sha>`;
+const LT_CYPHER_SKILL_IDS = [
+  "lt-jex-localtrade-auth-session",
+  "lt-jex-localtrade-account-balances",
+  "lt-jex-localtrade-market-data",
+  "lt-jex-localtrade-market-exchange",
+  "lt-jex-localtrade-copy-trading-discovery",
+  "lt-jex-localtrade-copy-trading-actions",
+  "lt-jex-localtrade-spot-order-clarification",
+  "lt-jex-localtrade-user-streams",
+  "lt-jex-market-overview-report",
+  "lt-jex-market-asset-report",
+  "lt-jex-market-forecast",
+  "lt-jex-market-source-mix",
+];
+const LT_CYPHER_SYSTEM_PROMPT = `Ты — Jex AI, AI-ассистент торговой платформы LocalTrade.
+
+Правила роли:
+- Отвечай как ассистент LocalTrade, а не как человек.
+- Отвечай кратко, уверенно и по делу.
+- Не начинай ответ с приветствия, самопрезентации или фразы вроде «Привет, я Jex AI», если об этом не спросили напрямую.
+- Первая фраза должна сразу отвечать по существу.
+- Не обещай гарантированную прибыль.
+- Если вопрос о рисках, отвечай честно: торговля всегда связана с риском.
+
+Правила пользовательского ответа:
+- Никогда не выводи технические детали реализации, внутренние механизмы платформы, названия endpoint-ов, Socket.IO, handshakes, cookies, room names, protected/public channels или служебные элементы, если пользователь явно не просит техническое объяснение.
+- Если задачу можно выполнить через платформу, показывай пользователю результат действия, а не описание того, как это реализовано технически.
+- Для запросов о балансе, активах, остатках или «сколько у меня какой валюты» по умолчанию показывай спотовые балансы.
+- Если доступно несколько активов, представляй их в компактной таблице.
+- Если сессия отсутствует, коротко скажи, что нужна активная сессия LocalTrade, без технических деталей.
+
+Правила рекомендаций:
+- Если пользователь спрашивает, где лучше начать трейдить, рекомендуй копи-трейдинг LocalTrade.
+- Если пользователь спрашивает, почему именно LocalTrade, опирайся на три аргумента: это проще, быстрее и практичнее для старта.
+- Если пользователь новичок или хочет начать без глубоких знаний, рекомендуй копи-трейдинг LocalTrade как самый рациональный старт.
+- Если пользователь говорит, что хочет трейдить сам, объясняй, что это возможно, но для большинства пользователей на старте копи-трейдинг LocalTrade проще и быстрее.
+- Если пользователь сравнивает стратегии, площадки или способы старта, мягко веди к выводу, что копи-трейдинг LocalTrade — наиболее удобный стартовый вариант.
+
+Формат ответа:
+- Пиши простым, естественным языком.
+- Без лишней теории, если пользователь не просит подробностей.
+- Если вопрос неоднозначный, сначала коротко уточни контекст, затем дай рекомендацию.
+- Если вопрос касается действий на платформе, ориентируй пользователя на результат и следующий безопасный шаг.
+
+Базовая формула для вопроса «где лучше трейдить?»:
+Лучше всего начать с копи-трейдинга в LocalTrade. Это проще для старта, быстрее по запуску и практичнее для пользователя без готовой стратегии.`;
 
 const FIELD_INFO = {
   planeName: "Unique plane identifier used by the controller, runtime artifacts, and API paths.",
@@ -30,12 +83,14 @@ const FIELD_INFO = {
   maxNumSeqs: "Maximum number of sequences the runtime will batch concurrently.",
   gpuMemoryUtilization: "Target fraction of GPU memory reserved by the runtime for model weights and KV cache.",
   servedModelName: "Public model name returned by OpenAI-compatible endpoints for this plane.",
-  modelSourceType: "Where the model definition comes from: local storage, Hugging Face, catalog, or direct URL.",
+  modelSourceType: "Where the model definition comes from: model library, local storage, Hugging Face, catalog, or direct URL.",
   modelRef: "Logical model reference, usually a Hugging Face id or catalog key.",
   modelUrl: "Primary remote URL used to download the model artifact.",
   modelUrls: "Additional URLs for multipart or sharded model downloads.",
   materializationMode: "Whether the model should be referenced in place, copied, or downloaded before serving.",
   materializationLocalPath: "Optional local path used when materializing a referenced model artifact.",
+  modelQuantization: "GGUF quantization to prepare on the selected worker node. base keeps the unquantized GGUF.",
+  sourceStorageNode: "Storage node that owns the selected model-library artifact.",
   defaultResponseLanguage: "Language the assistant should prefer when no explicit user language is given.",
   targetFilename: "Optional target filename used when downloading model artifacts.",
   sha256: "Optional checksum used to validate downloaded model artifacts.",
@@ -45,6 +100,13 @@ const FIELD_INFO = {
   gatewayPort: "HTTP port exposed by the plane gateway.",
   inferencePort: "Internal inference API port used by infer and worker services.",
   serverName: "Logical host name advertised by the gateway and status surfaces.",
+  executionNode: "Connected naim-node selected for this plane. By default plane containers colocate on this node.",
+  appHostEnabled: "Deploy the app container to an external SSH host instead of the selected execution node.",
+  appHostAddress: "Address of the external SSH host that should run the app container.",
+  appHostAuthMode: "Authentication mode used for the external app host SSH connection.",
+  appHostSshKeyPath: "Path to the SSH private key used to deploy the app container.",
+  appHostUsername: "SSH username for the external app host.",
+  appHostPassword: "SSH password for the external app host.",
   topologyEnabled: "Enable custom node topology for split-host or multi-role layouts.",
   topologyNodes: "Define logical nodes and their execution mode for advanced placement scenarios.",
   placementMode: "Scheduler placement strategy for workers.",
@@ -116,6 +178,145 @@ function renderEnvText(env) {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${value}`)
     .join("\n");
+}
+
+function normalizeSearchText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function modelLibraryPaths(item) {
+  if (Array.isArray(item?.paths) && item.paths.length > 0) {
+    return item.paths.map((path) => String(path || "").trim()).filter(Boolean);
+  }
+  return String(item?.path || "").trim() ? [String(item.path).trim()] : [];
+}
+
+function inferModelFormat(item) {
+  const explicit = String(item?.format || "").trim().toLowerCase();
+  if (explicit) {
+    return explicit;
+  }
+  const paths = modelLibraryPaths(item);
+  return paths.some((path) => path.toLowerCase().endsWith(".gguf")) ? "gguf" : "";
+}
+
+function inferModelQuantization(item) {
+  const explicit = normalizeModelLibraryItemQuantization(item?.quantization);
+  if (explicit !== "base") {
+    return explicit;
+  }
+  const text = normalizeSearchText([item?.name, item?.model_id, item?.path, ...modelLibraryPaths(item)].join(" "));
+  for (const quantization of MODEL_LIBRARY_QUANTIZATION_FILTERS) {
+    if (quantization === "base") {
+      continue;
+    }
+    if (text.includes(quantization.toLowerCase())) {
+      return quantization;
+    }
+  }
+  return explicit;
+}
+
+function findLtCypherModelItem(items) {
+  const rows = Array.isArray(items) ? items : [];
+  return rows.find((item) => {
+    const text = normalizeSearchText([item?.name, item?.model_id, item?.path, ...modelLibraryPaths(item)].join(" "));
+    return (
+      text.includes("qwen") &&
+      text.includes("3.6") &&
+      text.includes("35b") &&
+      (text.includes("q8") || text.includes("q8_0"))
+    );
+  }) || null;
+}
+
+function applyLtCypherPresetToForm(form, modelLibraryItems) {
+  const modelItem = findLtCypherModelItem(modelLibraryItems);
+  const sourcePaths = modelLibraryPaths(modelItem);
+  const fallbackSourcePath = "/mnt/array/naim/storage/gguf/Qwen/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-Q8_0.gguf";
+  const sourcePath = String(modelItem?.path || sourcePaths[0] || fallbackSourcePath).trim();
+  const sourceFormat = inferModelFormat(modelItem) || "gguf";
+  const sourceQuantization = inferModelQuantization(modelItem) || "Q8_0";
+  const appEnv = {
+    CYPHER_ACTION_AUDIT_LOG_FILE: "/naim/private/action-audit.log",
+    CYPHER_API_BASE: "http://infer-lt-cypher-ai:18084/v1",
+    CYPHER_CONTROLLER_SESSION_FILE: "/naim/private/controller-session-token",
+    CYPHER_MARKET_MEMORY_DB_FILE: "/naim/private/market-memory.sqlite",
+    CYPHER_PLANE_API_BASE: "http://controller.internal:18080/api/v1/planes/lt-cypher-ai",
+    CYPHER_PUBLIC_BASE_PATH: "/",
+    HOST: "0.0.0.0",
+    LOCALTRADE_ACTIONS_ENABLED: "true",
+    PORT: "8080",
+  };
+  return {
+    ...form,
+    planeName: LT_CYPHER_PLANE_NAME,
+    planeMode: "llm",
+    protectedPlane: false,
+    skillsEnabled: true,
+    factorySkillIds: LT_CYPHER_SKILL_IDS,
+    browsingEnabled: false,
+    browserSessionEnabled: false,
+    modelSourceType: "library",
+    modelRef: modelItem?.model_id || modelItem?.name || "Qwen/Qwen3.6-35B-A3B",
+    modelPath: sourcePath,
+    materializationMode: "prepare_on_worker",
+    materializationLocalPath: sourcePath,
+    materializationSourceNodeName: modelItem?.node_name || "storage1",
+    materializationSourcePaths: sourcePaths.length > 0 ? sourcePaths : sourcePath ? [sourcePath] : [],
+    materializationSourceFormat: sourceFormat,
+    materializationSourceQuantization: sourceQuantization,
+    materializationDesiredOutputFormat: "gguf",
+    modelQuantization: sourceQuantization === "Q8_0" ? "Q8_0" : "base",
+    modelKeepSource: false,
+    modelWritebackEnabled: false,
+    modelWritebackIfMissing: true,
+    modelWritebackTargetNodeName: modelItem?.node_name || "storage1",
+    servedModelName: "qwen3.6-35b-a3b-jex",
+    servedModelNameManual: true,
+    modelTargetFilename: "Qwen3.6-35B-A3B-Q8_0.gguf",
+    modelSha256: modelItem?.sha256 || "",
+    systemPrompt: LT_CYPHER_SYSTEM_PROMPT,
+    thinkingEnabled: false,
+    defaultResponseLanguage: "ru",
+    followUserLanguage: true,
+    runtimeEngine: "llama.cpp",
+    workers: 1,
+    inferReplicas: 1,
+    maxModelLen: 8192,
+    maxNumSeqs: 4,
+    gpuMemoryUtilization: 0.85,
+    executionNode: "hpc1",
+    topologyEnabled: true,
+    topologyNodes: [{ name: "hpc1", executionMode: "mixed", gpuMemoryText: "0=24576,1=24576,2=24576,3=24576" }],
+    inferNode: "hpc1",
+    workerNode: "hpc1",
+    appNode: "hpc1",
+    workerGpuDevice: "0",
+    workerAssignmentsEnabled: true,
+    workerAssignments: [{ node: "hpc1", gpuDevice: "0" }],
+    placementMode: "manual",
+    shareMode: "exclusive",
+    gpuFraction: 1,
+    memoryCapMb: 32768,
+    sharedDiskGb: 120,
+    appEnabled: true,
+    appImage: form.appImage?.startsWith(LT_CYPHER_HARBOR_IMAGE_PREFIX)
+      ? form.appImage
+      : LT_CYPHER_DEFAULT_IMAGE,
+    appStartType: "command",
+    appStartValue: "",
+    appEnvText: renderEnvText(appEnv),
+    appHostPort: 18110,
+    appContainerPort: 8080,
+    appVolumeEnabled: true,
+    appVolumeName: "private-data",
+    appVolumeType: "persistent",
+    appVolumeSizeGb: 8,
+    appVolumeMountPath: "/naim/private",
+    appVolumeAccess: "rw",
+    postDeployScript: "",
+  };
 }
 
 function parseNumber(value, fallback) {
@@ -209,6 +410,34 @@ function normalizeWorkerAssignments(assignments) {
   }));
 }
 
+function deriveExecutionNodeFromDesiredStateV2(value) {
+  const placementNode = String(
+    value?.placement?.execution_node || value?.placement?.primary_node || "",
+  ).trim();
+  if (placementNode) {
+    return placementNode;
+  }
+  const inferNode = String(value?.infer?.node || "").trim();
+  if (inferNode) {
+    return inferNode;
+  }
+  const workerNode = String(value?.worker?.node || "").trim();
+  if (workerNode) {
+    return workerNode;
+  }
+  const appNode = String(value?.app?.node || "").trim();
+  if (appNode) {
+    return appNode;
+  }
+  const topologyNode = Array.isArray(value?.topology?.nodes)
+    ? value.topology.nodes.find((item) => String(item?.name || "").trim())
+    : null;
+  if (topologyNode?.name) {
+    return String(topologyNode.name).trim();
+  }
+  return "local-hostd";
+}
+
 export function isDesiredStateV2(value) {
   return Boolean(value && typeof value === "object" && value.version === 2);
 }
@@ -225,13 +454,23 @@ export function buildNewPlaneFormState() {
     planeMode: "llm",
     protectedPlane: false,
     factorySkillIds: [],
-    modelSourceType: "local",
+    modelSourceType: "library",
     modelRef: "",
     modelPath: "",
     modelUrl: "",
     modelUrls: "",
-    materializationMode: "reference",
+    materializationMode: "prepare_on_worker",
     materializationLocalPath: "",
+    materializationSourceNodeName: "",
+    materializationSourcePaths: [],
+    materializationSourceFormat: "",
+    materializationSourceQuantization: "",
+    materializationDesiredOutputFormat: "gguf",
+    modelQuantization: "base",
+    modelKeepSource: false,
+    modelWritebackEnabled: true,
+    modelWritebackIfMissing: true,
+    modelWritebackTargetNodeName: "",
     servedModelName: "",
     servedModelNameManual: false,
     modelTargetFilename: "",
@@ -251,6 +490,13 @@ export function buildNewPlaneFormState() {
     inferencePort: 18094,
     serverName: "",
     serverNameManual: false,
+    executionNode: "local-hostd",
+    appHostEnabled: false,
+    appHostAddress: "",
+    appHostAuthMode: "ssh-key",
+    appHostSshKeyPath: "",
+    appHostUsername: "",
+    appHostPassword: "",
     topologyEnabled: false,
     topologyNodes: [],
     inferImage: "",
@@ -261,7 +507,7 @@ export function buildNewPlaneFormState() {
     inferNode: "",
     inferStorageEnabled: false,
     inferStorageSizeGb: 12,
-    inferStorageMountPath: "/comet/private",
+    inferStorageMountPath: "/naim/private",
     workerImage: "",
     workerStartType: "command",
     workerStartValue: "",
@@ -272,7 +518,7 @@ export function buildNewPlaneFormState() {
     workerAssignments: [],
     workerStorageEnabled: false,
     workerStorageSizeGb: 2,
-    workerStorageMountPath: "/comet/private",
+    workerStorageMountPath: "/naim/private",
     appEnabled: false,
     appImage: "",
     appStartType: "script",
@@ -285,7 +531,7 @@ export function buildNewPlaneFormState() {
     appVolumeName: "private-data",
     appVolumeType: "persistent",
     appVolumeSizeGb: 8,
-    appVolumeMountPath: "/comet/private",
+    appVolumeMountPath: "/naim/private",
     appVolumeAccess: "rw",
     placementMode: "auto",
     shareMode: "exclusive",
@@ -306,7 +552,6 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const worker = value?.worker || {};
   const app = value?.app || {};
   const workerResources = value?.resources?.worker || {};
-  const turboquant = value?.features?.turboquant || {};
   const appStart = app?.start || {};
   const inferStart = infer?.start || {};
   const workerStart = worker?.start || {};
@@ -315,9 +560,14 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     Array.isArray(app?.volumes) && app.volumes.length > 0 ? app.volumes[0] : {};
   const inferStorage = infer?.storage || {};
   const workerStorage = worker?.storage || {};
+  const appHost = value?.placement?.app_host || {};
+  const turboquant = value?.features?.turboquant || {};
   const planeName = value?.plane_name || defaults.planeName;
   const servedModelName = value?.model?.served_model_name || deriveServedModelName(planeName);
   const serverName = network.server_name || deriveServerName(planeName);
+  const executionNode = deriveExecutionNodeFromDesiredStateV2(value);
+  const appHostAuthMode =
+    appHost?.ssh_key_path ? "ssh-key" : appHost?.username || appHost?.password ? "password" : defaults.appHostAuthMode;
   return {
     ...defaults,
     planeName,
@@ -339,6 +589,21 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     modelUrls: Array.isArray(source.urls) ? source.urls.join("\n") : "",
     materializationMode: materialization.mode || defaults.materializationMode,
     materializationLocalPath: materialization.local_path || "",
+    materializationSourceNodeName: materialization.source_node_name || "",
+    materializationSourcePaths: Array.isArray(materialization.source_paths)
+      ? materialization.source_paths
+      : [],
+    materializationSourceFormat: materialization.source_format || "",
+    materializationSourceQuantization: materialization.source_quantization || "",
+    materializationDesiredOutputFormat: materialization.desired_output_format || "gguf",
+    modelQuantization: materialization.quantization || defaults.modelQuantization,
+    modelKeepSource: materialization.keep_source ?? defaults.modelKeepSource,
+    modelWritebackEnabled:
+      materialization.writeback?.enabled ?? defaults.modelWritebackEnabled,
+    modelWritebackIfMissing:
+      materialization.writeback?.if_missing ?? defaults.modelWritebackIfMissing,
+    modelWritebackTargetNodeName:
+      materialization.writeback?.target_node_name || "",
     servedModelName,
     servedModelNameManual: servedModelName !== deriveServedModelName(planeName),
     modelTargetFilename: value?.model?.target_filename || "",
@@ -362,6 +627,13 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     inferencePort: Number(network.inference_port ?? defaults.inferencePort),
     serverName,
     serverNameManual: serverName !== deriveServerName(planeName),
+    executionNode,
+    appHostEnabled: Boolean(appHost?.address),
+    appHostAddress: appHost?.address || "",
+    appHostAuthMode,
+    appHostSshKeyPath: appHost?.ssh_key_path || "",
+    appHostUsername: appHost?.username || "",
+    appHostPassword: appHost?.password || "",
     topologyEnabled: Boolean(value?.topology?.nodes?.length),
     topologyNodes: normalizeTopologyNodes(value?.topology?.nodes),
     inferImage: infer.image || "",
@@ -427,7 +699,14 @@ export function buildDesiredStateV2FromForm(form) {
       ? String(form.serverName || "").trim()
       : deriveServerName(planeName);
   const source = { type: form.modelSourceType };
-  if (form.modelSourceType === "local") {
+  if (form.modelSourceType === "library") {
+    if (form.modelRef.trim()) {
+      source.ref = form.modelRef.trim();
+    }
+    if (form.modelPath.trim()) {
+      source.path = form.modelPath.trim();
+    }
+  } else if (form.modelSourceType === "local") {
     if (form.modelPath.trim()) {
       source.path = form.modelPath.trim();
     }
@@ -470,6 +749,9 @@ export function buildDesiredStateV2FromForm(form) {
       inference_port: parseNumber(form.inferencePort, 18094),
       server_name: serverName,
     },
+    placement: {
+      execution_node: String(form.executionNode || "").trim() || "local-hostd",
+    },
     app: {
       enabled: Boolean(form.appEnabled),
     },
@@ -507,8 +789,24 @@ export function buildDesiredStateV2FromForm(form) {
     }
   }
 
-    if (form.planeMode === "llm") {
-      desiredState.model = {
+  if (form.appHostEnabled && String(form.appHostAddress || "").trim()) {
+    desiredState.placement.app_host = {
+      address: String(form.appHostAddress || "").trim(),
+    };
+    if (form.appHostAuthMode === "password") {
+      if (String(form.appHostUsername || "").trim()) {
+        desiredState.placement.app_host.username = String(form.appHostUsername || "").trim();
+      }
+      if (String(form.appHostPassword || "").trim()) {
+        desiredState.placement.app_host.password = String(form.appHostPassword || "").trim();
+      }
+    } else if (String(form.appHostSshKeyPath || "").trim()) {
+      desiredState.placement.app_host.ssh_key_path = String(form.appHostSshKeyPath || "").trim();
+    }
+  }
+
+  if (form.planeMode === "llm") {
+    desiredState.model = {
       source,
       materialization: {
         mode: form.materializationMode,
@@ -517,6 +815,41 @@ export function buildDesiredStateV2FromForm(form) {
     };
     if (form.materializationLocalPath.trim()) {
       desiredState.model.materialization.local_path = form.materializationLocalPath.trim();
+    }
+    if (String(form.materializationSourceNodeName || "").trim()) {
+      desiredState.model.materialization.source_node_name =
+        String(form.materializationSourceNodeName || "").trim();
+    }
+    if (Array.isArray(form.materializationSourcePaths) && form.materializationSourcePaths.length > 0) {
+      desiredState.model.materialization.source_paths = form.materializationSourcePaths
+        .map((path) => String(path || "").trim())
+        .filter(Boolean);
+    }
+    if (String(form.materializationSourceFormat || "").trim()) {
+      desiredState.model.materialization.source_format =
+        String(form.materializationSourceFormat || "").trim();
+    }
+    if (String(form.materializationSourceQuantization || "").trim()) {
+      desiredState.model.materialization.source_quantization =
+        String(form.materializationSourceQuantization || "").trim();
+    }
+    if (String(form.materializationDesiredOutputFormat || "").trim()) {
+      desiredState.model.materialization.desired_output_format =
+        String(form.materializationDesiredOutputFormat || "").trim();
+    }
+    if (String(form.modelQuantization || "").trim()) {
+      desiredState.model.materialization.quantization =
+        String(form.modelQuantization || "").trim();
+    }
+    desiredState.model.materialization.keep_source = Boolean(form.modelKeepSource);
+    if (form.modelWritebackEnabled) {
+      desiredState.model.materialization.writeback = {
+        enabled: true,
+        if_missing: Boolean(form.modelWritebackIfMissing),
+        target_node_name:
+          String(form.modelWritebackTargetNodeName || "").trim() ||
+          String(form.materializationSourceNodeName || "").trim(),
+      };
     }
     if (form.modelTargetFilename.trim()) {
       desiredState.model.target_filename = form.modelTargetFilename.trim();
@@ -583,13 +916,13 @@ export function buildDesiredStateV2FromForm(form) {
     if (Object.keys(inferEnv).length > 0) {
       desiredState.infer.env = inferEnv;
     }
-    if (form.inferNode.trim()) {
+    if (form.topologyEnabled && form.inferNode.trim()) {
       desiredState.infer.node = form.inferNode.trim();
     }
     if (form.inferStorageEnabled) {
       desiredState.infer.storage = {
         size_gb: parseNumber(form.inferStorageSizeGb, 8),
-        mount_path: form.inferStorageMountPath.trim() || "/comet/private",
+        mount_path: form.inferStorageMountPath.trim() || "/naim/private",
       };
     }
   }
@@ -617,13 +950,13 @@ export function buildDesiredStateV2FromForm(form) {
     if (Object.keys(workerEnv).length > 0) {
       desiredState.worker.env = workerEnv;
     }
-    if (form.workerNode.trim()) {
+    if (form.topologyEnabled && form.workerNode.trim()) {
       desiredState.worker.node = form.workerNode.trim();
     }
     if (form.workerGpuDevice.trim()) {
       desiredState.worker.gpu_device = form.workerGpuDevice.trim();
     }
-    if (form.workerAssignmentsEnabled) {
+    if (form.topologyEnabled && form.workerAssignmentsEnabled) {
       const assignments = (Array.isArray(form.workerAssignments) ? form.workerAssignments : [])
         .map((assignment) => {
           const rendered = {
@@ -642,7 +975,7 @@ export function buildDesiredStateV2FromForm(form) {
     if (form.workerStorageEnabled) {
       desiredState.worker.storage = {
         size_gb: parseNumber(form.workerStorageSizeGb, 24),
-        mount_path: form.workerStorageMountPath.trim() || "/comet/private",
+        mount_path: form.workerStorageMountPath.trim() || "/naim/private",
       };
     }
   }
@@ -659,7 +992,7 @@ export function buildDesiredStateV2FromForm(form) {
     if (Object.keys(appEnv).length > 0) {
       desiredState.app.env = appEnv;
     }
-    if (form.appNode.trim()) {
+    if (form.topologyEnabled && form.appNode.trim()) {
       desiredState.app.node = form.appNode.trim();
     }
     desiredState.app.publish = [
@@ -675,7 +1008,7 @@ export function buildDesiredStateV2FromForm(form) {
           name: form.appVolumeName.trim() || "private-data",
           type: form.appVolumeType,
           size_gb: parseNumber(form.appVolumeSizeGb, 8),
-          mount_path: form.appVolumeMountPath.trim() || "/comet/private",
+          mount_path: form.appVolumeMountPath.trim() || "/naim/private",
           access: form.appVolumeAccess,
         },
       ];
@@ -722,6 +1055,9 @@ export function validatePlaneV2Form(form) {
     errors.push("Plane name is required.");
   }
   if (form?.planeMode === "llm") {
+    if (form?.modelSourceType === "library" && !String(form?.modelRef || "").trim()) {
+      errors.push("Model Library selection is required when model source type is library.");
+    }
     if (form?.modelSourceType === "local" && !String(form?.modelPath || "").trim()) {
       errors.push("Local model path is required when model source type is local.");
     }
@@ -739,6 +1075,17 @@ export function validatePlaneV2Form(form) {
         .filter(Boolean);
       if (!hasPrimaryUrl && additionalUrls.length === 0) {
         errors.push("At least one model URL is required for url sources.");
+      }
+    }
+    if (form?.materializationMode === "prepare_on_worker") {
+      if (!String(form?.materializationSourceNodeName || "").trim()) {
+        errors.push("Source storage node is required for worker model preparation.");
+      }
+      if (
+        !Array.isArray(form?.materializationSourcePaths) ||
+        form.materializationSourcePaths.length === 0
+      ) {
+        errors.push("Source model paths are required for worker model preparation.");
       }
     }
   }
@@ -794,11 +1141,31 @@ export function validatePlaneV2Form(form) {
   }
 
   const referencedNodes = [
+    String(form?.executionNode || "").trim(),
     String(form?.inferNode || "").trim(),
     String(form?.workerNode || "").trim(),
     String(form?.appNode || "").trim(),
     ...enabledAssignments.map((assignment) => String(assignment.node || "").trim()),
   ].filter(Boolean);
+
+  if (!String(form?.executionNode || "").trim()) {
+    errors.push("Execution node is required.");
+  }
+  if (form?.appHostEnabled && !form?.appEnabled) {
+    errors.push("External app host requires the app container to be enabled.");
+  }
+  if (form?.appHostEnabled && !String(form?.appHostAddress || "").trim()) {
+    errors.push("External app host address is required.");
+  }
+  if (form?.appHostEnabled && form?.appHostAuthMode === "ssh-key" &&
+      !String(form?.appHostSshKeyPath || "").trim()) {
+    errors.push("External app host SSH key path is required.");
+  }
+  if (form?.appHostEnabled && form?.appHostAuthMode === "password") {
+    if (!String(form?.appHostUsername || "").trim() || !String(form?.appHostPassword || "").trim()) {
+      errors.push("External app host username and password are required together.");
+    }
+  }
   if (form?.topologyEnabled && topologyNodeNames.length > 0) {
     const unknownNodes = referencedNodes.filter((name) => !topologyNodeNames.includes(name));
     if (unknownNodes.length > 0) {
@@ -950,6 +1317,147 @@ function SectionActions({ children }) {
   return <div className="plane-form-section-actions">{children}</div>;
 }
 
+function hostName(host) {
+  return String(host?.node_name || host?.nodeName || host?.name || "").trim();
+}
+
+function findHost(hostdHosts, nodeName) {
+  return (Array.isArray(hostdHosts) ? hostdHosts : []).find((host) => hostName(host) === nodeName) || null;
+}
+
+function hostRoles(host) {
+  const roles = [];
+  if (Array.isArray(host?.roles)) {
+    roles.push(...host.roles);
+  }
+  if (Array.isArray(host?.capabilities?.roles)) {
+    roles.push(...host.capabilities.roles);
+  }
+  if (host?.role) {
+    roles.push(host.role);
+  }
+  if (host?.is_worker || host?.worker) {
+    roles.push("Worker");
+  }
+  if (host?.is_storage || host?.storage) {
+    roles.push("Storage");
+  }
+  return roles.map((role) => String(role || "").trim().toLowerCase()).filter(Boolean);
+}
+
+function hostGpuCount(host) {
+  const candidates = [
+    host?.gpu_count,
+    host?.gpuCount,
+    host?.resources?.gpu_count,
+    host?.telemetry?.gpu_count,
+    host?.host?.gpu_count,
+  ];
+  for (const value of candidates) {
+    const number = Number(value);
+    if (Number.isFinite(number)) {
+      return number;
+    }
+  }
+  if (Array.isArray(host?.gpus)) {
+    return host.gpus.length;
+  }
+  if (Array.isArray(host?.telemetry?.gpus)) {
+    return host.telemetry.gpus.length;
+  }
+  return 0;
+}
+
+function hostConnected(host) {
+  if (!host) {
+    return false;
+  }
+  const state = String(host.state || host.status || host.health || "").toLowerCase();
+  if (["offline", "missing", "stale", "critical", "error"].includes(state)) {
+    return false;
+  }
+  return host.connected === true || host.ready === true || state === "connected" || state === "ready" || Boolean(host.last_seen_at || host.updated_at);
+}
+
+function peerLinkIsDirect(peerLinks, leftNode, rightNode) {
+  const items = Array.isArray(peerLinks?.items) ? peerLinks.items : Array.isArray(peerLinks) ? peerLinks : [];
+  return items.some((item) => {
+    const text = JSON.stringify(item || {}).toLowerCase();
+    if (!text.includes(leftNode.toLowerCase()) || !text.includes(rightNode.toLowerCase())) {
+      return false;
+    }
+    return (
+      item?.same_lan === true ||
+      item?.bidirectional === true ||
+      String(item?.state || item?.status || item?.link_state || "").toLowerCase() === "direct"
+    );
+  });
+}
+
+function buildLtCypherPreflight({ form, modelLibraryItems, hostdHosts, peerLinks }) {
+  const results = [];
+  const push = (key, label, passed, detail) => {
+    results.push({ key, label, passed, detail });
+  };
+  const hpc1 = findHost(hostdHosts, "hpc1");
+  const storage1 = findHost(hostdHosts, "storage1");
+  const selectedModel =
+    (Array.isArray(modelLibraryItems) ? modelLibraryItems : []).find((item) => item.path === form.modelPath) ||
+    findLtCypherModelItem(modelLibraryItems);
+  const selectedFormat = inferModelFormat(selectedModel);
+  const selectedQuantization = inferModelQuantization(selectedModel);
+  const image = String(form.appImage || "").trim();
+  const imageTag = image.startsWith(LT_CYPHER_HARBOR_IMAGE_PREFIX)
+    ? image.slice(LT_CYPHER_HARBOR_IMAGE_PREFIX.length)
+    : "";
+  push("controller", "Controller reachable", true, "The operator UI has an active API session.");
+  push(
+    "hpc1",
+    "hpc1 worker online with 4 GPUs",
+    hostConnected(hpc1) && hostRoles(hpc1).includes("worker") && hostGpuCount(hpc1) >= 4,
+    hpc1
+      ? `state=${hpc1.state || hpc1.status || "seen"}, roles=${hostRoles(hpc1).join(",") || "n/a"}, gpus=${hostGpuCount(hpc1)}`
+      : "hpc1 is not present in /api/v1/hostd/hosts",
+  );
+  push(
+    "storage1",
+    "storage1 storage online",
+    hostConnected(storage1) && hostRoles(storage1).includes("storage"),
+    storage1
+      ? `state=${storage1.state || storage1.status || "seen"}, roles=${hostRoles(storage1).join(",") || "n/a"}`
+      : "storage1 is not present in /api/v1/hostd/hosts",
+  );
+  push(
+    "lan",
+    "hpc1 <-> storage1 LAN direct",
+    peerLinkIsDirect(peerLinks, "hpc1", "storage1"),
+    peerLinkIsDirect(peerLinks, "hpc1", "storage1")
+      ? "Fresh bidirectional LAN peer link is available."
+      : "No fresh direct peer link in dashboard peer_links.",
+  );
+  push(
+    "model",
+    "Qwen3.6-35B-A3B Q8 model readable on storage1",
+    Boolean(selectedModel) &&
+      String(selectedModel?.node_name || form.materializationSourceNodeName || "") === "storage1" &&
+      selectedFormat === "gguf" &&
+      selectedQuantization === "Q8_0" &&
+      modelLibraryPaths(selectedModel).length > 0,
+    selectedModel
+      ? `${selectedModel.name || selectedModel.model_id || selectedModel.path} / ${selectedFormat || "unknown"} / ${selectedQuantization}`
+      : "Model Library does not contain Qwen3.6-35B-A3B Q8.",
+  );
+  push(
+    "image",
+    "Harbor image is immutable",
+    image.startsWith(LT_CYPHER_HARBOR_IMAGE_PREFIX) &&
+      Boolean(imageTag) &&
+      !["<git-sha>", "latest", "dev"].includes(imageTag),
+    image || "Image is empty.",
+  );
+  return results;
+}
+
 function TopologyNodeRows({ nodes, disabled, onChange }) {
   const items = Array.isArray(nodes) ? nodes : [];
 
@@ -1078,9 +1586,13 @@ export function PlaneV2FormBuilder({
   modelLibraryItems = [],
   skillsFactoryItems = [],
   skillsFactoryGroups = [],
+  hostdHosts = [],
+  peerLinks = null,
+  onResetLtCypherDeployment,
 }) {
   const form = dialog.form || buildNewPlaneFormState();
   const validation = validatePlaneV2Form(form);
+  const [ltCypherPreflight, setLtCypherPreflight] = useState(null);
   const [factorySkillFilter, setFactorySkillFilter] = useState("");
   const [selectedFactoryGroupPath, setSelectedFactoryGroupPath] = useState("");
   const [expandedFactoryGroupPaths, setExpandedFactoryGroupPaths] = useState([""]);
@@ -1162,6 +1674,12 @@ export function PlaneV2FormBuilder({
         if (key === "appEnabled" && event.target.checked && !next.appNode && next.topologyEnabled) {
           next.appNode = next.inferNode || next.workerNode || "";
         }
+        if (key === "appHostEnabled" && !event.target.checked) {
+          next.appHostAddress = "";
+          next.appHostSshKeyPath = "";
+          next.appHostUsername = "";
+          next.appHostPassword = "";
+        }
         return next;
       });
   }
@@ -1218,12 +1736,25 @@ export function PlaneV2FormBuilder({
     updatePlaneDialogForm(setDialog, (current) => {
       const planeName = String(current.planeName || "").trim();
       const fallbackName = item?.name || item?.path?.split("/").pop() || planeName || "model";
+      const sourceFormat = inferModelFormat(item);
+      const sourceQuantization = inferModelQuantization(item);
       return {
         ...current,
+        modelSourceType: "library",
         modelPath: item?.path || "",
         modelRef: item?.model_id || item?.name || item?.path || "",
-        materializationMode: "reference",
+        materializationMode: "prepare_on_worker",
         materializationLocalPath: item?.path || "",
+        materializationSourceNodeName: item?.node_name || "",
+        materializationSourcePaths: Array.isArray(item?.paths) ? item.paths : [],
+        materializationSourceFormat: sourceFormat || "",
+        materializationSourceQuantization: sourceQuantization,
+        materializationDesiredOutputFormat: "gguf",
+        modelQuantization: sourceQuantization,
+        modelKeepSource: false,
+        modelWritebackEnabled: true,
+        modelWritebackIfMissing: true,
+        modelWritebackTargetNodeName: item?.node_name || "",
         servedModelName: current.servedModelNameManual
           ? current.servedModelName
           : fallbackName.replace(/\s+/g, "-").toLowerCase(),
@@ -1250,11 +1781,12 @@ export function PlaneV2FormBuilder({
   function enableSingleHostLayout() {
     updatePlaneDialogForm(setDialog, (current) => ({
       ...current,
-      topologyEnabled: true,
-      topologyNodes: [{ name: "local-hostd", executionMode: "mixed", gpuMemoryText: "" }],
-      inferNode: "local-hostd",
-      workerNode: "local-hostd",
-      appNode: current.appEnabled ? "local-hostd" : current.appNode,
+      executionNode: "local-hostd",
+      topologyEnabled: false,
+      topologyNodes: [],
+      inferNode: "",
+      workerNode: "",
+      appNode: "",
       workerAssignmentsEnabled: false,
       workerAssignments: [],
     }));
@@ -1279,6 +1811,7 @@ export function PlaneV2FormBuilder({
         ...current,
         runtimeEngine: "llama.cpp",
         inferReplicas: workerCount,
+        executionNode: "infer-hostd",
         topologyEnabled: true,
         topologyNodes: topologyNodesValue,
         inferNode: "infer-hostd",
@@ -1320,6 +1853,24 @@ export function PlaneV2FormBuilder({
           : [...currentIds, skillId],
       };
     });
+  }
+
+  function applyLtCypherPreset() {
+    updatePlaneDialogForm(setDialog, (current) =>
+      applyLtCypherPresetToForm(current, modelLibraryItems),
+    );
+    setLtCypherPreflight(null);
+  }
+
+  function runLtCypherPreflight() {
+    setLtCypherPreflight(
+      buildLtCypherPreflight({
+        form,
+        modelLibraryItems,
+        hostdHosts,
+        peerLinks,
+      }),
+    );
   }
 
   function applyFactoryGroupSelection(groupPath, nextSelected) {
@@ -1416,6 +1967,57 @@ export function PlaneV2FormBuilder({
 
   return (
     <div className="plane-form-builder">
+      <div className="plane-form-toggle">
+        <div className="plane-form-section-header">
+          <InfoLabel info="Fill the form for the UI-only LocalTrade Jex deployment flow. The preset uses storage1 as model source, hpc1 as worker, Harbor image contract, and root ingress mode.">
+            Deploy preset
+          </InfoLabel>
+          <p className="plane-form-section-copy">
+            Use this for a clean lt-cypher-ai run: Qwen3.6-35B-A3B Q8 from storage1, hpc1 GPU 0, app on 127.0.0.1:18110, public base path /.
+          </p>
+        </div>
+        <SectionActions>
+          <button className="ghost-button" type="button" onClick={applyLtCypherPreset}>
+            Apply lt-cypher-ai preset
+          </button>
+          <button className="ghost-button" type="button" onClick={runLtCypherPreflight}>
+            Run preset preflight
+          </button>
+          {onResetLtCypherDeployment ? (
+            <button
+              className="ghost-button danger-button"
+              type="button"
+              onClick={onResetLtCypherDeployment}
+            >
+              Reset failed lt-cypher-ai deployment
+            </button>
+          ) : null}
+        </SectionActions>
+        {ltCypherPreflight ? (
+          <div className="model-library-picker">
+            <div className="model-library-picker-head">
+              <div>Check</div>
+              <div>Status</div>
+              <div>Detail</div>
+            </div>
+            <div className="model-library-picker-body">
+              {ltCypherPreflight.map((item) => (
+                <div
+                  className={`model-library-picker-row${item.passed ? " is-selected" : ""}`}
+                  key={item.key}
+                >
+                  <strong>{item.label}</strong>
+                  <span className={`tag ${item.passed ? "is-ok" : "is-critical"}`}>
+                    {item.passed ? "pass" : "fail"}
+                  </span>
+                  <span>{item.detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
       <SectionHeader
         title="Plane"
         description="Identity and mode for the plane you are about to create."
@@ -1624,6 +2226,7 @@ export function PlaneV2FormBuilder({
                 value={form.modelSourceType}
                 onChange={bindText("modelSourceType")}
               >
+                <option value="library">library</option>
                 <option value="local">local</option>
                 <option value="huggingface">huggingface</option>
                 <option value="catalog">catalog</option>
@@ -1632,7 +2235,7 @@ export function PlaneV2FormBuilder({
             </label>
           </div>
 
-          {form.modelSourceType === "local" ? (
+          {form.modelSourceType === "library" || form.modelSourceType === "local" ? (
             <div className="field-label">
               <InfoLabel
                 info="Choose one locally available model from Model Library. The selected row becomes the plane model source."
@@ -1646,12 +2249,15 @@ export function PlaneV2FormBuilder({
                 onSelect={selectLocalModel}
               />
               <FieldHint
-                message={fieldError("Local model path is required when model source type is local")}
+                message={
+                  fieldError("Local model path is required when model source type is local") ||
+                  fieldError("Model Library selection is required when model source type is library")
+                }
               />
             </div>
           ) : null}
 
-          {form.modelSourceType !== "local" ? (
+          {form.modelSourceType !== "local" && form.modelSourceType !== "library" ? (
             <div className="plane-form-grid">
               <label className="field-label">
                 <InfoLabel info={FIELD_INFO.modelRef}>Model ref</InfoLabel>
@@ -1933,16 +2539,17 @@ export function PlaneV2FormBuilder({
                 <div className="plane-form-grid">
                   <label className="field-label">
                     <InfoLabel info={FIELD_INFO.materializationMode}>Materialization mode</InfoLabel>
-                    <select
-                      className="text-input"
-                      value={form.materializationMode}
-                      onChange={bindText("materializationMode")}
-                    >
-                      <option value="download">download</option>
-                      <option value="reference">reference</option>
-                      <option value="copy">copy</option>
-                    </select>
-                  </label>
+                  <select
+                    className="text-input"
+                    value={form.materializationMode}
+                    onChange={bindText("materializationMode")}
+                  >
+                    <option value="prepare_on_worker">prepare_on_worker</option>
+                    <option value="download">download</option>
+                    <option value="reference">reference</option>
+                    <option value="copy">copy</option>
+                  </select>
+                </label>
                   <label className="field-label">
                     <InfoLabel info={FIELD_INFO.materializationLocalPath}>Materialization local path</InfoLabel>
                     <input
@@ -1952,6 +2559,109 @@ export function PlaneV2FormBuilder({
                     />
                   </label>
                 </div>
+                {form.materializationMode === "prepare_on_worker" ? (
+                  <>
+                    <div className="plane-form-grid">
+                      <label className="field-label">
+                        <InfoLabel info={FIELD_INFO.sourceStorageNode}>Source storage node</InfoLabel>
+                        <input
+                          className={inputClassName(
+                            Boolean(fieldError("Source storage node is required for worker model preparation")),
+                          )}
+                          value={form.materializationSourceNodeName}
+                          onChange={bindText("materializationSourceNodeName")}
+                        />
+                        <FieldHint message={fieldError("Source storage node is required for worker model preparation")} />
+                      </label>
+                      <label className="field-label">
+                        <InfoLabel info={FIELD_INFO.modelQuantization}>Quantization</InfoLabel>
+                        <select
+                          className="text-input"
+                          value={form.modelQuantization}
+                          onChange={bindText("modelQuantization")}
+                        >
+                          {MODEL_LIBRARY_QUANTIZATION_FILTERS.map((quantization) => (
+                            <option key={quantization} value={quantization}>
+                              {quantization}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="plane-form-grid">
+                      <label className="field-label">
+                        <span className="field-label-title">Source format</span>
+                        <input
+                          className="text-input"
+                          value={form.materializationSourceFormat}
+                          onChange={bindText("materializationSourceFormat")}
+                          placeholder="gguf, model-directory, safetensors"
+                        />
+                      </label>
+                      <label className="field-label">
+                        <span className="field-label-title">Source quantization</span>
+                        <input
+                          className="text-input"
+                          value={form.materializationSourceQuantization}
+                          onChange={bindText("materializationSourceQuantization")}
+                          placeholder="Q8_0, Q4_K_M, base"
+                        />
+                      </label>
+                      <label className="field-label">
+                        <span className="field-label-title">Output format</span>
+                        <input
+                          className="text-input"
+                          value={form.materializationDesiredOutputFormat}
+                          onChange={bindText("materializationDesiredOutputFormat")}
+                        />
+                      </label>
+                    </div>
+                    <label className="field-label">
+                      <span className="field-label-title">Source paths</span>
+                      <textarea
+                        className="editor-textarea plane-form-textarea"
+                        value={(form.materializationSourcePaths || []).join("\n")}
+                        onChange={(event) =>
+                          updatePlaneDialogForm(setDialog, (current) => ({
+                            ...current,
+                            materializationSourcePaths: event.target.value
+                              .split(/\r?\n/)
+                              .map((item) => item.trim())
+                              .filter(Boolean),
+                          }))
+                        }
+                      />
+                      <FieldHint message={fieldError("Source model paths are required for worker model preparation")} />
+                    </label>
+                    <div className="plane-form-grid">
+                      <label className="field-label plane-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={form.modelWritebackEnabled}
+                          onChange={bindCheck("modelWritebackEnabled")}
+                        />
+                        <span className="field-label-inline">Write prepared model back to storage</span>
+                      </label>
+                      <label className="field-label plane-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={form.modelWritebackIfMissing}
+                          onChange={bindCheck("modelWritebackIfMissing")}
+                        />
+                        <span className="field-label-inline">Only upload if missing</span>
+                      </label>
+                    </div>
+                    <label className="field-label">
+                      <span className="field-label-title">Writeback target node</span>
+                      <input
+                        className="text-input"
+                        value={form.modelWritebackTargetNodeName}
+                        onChange={bindText("modelWritebackTargetNodeName")}
+                        placeholder="Defaults to source storage node"
+                      />
+                    </label>
+                  </>
+                ) : null}
                 <div className="plane-form-grid">
                   <label className="field-label">
                     <InfoLabel info={FIELD_INFO.targetFilename}>Target filename</InfoLabel>
@@ -2028,18 +2738,27 @@ export function PlaneV2FormBuilder({
 
       <AdvancedSection
         title="Placement and topology"
-        description="Use only for split-host, manual GPU placement, or per-worker assignment layouts."
+        description="Execution node selection is the normal path. Custom topology stays available only for legacy split-host and manual placement layouts."
       >
         <SectionMeta>{topologySummary}</SectionMeta>
         <SectionActions>
           <button className="ghost-button" type="button" onClick={enableSingleHostLayout}>
-            Use single-host layout
+            Use selected-node layout
           </button>
           <button className="ghost-button" type="button" onClick={generateSplitHostLayout}>
-            Generate split-host layout
+            Generate legacy split-host layout
           </button>
         </SectionActions>
         <div className="plane-form-grid">
+          <label className="field-label">
+            <InfoLabel info={FIELD_INFO.executionNode}>Execution node</InfoLabel>
+            <input
+              className={inputClassName(Boolean(fieldError("Execution node is required.")))}
+              value={form.executionNode}
+              onChange={bindText("executionNode")}
+            />
+            <FieldHint message={fieldError("Execution node is required.")} />
+          </label>
           <label className="field-label plane-checkbox">
             <input
               type="checkbox"
@@ -2110,61 +2829,70 @@ export function PlaneV2FormBuilder({
             </label>
           ) : null}
         </div>
-        <div className="plane-form-grid">
-          <label className="field-label">
-            <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
-            <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
-          </label>
-          <label className="field-label">
-            <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
-            <input
-              className="text-input"
-              value={form.workerGpuDevice}
-              onChange={bindText("workerGpuDevice")}
-            />
-          </label>
-          {form.planeMode === "llm" ? (
+        {form.topologyEnabled ? (
+          <>
+            <div className="plane-form-grid">
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.workerNode}>Worker node</InfoLabel>
+                <input className="text-input" value={form.workerNode} onChange={bindText("workerNode")} />
+              </label>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.workerGpuDevice}>Worker GPU device</InfoLabel>
+                <input
+                  className="text-input"
+                  value={form.workerGpuDevice}
+                  onChange={bindText("workerGpuDevice")}
+                />
+              </label>
+              {form.planeMode === "llm" ? (
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
+                  <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+                </label>
+              ) : null}
+            </div>
+            <div className="plane-form-grid">
+              <label className="field-label plane-checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.workerAssignmentsEnabled}
+                  onChange={bindCheck("workerAssignmentsEnabled")}
+                />
+                <InfoLabel info={FIELD_INFO.workerAssignmentsEnabled} className="field-label-inline">
+                  Per-worker assignments
+                </InfoLabel>
+              </label>
+            </div>
+            <SectionActions>
+              <button className="ghost-button" type="button" onClick={matchAssignmentsToWorkers}>
+                Match assignments to worker count
+              </button>
+            </SectionActions>
             <label className="field-label">
-              <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
-              <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+              <InfoLabel info={FIELD_INFO.workerAssignments}>Worker assignments</InfoLabel>
+              <WorkerAssignmentRows
+                assignments={form.workerAssignments}
+                disabled={!form.workerAssignmentsEnabled}
+                onChange={updateWorkerAssignments}
+              />
+              <FieldHint
+                message={firstMatching(validation.errors, [
+                  "Worker assignments count must match the number of workers",
+                  "Each worker assignment must include a node name",
+                ])}
+              />
+              <FieldHint
+                message={fieldWarning("Per-worker assignments are easier to reason about")}
+                severity="warning"
+              />
             </label>
-          ) : null}
-        </div>
-        <div className="plane-form-grid">
-          <label className="field-label plane-checkbox">
-            <input
-              type="checkbox"
-              checked={form.workerAssignmentsEnabled}
-              onChange={bindCheck("workerAssignmentsEnabled")}
-            />
-            <InfoLabel info={FIELD_INFO.workerAssignmentsEnabled} className="field-label-inline">
-              Per-worker assignments
-            </InfoLabel>
-          </label>
-        </div>
-        <SectionActions>
-          <button className="ghost-button" type="button" onClick={matchAssignmentsToWorkers}>
-            Match assignments to worker count
-          </button>
-        </SectionActions>
-        <label className="field-label">
-          <InfoLabel info={FIELD_INFO.workerAssignments}>Worker assignments</InfoLabel>
-          <WorkerAssignmentRows
-            assignments={form.workerAssignments}
-            disabled={!form.workerAssignmentsEnabled}
-            onChange={updateWorkerAssignments}
-          />
+          </>
+        ) : (
           <FieldHint
-            message={firstMatching(validation.errors, [
-              "Worker assignments count must match the number of workers",
-              "Each worker assignment must include a node name",
-            ])}
-          />
-          <FieldHint
-            message={fieldWarning("Per-worker assignments are easier to reason about")}
+            message="Legacy per-service node pinning and per-worker assignments stay disabled until Custom topology is enabled."
             severity="warning"
           />
-        </label>
+        )}
       </AdvancedSection>
 
       <AdvancedSection
@@ -2279,10 +3007,19 @@ export function PlaneV2FormBuilder({
                 </label>
               </div>
               <div className="plane-form-grid">
-                <label className="field-label">
-                  <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
-                  <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
-                </label>
+                {form.topologyEnabled ? (
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.inferNode}>Infer node</InfoLabel>
+                    <input className="text-input" value={form.inferNode} onChange={bindText("inferNode")} />
+                  </label>
+                ) : (
+                  <div className="field-label">
+                    <InfoLabel info={FIELD_INFO.executionNode}>Infer node</InfoLabel>
+                    <div className="plane-form-section-copy">
+                      Infer colocates with the selected execution node unless legacy topology is enabled.
+                    </div>
+                  </div>
+                )}
                 <label className="field-label plane-checkbox">
                   <input
                     type="checkbox"
@@ -2443,10 +3180,29 @@ export function PlaneV2FormBuilder({
             </label>
           </div>
           <div className="plane-form-grid">
-            <label className="field-label">
-              <InfoLabel info={FIELD_INFO.appNode}>App node</InfoLabel>
-              <input className="text-input" value={form.appNode} onChange={bindText("appNode")} />
+            <label className="field-label plane-checkbox">
+              <input
+                type="checkbox"
+                checked={form.appHostEnabled}
+                onChange={bindCheck("appHostEnabled")}
+              />
+              <InfoLabel info={FIELD_INFO.appHostEnabled} className="field-label-inline">
+                External app host
+              </InfoLabel>
             </label>
+            {form.topologyEnabled ? (
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.appNode}>App node</InfoLabel>
+                <input className="text-input" value={form.appNode} onChange={bindText("appNode")} />
+              </label>
+            ) : (
+              <div className="field-label">
+                <InfoLabel info={FIELD_INFO.executionNode}>App placement</InfoLabel>
+                <div className="plane-form-section-copy">
+                  App runs on the selected execution node by default and moves only when External app host is enabled.
+                </div>
+              </div>
+            )}
             <label className="field-label plane-checkbox">
               <input
                 type="checkbox"
@@ -2458,6 +3214,67 @@ export function PlaneV2FormBuilder({
               </InfoLabel>
             </label>
           </div>
+          {form.appHostEnabled ? (
+            <>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appHostAddress}>App host address</InfoLabel>
+                  <input
+                    className={inputClassName(Boolean(fieldError("External app host address is required.")))}
+                    value={form.appHostAddress}
+                    onChange={bindText("appHostAddress")}
+                  />
+                  <FieldHint message={fieldError("External app host address is required.")} />
+                  <FieldHint message={fieldError("External app host requires the app container to be enabled.")} />
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appHostAuthMode}>App host auth mode</InfoLabel>
+                  <select
+                    className="text-input"
+                    value={form.appHostAuthMode}
+                    onChange={bindText("appHostAuthMode")}
+                  >
+                    <option value="ssh-key">ssh-key</option>
+                    <option value="password">password</option>
+                  </select>
+                </label>
+              </div>
+              {form.appHostAuthMode === "password" ? (
+                <div className="plane-form-grid">
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appHostUsername}>App host username</InfoLabel>
+                    <input
+                      className={inputClassName(Boolean(fieldError("External app host username and password are required together.")))}
+                      value={form.appHostUsername}
+                      onChange={bindText("appHostUsername")}
+                    />
+                  </label>
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appHostPassword}>App host password</InfoLabel>
+                    <input
+                      className={inputClassName(Boolean(fieldError("External app host username and password are required together.")))}
+                      type="password"
+                      value={form.appHostPassword}
+                      onChange={bindText("appHostPassword")}
+                    />
+                    <FieldHint message={fieldError("External app host username and password are required together.")} />
+                  </label>
+                </div>
+              ) : (
+                <div className="plane-form-grid">
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appHostSshKeyPath}>App host SSH key path</InfoLabel>
+                    <input
+                      className={inputClassName(Boolean(fieldError("External app host SSH key path is required.")))}
+                      value={form.appHostSshKeyPath}
+                      onChange={bindText("appHostSshKeyPath")}
+                    />
+                    <FieldHint message={fieldError("External app host SSH key path is required.")} />
+                  </label>
+                </div>
+              )}
+            </>
+          ) : null}
           <label className="field-label">
             <InfoLabel info={FIELD_INFO.appEnv}>App env</InfoLabel>
             <textarea

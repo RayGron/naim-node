@@ -17,7 +17,7 @@
 #include <unistd.h>
 #endif
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
 namespace {
 
@@ -34,7 +34,7 @@ constexpr std::array<std::string_view, 5> kKnownQuantizations = {
 
 bool IsHfAuxiliaryConversionFile(const std::string& lowered_filename) {
   return lowered_filename.ends_with(".json") || lowered_filename.ends_with(".model") ||
-         lowered_filename.ends_with(".txt");
+         lowered_filename.ends_with(".txt") || lowered_filename.ends_with(".jinja");
 }
 
 std::filesystem::path JoinNormalized(
@@ -315,10 +315,10 @@ ModelConversionService::LlamaCppToolLocator::LlamaCppToolLocator(
 ModelConversionService::ToolPaths
 ModelConversionService::LlamaCppToolLocator::Resolve() const {
   ToolPaths paths;
-  if (const char* value = std::getenv("COMET_MODEL_LIBRARY_PYTHON");
+  if (const char* value = std::getenv("NAIM_MODEL_LIBRARY_PYTHON");
       value != nullptr && *value != '\0') {
     paths.python_executable = value;
-  } else if (const char* value = std::getenv("COMET_LLAMA_CPP_PYTHON");
+  } else if (const char* value = std::getenv("NAIM_LLAMA_CPP_PYTHON");
              value != nullptr && *value != '\0') {
     paths.python_executable = value;
   } else if (std::filesystem::exists("/usr/bin/python3")) {
@@ -327,15 +327,15 @@ ModelConversionService::LlamaCppToolLocator::Resolve() const {
     paths.python_executable = "python3";
   }
 
-  if (const char* value = std::getenv("COMET_MODEL_LIBRARY_CONVERT_SCRIPT");
+  if (const char* value = std::getenv("NAIM_MODEL_LIBRARY_CONVERT_SCRIPT");
       value != nullptr && *value != '\0') {
     paths.convert_script_path = value;
-  } else if (const char* value = std::getenv("COMET_LLAMA_CPP_CONVERT_SCRIPT");
+  } else if (const char* value = std::getenv("NAIM_LLAMA_CPP_CONVERT_SCRIPT");
              value != nullptr && *value != '\0') {
     paths.convert_script_path = value;
   } else {
-#if defined(COMET_LLAMA_CPP_SOURCE_TREE)
-    const std::filesystem::path compiled_source_tree(COMET_LLAMA_CPP_SOURCE_TREE);
+#if defined(NAIM_LLAMA_CPP_SOURCE_TREE)
+    const std::filesystem::path compiled_source_tree(NAIM_LLAMA_CPP_SOURCE_TREE);
     if (std::filesystem::exists(compiled_source_tree / "convert_hf_to_gguf.py")) {
       paths.convert_script_path = compiled_source_tree / "convert_hf_to_gguf.py";
     }
@@ -349,15 +349,15 @@ ModelConversionService::LlamaCppToolLocator::Resolve() const {
     }
   }
 
-  if (const char* value = std::getenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN");
+  if (const char* value = std::getenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN");
       value != nullptr && *value != '\0') {
     paths.quantize_executable_path = value;
-  } else if (const char* value = std::getenv("COMET_LLAMA_CPP_QUANTIZE");
+  } else if (const char* value = std::getenv("NAIM_LLAMA_CPP_QUANTIZE");
              value != nullptr && *value != '\0') {
     paths.quantize_executable_path = value;
   } else {
-#if defined(COMET_LLAMA_CPP_RUNTIME_OUTPUT_DIR)
-    const std::filesystem::path runtime_output(COMET_LLAMA_CPP_RUNTIME_OUTPUT_DIR);
+#if defined(NAIM_LLAMA_CPP_RUNTIME_OUTPUT_DIR)
+    const std::filesystem::path runtime_output(NAIM_LLAMA_CPP_RUNTIME_OUTPUT_DIR);
     if (std::filesystem::exists(runtime_output / "llama-quantize")) {
       paths.quantize_executable_path = runtime_output / "llama-quantize";
     }
@@ -379,7 +379,7 @@ ModelConversionService::LlamaCppToolLocator::Resolve() const {
 
   if (paths.convert_script_path.empty()) {
     throw std::runtime_error(
-        "failed to locate convert_hf_to_gguf.py; set COMET_MODEL_LIBRARY_CONVERT_SCRIPT");
+        "failed to locate convert_hf_to_gguf.py; set NAIM_MODEL_LIBRARY_CONVERT_SCRIPT");
   }
   return paths;
 }
@@ -429,7 +429,7 @@ void ModelConversionService::GgufQuantizationService::Quantize(
     const JobHooks& hooks) const {
   if (tool_paths_.quantize_executable_path.empty()) {
     throw std::runtime_error(
-        "failed to locate llama-quantize; set COMET_MODEL_LIBRARY_QUANTIZE_BIN");
+        "failed to locate llama-quantize; set NAIM_MODEL_LIBRARY_QUANTIZE_BIN");
   }
   for (std::size_t index = 0; index < plan.quantizations.size(); ++index) {
     const auto& quantization = plan.quantizations.at(index);
@@ -556,7 +556,7 @@ void ModelConversionService::RemovePathIfExists(const std::filesystem::path& pat
 }
 
 std::filesystem::path ModelConversionService::DetectRepoRoot() {
-  const auto executable_path = std::filesystem::path(comet::platform::ExecutablePath());
+  const auto executable_path = std::filesystem::path(naim::platform::ExecutablePath());
   if (!executable_path.empty()) {
     auto current = executable_path.parent_path();
     while (!current.empty()) {
@@ -607,7 +607,7 @@ void ModelConversionService::RunCommand(
     if (!working_directory.empty()) {
       chdir(working_directory.c_str());
       const auto log_path =
-          working_directory / (".comet-" + SanitizeLogLabel(phase) + ".log");
+          working_directory / (".naim-" + SanitizeLogLabel(phase) + ".log");
       const int log_fd =
           open(log_path.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0664);
       if (log_fd >= 0) {

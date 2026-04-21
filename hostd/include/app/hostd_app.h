@@ -1,6 +1,6 @@
 #pragma once
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdApp final {
  public:
@@ -16,4 +16,4 @@ class HostdApp final {
   char** argv_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

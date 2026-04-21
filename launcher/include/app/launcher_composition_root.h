@@ -13,7 +13,7 @@
 #include "platform/signal_manager.h"
 #include "run/launcher_run_service.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class LauncherCompositionRoot {
  public:
@@ -36,4 +36,4 @@ class LauncherCompositionRoot {
   std::unique_ptr<HostdRegistrationService> hostd_registration_service_;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

@@ -17,14 +17,14 @@
 #include "scheduler/scheduler_execution_support.h"
 #include "skills/plane_skill_runtime_sync_service.h"
 
-#include "comet/planning/execution_plan.h"
-#include "comet/planning/scheduling_policy.h"
-#include "comet/state/state_json.h"
+#include "naim/planning/execution_plan.h"
+#include "naim/planning/scheduling_policy.h"
+#include "naim/state/state_json.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
-std::optional<comet::RolloutActionRecord> SchedulerService::FindRolloutActionById(
-    const std::vector<comet::RolloutActionRecord>& actions,
+std::optional<naim::RolloutActionRecord> SchedulerService::FindRolloutActionById(
+    const std::vector<naim::RolloutActionRecord>& actions,
     int action_id) const {
   for (const auto& action : actions) {
     if (action.id == action_id) {
@@ -174,7 +174,7 @@ ControllerActionResult SchedulerService::ExecuteSetRolloutActionStatus(
       [&]() {
         return SetRolloutActionStatus(
             action_id,
-            comet::ParseRolloutActionStatus(requested_status),
+            naim::ParseRolloutActionStatus(requested_status),
             message);
       });
 }
@@ -198,7 +198,7 @@ ControllerActionResult SchedulerService::ExecuteApplyReadyRolloutAction(int acti
 }
 
 int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -238,15 +238,15 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
         "); apply a fresh bundle or rollout generation before materializing another direct rebalance");
   }
 
-  comet::DesiredState updated_state = *desired_state;
+  naim::DesiredState updated_state = *desired_state;
   scheduler_execution_support_.MaterializeRebalancePlanEntry(&updated_state, *rebalance_it);
-  comet::RequireSchedulingPolicy(updated_state);
-  const comet::SchedulingPolicyReport updated_scheduling_report =
-      comet::EvaluateSchedulingPolicy(updated_state);
+  naim::RequireSchedulingPolicy(updated_state);
+  const naim::SchedulingPolicyReport updated_scheduling_report =
+      naim::EvaluateSchedulingPolicy(updated_state);
   const int next_generation = *desired_generation + 1;
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto host_plans =
-      comet::BuildNodeExecutionPlans(desired_state, updated_state, artifacts_root_);
+      naim::BuildNodeExecutionPlans(desired_state, updated_state, artifacts_root_);
 
   plane_realization_service_.MaterializeComposeArtifacts(updated_state, host_plans);
   plane_realization_service_.MaterializeInferRuntimeArtifact(updated_state, artifacts_root_);
@@ -266,7 +266,7 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
           availability_overrides,
           observations,
           updated_scheduling_report));
-  comet::SchedulerPlaneRuntime plane_runtime;
+  naim::SchedulerPlaneRuntime plane_runtime;
   plane_runtime.plane_name = updated_state.plane_name;
   plane_runtime.active_action = "rebalance";
   plane_runtime.active_worker_name = rebalance_it->worker_name;
@@ -278,7 +278,7 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
   plane_runtime.source_gpu_device = rebalance_it->current_gpu_device;
   plane_runtime.target_node_name = rebalance_it->target_node_name;
   plane_runtime.target_gpu_device = rebalance_it->target_gpu_device;
-  plane_runtime.previous_state_json = comet::SerializeDesiredStateJson(*desired_state);
+  plane_runtime.previous_state_json = naim::SerializeDesiredStateJson(*desired_state);
   plane_runtime.status_message = "awaiting post-move verification";
   store.UpsertSchedulerPlaneRuntime(plane_runtime);
   controller_event_service_.AppendEvent(
@@ -307,7 +307,7 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
   std::cout << "target=" << rebalance_it->target_node_name << ":"
             << rebalance_it->target_gpu_device << "\n";
   controller_print_service_.PrintStateSummary(updated_state);
-  std::cout << comet::RenderSchedulingPolicyReport(updated_scheduling_report);
+  std::cout << naim::RenderSchedulingPolicyReport(updated_scheduling_report);
   controller_print_service_.PrintSchedulerDecisionSummary(updated_state);
   controller_print_service_.PrintRolloutGateSummary(updated_scheduling_report);
   controller_print_service_.PrintAssignmentDispatchSummary(
@@ -319,7 +319,7 @@ int SchedulerService::ApplyRebalanceProposal(const std::string& worker_name) con
 }
 
 int SchedulerService::ReconcileRebalanceProposals() const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -391,7 +391,7 @@ int SchedulerService::ReconcileRebalanceProposals() const {
 }
 
 int SchedulerService::SchedulerTick() const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   const HostAssignmentReconciliationService reconciliation_service;
   (void)reconciliation_service.Reconcile(store);
@@ -417,7 +417,7 @@ int SchedulerService::SchedulerTick() const {
   bool has_active_rollout = false;
   for (const auto& action : rollout_actions) {
     if (action.desired_generation == *desired_generation &&
-        action.status != comet::RolloutActionStatus::ReadyToRetry) {
+        action.status != naim::RolloutActionStatus::ReadyToRetry) {
       has_active_rollout = true;
       break;
     }
@@ -437,9 +437,9 @@ int SchedulerService::SchedulerTick() const {
 
 int SchedulerService::SetRolloutActionStatus(
     int action_id,
-    comet::RolloutActionStatus status,
+    naim::RolloutActionStatus status,
     const std::optional<std::string>& status_message) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
   if (!store.UpdateRolloutActionStatus(action_id, status, status_message.value_or(""))) {
     throw std::runtime_error(
@@ -453,7 +453,7 @@ int SchedulerService::SetRolloutActionStatus(
         "status-updated",
         "updated rollout action status",
         nlohmann::json{
-            {"status", comet::ToString(status)},
+            {"status", naim::ToString(status)},
             {"status_message", status_message.value_or("")},
             {"action", updated_action->action},
             {"step", updated_action->step},
@@ -466,7 +466,7 @@ int SchedulerService::SetRolloutActionStatus(
         "info");
   }
   std::cout << "updated rollout action id=" << action_id
-            << " status=" << comet::ToString(status) << "\n";
+            << " status=" << naim::ToString(status) << "\n";
   if (updated_action.has_value()) {
     controller_print_service_.PrintPersistedRolloutActions(
         store.LoadRolloutActions(updated_action->plane_name));
@@ -477,7 +477,7 @@ int SchedulerService::SetRolloutActionStatus(
 }
 
 int SchedulerService::EnqueueRolloutEviction(int action_id) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -503,12 +503,12 @@ int SchedulerService::EnqueueRolloutEviction(int action_id) const {
         "rollout action id=" + std::to_string(action_id) +
         " is not an evict-best-effort action");
   }
-  if (action->status != comet::RolloutActionStatus::Pending &&
-      action->status != comet::RolloutActionStatus::Acknowledged) {
+  if (action->status != naim::RolloutActionStatus::Pending &&
+      action->status != naim::RolloutActionStatus::Acknowledged) {
     throw std::runtime_error(
         "rollout action id=" + std::to_string(action_id) +
         " cannot enqueue eviction from status=" +
-        comet::ToString(action->status));
+        naim::ToString(action->status));
   }
 
   const auto existing_assignments = store.LoadHostAssignments();
@@ -537,7 +537,7 @@ int SchedulerService::EnqueueRolloutEviction(int action_id) const {
   }
   store.UpdateRolloutActionStatus(
       action_id,
-      comet::RolloutActionStatus::Acknowledged,
+      naim::RolloutActionStatus::Acknowledged,
       message.str());
   controller_event_service_.AppendEvent(
       store,
@@ -566,7 +566,7 @@ int SchedulerService::EnqueueRolloutEviction(int action_id) const {
 }
 
 int SchedulerService::ReconcileRolloutActions() const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -576,7 +576,7 @@ int SchedulerService::ReconcileRolloutActions() const {
   }
 
   const auto all_rollout_actions = store.LoadRolloutActions(desired_state->plane_name);
-  std::vector<comet::RolloutActionRecord> rollout_actions;
+  std::vector<naim::RolloutActionRecord> rollout_actions;
   for (const auto& action : all_rollout_actions) {
     if (action.desired_generation == *desired_generation) {
       rollout_actions.push_back(action);
@@ -593,7 +593,7 @@ int SchedulerService::ReconcileRolloutActions() const {
   bool changed = false;
   for (const auto& action : rollout_actions) {
     if (action.action == "evict-best-effort") {
-      if (action.status == comet::RolloutActionStatus::Pending) {
+      if (action.status == naim::RolloutActionStatus::Pending) {
         const auto existing_assignments = store.LoadHostAssignments();
         const auto eviction_assignments =
             scheduler_execution_support_.BuildEvictionAssignmentsForAction(
@@ -606,20 +606,20 @@ int SchedulerService::ReconcileRolloutActions() const {
             "superseded by rollout eviction action id=" + std::to_string(action.id));
         store.UpdateRolloutActionStatus(
             action.id,
-            comet::RolloutActionStatus::Acknowledged,
+            naim::RolloutActionStatus::Acknowledged,
             "controller-managed eviction assignments enqueued");
         std::cout << "rollout reconcile: enqueued eviction action id=" << action.id << "\n";
         changed = true;
         continue;
       }
 
-      if (action.status == comet::RolloutActionStatus::Acknowledged &&
+      if (action.status == naim::RolloutActionStatus::Acknowledged &&
           scheduler_execution_support_.AreRolloutEvictionAssignmentsApplied(
               store.LoadHostAssignments(),
               action.id)) {
         store.UpdateRolloutActionStatus(
             action.id,
-            comet::RolloutActionStatus::ReadyToRetry,
+            naim::RolloutActionStatus::ReadyToRetry,
             "eviction assignments applied");
         scheduler_execution_support_.MarkWorkersEvicted(
             &store,
@@ -647,12 +647,12 @@ int SchedulerService::ReconcileRolloutActions() const {
         store.LoadRolloutActions(desired_state->plane_name),
         *current_action,
         "evict-best-effort");
-    if (current_action->status == comet::RolloutActionStatus::Pending &&
+    if (current_action->status == naim::RolloutActionStatus::Pending &&
         prior_evict_action.has_value() &&
-        prior_evict_action->status == comet::RolloutActionStatus::ReadyToRetry) {
+        prior_evict_action->status == naim::RolloutActionStatus::ReadyToRetry) {
       store.UpdateRolloutActionStatus(
           current_action->id,
-          comet::RolloutActionStatus::ReadyToRetry,
+          naim::RolloutActionStatus::ReadyToRetry,
           "preceding eviction completed");
       std::cout << "rollout reconcile: retry action id=" << current_action->id
                 << " is ready-to-retry\n";
@@ -663,7 +663,7 @@ int SchedulerService::ReconcileRolloutActions() const {
     }
 
     if (current_action.has_value() &&
-        current_action->status == comet::RolloutActionStatus::ReadyToRetry) {
+        current_action->status == naim::RolloutActionStatus::ReadyToRetry) {
       std::cout << "rollout reconcile: materializing retry action id="
                 << current_action->id << "\n";
       return ApplyReadyRolloutAction(current_action->id);
@@ -690,7 +690,7 @@ int SchedulerService::ReconcileRolloutActions() const {
 }
 
 int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -705,11 +705,11 @@ int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
     throw std::runtime_error(
         "rollout action id=" + std::to_string(action_id) + " not found");
   }
-  if (action->status != comet::RolloutActionStatus::ReadyToRetry) {
+  if (action->status != naim::RolloutActionStatus::ReadyToRetry) {
     throw std::runtime_error(
         "rollout action id=" + std::to_string(action_id) +
         " is not ready-to-retry; current status=" +
-        comet::ToString(action->status));
+        naim::ToString(action->status));
   }
   if (action->action != "retry-placement") {
     throw std::runtime_error(
@@ -724,7 +724,7 @@ int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
         candidate_action.step >= action->step) {
       continue;
     }
-    if (candidate_action.status != comet::RolloutActionStatus::ReadyToRetry) {
+    if (candidate_action.status != naim::RolloutActionStatus::ReadyToRetry) {
       throw std::runtime_error(
           "prior rollout step id=" + std::to_string(candidate_action.id) +
           " is not ready-to-retry");
@@ -734,12 +734,12 @@ int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
     }
   }
 
-  comet::DesiredState updated_state = *desired_state;
+  naim::DesiredState updated_state = *desired_state;
   scheduler_execution_support_.MaterializeRetryPlacementAction(
       &updated_state, *action, victim_worker_names);
-  comet::RequireSchedulingPolicy(updated_state);
-  const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(updated_state);
+  naim::RequireSchedulingPolicy(updated_state);
+  const naim::SchedulingPolicyReport scheduling_report =
+      naim::EvaluateSchedulingPolicy(updated_state);
   const int next_generation = *desired_generation + 1;
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto observations = store.LoadHostObservations();
@@ -777,14 +777,14 @@ int SchedulerService::ApplyReadyRolloutAction(int action_id) const {
   std::cout << "applied ready rollout action id=" << action_id << "\n";
   std::cout << "desired generation: " << next_generation << "\n";
   controller_print_service_.PrintStateSummary(updated_state);
-  std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
+  std::cout << naim::RenderSchedulingPolicyReport(scheduling_report);
   controller_print_service_.PrintSchedulerDecisionSummary(updated_state);
   controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   return 0;
 }
 
 int SchedulerService::AdvanceActiveSchedulerAction() const {
-  comet::ControllerStore store(db_path_);
+  naim::ControllerStore store(db_path_);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState();
@@ -805,12 +805,12 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
       throw std::runtime_error(
           "rollback-planned action has no previous desired state payload");
     }
-    const comet::DesiredState rollback_state =
-        comet::DeserializeDesiredStateJson(plane_runtime->previous_state_json);
-    comet::RequireSchedulingPolicy(rollback_state);
+    const naim::DesiredState rollback_state =
+        naim::DeserializeDesiredStateJson(plane_runtime->previous_state_json);
+    naim::RequireSchedulingPolicy(rollback_state);
     const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
     const auto observations = store.LoadHostObservations();
-    const auto rollback_report = comet::EvaluateSchedulingPolicy(rollback_state);
+    const auto rollback_report = naim::EvaluateSchedulingPolicy(rollback_state);
     const int rollback_generation = *desired_generation + 1;
     store.ReplaceDesiredState(rollback_state, rollback_generation, 0);
     store.ReplaceRolloutActions(
@@ -825,7 +825,7 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
             availability_overrides,
             observations,
             rollback_report));
-    comet::SchedulerPlaneRuntime updated_runtime = *plane_runtime;
+    naim::SchedulerPlaneRuntime updated_runtime = *plane_runtime;
     updated_runtime.phase = "rollback-applied";
     updated_runtime.action_generation = rollback_generation;
     updated_runtime.stable_samples = 0;
@@ -859,7 +859,7 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
   const auto verification =
       scheduler_execution_support_.EvaluateSchedulerActionVerification(
           *plane_runtime, observations);
-  comet::SchedulerPlaneRuntime updated_runtime = *plane_runtime;
+  naim::SchedulerPlaneRuntime updated_runtime = *plane_runtime;
   updated_runtime.stable_samples = verification.next_stable_samples;
   updated_runtime.status_message = verification.detail;
 
@@ -902,7 +902,7 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
 
   if (updated_runtime.rollback_attempt_count == 0 &&
       !updated_runtime.previous_state_json.empty()) {
-    comet::SchedulerWorkerRuntime worker_runtime;
+    naim::SchedulerWorkerRuntime worker_runtime;
     if (const auto current = store.LoadSchedulerWorkerRuntime(updated_runtime.active_worker_name);
         current.has_value()) {
       worker_runtime = *current;
@@ -940,7 +940,7 @@ int SchedulerService::AdvanceActiveSchedulerAction() const {
     return 0;
   }
 
-  comet::SchedulerWorkerRuntime worker_runtime;
+  naim::SchedulerWorkerRuntime worker_runtime;
   if (const auto current = store.LoadSchedulerWorkerRuntime(updated_runtime.active_worker_name);
       current.has_value()) {
     worker_runtime = *current;
@@ -980,8 +980,8 @@ int SchedulerService::SetRolloutActionStatus(
     const std::optional<std::string>& message) const {
   return SetRolloutActionStatus(
       action_id,
-      comet::ParseRolloutActionStatus(requested_status),
+      naim::ParseRolloutActionStatus(requested_status),
       message);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

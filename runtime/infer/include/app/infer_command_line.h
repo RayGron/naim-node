@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace comet::infer {
+namespace naim::infer {
 
 struct InferCommandLineOptions {
   std::string command;
@@ -34,4 +34,4 @@ class InferCommandLine final {
   std::string DefaultProfilesPath() const;
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

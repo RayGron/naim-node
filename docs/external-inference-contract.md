@@ -1,6 +1,6 @@
 # External Inference Contract
 
-`comet-node` exposes a controller-owned plane-scoped inference contract for external clients.
+`naim-node` exposes a controller-owned plane-scoped inference contract for external clients.
 This is the supported external boundary for agent clients such as `maglev`.
 
 Authoritative endpoints:
@@ -21,7 +21,7 @@ external contract.
 
 ## Responsibility Split
 
-`comet-node` owns:
+`naim-node` owns:
 
 - readiness and not-ready semantics
 - request normalization and validation
@@ -54,7 +54,7 @@ Supported fields for chat requests:
 Controller-owned normalization:
 
 - `model`
-  - when absent, `comet-node` injects the plane's active served model
+  - when absent, `naim-node` injects the plane's active served model
   - when present, it must match the active served model name or root model id
 - `response_format`
   - supported only as `{"type":"json_object"}`
@@ -74,7 +74,7 @@ Explicitly unsupported and rejected:
 - `functions`
 - `function_call`
 - unsupported `response_format` variants, including tool/schema/function-oriented modes not
-  guaranteed by `comet-node`
+  guaranteed by `naim-node`
 
 ## Status Contract
 
@@ -92,7 +92,7 @@ Stable top-level fields:
 - `completion_policy`
 - `long_completion_policy`
 - `request_id`
-- `comet`
+- `naim`
 
 Current `reason` values are controller-owned enums. External clients should branch on `ready`,
 `degraded`, and `reason`, not on logs.
@@ -136,7 +136,7 @@ Interaction endpoints return a machine-readable error envelope:
     "message": "plane interaction target is not ready",
     "retryable": true
   },
-  "comet": {
+  "naim": {
     "request_id": "req-...",
     "plane_name": "qwen35-35b-a3b",
     "served_model_name": "qwen3.5-35b-a3b",
@@ -201,7 +201,7 @@ Initial structured-output transport support is limited to:
 
 Behavior:
 
-- `comet-node` shapes the request for JSON-only output
+- `naim-node` shapes the request for JSON-only output
 - success is returned only when the final content parses as a JSON object
 - truncated structured output returns `422 structured_output_truncated`
 - malformed structured output returns `422 structured_output_malformed`
@@ -226,7 +226,7 @@ Skill shape:
 - `content`
 - `enabled`
 - `session_ids[]`
-- `comet_links[]`
+- `naim_links[]`
 - `created_at`
 - `updated_at`
 
@@ -239,8 +239,8 @@ Resolution behavior for interaction requests:
 - `SkillsFactory` is not queried directly during interaction-time resolution
 - enabled skills bound to `session_id` are appended next, ordered by `updated_at DESC`
 - duplicates are removed by skill id
-- each resolved skill is materialized by `comet-node` into a controller-owned system prompt block
-- `comet_links[]` are stored as metadata in v1 and are not injected into the prompt
+- each resolved skill is materialized by `naim-node` into a controller-owned system prompt block
+- `naim_links[]` are stored as metadata in v1 and are not injected into the prompt
 
 Response metadata when Skills are applied:
 

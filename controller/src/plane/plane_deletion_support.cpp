@@ -2,10 +2,10 @@
 
 #include <utility>
 
-namespace comet::controller::plane_deletion_support {
+namespace naim::controller::plane_deletion_support {
 
 bool FinalizeDeletedPlaneIfReady(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& plane_name,
     const PlaneDeleteFinalizer& can_finalize_deleted_plane,
     const PlaneEventAppender& event_appender) {
@@ -34,7 +34,7 @@ bool FinalizeDeletedPlaneIfReady(
 }
 
 void FinalizeDeletedPlanesIfReady(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const PlaneDeleteFinalizer& can_finalize_deleted_plane,
     const PlaneEventAppender& event_appender) {
   for (const auto& plane : store.LoadPlanes()) {
@@ -49,4 +49,4 @@ void FinalizeDeletedPlanesIfReady(
   }
 }
 
-}  // namespace comet::controller::plane_deletion_support
+}  // namespace naim::controller::plane_deletion_support

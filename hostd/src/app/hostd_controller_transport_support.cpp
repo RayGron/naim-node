@@ -12,22 +12,22 @@
 #include <errno.h>
 #include <netdb.h>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::hostd::controller_transport_support {
+namespace naim::hostd::controller_transport_support {
 
 namespace {
 
 using nlohmann::json;
-using SocketHandle = comet::platform::SocketHandle;
+using SocketHandle = naim::platform::SocketHandle;
 
 std::string SocketErrorMessage() {
-  return comet::platform::LastSocketErrorMessage();
+  return naim::platform::LastSocketErrorMessage();
 }
 
 void CloseSocketHandle(const SocketHandle fd) {
-  if (comet::platform::IsSocketValid(fd)) {
-    comet::platform::CloseSocket(fd);
+  if (naim::platform::IsSocketValid(fd)) {
+    naim::platform::CloseSocket(fd);
   }
 }
 
@@ -130,7 +130,7 @@ HttpResponse SendControllerHttpRequest(
     const std::string& path_and_query,
     const std::string& body,
     const std::map<std::string, std::string>& headers) {
-  comet::platform::EnsureSocketsInitialized();
+  naim::platform::EnsureSocketsInitialized();
 
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
@@ -143,20 +143,20 @@ HttpResponse SendControllerHttpRequest(
         "failed to resolve controller target '" + target.raw + "': " + gai_strerror(lookup));
   }
 
-  SocketHandle fd = comet::platform::kInvalidSocket;
+  SocketHandle fd = naim::platform::kInvalidSocket;
   for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
     fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (!comet::platform::IsSocketValid(fd)) {
+    if (!naim::platform::IsSocketValid(fd)) {
       continue;
     }
     if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
     CloseSocketHandle(fd);
-    fd = comet::platform::kInvalidSocket;
+    fd = naim::platform::kInvalidSocket;
   }
   freeaddrinfo(results);
-  if (!comet::platform::IsSocketValid(fd)) {
+  if (!naim::platform::IsSocketValid(fd)) {
     throw std::runtime_error("failed to connect to controller target '" + target.raw + "'");
   }
 
@@ -244,8 +244,8 @@ nlohmann::json SendControllerJsonRequest(
   return body;
 }
 
-comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) {
-  comet::HostAssignment assignment;
+naim::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) {
+  naim::HostAssignment assignment;
   assignment.id = payload.value("id", 0);
   assignment.node_name = payload.value("node_name", std::string{});
   assignment.plane_name = payload.value("plane_name", std::string{});
@@ -256,7 +256,7 @@ comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) {
   assignment.desired_state_json = payload.value("desired_state_json", std::string{});
   assignment.artifacts_root = payload.value("artifacts_root", std::string{});
   assignment.status =
-      comet::ParseHostAssignmentStatus(payload.value("status", std::string("pending")));
+      naim::ParseHostAssignmentStatus(payload.value("status", std::string("pending")));
   assignment.status_message = payload.value("status_message", std::string{});
   if (payload.contains("progress") && !payload.at("progress").is_null()) {
     assignment.progress_json = payload.at("progress").dump();
@@ -264,7 +264,7 @@ comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) {
   return assignment;
 }
 
-nlohmann::json BuildHostObservationPayload(const comet::HostObservation& observation) {
+nlohmann::json BuildHostObservationPayload(const naim::HostObservation& observation) {
   return json{
       {"node_name", observation.node_name},
       {"plane_name", observation.plane_name},
@@ -274,7 +274,7 @@ nlohmann::json BuildHostObservationPayload(const comet::HostObservation& observa
       {"last_assignment_id",
        observation.last_assignment_id.has_value() ? json(*observation.last_assignment_id)
                                                   : json(nullptr)},
-      {"status", comet::ToString(observation.status)},
+      {"status", naim::ToString(observation.status)},
       {"status_message", observation.status_message},
       {"observed_state_json", observation.observed_state_json},
       {"runtime_status_json", observation.runtime_status_json},
@@ -287,7 +287,7 @@ nlohmann::json BuildHostObservationPayload(const comet::HostObservation& observa
   };
 }
 
-nlohmann::json BuildDiskRuntimeStatePayload(const comet::DiskRuntimeState& state) {
+nlohmann::json BuildDiskRuntimeStatePayload(const naim::DiskRuntimeState& state) {
   return json{
       {"disk_name", state.disk_name},
       {"plane_name", state.plane_name},
@@ -305,8 +305,8 @@ nlohmann::json BuildDiskRuntimeStatePayload(const comet::DiskRuntimeState& state
   };
 }
 
-comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const nlohmann::json& payload) {
-  comet::DiskRuntimeState state;
+naim::DiskRuntimeState ParseDiskRuntimeStatePayload(const nlohmann::json& payload) {
+  naim::DiskRuntimeState state;
   state.disk_name = payload.value("disk_name", std::string{});
   state.plane_name = payload.value("plane_name", std::string{});
   state.node_name = payload.value("node_name", std::string{});
@@ -323,4 +323,4 @@ comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const nlohmann::json& paylo
   return state;
 }
 
-}  // namespace comet::hostd::controller_transport_support
+}  // namespace naim::hostd::controller_transport_support

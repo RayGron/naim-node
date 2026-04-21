@@ -1,11 +1,13 @@
-#include "comet/state/desired_state_v2_validator.h"
+#include "naim/state/desired_state_v2_validator.h"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -29,6 +31,23 @@ bool IsSupportedTurboQuantCacheType(const std::string& value) {
   return kSupportedTypes.find(value) != kSupportedTypes.end();
 }
 
+std::optional<std::string> PlacementExecutionNodeName(const nlohmann::json& placement) {
+  const std::string execution_node = placement.value("execution_node", std::string{});
+  const std::string legacy_primary_node = placement.value("primary_node", std::string{});
+  if (!execution_node.empty() && !legacy_primary_node.empty() &&
+      execution_node != legacy_primary_node) {
+    throw std::runtime_error(
+        "desired-state v2 placement.execution_node conflicts with legacy placement.primary_node");
+  }
+  if (!execution_node.empty()) {
+    return execution_node;
+  }
+  if (!legacy_primary_node.empty()) {
+    return legacy_primary_node;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 void DesiredStateV2Validator::ValidateOrThrow(const nlohmann::json& value) {
@@ -42,7 +61,9 @@ void DesiredStateV2Validator::Validate() {
   ValidateModel();
   ValidateFeatures();
   ValidateRuntime();
+  ValidatePlacement();
   ValidateTopology();
+  ValidateLegacyPlacementCompatibility();
   ValidateInfer();
   ValidateWorker();
   ValidateApp();
@@ -87,10 +108,11 @@ void DesiredStateV2Validator::ValidateModel() const {
   if (source_type.empty()) {
     throw std::runtime_error("desired-state v2 model.source requires type");
   }
-  if ((source_type == "catalog" || source_type == "huggingface") &&
+  if ((source_type == "catalog" || source_type == "huggingface" ||
+       source_type == "library") &&
       source.value("ref", std::string{}).empty()) {
     throw std::runtime_error(
-        "desired-state v2 model.source.ref is required for catalog/huggingface models");
+        "desired-state v2 model.source.ref is required for catalog/huggingface/library models");
   }
   if (source_type == "url" && source.value("url", std::string{}).empty()) {
     if (!source.contains("urls") || !source.at("urls").is_array() || source.at("urls").empty()) {
@@ -108,11 +130,33 @@ void DesiredStateV2Validator::ValidateModel() const {
   }
   if (model.contains("materialization") && model.at("materialization").is_object()) {
     const auto& materialization = model.at("materialization");
+    const std::string mode = materialization.value("mode", std::string{});
     if (materialization.value("mode", std::string{}) == "reference" &&
         materialization.value("local_path", std::string{}).empty() &&
         source.value("path", std::string{}).empty()) {
       throw std::runtime_error(
           "desired-state v2 reference materialization requires local_path or source.path");
+    }
+    if (mode == "prepare_on_worker") {
+      if (source_type != "library" && source_type != "local") {
+        throw std::runtime_error(
+            "desired-state v2 prepare_on_worker requires library or local model source");
+      }
+      if (materialization.value("source_node_name", std::string{}).empty()) {
+        throw std::runtime_error(
+            "desired-state v2 prepare_on_worker requires materialization.source_node_name");
+      }
+      if (!materialization.contains("source_paths") ||
+          !materialization.at("source_paths").is_array() ||
+          materialization.at("source_paths").empty()) {
+        throw std::runtime_error(
+            "desired-state v2 prepare_on_worker requires non-empty materialization.source_paths");
+      }
+    }
+    if (materialization.contains("writeback") &&
+        !materialization.at("writeback").is_object()) {
+      throw std::runtime_error(
+          "desired-state v2 model.materialization.writeback must be an object");
     }
   }
 }
@@ -216,6 +260,62 @@ void DesiredStateV2Validator::ValidateRuntime() const {
   }
 }
 
+void DesiredStateV2Validator::ValidatePlacement() const {
+  if (!value_.contains("placement")) {
+    return;
+  }
+  RequireObject("placement");
+  const auto& placement = value_.at("placement");
+  if (placement.contains("execution_node") && !placement.at("execution_node").is_string()) {
+    throw std::runtime_error(
+        "desired-state v2 placement.execution_node must be a string");
+  }
+  if (placement.contains("primary_node") && !placement.at("primary_node").is_string()) {
+    throw std::runtime_error(
+        "desired-state v2 placement.primary_node legacy alias must be a string");
+  }
+  if (!PlacementExecutionNodeName(placement).has_value()) {
+    throw std::runtime_error(
+        "desired-state v2 placement.execution_node must be a non-empty string");
+  }
+  if (!placement.contains("app_host")) {
+    return;
+  }
+  if (!placement.at("app_host").is_object()) {
+    throw std::runtime_error("desired-state v2 placement.app_host must be an object");
+  }
+  const auto& app_host = placement.at("app_host");
+  if (app_host.value("address", std::string{}).empty()) {
+    throw std::runtime_error(
+        "desired-state v2 placement.app_host.address must be a non-empty string");
+  }
+  const bool has_ssh_key =
+      app_host.contains("ssh_key_path") &&
+      app_host.at("ssh_key_path").is_string() &&
+      !app_host.at("ssh_key_path").get<std::string>().empty();
+  const bool has_username =
+      app_host.contains("username") &&
+      app_host.at("username").is_string() &&
+      !app_host.at("username").get<std::string>().empty();
+  const bool has_password =
+      app_host.contains("password") &&
+      app_host.at("password").is_string() &&
+      !app_host.at("password").get<std::string>().empty();
+  const bool uses_password_auth = has_username || has_password;
+  if (!has_ssh_key && !uses_password_auth) {
+    throw std::runtime_error(
+        "desired-state v2 placement.app_host requires ssh_key_path or username/password");
+  }
+  if (has_ssh_key && (has_username || has_password)) {
+    throw std::runtime_error(
+        "desired-state v2 placement.app_host cannot mix ssh_key_path with username/password");
+  }
+  if (uses_password_auth && !(has_username && has_password)) {
+    throw std::runtime_error(
+        "desired-state v2 placement.app_host username/password must be provided together");
+  }
+}
+
 void DesiredStateV2Validator::ValidateTopology() const {
   if (!value_.contains("topology")) {
     return;
@@ -240,6 +340,38 @@ void DesiredStateV2Validator::ValidateTopology() const {
     if (!node_names.insert(node_name).second) {
       throw std::runtime_error("desired-state v2 topology node names must be unique");
     }
+  }
+}
+
+void DesiredStateV2Validator::ValidateLegacyPlacementCompatibility() const {
+  if (LegacyTopologyPlacementEnabled()) {
+    return;
+  }
+
+  const auto reject_legacy_service_node = [&](const char* service_name, const nlohmann::json* service_json) {
+    if (service_json == nullptr || !service_json->is_object() ||
+        !service_json->contains("node")) {
+      return;
+    }
+    throw std::runtime_error(
+        std::string("desired-state v2 ") + service_name +
+        ".node requires topology.nodes compatibility mode");
+  };
+
+  reject_legacy_service_node("infer", value_.contains("infer") ? &value_.at("infer") : nullptr);
+  reject_legacy_service_node("worker", value_.contains("worker") ? &value_.at("worker") : nullptr);
+  reject_legacy_service_node("app", value_.contains("app") ? &value_.at("app") : nullptr);
+  reject_legacy_service_node("skills", value_.contains("skills") ? &value_.at("skills") : nullptr);
+  reject_legacy_service_node(
+      "webgateway",
+      value_.contains("webgateway")
+          ? &value_.at("webgateway")
+          : (value_.contains("browsing") ? &value_.at("browsing") : nullptr));
+
+  if (value_.contains("worker") && value_.at("worker").is_object() &&
+      value_.at("worker").contains("assignments")) {
+    throw std::runtime_error(
+        "desired-state v2 worker.assignments requires topology.nodes compatibility mode");
   }
 }
 
@@ -566,6 +698,10 @@ void DesiredStateV2Validator::RequireObject(const char* field_name) const {
   }
 }
 
+bool DesiredStateV2Validator::LegacyTopologyPlacementEnabled() const {
+  return value_.contains("topology") && value_.at("topology").is_object();
+}
+
 void DesiredStateV2Validator::ValidateStartBlock(
     const nlohmann::json& service_json,
     const char* service_name) const {
@@ -588,13 +724,21 @@ void DesiredStateV2Validator::ValidateStartBlock(
   }
 }
 
-std::optional<std::string> DesiredStateV2Validator::TopologyNodeExecutionMode(
+std::optional<std::string> DesiredStateV2Validator::KnownNodeExecutionMode(
     const std::string& node_name) const {
-  if (!value_.contains("topology") || !value_.at("topology").is_object()) {
+  if (!LegacyTopologyPlacementEnabled()) {
+    if (value_.contains("placement") && value_.at("placement").is_object() &&
+        PlacementExecutionNodeName(value_.at("placement")).value_or(std::string{}) == node_name) {
+      return std::string("mixed");
+    }
     return std::nullopt;
   }
   const auto& topology = value_.at("topology");
   if (!topology.contains("nodes") || !topology.at("nodes").is_array()) {
+    if (value_.contains("placement") && value_.at("placement").is_object() &&
+        PlacementExecutionNodeName(value_.at("placement")).value_or(std::string{}) == node_name) {
+      return std::string("mixed");
+    }
     return std::nullopt;
   }
   for (const auto& node : topology.at("nodes")) {
@@ -602,15 +746,19 @@ std::optional<std::string> DesiredStateV2Validator::TopologyNodeExecutionMode(
       return node.value("execution_mode", std::string("mixed"));
     }
   }
+  if (value_.contains("placement") && value_.at("placement").is_object() &&
+      PlacementExecutionNodeName(value_.at("placement")).value_or(std::string{}) == node_name) {
+    return std::string("mixed");
+  }
   return std::nullopt;
 }
 
 void DesiredStateV2Validator::ValidateNodeRoleCompatibility(
-    const std::string& node_name,
-    const char* service_name,
-    const char* required_role) const {
+  const std::string& node_name,
+  const char* service_name,
+  const char* required_role) const {
   const std::string required(required_role);
-  const auto mode = TopologyNodeExecutionMode(node_name);
+  const auto mode = KnownNodeExecutionMode(node_name);
   if (!mode.has_value()) {
     throw std::runtime_error(
         std::string("desired-state v2 ") + service_name + " references unknown node '" +
@@ -647,4 +795,4 @@ void DesiredStateV2Validator::ValidateNodeRoleCompatibility(
   }
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -5,7 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::controller {
+namespace naim::controller {
 
 struct ControllerActionResult {
   std::string action_name;
@@ -21,4 +21,4 @@ nlohmann::json BuildControllerActionPayload(const ControllerActionResult& result
 
 int EmitControllerActionResult(const ControllerActionResult& result);
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -5,9 +5,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class IHttpHostdBackendSupport {
  public:
@@ -20,14 +20,14 @@ class IHttpHostdBackendSupport {
       const nlohmann::json& payload,
       const std::map<std::string, std::string>& headers = {}) const = 0;
 
-  virtual comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const = 0;
+  virtual naim::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload) const = 0;
   virtual nlohmann::json BuildHostObservationPayload(
-      const comet::HostObservation& observation) const = 0;
+      const naim::HostObservation& observation) const = 0;
   virtual nlohmann::json BuildDiskRuntimeStatePayload(
-      const comet::DiskRuntimeState& state) const = 0;
-  virtual comet::DiskRuntimeState ParseDiskRuntimeStatePayload(
+      const naim::DiskRuntimeState& state) const = 0;
+  virtual naim::DiskRuntimeState ParseDiskRuntimeStatePayload(
       const nlohmann::json& payload) const = 0;
   virtual std::string Trim(const std::string& value) const = 0;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

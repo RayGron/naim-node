@@ -2,7 +2,7 @@
 
 #include <atomic>
 
-namespace comet::infer {
+namespace naim::infer {
 
 class InferSignalService final {
  public:
@@ -22,4 +22,4 @@ class InferSignalService final {
   std::atomic<bool> stop_requested_{false};
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

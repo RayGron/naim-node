@@ -5,9 +5,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::hostd::controller_transport_support {
+namespace naim::hostd::controller_transport_support {
 
 std::string Trim(const std::string& value);
 
@@ -18,9 +18,9 @@ nlohmann::json SendControllerJsonRequest(
     const nlohmann::json& payload,
     const std::map<std::string, std::string>& headers = {});
 
-comet::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload);
-nlohmann::json BuildHostObservationPayload(const comet::HostObservation& observation);
-nlohmann::json BuildDiskRuntimeStatePayload(const comet::DiskRuntimeState& state);
-comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const nlohmann::json& payload);
+naim::HostAssignment ParseAssignmentPayload(const nlohmann::json& payload);
+nlohmann::json BuildHostObservationPayload(const naim::HostObservation& observation);
+nlohmann::json BuildDiskRuntimeStatePayload(const naim::DiskRuntimeState& state);
+naim::DiskRuntimeState ParseDiskRuntimeStatePayload(const nlohmann::json& payload);
 
-}  // namespace comet::hostd::controller_transport_support
+}  // namespace naim::hostd::controller_transport_support

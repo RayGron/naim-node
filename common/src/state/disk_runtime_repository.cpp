@@ -1,8 +1,8 @@
-#include "comet/state/disk_runtime_repository.h"
+#include "naim/state/disk_runtime_repository.h"
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -133,4 +133,4 @@ DiskRuntimeState DiskRuntimeRepository::ReadDiskRuntimeState(sqlite3_stmt* state
   return runtime_state;
 }
 
-}  // namespace comet
+}  // namespace naim

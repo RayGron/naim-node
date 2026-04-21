@@ -4,10 +4,10 @@
 
 #include "scheduler/scheduler_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 SchedulerService BuildControllerSchedulerService(
     const std::string& db_path,
     const std::string& artifacts_root);
 
-}  // namespace comet::controller
+}  // namespace naim::controller

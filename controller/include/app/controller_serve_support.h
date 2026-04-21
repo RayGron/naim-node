@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller::serve_support {
+namespace naim::controller::serve_support {
 
 int ServeControllerHttp(
     const std::string& db_path,
@@ -30,4 +30,4 @@ int ServeSkillsFactoryHttp(
     int listen_port,
     SkillsFactoryHttpService& skills_factory_http_service);
 
-}  // namespace comet::controller::serve_support
+}  // namespace naim::controller::serve_support

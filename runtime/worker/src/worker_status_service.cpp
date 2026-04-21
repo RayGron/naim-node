@@ -1,6 +1,6 @@
 #include "worker_status_service.h"
 
-#include "comet/runtime/runtime_status.h"
+#include "naim/runtime/runtime_status.h"
 
 #include <chrono>
 #include <ctime>
@@ -13,7 +13,7 @@
 
 namespace fs = std::filesystem;
 
-namespace comet::worker {
+namespace naim::worker {
 
 std::string WorkerStatusService::CurrentTimestamp() const {
   const auto now = std::chrono::system_clock::now();
@@ -88,7 +88,7 @@ void WorkerStatusService::MarkStopped(
 }
 
 void WorkerStatusService::TouchReadyFile(bool ready) {
-  const fs::path ready_path("/tmp/comet-ready");
+  const fs::path ready_path("/tmp/naim-ready");
   if (ready) {
     fs::create_directories(ready_path.parent_path());
     std::ofstream(ready_path) << "ready\n";
@@ -98,21 +98,21 @@ void WorkerStatusService::TouchReadyFile(bool ready) {
   }
 }
 
-comet::RuntimeStatus WorkerStatusService::BuildStatus(
+naim::RuntimeStatus WorkerStatusService::BuildStatus(
     const WorkerConfig& config,
     const std::string& phase,
     bool ready,
     const std::string& started_at,
     const std::string& last_activity_at,
     const std::string& model_path) {
-  comet::RuntimeStatus status;
+  naim::RuntimeStatus status;
   status.plane_name = config.plane_name;
   status.control_root = config.control_root;
   status.instance_name = config.instance_name;
   status.instance_role = config.instance_role;
   status.node_name = config.node_name;
   status.runtime_backend =
-      config.boot_mode == "llama-rpc" ? "llama-rpc-worker" : "comet-worker";
+      config.boot_mode == "llama-rpc" ? "llama-rpc-worker" : "naim-worker";
   status.runtime_phase = phase;
   status.runtime_pid = static_cast<int>(getpid());
   status.engine_pid = static_cast<int>(getpid());
@@ -130,9 +130,9 @@ comet::RuntimeStatus WorkerStatusService::BuildStatus(
 }
 
 void WorkerStatusService::WriteStatus(
-    const comet::RuntimeStatus& status,
+    const naim::RuntimeStatus& status,
     const std::string& path) {
-  comet::SaveRuntimeStatusJson(status, path);
+  naim::SaveRuntimeStatusJson(status, path);
 }
 
-}  // namespace comet::worker
+}  // namespace naim::worker

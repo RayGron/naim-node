@@ -7,10 +7,10 @@
 
 namespace {
 
-using LauncherCommandLine = comet::launcher::LauncherCommandLine;
+using LauncherCommandLine = naim::launcher::LauncherCommandLine;
 }  // namespace
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 LauncherApp::LauncherApp(int argc, char** argv) : argc_(argc), argv_(argv) {}
 
@@ -20,4 +20,4 @@ int LauncherApp::Run() {
   return composition_root.Run(command_line, argv_[0]);
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

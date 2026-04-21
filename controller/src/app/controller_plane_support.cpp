@@ -1,8 +1,9 @@
 #include "app/controller_plane_support.h"
 
 #include "app/controller_composition_support.h"
+#include <memory>
 
-namespace comet::controller::plane_support {
+namespace naim::controller::plane_support {
 
 ControllerPrintService CreateControllerPrintService(
     const ControllerRuntimeSupportService& runtime_support_service) {
@@ -30,7 +31,7 @@ PlaneMutationService CreatePlaneMutationService(
     PlaneMutationService::MakePlaneServiceFn make_plane_service) {
   return PlaneMutationService({
       [&](const std::string& db_path,
-          const comet::DesiredState& desired_state,
+          const naim::DesiredState& desired_state,
           const std::string& artifacts_root,
           const std::string& source_label) {
         return bundle_cli_service.ApplyDesiredState(
@@ -64,78 +65,22 @@ PlaneService CreatePlaneService(
     const DesiredStatePolicyService& desired_state_policy_service,
     const PlaneRealizationService& plane_realization_service,
     const std::string& default_artifacts_root) {
+  auto state_presentation_support =
+      std::make_shared<ControllerPlaneStatePresentationSupport>(controller_print_service);
+  auto lifecycle_support = std::make_shared<ControllerPlaneLifecycleSupport>(
+      desired_state_policy_service,
+      plane_realization_service,
+      default_artifacts_root);
   return PlaneService(
       db_path,
-      [](const std::string& value) {
-        return ControllerTimeSupport::FormatDisplayTimestamp(value);
-      },
-      [&](const comet::DesiredState& state) {
-        controller_print_service.PrintStateSummary(state);
-      },
-      [&](comet::ControllerStore& store, comet::DesiredState* desired_state) {
-        desired_state_policy_service.ApplyRegisteredHostExecutionModes(
-            store, desired_state);
-        desired_state_policy_service.ResolveDesiredStateDynamicPlacements(
-            store, desired_state);
-        desired_state_policy_service.ValidateDesiredStateForControllerAdmission(
-            *desired_state);
-        desired_state_policy_service.ValidateDesiredStateExecutionModes(
-            *desired_state);
-      },
-      [](comet::ControllerStore& store,
-         const std::string& category,
-         const std::string& event_type,
-         const std::string& message,
-         const nlohmann::json& payload,
-         const std::string& plane_name) {
-        composition_support::AppendControllerEvent(
-            store, category, event_type, message, payload, plane_name);
-      },
-      [](comet::ControllerStore& store, const std::string& plane_name) {
-        return composition_support::CanFinalizeDeletedPlane(store, plane_name);
-      },
-      [&](const std::vector<comet::HostAssignment>& assignments, const std::string& plane_name) {
-        return plane_realization_service.FindLatestHostAssignmentForPlane(assignments, plane_name);
-      },
-      [&](const comet::DesiredState& desired_state,
-         const std::string& artifacts_root,
-         int desired_generation,
-         const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
-         const std::vector<comet::HostObservation>& observations,
-         const comet::SchedulingPolicyReport& scheduling_report) {
-        return plane_realization_service.BuildHostAssignments(
-            desired_state,
-            artifacts_root,
-            desired_generation,
-            availability_overrides,
-            observations,
-            scheduling_report);
-      },
-      [&](const comet::DesiredState& desired_state,
-         int desired_generation,
-         const std::string& artifacts_root,
-         const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) {
-        return plane_realization_service.BuildStopPlaneAssignments(
-            desired_state,
-            desired_generation,
-            artifacts_root,
-            availability_overrides);
-      },
-      [&](const comet::DesiredState& desired_state,
-         int desired_generation,
-         const std::string& artifacts_root) {
-        return plane_realization_service.BuildDeletePlaneAssignments(
-            desired_state,
-            desired_generation,
-            artifacts_root);
-      },
-      [default_artifacts_root]() { return default_artifacts_root; });
+      std::move(state_presentation_support),
+      std::move(lifecycle_support));
 }
 
 HostRegistryService CreateHostRegistryService(const std::string& db_path) {
   return HostRegistryService(
       db_path,
-      [](comet::ControllerStore& store,
+      [](naim::ControllerStore& store,
          const std::string& event_type,
          const std::string& message,
          const nlohmann::json& payload,
@@ -156,4 +101,4 @@ HostRegistryService CreateHostRegistryService(const std::string& db_path) {
       });
 }
 
-}  // namespace comet::controller::plane_support
+}  // namespace naim::controller::plane_support

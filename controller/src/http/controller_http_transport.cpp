@@ -8,12 +8,12 @@
 #include <stdexcept>
 
 #include "infra/controller_network_manager.h"
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
 namespace {
 
-using SocketHandle = comet::platform::SocketHandle;
-using ControllerNetworkManager = comet::controller::ControllerNetworkManager;
+using SocketHandle = naim::platform::SocketHandle;
+using ControllerNetworkManager = naim::controller::ControllerNetworkManager;
 
 std::string TrimCopy(const std::string& value) {
   std::size_t start = 0;
@@ -39,8 +39,8 @@ std::string LowercaseCopy(const std::string& value) {
 }
 
 SocketHandle ConnectHttpTarget(
-    const comet::controller::ControllerEndpointTarget& target) {
-  comet::platform::EnsureSocketsInitialized();
+    const naim::controller::ControllerEndpointTarget& target) {
+  naim::platform::EnsureSocketsInitialized();
 
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
@@ -55,22 +55,22 @@ SocketHandle ConnectHttpTarget(
         "': " + gai_strerror(lookup));
   }
 
-  SocketHandle fd = comet::platform::kInvalidSocket;
+  SocketHandle fd = naim::platform::kInvalidSocket;
   for (addrinfo* candidate = results; candidate != nullptr;
        candidate = candidate->ai_next) {
     fd = socket(
         candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (!comet::platform::IsSocketValid(fd)) {
+    if (!naim::platform::IsSocketValid(fd)) {
       continue;
     }
     if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
     ControllerNetworkManager::CloseSocket(fd);
-    fd = comet::platform::kInvalidSocket;
+    fd = naim::platform::kInvalidSocket;
   }
   freeaddrinfo(results);
-  if (!comet::platform::IsSocketValid(fd)) {
+  if (!naim::platform::IsSocketValid(fd)) {
     throw std::runtime_error(
         "failed to connect to controller target '" + target.raw + "'");
   }
@@ -79,14 +79,14 @@ SocketHandle ConnectHttpTarget(
 
 }  // namespace
 
-comet::controller::ControllerEndpointTarget ParseControllerEndpointTarget(
+naim::controller::ControllerEndpointTarget ParseControllerEndpointTarget(
     const std::string& raw_target) {
   std::string target = TrimCopy(raw_target);
   if (target.empty()) {
     throw std::runtime_error("empty controller target");
   }
 
-  comet::controller::ControllerEndpointTarget parsed;
+  naim::controller::ControllerEndpointTarget parsed;
   parsed.raw = target;
   if (target.rfind("http://", 0) == 0) {
     target = target.substr(7);
@@ -185,7 +185,7 @@ std::optional<std::string> FindHttpHeaderValue(
 }
 
 HttpResponse SendControllerHttpRequest(
-    const comet::controller::ControllerEndpointTarget& target,
+    const naim::controller::ControllerEndpointTarget& target,
     const std::string& method,
     const std::string& path_and_query,
     const std::string& body,
@@ -246,16 +246,16 @@ HttpResponse SendControllerHttpRequest(
   return ParseHttpResponse(response_text);
 }
 
-comet::controller::InteractionStreamingUpstreamConnection
+naim::controller::InteractionStreamingUpstreamConnection
 OpenInteractionStreamRequest(
-    const comet::controller::ControllerEndpointTarget& target,
+    const naim::controller::ControllerEndpointTarget& target,
     const std::string& request_id,
     const std::string& body) {
   auto fd = std::make_shared<SocketHandle>(ConnectHttpTarget(target));
   const auto close_transport = [fd]() {
-    if (comet::platform::IsSocketValid(*fd)) {
+    if (naim::platform::IsSocketValid(*fd)) {
       ControllerNetworkManager::ShutdownAndCloseSocket(*fd);
-      *fd = comet::platform::kInvalidSocket;
+      *fd = naim::platform::kInvalidSocket;
     }
   };
 
@@ -265,7 +265,7 @@ OpenInteractionStreamRequest(
     upstream_request << "Host: " << target.host << ":" << target.port << "\r\n";
     upstream_request << "Connection: close\r\n";
     upstream_request << "Accept: text/event-stream\r\n";
-    upstream_request << "X-Comet-Request-Id: " << request_id << "\r\n";
+    upstream_request << "X-Naim-Request-Id: " << request_id << "\r\n";
     upstream_request << "Content-Type: application/json\r\n";
     upstream_request << "Content-Length: " << body.size() << "\r\n\r\n";
     upstream_request << body;
@@ -312,7 +312,7 @@ OpenInteractionStreamRequest(
                                  : upstream.body));
     }
 
-    return comet::controller::InteractionStreamingUpstreamConnection{
+    return naim::controller::InteractionStreamingUpstreamConnection{
         chunked_transfer,
         std::move(upstream.body),
         [fd]() -> std::string {

@@ -25,11 +25,11 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/runtime/model_adapter.h"
+#include "naim/runtime/model_adapter.h"
 #include "runtime/infer_control_support.h"
 #include "runtime/local_runtime.h"
 
-namespace comet::infer {
+namespace naim::infer {
 
 namespace {
 
@@ -273,13 +273,13 @@ int LlamaRpcRuntime::Run() {
     }
     close(stderr_pipe[1]);
     const json active_model = LoadActiveModel(config_);
-    comet::runtime::ModelIdentity model_identity =
-        comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
+    naim::runtime::ModelIdentity model_identity =
+        naim::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
     if (model_identity.cached_runtime_model_path.empty()) {
       model_identity.cached_runtime_model_path = model_path;
     }
     std::vector<std::string> args = {
-        ResolveExecutablePath("COMET_LLAMA_SERVER_BIN", "/runtime/bin/llama-server"),
+        ResolveExecutablePath("NAIM_LLAMA_SERVER_BIN", "/runtime/bin/llama-server"),
         "--host",
         "127.0.0.1",
         "--port",
@@ -300,7 +300,7 @@ int LlamaRpcRuntime::Run() {
         "--rpc",
         rpc_servers,
     };
-    comet::runtime::ModelAdapter::AdaptLaunchArgs(&args, model_identity);
+    naim::runtime::ModelAdapter::AdaptLaunchArgs(&args, model_identity);
     if (!rpc_devices.empty()) {
       args.push_back("--device");
       args.push_back(rpc_devices);
@@ -318,7 +318,7 @@ int LlamaRpcRuntime::Run() {
         }
         command_line << args[index];
       }
-      std::cerr << "[comet-inferctl] launching llama-server: "
+      std::cerr << "[naim-inferctl] launching llama-server: "
                 << command_line.str() << std::endl;
     }
     std::vector<char*> argv;
@@ -377,7 +377,7 @@ std::string LlamaRpcRuntime::ResolveModelPath() const {
 std::string LlamaRpcRuntime::BuildRpcServerList() const {
   const json members = config_.worker_group.value("members", json::array());
   std::vector<std::string> endpoints;
-  const char* local_node_name = std::getenv("COMET_NODE_NAME");
+  const char* local_node_name = std::getenv("NAIM_NODE_NAME");
   for (const auto& member : members) {
     if (!member.is_object() || !member.value("enabled", true)) {
       continue;
@@ -583,4 +583,4 @@ void LlamaRpcRuntime::StopServer() {
   StopServerLogPump();
 }
 
-}  // namespace comet::infer
+}  // namespace naim::infer

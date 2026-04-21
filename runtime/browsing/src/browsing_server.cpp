@@ -29,12 +29,12 @@
 #include "browsing/process_support.h"
 #include "browsing/cef_browser_backend.h"
 #include "browsing/cef_support.h"
-#include "comet/runtime/runtime_status.h"
-#include "comet/security/crypto_utils.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/security/crypto_utils.h"
 #include "http/controller_http_server_support.h"
 #include "infra/controller_network_manager.h"
 
-namespace comet::browsing {
+namespace naim::browsing {
 
 namespace {
 
@@ -2482,7 +2482,7 @@ int BrowsingServer::Run() {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
-  listen_fd_ = comet::controller::ControllerNetworkManager::CreateListenSocket(
+  listen_fd_ = naim::controller::ControllerNetworkManager::CreateListenSocket(
       config_.listen_host,
       config_.port);
   WriteRuntimeStatus("running", true);
@@ -2493,42 +2493,42 @@ int BrowsingServer::Run() {
   } catch (...) {
     WriteRuntimeStatus("stopped", false);
     SetReadyFile(false);
-    comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
-    listen_fd_ = comet::platform::kInvalidSocket;
+    naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+    listen_fd_ = naim::platform::kInvalidSocket;
     throw;
   }
 
   WriteRuntimeStatus("stopped", false);
   SetReadyFile(false);
-  comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
-  listen_fd_ = comet::platform::kInvalidSocket;
+  naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+  listen_fd_ = naim::platform::kInvalidSocket;
   return 0;
 }
 
 void BrowsingServer::RequestStop() {
   const bool was_requested = stop_requested_.exchange(true);
-  if (!was_requested && comet::platform::IsSocketValid(listen_fd_)) {
+  if (!was_requested && naim::platform::IsSocketValid(listen_fd_)) {
     WriteRuntimeStatus("stopping", false);
     SetReadyFile(false);
-    comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+    naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
   }
 }
 
 void BrowsingServer::AcceptLoop() {
   while (!stop_requested_.load()) {
     const auto client_fd = accept(listen_fd_, nullptr, nullptr);
-    if (!comet::platform::IsSocketValid(client_fd)) {
-      if (stop_requested_.load() || comet::platform::LastSocketErrorWasInterrupted()) {
+    if (!naim::platform::IsSocketValid(client_fd)) {
+      if (stop_requested_.load() || naim::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
       throw std::runtime_error(
-          "accept failed: " + comet::controller::ControllerNetworkManager::SocketErrorMessage());
+          "accept failed: " + naim::controller::ControllerNetworkManager::SocketErrorMessage());
     }
     std::thread(&BrowsingServer::HandleClient, this, client_fd).detach();
   }
 }
 
-void BrowsingServer::HandleClient(comet::platform::SocketHandle client_fd) {
+void BrowsingServer::HandleClient(naim::platform::SocketHandle client_fd) {
   std::string request_data;
   std::array<char, 8192> buffer{};
   std::size_t expected_request_bytes = 0;
@@ -2540,7 +2540,7 @@ void BrowsingServer::HandleClient(comet::platform::SocketHandle client_fd) {
     request_data.append(buffer.data(), static_cast<std::size_t>(read_count));
     if (expected_request_bytes == 0) {
       expected_request_bytes =
-          comet::controller::ControllerHttpServerSupport::ExpectedRequestBytes(request_data);
+          naim::controller::ControllerHttpServerSupport::ExpectedRequestBytes(request_data);
     }
     if (expected_request_bytes != 0 && request_data.size() >= expected_request_bytes) {
       break;
@@ -2550,19 +2550,19 @@ void BrowsingServer::HandleClient(comet::platform::SocketHandle client_fd) {
   if (!request_data.empty()) {
     try {
       const HttpRequest request =
-          comet::controller::ControllerHttpServerSupport::ParseHttpRequest(request_data);
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+          naim::controller::ControllerHttpServerSupport::ParseHttpRequest(request_data);
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           HandleRequest(request));
     } catch (const ApiError& error) {
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           BuildJsonResponse(
               error.status(),
               nlohmann::json{{"status", "error"},
                              {"error", {{"code", error.code()}, {"message", error.message()}}}}));
     } catch (const std::exception& error) {
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           BuildJsonResponse(
               500,
@@ -2570,7 +2570,7 @@ void BrowsingServer::HandleClient(comet::platform::SocketHandle client_fd) {
                              {"error", {{"code", "internal_error"}, {"message", error.what()}}}}));
     }
   }
-  comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+  naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
 }
 
 HttpResponse BrowsingServer::HandleRequest(const HttpRequest& request) {
@@ -2591,7 +2591,7 @@ HttpResponse BrowsingServer::HandleGet(const HttpRequest& request) {
   if (parts.size() == 1 && parts[0] == "health") {
     return BuildJsonResponse(
         200,
-        nlohmann::json{{"status", "ok"}, {"service", "comet-webgateway"}, {"ready", true}});
+        nlohmann::json{{"status", "ok"}, {"service", "naim-webgateway"}, {"ready", true}});
   }
   const bool web_api =
       parts.size() >= 3 && parts[0] == "v1" && parts[1] == "webgateway";
@@ -2681,7 +2681,7 @@ HttpResponse BrowsingServer::BuildJsonResponse(
 }
 
 void BrowsingServer::WriteRuntimeStatus(const std::string& phase, bool ready) const {
-  comet::RuntimeStatus status;
+  naim::RuntimeStatus status;
   status.plane_name = config_.plane_name;
   status.control_root = config_.control_root;
   status.controller_url = config_.controller_url;
@@ -2735,7 +2735,7 @@ nlohmann::json BrowsingServer::BuildStatusPayload() const {
       config_.policy.rendered_browser_enabled && cef_backend_ != nullptr && cef_backend_->IsAvailable();
   return nlohmann::json{
       {"status", "ok"},
-      {"service", "comet-webgateway"},
+      {"service", "naim-webgateway"},
       {"plane_name", config_.plane_name},
       {"instance_name", config_.instance_name},
       {"ready", true},
@@ -2960,7 +2960,7 @@ nlohmann::json BrowsingServer::HandleWebGatewayResolvePayload(const nlohmann::js
 
   return nlohmann::json{
       {"status", "ok"},
-      {"service", "comet-webgateway"},
+      {"service", "naim-webgateway"},
       {"decision", decision.decision},
       {"context", context},
       {"refusal", refusal.has_value() ? nlohmann::json(*refusal) : nlohmann::json(nullptr)},
@@ -3325,7 +3325,7 @@ nlohmann::json BrowsingServer::HandleSearchPayload(const nlohmann::json& payload
       std::string rendered_error;
       const auto rendered = cef_backend_->FetchPage(
           broker_html_search_url,
-          config_.state_root / ("rendered-search-" + ShellSafeToken(comet::RandomTokenBase64(8))),
+          config_.state_root / ("rendered-search-" + ShellSafeToken(naim::RandomTokenBase64(8))),
           &rendered_error,
           true);
       if (rendered.has_value() && !rendered->html_source.empty()) {
@@ -3794,7 +3794,7 @@ nlohmann::json BrowsingServer::DeleteSession(const std::string& session_id) {
 }
 
 std::string BrowsingServer::NewSessionId() const {
-  return ShellSafeToken(comet::RandomTokenBase64(12));
+  return ShellSafeToken(naim::RandomTokenBase64(12));
 }
 
 std::optional<FetchResult> BrowsingServer::FetchUrlViaBroker(
@@ -3813,10 +3813,12 @@ std::optional<FetchResult> BrowsingServer::FetchUrlViaBroker(
     return std::nullopt;
   }
 
-  const auto temp_root = config_.state_root / ("fetch-" + ShellSafeToken(comet::RandomTokenBase64(8)));
+  const auto temp_root = config_.state_root / ("fetch-" + ShellSafeToken(naim::RandomTokenBase64(8)));
   std::filesystem::create_directories(temp_root);
   const auto header_path = temp_root / "headers.txt";
   const auto body_path = temp_root / "body.txt";
+
+  const int max_download_bytes = std::max(1048576, config_.policy.max_fetch_bytes * 16);
 
   std::optional<FetchResult> result;
   try {
@@ -3832,6 +3834,8 @@ std::optional<FetchResult> BrowsingServer::FetchUrlViaBroker(
              "20",
              "--max-redirs",
              "5",
+             "--max-filesize",
+             std::to_string(max_download_bytes),
              "-D",
              header_path.string(),
              "-o",
@@ -3921,7 +3925,7 @@ std::optional<FetchResult> BrowsingServer::FetchUrl(
     std::string rendered_error;
     const auto rendered = cef_backend_->FetchPage(
         url,
-        config_.state_root / ("rendered-fetch-" + ShellSafeToken(comet::RandomTokenBase64(8))),
+        config_.state_root / ("rendered-fetch-" + ShellSafeToken(naim::RandomTokenBase64(8))),
         &rendered_error,
         false);
     if (rendered.has_value()) {
@@ -3941,7 +3945,7 @@ std::optional<FetchResult> BrowsingServer::FetchUrl(
     std::string rendered_error;
     const auto rendered = cef_backend_->FetchPage(
         url,
-        config_.state_root / ("rendered-fetch-" + ShellSafeToken(comet::RandomTokenBase64(8))),
+        config_.state_root / ("rendered-fetch-" + ShellSafeToken(naim::RandomTokenBase64(8))),
         &rendered_error,
         false);
     if (rendered.has_value()) {
@@ -3952,4 +3956,4 @@ std::optional<FetchResult> BrowsingServer::FetchUrl(
   return brokered;
 }
 
-}  // namespace comet::browsing
+}  // namespace naim::browsing

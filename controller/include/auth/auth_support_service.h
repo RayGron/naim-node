@@ -11,20 +11,20 @@
 #include "auth/auth_pending_flows.h"
 #include "http/controller_http_types.h"
 
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
 class AuthSupportService {
  public:
-  std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>>
+  std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>
   AuthenticateControllerUserSession(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const HttpRequest& request,
       const std::optional<std::string>& session_kind =
           std::optional<std::string>("web")) const;
 
-  std::optional<comet::UserRecord> RequireControllerAdminUser(
-      comet::ControllerStore& store,
+  std::optional<naim::UserRecord> RequireControllerAdminUser(
+      naim::ControllerStore& store,
       const HttpRequest& request) const;
 
   std::string ResolveWebAuthnRpId(const HttpRequest& request) const;
@@ -38,7 +38,7 @@ class AuthSupportService {
       const HttpRequest& request) const;
   std::string ClearSessionCookieHeader(const HttpRequest& request) const;
   std::string CreateControllerSession(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       int user_id,
       const std::string& session_kind,
       const std::string& plane_name = "") const;
@@ -68,9 +68,9 @@ class AuthSupportService {
 
   void CleanupExpiredPendingAuthFlows() const;
 
-  std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>>
+  std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>
   AuthenticateProtectedPlaneRequest(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const HttpRequest& request,
       const std::string& plane_name) const;
 

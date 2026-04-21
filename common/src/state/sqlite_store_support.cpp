@@ -1,10 +1,10 @@
-#include "comet/state/sqlite_store_support.h"
+#include "naim/state/sqlite_store_support.h"
 
 #include <stdexcept>
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
-namespace comet::sqlite_store_support {
+namespace naim::sqlite_store_support {
 
 namespace {
 
@@ -71,4 +71,4 @@ NodeAvailabilityOverride AvailabilityOverrideFromStatement(sqlite3_stmt* stateme
   return availability_override;
 }
 
-}  // namespace comet::sqlite_store_support
+}  // namespace naim::sqlite_store_support

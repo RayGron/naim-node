@@ -2,16 +2,16 @@
 
 #include <string>
 
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneSkillRuntimeSyncService final {
  public:
-  bool SyncPlane(const std::string& db_path, const comet::DesiredState& desired_state) const;
+  bool SyncPlane(const std::string& db_path, const naim::DesiredState& desired_state) const;
 
  private:
-  static bool IsReadyForSync(const std::string& db_path, const comet::DesiredState& desired_state);
+  static bool IsReadyForSync(const std::string& db_path, const naim::DesiredState& desired_state);
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

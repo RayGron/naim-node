@@ -3,7 +3,7 @@
 #include <optional>
 #include <string>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerTimeSupport final {
  public:
@@ -14,4 +14,4 @@ class ControllerTimeSupport final {
   static std::string FormatDisplayTimestamp(const std::string& value);
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

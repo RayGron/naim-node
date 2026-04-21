@@ -1,6 +1,6 @@
 #include "worker_app.h"
 
 int main() {
-  comet::worker::WorkerApp app;
+  naim::worker::WorkerApp app;
   return app.Run();
 }

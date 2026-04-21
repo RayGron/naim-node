@@ -6,7 +6,7 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class IControllerHttpRouteHandler {
  public:
@@ -18,4 +18,4 @@ class IControllerHttpRouteHandler {
       const HttpRequest& request) const = 0;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

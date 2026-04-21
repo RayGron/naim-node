@@ -4,9 +4,9 @@
 #include <iostream>
 #include <stdexcept>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 LauncherCompositionRoot::LauncherCompositionRoot()
     : signal_manager_(std::make_unique<SignalManager>()),
@@ -40,7 +40,7 @@ int LauncherCompositionRoot::Run(
 
   try {
     if (command == "version") {
-      std::cout << "comet-node 0.1.0\n";
+      std::cout << "naim-node 0.1.0\n";
       return 0;
     }
 
@@ -89,7 +89,7 @@ int LauncherCompositionRoot::Run(
       }
       if (args[1] == "controller") {
         const std::filesystem::path controller_binary =
-            path_resolver_->ResolveSiblingBinary(self_path, "comet-controller");
+            path_resolver_->ResolveSiblingBinary(self_path, "naim-controller");
         return run_service_->RunController(
             *signal_manager_,
             self_path,
@@ -98,7 +98,7 @@ int LauncherCompositionRoot::Run(
       }
       if (args[1] == "hostd") {
         const std::filesystem::path hostd_binary =
-            path_resolver_->ResolveSiblingBinary(self_path, "comet-hostd");
+            path_resolver_->ResolveSiblingBinary(self_path, "naim-hostd");
         return run_service_->RunHostd(
             *signal_manager_,
             hostd_binary,
@@ -117,7 +117,7 @@ int LauncherCompositionRoot::Run(
 }
 
 bool LauncherCompositionRoot::RunningInManagedServiceMode() const {
-  const char* value = std::getenv("COMET_SERVICE_MODE");
+  const char* value = std::getenv("NAIM_SERVICE_MODE");
   return value != nullptr && std::string(value) == "1";
 }
 
@@ -128,7 +128,7 @@ bool LauncherCompositionRoot::SystemdAvailable() const {
   if (!process_runner_->CommandExists("systemctl")) {
     return false;
   }
-  if (comet::platform::HasElevatedPrivileges()) {
+  if (naim::platform::HasElevatedPrivileges()) {
     return process_runner_->RunShellCommand("systemctl is-system-running >/dev/null 2>&1") == 0;
   }
   return process_runner_->RunShellCommand("systemctl --user is-system-running >/dev/null 2>&1") ==
@@ -136,4 +136,4 @@ bool LauncherCompositionRoot::SystemdAvailable() const {
 #endif
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

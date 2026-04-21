@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-comet_is_build_type() {
+naim_is_build_type() {
   case "${1:-}" in
     Debug|Release|RelWithDebInfo|MinSizeRel)
       return 0
@@ -11,9 +11,9 @@ comet_is_build_type() {
   esac
 }
 
-comet_validate_build_type() {
+naim_validate_build_type() {
   local build_type="${1:-}"
-  if comet_is_build_type "${build_type}"; then
+  if naim_is_build_type "${build_type}"; then
     return 0
   fi
   echo "error: unsupported build type '${build_type}'" >&2
@@ -21,12 +21,12 @@ comet_validate_build_type() {
   exit 1
 }
 
-comet_detect_host_target() {
+naim_detect_host_target() {
   local script_dir="${1}"
   "${script_dir}/detect-host-target.sh"
 }
 
-comet_resolve_target_context() {
+naim_resolve_target_context() {
   local script_dir="${1}"
   shift
 
@@ -34,7 +34,7 @@ comet_resolve_target_context() {
   local target_arch=""
   case $# in
     0)
-      read -r target_os target_arch < <(comet_detect_host_target "${script_dir}")
+      read -r target_os target_arch < <(naim_detect_host_target "${script_dir}")
       ;;
     2)
       target_os="${1}"
@@ -54,7 +54,7 @@ comet_resolve_target_context() {
 
   local repo_dir
   repo_dir="$(cd -- "${script_dir}/.." && pwd)"
-  local build_root="${COMET_BUILD_ROOT:-${repo_dir}/build}"
+  local build_root="${NAIM_BUILD_ROOT:-${repo_dir}/build}"
 
   TARGET_OS="${target_os}"
   TARGET_ARCH="${target_arch}"
@@ -62,18 +62,18 @@ comet_resolve_target_context() {
   REPO_DIR="${repo_dir}"
 }
 
-comet_resolve_build_context() {
+naim_resolve_build_context() {
   local script_dir="${1}"
   shift
 
-  local build_type="${COMET_BUILD_TYPE:-Debug}"
+  local build_type="${NAIM_BUILD_TYPE:-Debug}"
   local -a target_args=()
 
   case $# in
     0)
       ;;
     1)
-      if comet_is_build_type "${1}"; then
+      if naim_is_build_type "${1}"; then
         build_type="${1}"
       else
         echo "usage: $0 [<build-type>] | [<os> <arch> [<build-type>]]" >&2
@@ -93,7 +93,7 @@ comet_resolve_build_context() {
       ;;
   esac
 
-  comet_validate_build_type "${build_type}"
-  comet_resolve_target_context "${script_dir}" "${target_args[@]}"
+  naim_validate_build_type "${build_type}"
+  naim_resolve_target_context "${script_dir}" "${target_args[@]}"
   BUILD_TYPE="${build_type}"
 }

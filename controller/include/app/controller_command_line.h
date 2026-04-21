@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerCommandLine {
  public:
@@ -52,4 +52,4 @@ class ControllerCommandLine {
   std::string command_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

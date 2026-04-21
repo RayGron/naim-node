@@ -7,7 +7,7 @@
 
 #include "http/controller_http_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerHttpServerSupport {
  public:
@@ -28,4 +28,4 @@ class ControllerHttpServerSupport {
   static std::string LowercaseCopy(const std::string& value);
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

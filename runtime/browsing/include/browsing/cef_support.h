@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace comet::browsing {
+namespace naim::browsing {
 
 bool CefBuildEnabled();
 std::string CefBuildSummary();
@@ -17,4 +17,4 @@ void ShutdownCef();
 bool CefRuntimeEnabled();
 std::string CurrentExecutablePath();
 
-}  // namespace comet::browsing
+}  // namespace naim::browsing

@@ -7,9 +7,9 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerPrintService::ControllerPrintService() = default;
 
@@ -44,7 +44,7 @@ std::string ControllerPrintService::FormatDisplayTimestamp(
   return output.str();
 }
 
-void ControllerPrintService::PrintStateSummary(const comet::DesiredState& state) const {
+void ControllerPrintService::PrintStateSummary(const naim::DesiredState& state) const {
   std::cout << "plane: " << state.plane_name << "\n";
   std::cout << "control_root: " << state.control_root << "\n";
   std::cout << "inference:\n";
@@ -78,7 +78,7 @@ void ControllerPrintService::PrintStateSummary(const comet::DesiredState& state)
   std::cout << "disks:\n";
   for (const auto& disk : state.disks) {
     std::cout << "  - " << disk.name
-              << " kind=" << comet::ToString(disk.kind)
+              << " kind=" << naim::ToString(disk.kind)
               << " node=" << disk.node_name
               << " host_path=" << disk.host_path
               << " container_path=" << disk.container_path
@@ -89,47 +89,47 @@ void ControllerPrintService::PrintStateSummary(const comet::DesiredState& state)
   std::cout << "instances:\n";
   for (const auto& instance : state.instances) {
     std::cout << "  - " << instance.name
-              << " role=" << comet::ToString(instance.role)
+              << " role=" << naim::ToString(instance.role)
               << " node=" << instance.node_name;
     if (instance.gpu_device.has_value()) {
       std::cout << " gpu=" << *instance.gpu_device
                 << " fraction=" << instance.gpu_fraction
-                << " placement_mode=" << comet::ToString(instance.placement_mode)
-                << " share_mode=" << comet::ToString(instance.share_mode)
+                << " placement_mode=" << naim::ToString(instance.placement_mode)
+                << " share_mode=" << naim::ToString(instance.share_mode)
                 << " priority=" << instance.priority
                 << " preemptible=" << (instance.preemptible ? "true" : "false");
       if (instance.memory_cap_mb.has_value()) {
         std::cout << " memory_cap_mb=" << *instance.memory_cap_mb;
       }
-      const auto placement_it = instance.labels.find("comet.placement");
+      const auto placement_it = instance.labels.find("naim.placement");
       if (placement_it != instance.labels.end()) {
         std::cout << " placement=" << placement_it->second;
       }
-      const auto action_it = instance.labels.find("comet.placement.action");
+      const auto action_it = instance.labels.find("naim.placement.action");
       if (action_it != instance.labels.end()) {
         std::cout << " placement_action=" << action_it->second;
       }
-      const auto score_it = instance.labels.find("comet.placement.score");
+      const auto score_it = instance.labels.find("naim.placement.score");
       if (score_it != instance.labels.end()) {
         std::cout << " placement_score=" << score_it->second;
       }
-      const auto decision_it = instance.labels.find("comet.placement.decision");
+      const auto decision_it = instance.labels.find("naim.placement.decision");
       if (decision_it != instance.labels.end()) {
         std::cout << " placement_decision=" << decision_it->second;
       }
-      const auto next_action_it = instance.labels.find("comet.placement.next_action");
+      const auto next_action_it = instance.labels.find("naim.placement.next_action");
       if (next_action_it != instance.labels.end()) {
         std::cout << " next_action=" << next_action_it->second;
       }
-      const auto next_target_it = instance.labels.find("comet.placement.next_target");
+      const auto next_target_it = instance.labels.find("naim.placement.next_target");
       if (next_target_it != instance.labels.end()) {
         std::cout << " next_target=" << next_target_it->second;
       }
-      const auto victims_it = instance.labels.find("comet.preemption.victims");
+      const auto victims_it = instance.labels.find("naim.preemption.victims");
       if (victims_it != instance.labels.end()) {
         std::cout << " preemption_victims=" << victims_it->second;
       }
-      const auto defer_reason_it = instance.labels.find("comet.placement.defer_reason");
+      const auto defer_reason_it = instance.labels.find("naim.placement.defer_reason");
       if (defer_reason_it != instance.labels.end()) {
         std::cout << " defer_reason=" << defer_reason_it->second;
       }
@@ -139,7 +139,7 @@ void ControllerPrintService::PrintStateSummary(const comet::DesiredState& state)
 }
 
 void ControllerPrintService::PrintDiskRuntimeStates(
-    const std::vector<comet::DiskRuntimeState>& runtime_states) const {
+    const std::vector<naim::DiskRuntimeState>& runtime_states) const {
   std::cout << "disk-runtime-state:\n";
   if (runtime_states.empty()) {
     std::cout << "  (empty)\n";
@@ -173,15 +173,15 @@ void ControllerPrintService::PrintDiskRuntimeStates(
 }
 
 void ControllerPrintService::PrintDetailedDiskState(
-    const comet::DesiredState& state,
-    const std::vector<comet::DiskRuntimeState>& runtime_states,
-    const std::vector<comet::HostObservation>& observations,
+    const naim::DesiredState& state,
+    const std::vector<naim::DiskRuntimeState>& runtime_states,
+    const std::vector<naim::HostObservation>& observations,
     const std::optional<std::string>& node_name) const {
-  std::map<std::string, comet::DiskRuntimeState> runtime_by_key;
+  std::map<std::string, naim::DiskRuntimeState> runtime_by_key;
   for (const auto& runtime_state : runtime_states) {
     runtime_by_key.emplace(runtime_state.disk_name + "@" + runtime_state.node_name, runtime_state);
   }
-  std::map<std::string, comet::DiskTelemetryRecord> telemetry_by_key;
+  std::map<std::string, naim::DiskTelemetryRecord> telemetry_by_key;
   for (const auto& observation : observations) {
     const auto disk_telemetry = runtime_support_service_.ParseDiskTelemetry(observation);
     if (!disk_telemetry.has_value()) {
@@ -202,7 +202,7 @@ void ControllerPrintService::PrintDetailedDiskState(
     const std::string key = disk.name + "@" + disk.node_name;
     const auto runtime_it = runtime_by_key.find(key);
     std::cout << "  - disk=" << disk.name
-              << " kind=" << comet::ToString(disk.kind)
+              << " kind=" << naim::ToString(disk.kind)
               << " node=" << disk.node_name
               << " size_gb=" << disk.size_gb
               << " desired_host_path=" << disk.host_path
@@ -314,13 +314,13 @@ void ControllerPrintService::PrintDetailedDiskState(
 }
 
 void ControllerPrintService::PrintSchedulerDecisionSummary(
-    const comet::DesiredState& state) const {
+    const naim::DesiredState& state) const {
   bool has_decisions = false;
   for (const auto& instance : state.instances) {
-    if (instance.role != comet::InstanceRole::Worker) {
+    if (instance.role != naim::InstanceRole::Worker) {
       continue;
     }
-    if (instance.labels.find("comet.placement.decision") == instance.labels.end()) {
+    if (instance.labels.find("naim.placement.decision") == instance.labels.end()) {
       continue;
     }
     if (!has_decisions) {
@@ -328,23 +328,23 @@ void ControllerPrintService::PrintSchedulerDecisionSummary(
       has_decisions = true;
     }
     std::cout << "  - worker=" << instance.name;
-    const auto decision_it = instance.labels.find("comet.placement.decision");
+    const auto decision_it = instance.labels.find("naim.placement.decision");
     if (decision_it != instance.labels.end()) {
       std::cout << " decision=" << decision_it->second;
     }
-    const auto next_action_it = instance.labels.find("comet.placement.next_action");
+    const auto next_action_it = instance.labels.find("naim.placement.next_action");
     if (next_action_it != instance.labels.end()) {
       std::cout << " next_action=" << next_action_it->second;
     }
-    const auto next_target_it = instance.labels.find("comet.placement.next_target");
+    const auto next_target_it = instance.labels.find("naim.placement.next_target");
     if (next_target_it != instance.labels.end()) {
       std::cout << " next_target=" << next_target_it->second;
     }
-    const auto victims_it = instance.labels.find("comet.preemption.victims");
+    const auto victims_it = instance.labels.find("naim.preemption.victims");
     if (victims_it != instance.labels.end()) {
       std::cout << " victims=" << victims_it->second;
     }
-    const auto defer_reason_it = instance.labels.find("comet.placement.defer_reason");
+    const auto defer_reason_it = instance.labels.find("naim.placement.defer_reason");
     if (defer_reason_it != instance.labels.end()) {
       std::cout << " defer_reason=" << defer_reason_it->second;
     }
@@ -353,7 +353,7 @@ void ControllerPrintService::PrintSchedulerDecisionSummary(
 }
 
 void ControllerPrintService::PrintRolloutGateSummary(
-    const comet::SchedulingPolicyReport& scheduling_report) const {
+    const naim::SchedulingPolicyReport& scheduling_report) const {
   if (scheduling_report.rollout_actions.empty()) {
     return;
   }
@@ -374,7 +374,7 @@ void ControllerPrintService::PrintRolloutGateSummary(
 }
 
 void ControllerPrintService::PrintPersistedRolloutActions(
-    const std::vector<comet::RolloutActionRecord>& actions) const {
+    const std::vector<naim::RolloutActionRecord>& actions) const {
   std::cout << "rollout-actions:\n";
   if (actions.empty()) {
     std::cout << "  (empty)\n";
@@ -387,7 +387,7 @@ void ControllerPrintService::PrintPersistedRolloutActions(
               << " worker=" << action.worker_name
               << " action=" << action.action
               << " target=" << action.target_node_name << ":" << action.target_gpu_device
-              << " status=" << comet::ToString(action.status);
+              << " status=" << naim::ToString(action.status);
     if (!action.victim_worker_names.empty()) {
       std::cout << " victims=";
       for (std::size_t index = 0; index < action.victim_worker_names.size(); ++index) {
@@ -408,7 +408,7 @@ void ControllerPrintService::PrintPersistedRolloutActions(
 }
 
 void ControllerPrintService::PrintNodeAvailabilityOverrides(
-    const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) const {
+    const std::vector<naim::NodeAvailabilityOverride>& availability_overrides) const {
   std::cout << "node-availability:\n";
   if (availability_overrides.empty()) {
     std::cout << "  (empty)\n";
@@ -416,7 +416,7 @@ void ControllerPrintService::PrintNodeAvailabilityOverrides(
   }
   for (const auto& availability_override : availability_overrides) {
     std::cout << "  - node=" << availability_override.node_name
-              << " availability=" << comet::ToString(availability_override.availability)
+              << " availability=" << naim::ToString(availability_override.availability)
               << " updated_at="
               << FormatDisplayTimestamp(availability_override.updated_at)
               << "\n";
@@ -427,9 +427,9 @@ void ControllerPrintService::PrintNodeAvailabilityOverrides(
 }
 
 void ControllerPrintService::PrintAssignmentDispatchSummary(
-    const comet::DesiredState& desired_state,
-    const std::map<std::string, comet::NodeAvailabilityOverride>& availability_overrides,
-    const std::vector<comet::HostObservation>& observations,
+    const naim::DesiredState& desired_state,
+    const std::map<std::string, naim::NodeAvailabilityOverride>& availability_overrides,
+    const std::vector<naim::HostObservation>& observations,
     int stale_after_seconds) const {
   std::size_t schedulable_nodes = 0;
   std::vector<std::string> skipped_nodes;
@@ -437,7 +437,7 @@ void ControllerPrintService::PrintAssignmentDispatchSummary(
     const auto availability =
         runtime_support_service_.ResolveNodeAvailability(availability_overrides, node.name);
     if (!IsNodeSchedulable(availability)) {
-      skipped_nodes.push_back(node.name + "(" + comet::ToString(availability) + ")");
+      skipped_nodes.push_back(node.name + "(" + naim::ToString(availability) + ")");
       continue;
     }
     const auto observed_gate_reason =
@@ -464,7 +464,7 @@ void ControllerPrintService::PrintAssignmentDispatchSummary(
 }
 
 void ControllerPrintService::PrintHostAssignments(
-    const std::vector<comet::HostAssignment>& assignments) const {
+    const std::vector<naim::HostAssignment>& assignments) const {
   std::cout << "host-assignments:\n";
   if (assignments.empty()) {
     std::cout << "  (empty)\n";
@@ -472,14 +472,14 @@ void ControllerPrintService::PrintHostAssignments(
   }
   for (const auto& assignment : assignments) {
     const auto desired_node_state =
-        comet::DeserializeDesiredStateJson(assignment.desired_state_json);
+        naim::DeserializeDesiredStateJson(assignment.desired_state_json);
     std::cout << "  - id=" << assignment.id
               << " node=" << assignment.node_name
               << " plane=" << assignment.plane_name
               << " generation=" << assignment.desired_generation
               << " attempts=" << assignment.attempt_count << "/" << assignment.max_attempts
               << " type=" << assignment.assignment_type
-              << " status=" << comet::ToString(assignment.status)
+              << " status=" << naim::ToString(assignment.status)
               << " instances=" << desired_node_state.instances.size()
               << " artifacts_root=" << assignment.artifacts_root << "\n";
     if (!assignment.status_message.empty()) {
@@ -489,7 +489,7 @@ void ControllerPrintService::PrintHostAssignments(
 }
 
 void ControllerPrintService::PrintHostObservations(
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     int stale_after_seconds) const {
   std::cout << "host-observations:\n";
   if (observations.empty()) {
@@ -501,7 +501,7 @@ void ControllerPrintService::PrintHostObservations(
     std::size_t instance_count = 0;
     if (!observation.observed_state_json.empty()) {
       const auto observed_state =
-          comet::DeserializeDesiredStateJson(observation.observed_state_json);
+          naim::DeserializeDesiredStateJson(observation.observed_state_json);
       disk_count = observed_state.disks.size();
       instance_count = observed_state.instances.size();
     }
@@ -516,7 +516,7 @@ void ControllerPrintService::PrintHostObservations(
 
     std::cout << "  - node=" << observation.node_name
               << " plane=" << (observation.plane_name.empty() ? "(none)" : observation.plane_name)
-              << " status=" << comet::ToString(observation.status);
+              << " status=" << naim::ToString(observation.status);
     if (observation.applied_generation.has_value()) {
       std::cout << " applied_generation=" << *observation.applied_generation;
     }
@@ -720,12 +720,12 @@ void ControllerPrintService::PrintHostObservations(
 }
 
 void ControllerPrintService::PrintHostHealth(
-    const std::optional<comet::DesiredState>& desired_state,
-    const std::vector<comet::HostObservation>& observations,
-    const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
+    const std::optional<naim::DesiredState>& desired_state,
+    const std::vector<naim::HostObservation>& observations,
+    const std::vector<naim::NodeAvailabilityOverride>& availability_overrides,
     const std::optional<std::string>& node_name,
     int stale_after_seconds) const {
-  std::map<std::string, comet::HostObservation> observation_by_node;
+  std::map<std::string, naim::HostObservation> observation_by_node;
   for (const auto& observation : observations) {
     observation_by_node.emplace(observation.node_name, observation);
   }
@@ -765,7 +765,7 @@ void ControllerPrintService::PrintHostHealth(
     if (observation_it == observation_by_node.end()) {
       std::cout << "  - node=" << current_node_name
                 << " availability="
-                << comet::ToString(
+                << naim::ToString(
                        runtime_support_service_.ResolveNodeAvailability(
                            availability_override_map, current_node_name))
                 << " health=unknown status=(none)\n";
@@ -791,11 +791,11 @@ void ControllerPrintService::PrintHostHealth(
 
     std::cout << "  - node=" << current_node_name
               << " availability="
-              << comet::ToString(
+              << naim::ToString(
                      runtime_support_service_.ResolveNodeAvailability(
                          availability_override_map, current_node_name))
               << " health=" << health
-              << " status=" << comet::ToString(observation_it->second.status);
+              << " status=" << naim::ToString(observation_it->second.status);
     if (observation_it->second.applied_generation.has_value()) {
       std::cout << " applied_generation=" << *observation_it->second.applied_generation;
     }
@@ -838,7 +838,7 @@ void ControllerPrintService::PrintHostHealth(
 }
 
 void ControllerPrintService::PrintEvents(
-    const std::vector<comet::EventRecord>& events) const {
+    const std::vector<naim::EventRecord>& events) const {
   std::cout << "events:\n";
   if (events.empty()) {
     std::cout << "  (empty)\n";
@@ -871,12 +871,12 @@ void ControllerPrintService::PrintEvents(
   }
 }
 
-bool ControllerPrintService::IsNodeSchedulable(comet::NodeAvailability availability) const {
-  return availability == comet::NodeAvailability::Active;
+bool ControllerPrintService::IsNodeSchedulable(naim::NodeAvailability availability) const {
+  return availability == naim::NodeAvailability::Active;
 }
 
 std::optional<std::string> ControllerPrintService::ObservedSchedulingGateReason(
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     const std::string& node_name,
     int stale_after_seconds) const {
   const auto observation =
@@ -884,7 +884,7 @@ std::optional<std::string> ControllerPrintService::ObservedSchedulingGateReason(
   if (!observation.has_value()) {
     return std::nullopt;
   }
-  if (observation->status == comet::HostObservationStatus::Failed) {
+  if (observation->status == naim::HostObservationStatus::Failed) {
     return std::string("failed");
   }
   const auto age_seconds =
@@ -903,4 +903,4 @@ std::optional<std::string> ControllerPrintService::ObservedSchedulingGateReason(
   return std::nullopt;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

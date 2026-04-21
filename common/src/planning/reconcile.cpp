@@ -1,4 +1,4 @@
-#include "comet/planning/reconcile.h"
+#include "naim/planning/reconcile.h"
 
 #include <algorithm>
 #include <map>
@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -304,4 +304,4 @@ std::string ToString(ChangeAction action) {
   return "unknown";
 }
 
-}  // namespace comet
+}  // namespace naim

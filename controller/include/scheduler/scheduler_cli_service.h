@@ -7,7 +7,7 @@
 #include "scheduler/scheduler_view_service.h"
 #include "read_model/state_aggregate_loader.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class SchedulerCliService {
  public:
@@ -36,4 +36,4 @@ class SchedulerCliService {
   int verification_stable_samples_required_ = 3;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

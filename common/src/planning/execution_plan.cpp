@@ -1,4 +1,4 @@
-#include "comet/planning/execution_plan.h"
+#include "naim/planning/execution_plan.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "comet/runtime/infer_runtime_config.h"
+#include "naim/runtime/infer_runtime_config.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -436,4 +436,4 @@ std::string ToString(HostOperationKind kind) {
   return "unknown";
 }
 
-}  // namespace comet
+}  // namespace naim

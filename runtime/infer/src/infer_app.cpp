@@ -14,8 +14,8 @@
 #include "runtime/llama_library_engine.h"
 #include "runtime/llama_rpc_runtime.h"
 #include "runtime/local_runtime.h"
-#include "comet/runtime/model_adapter.h"
-#include "comet/runtime/runtime_status.h"
+#include "naim/runtime/model_adapter.h"
+#include "naim/runtime/runtime_status.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -62,22 +62,22 @@ using nlohmann::json;
 
 namespace {
 
-using InferSignalService = comet::infer::InferSignalService;
-using InferCommandLineOptions = comet::infer::InferCommandLineOptions;
-using LlamaLibraryEngine = comet::infer::LlamaLibraryEngine;
-using LlamaRpcRuntime = comet::infer::LlamaRpcRuntime;
-using RuntimeConfig = comet::infer::RuntimeConfig;
-using RuntimeProfile = comet::infer::control_support::RuntimeProfile;
-using HttpRequest = comet::infer::HttpRequest;
-using LocalRuntime = comet::infer::LocalRuntime;
-using SimpleResponse = comet::infer::SimpleResponse;
-using UpstreamTarget = comet::infer::UpstreamTarget;
-using ControlPaths = comet::infer::control_support::ControlPaths;
-namespace cli_output_support = comet::infer::cli_output_support;
-namespace model_cache_support = comet::infer::model_cache_support;
-namespace status_support = comet::infer::status_support;
-namespace prewarm_support = comet::infer::prewarm_support;
-namespace replica_support = comet::infer::replica_support;
+using InferSignalService = naim::infer::InferSignalService;
+using InferCommandLineOptions = naim::infer::InferCommandLineOptions;
+using LlamaLibraryEngine = naim::infer::LlamaLibraryEngine;
+using LlamaRpcRuntime = naim::infer::LlamaRpcRuntime;
+using RuntimeConfig = naim::infer::RuntimeConfig;
+using RuntimeProfile = naim::infer::control_support::RuntimeProfile;
+using HttpRequest = naim::infer::HttpRequest;
+using LocalRuntime = naim::infer::LocalRuntime;
+using SimpleResponse = naim::infer::SimpleResponse;
+using UpstreamTarget = naim::infer::UpstreamTarget;
+using ControlPaths = naim::infer::control_support::ControlPaths;
+namespace cli_output_support = naim::infer::cli_output_support;
+namespace model_cache_support = naim::infer::model_cache_support;
+namespace status_support = naim::infer::status_support;
+namespace prewarm_support = naim::infer::prewarm_support;
+namespace replica_support = naim::infer::replica_support;
 
 struct AssistantTextFilterState {
   std::string raw_text;
@@ -229,12 +229,12 @@ int ConnectTcpHost(const std::string& host, int port) {
 std::string UpdateAssistantTextFilter(
     AssistantTextFilterState& state,
     const std::string& appended_piece,
-    const comet::runtime::ModelIdentity& model_identity) {
+    const naim::runtime::ModelIdentity& model_identity) {
   if (!appended_piece.empty()) {
     state.raw_text += appended_piece;
   }
   const std::string sanitized =
-      comet::runtime::ModelAdapter::SanitizeVisibleText(state.raw_text, model_identity);
+      naim::runtime::ModelAdapter::SanitizeVisibleText(state.raw_text, model_identity);
   if (sanitized.size() < state.emitted_text.size()) {
     return "";
   }
@@ -321,11 +321,11 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
 }
 
 json LoadProfiles(const std::string& path_str) {
-  return comet::infer::control_support::LoadProfiles(path_str);
+  return naim::infer::control_support::LoadProfiles(path_str);
 }
 
 RuntimeProfile ResolveProfile(const json& profiles_json, const std::string& name) {
-  return comet::infer::control_support::ResolveProfile(profiles_json, name);
+  return naim::infer::control_support::ResolveProfile(profiles_json, name);
 }
 
 RuntimeProfile ResolveRequestedProfile(
@@ -335,7 +335,7 @@ RuntimeProfile ResolveRequestedProfile(
   if (!requested_name.empty()) {
     return ResolveProfile(profiles_json, requested_name);
   }
-  const json active_model = comet::infer::control_support::LoadActiveModel(config);
+  const json active_model = naim::infer::control_support::LoadActiveModel(config);
   const std::string active_runtime_profile =
       active_model.value("runtime_profile", std::string{});
   if (!active_runtime_profile.empty()) {
@@ -352,27 +352,27 @@ RuntimeProfile ResolveRequestedProfile(
 }
 
 ControlPaths BuildControlPaths(const RuntimeConfig& config) {
-  return comet::infer::control_support::BuildControlPaths(config);
+  return naim::infer::control_support::BuildControlPaths(config);
 }
 
 json LoadWorkerGroupStatus(const RuntimeConfig& config) {
-  return comet::infer::control_support::LoadWorkerGroupStatus(config);
+  return naim::infer::control_support::LoadWorkerGroupStatus(config);
 }
 
 json LoadActiveModel(const RuntimeConfig& config) {
-  return comet::infer::control_support::LoadActiveModel(config);
+  return naim::infer::control_support::LoadActiveModel(config);
 }
 
 json LoadGatewayPlan(const RuntimeConfig& config) {
-  return comet::infer::control_support::LoadGatewayPlan(config);
+  return naim::infer::control_support::LoadGatewayPlan(config);
 }
 
 json LoadRegistry(const RuntimeConfig& config) {
-  return comet::infer::control_support::LoadRegistry(config);
+  return naim::infer::control_support::LoadRegistry(config);
 }
 
 int EnabledGpuNodeCount(const RuntimeConfig& config) {
-  return comet::infer::control_support::EnabledGpuNodeCount(config);
+  return naim::infer::control_support::EnabledGpuNodeCount(config);
 }
 
 std::string RuntimeUpstreamHealthUrl(const RuntimeConfig& config) {
@@ -389,7 +389,7 @@ std::string RuntimeGatewayHealthUrl(const RuntimeConfig& config) {
   return "http://127.0.0.1:" + std::to_string(config.gateway_listen_port) + "/health";
 }
 
-comet::RuntimeStatus BuildRuntimeStatus(
+naim::RuntimeStatus BuildRuntimeStatus(
     const RuntimeConfig& config,
     const std::string& backend,
     const std::string& phase,
@@ -402,18 +402,18 @@ comet::RuntimeStatus BuildRuntimeStatus(
   const json active_model = LoadActiveModel(config);
   const json gateway_plan = LoadGatewayPlan(config);
   const auto topology = replica_support::InspectReplicaTopology(config);
-  comet::RuntimeStatus status;
+  naim::RuntimeStatus status;
   status.plane_name = config.plane_name;
   status.control_root = config.control_root;
   status.controller_url = config.controller_url;
   status.primary_infer_node = config.primary_infer_node;
-  if (const char* instance_name = std::getenv("COMET_INSTANCE_NAME")) {
+  if (const char* instance_name = std::getenv("NAIM_INSTANCE_NAME")) {
     status.instance_name = instance_name;
   }
-  if (const char* instance_role = std::getenv("COMET_INSTANCE_ROLE")) {
+  if (const char* instance_role = std::getenv("NAIM_INSTANCE_ROLE")) {
     status.instance_role = instance_role;
   }
-  if (const char* node_name = std::getenv("COMET_NODE_NAME")) {
+  if (const char* node_name = std::getenv("NAIM_NODE_NAME")) {
     status.node_name = node_name;
   }
   status.runtime_backend = backend;
@@ -488,7 +488,7 @@ void WriteRuntimeStatus(
     int supervisor_pid,
     const std::string& started_at,
     const std::optional<std::uint64_t>& kv_cache_bytes) {
-  comet::SaveRuntimeStatusJson(
+  naim::SaveRuntimeStatusJson(
       BuildRuntimeStatus(
           config,
           backend,
@@ -508,13 +508,13 @@ std::string SafeServedModelName(const std::string& model_id) {
 
 json BuildModelListPayload(const RuntimeConfig& config) {
   const json active_model = LoadActiveModel(config);
-  const std::optional<comet::RuntimeStatus> runtime_status =
-      comet::LoadRuntimeStatusJson(BuildControlPaths(config).runtime_status_path.string());
+  const std::optional<naim::RuntimeStatus> runtime_status =
+      naim::LoadRuntimeStatusJson(BuildControlPaths(config).runtime_status_path.string());
   const std::string owner =
       runtime_status.has_value() &&
               runtime_status->runtime_backend.rfind("llama", 0) == 0
-          ? "comet-llama-runtime"
-          : "comet-embedded-runtime";
+          ? "naim-llama-runtime"
+          : "naim-embedded-runtime";
   json data = json::array();
   const std::string model_id = active_model.value("model_id", std::string{});
   if (!model_id.empty()) {
@@ -530,7 +530,7 @@ json BuildModelListPayload(const RuntimeConfig& config) {
 }
 
 void TouchReadyFile() {
-  std::ofstream("/tmp/comet-ready") << "ready\n";
+  std::ofstream("/tmp/naim-ready") << "ready\n";
 }
 
 std::string UtcNowIso() {
@@ -544,7 +544,7 @@ std::string UtcNowIso() {
 }
 
 std::string StartupDoctorChecks() {
-  if (const char* checks = std::getenv("COMET_INFER_STARTUP_DOCTOR_CHECKS")) {
+  if (const char* checks = std::getenv("NAIM_INFER_STARTUP_DOCTOR_CHECKS")) {
     if (*checks != '\0') {
       return checks;
     }
@@ -666,8 +666,8 @@ std::string CompletionPromptFromRequest(const RuntimeConfig& config, const HttpR
       Throw("chat completion request is missing messages");
     }
     const json active_model = LoadActiveModel(config);
-    const std::string result = comet::runtime::ModelAdapter::BuildLegacyChatPrompt(
-        payload, comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model));
+    const std::string result = naim::runtime::ModelAdapter::BuildLegacyChatPrompt(
+        payload, naim::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model));
     if (result.empty()) {
       Throw("chat completion request contains no usable messages");
     }
@@ -689,15 +689,15 @@ SimpleResponse BuildCompletionResponse(
     const HttpRequest& request,
     const LlamaLibraryEngine::GenerationResult& result) {
   const json active_model = LoadActiveModel(config);
-  const comet::runtime::ModelIdentity model_identity =
-      comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
+  const naim::runtime::ModelIdentity model_identity =
+      naim::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
   const std::string served_model_name =
       active_model.value("served_model_name", active_model.value("model_id", std::string{"(unknown)"}));
   if (request.path == "/v1/chat/completions") {
     return BuildJsonResponse(
         200,
         json{
-            {"id", "chatcmpl-comet"},
+            {"id", "chatcmpl-naim"},
             {"object", "chat.completion"},
             {"model", served_model_name},
             {"choices",
@@ -705,7 +705,7 @@ SimpleResponse BuildCompletionResponse(
                  {"index", 0},
                  {"message",
                   json{{"role", "assistant"},
-                       {"content", comet::runtime::ModelAdapter::SanitizeVisibleText(
+                       {"content", naim::runtime::ModelAdapter::SanitizeVisibleText(
                                        result.text,
                                        model_identity)}}},
                  {"finish_reason", result.finish_reason},
@@ -719,7 +719,7 @@ SimpleResponse BuildCompletionResponse(
   return BuildJsonResponse(
       200,
       json{
-          {"id", "cmpl-comet"},
+          {"id", "cmpl-naim"},
           {"object", "text_completion"},
           {"model", served_model_name},
           {"choices",
@@ -884,19 +884,19 @@ bool ProxyHttpRequest(
     int client_fd,
     const std::string& request_data,
     const UpstreamTarget& upstream) {
-  const HttpRequest request = comet::infer::runtime_support::ParseHttpRequest(request_data);
+  const HttpRequest request = naim::infer::runtime_support::ParseHttpRequest(request_data);
   if (request.method == "POST" && request.path == "/v1/chat/completions" &&
       !RequestWantsStream(request)) {
-    auto response = comet::infer::runtime_support::ForwardHttpRequest(request, upstream);
+    auto response = naim::infer::runtime_support::ForwardHttpRequest(request, upstream);
     if (!response.has_value()) {
       return false;
     }
     if (response->content_type.starts_with("application/json")) {
       try {
         json payload = json::parse(response->body);
-        comet::runtime::ModelAdapter::SanitizeChatCompletionPayload(
+        naim::runtime::ModelAdapter::SanitizeChatCompletionPayload(
             &payload,
-            comet::runtime::ModelAdapter::IdentityFromActiveModelJson(
+            naim::runtime::ModelAdapter::IdentityFromActiveModelJson(
                 LoadActiveModel(config)));
         response->body = payload.dump();
       } catch (const std::exception&) {
@@ -908,14 +908,14 @@ bool ProxyHttpRequest(
 
   const int upstream_fd = ConnectTcpHost(upstream.host, upstream.port);
   if (upstream_fd < 0) {
-    std::cerr << "[comet-infer] proxy connect failed upstream="
+    std::cerr << "[naim-infer] proxy connect failed upstream="
               << upstream.host << ":" << upstream.port << std::endl;
     return false;
   }
 
   const std::string proxied_request = ForceConnectionClose(request_data);
   if (!SendAll(upstream_fd, proxied_request)) {
-    std::cerr << "[comet-infer] proxy send failed upstream="
+    std::cerr << "[naim-infer] proxy send failed upstream="
               << upstream.host << ":" << upstream.port << std::endl;
     shutdown(upstream_fd, SHUT_RDWR);
     close(upstream_fd);
@@ -927,7 +927,7 @@ bool ProxyHttpRequest(
   while (true) {
     const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
-      std::cerr << "[comet-infer] proxy recv failed upstream="
+      std::cerr << "[naim-infer] proxy recv failed upstream="
                 << upstream.host << ":" << upstream.port
                 << " errno=" << errno << std::endl;
       shutdown(upstream_fd, SHUT_RDWR);
@@ -939,7 +939,7 @@ bool ProxyHttpRequest(
     }
     received_any_response = true;
     if (!SendAll(client_fd, std::string(buffer.data(), static_cast<std::size_t>(read_count)))) {
-      std::cerr << "[comet-infer] proxy send-to-client failed upstream="
+      std::cerr << "[naim-infer] proxy send-to-client failed upstream="
                 << upstream.host << ":" << upstream.port << std::endl;
       shutdown(upstream_fd, SHUT_RDWR);
       close(upstream_fd);
@@ -953,7 +953,7 @@ bool ProxyHttpRequest(
     const std::size_t line_end = request_data.find("\r\n");
     const std::string request_line =
         line_end == std::string::npos ? request_data : request_data.substr(0, line_end);
-    std::cerr << "[comet-infer] proxy received no response upstream="
+    std::cerr << "[naim-infer] proxy received no response upstream="
               << upstream.host << ":" << upstream.port
               << " request=" << request_line << std::endl;
   }
@@ -965,14 +965,14 @@ std::optional<SimpleResponse> ForwardHttpRequest(
     const UpstreamTarget& upstream) {
   const int upstream_fd = ConnectTcpHost(upstream.host, upstream.port);
   if (upstream_fd < 0) {
-    std::cerr << "[comet-infer] forward connect failed upstream="
+    std::cerr << "[naim-infer] forward connect failed upstream="
               << upstream.host << ":" << upstream.port << std::endl;
     return std::nullopt;
   }
 
   const std::string proxied_request = BuildUpstreamRequest(request, upstream);
   if (!SendAll(upstream_fd, proxied_request)) {
-    std::cerr << "[comet-infer] forward send failed upstream="
+    std::cerr << "[naim-infer] forward send failed upstream="
               << upstream.host << ":" << upstream.port << std::endl;
     shutdown(upstream_fd, SHUT_RDWR);
     close(upstream_fd);
@@ -984,7 +984,7 @@ std::optional<SimpleResponse> ForwardHttpRequest(
   while (true) {
     const ssize_t read_count = recv(upstream_fd, buffer.data(), buffer.size(), 0);
     if (read_count < 0) {
-      std::cerr << "[comet-infer] forward recv failed upstream="
+      std::cerr << "[naim-infer] forward recv failed upstream="
                 << upstream.host << ":" << upstream.port
                 << " errno=" << errno << std::endl;
       shutdown(upstream_fd, SHUT_RDWR);
@@ -1115,8 +1115,8 @@ void HandleStreamingChatRequest(
         active_model.value(
             "served_model_name",
             active_model.value("model_id", std::string{"(unknown)"}));
-    const comet::runtime::ModelIdentity model_identity =
-        comet::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
+    const naim::runtime::ModelIdentity model_identity =
+        naim::runtime::ModelAdapter::IdentityFromActiveModelJson(active_model);
     if (!SendSseHeaders(client_fd)) {
       return;
     }
@@ -1435,11 +1435,11 @@ int LaunchRuntime(
   }
   const json active_model = LoadActiveModel(config);
   if (active_model.empty()) {
-    std::cout << "[comet-inferctl] auto backend fallback to embedded: no active model\n";
+    std::cout << "[naim-inferctl] auto backend fallback to embedded: no active model\n";
     return LaunchEmbeddedRuntime(config, "embedded", signal_service);
   }
   if (!HasResolvableGgufModel(config)) {
-    std::cout << "[comet-inferctl] auto backend fallback to embedded: active model has no local GGUF\n";
+    std::cout << "[naim-inferctl] auto backend fallback to embedded: active model has no local GGUF\n";
     return LaunchEmbeddedRuntime(config, "embedded", signal_service);
   }
   return LaunchLlamaRuntime(config, signal_service);
@@ -1455,7 +1455,7 @@ void PrintJsonOrEmpty(const json& value) {
 
 }  // namespace
 
-namespace comet::infer::runtime_support {
+namespace naim::infer::runtime_support {
 
 int CreateListenSocket(const std::string& host, int port) {
   return ::CreateListenSocket(host, port);
@@ -1559,9 +1559,9 @@ void WriteInferRuntimeStatus(
       kv_cache_bytes);
 }
 
-}  // namespace comet::infer::runtime_support
+}  // namespace naim::infer::runtime_support
 
-namespace comet::infer {
+namespace naim::infer {
 
 InferApp::InferApp(int argc, char** argv) : argc_(argc), argv_(argv) {}
 
@@ -1666,7 +1666,7 @@ int InferApp::Run() {
       }
       const int topology_rc = status_support::RunDoctor(config, "topology");
       if (topology_rc != 0) {
-        std::cerr << "[comet-infer] worker group topology is still bootstrapping; "
+        std::cerr << "[naim-infer] worker group topology is still bootstrapping; "
                      "continuing startup\n";
       }
       status_support::PrintGatewayPlan(config, true);
@@ -1688,4 +1688,4 @@ int InferApp::Run() {
   }
 }
 
-}  // namespace comet::infer
+}  // namespace naim::infer

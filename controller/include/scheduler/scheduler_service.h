@@ -8,9 +8,9 @@
 #include "infra/controller_action.h"
 #include "scheduler/scheduler_view_service.h"
 
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerEventService;
 class ControllerPrintService;
@@ -79,14 +79,14 @@ class SchedulerService : public ISchedulerService {
   int ApplyReadyRolloutAction(int action_id) const override;
 
  private:
-  std::optional<comet::RolloutActionRecord> FindRolloutActionById(
-      const std::vector<comet::RolloutActionRecord>& actions,
+  std::optional<naim::RolloutActionRecord> FindRolloutActionById(
+      const std::vector<naim::RolloutActionRecord>& actions,
       int action_id) const;
 
   int AdvanceActiveSchedulerAction() const;
   int SetRolloutActionStatus(
       int action_id,
-      comet::RolloutActionStatus status,
+      naim::RolloutActionStatus status,
       const std::optional<std::string>& status_message) const;
 
   std::string db_path_;
@@ -103,4 +103,4 @@ class SchedulerService : public ISchedulerService {
   const ControllerEventService& controller_event_service_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

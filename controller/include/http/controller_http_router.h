@@ -17,7 +17,7 @@
 #include "interaction/interaction_http_service.h"
 #include "auth/auth_support_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerHttpRouter {
  public:
@@ -71,4 +71,4 @@ class ControllerHttpRouter {
   Deps deps_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

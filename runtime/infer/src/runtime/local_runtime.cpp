@@ -8,7 +8,7 @@
 #include "runtime/infer_replica_support.h"
 #include "runtime/infer_runtime_support.h"
 
-namespace comet::infer {
+namespace naim::infer {
 
 namespace {
 
@@ -38,7 +38,7 @@ LocalRuntime::LocalRuntime(
       inference_server_(
           "0.0.0.0",
           config.api_port,
-          "comet-inference-local",
+          "naim-inference-local",
           config,
           engine_.get(),
           signal_service_,
@@ -47,7 +47,7 @@ LocalRuntime::LocalRuntime(
       gateway_server_(
           config.gateway_listen_host,
           config.gateway_listen_port,
-          "comet-gateway-local",
+          "naim-gateway-local",
           config,
           engine_.get(),
           signal_service_,
@@ -145,4 +145,4 @@ void LocalRuntime::WriteCurrentRuntimeStatus(const std::string& phase) const {
       kv_cache_bytes);
 }
 
-}  // namespace comet::infer
+}  // namespace naim::infer

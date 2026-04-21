@@ -9,7 +9,7 @@
 #include "infra/controller_request_support.h"
 #include "skills/skills_factory_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class SkillsFactoryHttpService final {
  public:
@@ -39,4 +39,4 @@ class SkillsFactoryHttpService final {
   std::optional<std::string> upstream_target_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

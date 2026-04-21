@@ -7,9 +7,9 @@
 #include <nlohmann/json.hpp>
 
 #include "app/controller_service_interfaces.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 enum class WebUiComposeMode {
   Skip,
@@ -17,7 +17,7 @@ enum class WebUiComposeMode {
 };
 
 using WebUiEventSink = std::function<void(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& event_type,
     const std::string& message,
     const nlohmann::json& payload)>;
@@ -48,4 +48,4 @@ class WebUiService : public IWebUiService {
   WebUiEventSink event_sink_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

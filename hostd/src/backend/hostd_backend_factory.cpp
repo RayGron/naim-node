@@ -15,7 +15,7 @@ std::string DefaultDbPath() {
 
 }  // namespace
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdBackendFactory::HostdBackendFactory(const IHttpHostdBackendSupport& support)
     : support_(support) {}
@@ -24,7 +24,10 @@ std::unique_ptr<HostdBackend> HostdBackendFactory::CreateBackend(
     const std::optional<std::string>& db_path,
     const std::optional<std::string>& controller_url,
     const std::optional<std::string>& host_private_key_path,
-    const std::optional<std::string>& controller_fingerprint) const {
+    const std::optional<std::string>& controller_fingerprint,
+    const std::optional<std::string>& onboarding_key,
+    const std::string& node_name,
+    const std::string& storage_root) const {
   if (controller_url.has_value() && !controller_url->empty()) {
     if (!host_private_key_path.has_value() || host_private_key_path->empty()) {
       throw std::runtime_error("--host-private-key is required for remote host-agent mode");
@@ -39,9 +42,12 @@ std::unique_ptr<HostdBackend> HostdBackendFactory::CreateBackend(
         *controller_url,
         support_.Trim(buffer.str()),
         controller_fingerprint.value_or(""),
+        onboarding_key.value_or(""),
+        node_name,
+        storage_root,
         support_);
   }
   return std::make_unique<LocalDbHostdBackend>(db_path.value_or(DefaultDbPath()));
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

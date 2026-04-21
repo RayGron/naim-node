@@ -3,18 +3,19 @@
 #include "app/controller_composition_support.h"
 #include "app/controller_request_context.h"
 #include "infra/controller_network_manager.h"
+#include "interaction/interaction_request_contract_support.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstdio>
 
-namespace comet::controller::serve_support {
+namespace naim::controller::serve_support {
 
 namespace {
 
 using nlohmann::json;
-using SocketHandle = comet::platform::SocketHandle;
+using SocketHandle = naim::platform::SocketHandle;
 
 std::string LowercaseCopy(std::string value) {
   std::transform(
@@ -47,7 +48,7 @@ bool WebGatewayRoutesEnabledForListener(const std::string& listen_host) {
   if (IsLoopbackHost(listen_host) || IsPrivateIpv4Host(listen_host)) {
     return true;
   }
-  if (const char* internal_host = std::getenv("COMET_CONTROLLER_INTERNAL_HOST");
+  if (const char* internal_host = std::getenv("NAIM_CONTROLLER_INTERNAL_HOST");
       internal_host != nullptr && internal_host[0] != '\0') {
     return listen_host == internal_host;
   }
@@ -138,9 +139,10 @@ int ServeControllerHttp(
             auth_support);
       },
       [](const std::string& method, const std::string& path) {
-        return ParseInteractionStreamPlaneName(method, path);
+        return InteractionRequestContractSupport{}.ParseInteractionStreamPlaneName(
+            method, path);
       },
-      [&](const comet::EventRecord& event) {
+      [&](const naim::EventRecord& event) {
         return read_model_service.BuildEventPayloadItem(event);
       },
   });
@@ -152,8 +154,8 @@ int ServeControllerHttp(
       listen_port,
       ui_root,
       webgateway_routes_enabled
-          ? "/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/model-library,/api/v1/model-library/download,/api/v1/model-library/jobs/stop,/api/v1/model-library/jobs/resume,/api/v1/model-library/jobs/hide,/api/v1/model-library/jobs[DELETE],/api/v1/model-library/skills-factory-worker,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/sessions,/api/v1/planes/<plane>/interaction/sessions/<session_id>,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/planes/<plane>/webgateway/status,/api/v1/planes/<plane>/webgateway/resolve,/api/v1/planes/<plane>/webgateway/review-response,/api/v1/planes/<plane>/webgateway/sessions,/api/v1/planes/<plane>/skills,/api/v1/skills-factory,/api/v1/skills-factory/<skill>,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key"
-          : "/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/model-library,/api/v1/model-library/download,/api/v1/model-library/jobs/stop,/api/v1/model-library/jobs/resume,/api/v1/model-library/jobs/hide,/api/v1/model-library/jobs[DELETE],/api/v1/model-library/skills-factory-worker,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/sessions,/api/v1/planes/<plane>/interaction/sessions/<session_id>,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/planes/<plane>/skills,/api/v1/skills-factory,/api/v1/skills-factory/<skill>,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key",
+          ? "/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/model-library,/api/v1/model-library/download,/api/v1/model-library/jobs/stop,/api/v1/model-library/jobs/resume,/api/v1/model-library/jobs/hide,/api/v1/model-library/jobs[DELETE],/api/v1/model-library/skills-factory-worker,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/sessions,/api/v1/planes/<plane>/interaction/sessions/<session_id>,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/planes/<plane>/webgateway/status,/api/v1/planes/<plane>/webgateway/resolve,/api/v1/planes/<plane>/webgateway/review-response,/api/v1/planes/<plane>/webgateway/sessions,/api/v1/planes/<plane>/skills,/api/v1/skills-factory,/api/v1/skills-factory/<skill>,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/peer-links,/api/v1/hostd/file-transfer-tickets,/api/v1/hostd/file-transfer-tickets/validate,/api/v1/hostd/file-upload-tickets,/api/v1/hostd/file-upload-tickets/validate,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key,/api/v1/hostd/hosts/<node>/reset-onboarding,/api/v1/hostd/hosts/<node>/storage-role,/api/v1/hostd/model-artifacts/chunks/request,/api/v1/hostd/model-artifacts/chunks/poll,/api/v1/hostd/model-artifacts/manifest/request,/api/v1/hostd/model-artifacts/manifest/poll"
+          : "/health,/api/v1/health,/api/v1/bundles/validate,/api/v1/bundles/preview,/api/v1/bundles/import,/api/v1/bundles/apply,/api/v1/model-library,/api/v1/model-library/download,/api/v1/model-library/jobs/stop,/api/v1/model-library/jobs/resume,/api/v1/model-library/jobs/hide,/api/v1/model-library/jobs[DELETE],/api/v1/model-library/skills-factory-worker,/api/v1/planes,/api/v1/planes/<plane>,/api/v1/planes/<plane>/dashboard,/api/v1/planes/<plane>/start,/api/v1/planes/<plane>/stop,/api/v1/planes/<plane>[DELETE],/api/v1/planes/<plane>/interaction/status,/api/v1/planes/<plane>/interaction/models,/api/v1/planes/<plane>/interaction/sessions,/api/v1/planes/<plane>/interaction/sessions/<session_id>,/api/v1/planes/<plane>/interaction/chat/completions,/api/v1/planes/<plane>/interaction/chat/completions/stream,/api/v1/planes/<plane>/skills,/api/v1/skills-factory,/api/v1/skills-factory/<skill>,/api/v1/state,/api/v1/dashboard,/api/v1/host-assignments,/api/v1/host-observations,/api/v1/host-health,/api/v1/disk-state,/api/v1/rollout-actions,/api/v1/rebalance-plan,/api/v1/events,/api/v1/events/stream,/api/v1/scheduler-tick,/api/v1/reconcile-rebalance-proposals,/api/v1/reconcile-rollout-actions,/api/v1/apply-rebalance-proposal,/api/v1/set-rollout-action-status,/api/v1/enqueue-rollout-eviction,/api/v1/apply-ready-rollout-action,/api/v1/node-availability,/api/v1/retry-host-assignment,/api/v1/hostd/hosts,/api/v1/hostd/peer-links,/api/v1/hostd/file-transfer-tickets,/api/v1/hostd/file-transfer-tickets/validate,/api/v1/hostd/file-upload-tickets,/api/v1/hostd/file-upload-tickets/validate,/api/v1/hostd/hosts/<node>/revoke,/api/v1/hostd/hosts/<node>/rotate-key,/api/v1/hostd/hosts/<node>/reset-onboarding,/api/v1/hostd/hosts/<node>/storage-role,/api/v1/hostd/model-artifacts/chunks/request,/api/v1/hostd/model-artifacts/chunks/poll,/api/v1/hostd/model-artifacts/manifest/request,/api/v1/hostd/model-artifacts/manifest/poll",
   });
 }
 
@@ -169,7 +171,7 @@ int ServeSkillsFactoryHttp(
         if (request.path == "/health" || request.path == "/api/v1/health") {
           return composition_support::BuildJsonResponse(
               200,
-              json{{"service", "comet-skills-factory"}, {"status", "ok"}},
+              json{{"service", "naim-skills-factory"}, {"status", "ok"}},
               {});
         }
         if (const auto response =
@@ -185,7 +187,7 @@ int ServeSkillsFactoryHttp(
       [](const std::string&, const std::string&) -> std::optional<std::string> {
         return std::nullopt;
       },
-      [](const comet::EventRecord&) { return json::object(); },
+      [](const naim::EventRecord&) { return json::object(); },
   });
 
   return server.Serve({
@@ -198,4 +200,4 @@ int ServeSkillsFactoryHttp(
   });
 }
 
-}  // namespace comet::controller::serve_support
+}  // namespace naim::controller::serve_support

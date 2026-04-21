@@ -1,10 +1,10 @@
-#include "comet/state/interaction_repository.h"
+#include "naim/state/interaction_repository.h"
 
 #include <stdexcept>
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -470,4 +470,4 @@ InteractionArchiveRecord InteractionRepository::ReadInteractionArchive(sqlite3_s
   return archive;
 }
 
-}  // namespace comet
+}  // namespace naim

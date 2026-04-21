@@ -1,8 +1,9 @@
 #include "app/controller_composition_support.h"
 
 #include "app/controller_request_context.h"
+#include "observation/plane_observation_matcher.h"
 
-namespace comet::controller::composition_support {
+namespace naim::controller::composition_support {
 
 namespace {
 
@@ -13,12 +14,12 @@ std::string SerializeEventPayload(const json& payload) {
 }
 
 bool ObservationBlocksPlaneDeletion(
-    const comet::HostObservation& observation,
+    const naim::HostObservation& observation,
     const std::string& plane_name) {
   if (!ObservationMatchesPlane(observation, plane_name)) {
     return false;
   }
-  if (observation.status != comet::HostObservationStatus::Idle) {
+  if (observation.status != naim::HostObservationStatus::Idle) {
     return true;
   }
   if (observation.observed_state_json.empty()) {
@@ -26,7 +27,7 @@ bool ObservationBlocksPlaneDeletion(
   }
   try {
     const auto observed_state =
-        comet::DeserializeDesiredStateJson(observation.observed_state_json);
+        naim::DeserializeDesiredStateJson(observation.observed_state_json);
     for (const auto& disk : observed_state.disks) {
       if (disk.plane_name == plane_name) {
         return true;
@@ -44,7 +45,7 @@ bool ObservationBlocksPlaneDeletion(
 }
 
 bool HasBlockingPlaneObservations(
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     const std::string& plane_name) {
   return std::any_of(
       observations.begin(),
@@ -91,7 +92,7 @@ std::optional<int> FindQueryInt(
 }
 
 void AppendControllerEvent(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& category,
     const std::string& event_type,
     const std::string& message,
@@ -102,7 +103,7 @@ void AppendControllerEvent(
     const std::optional<int>& assignment_id,
     const std::optional<int>& rollout_action_id,
     const std::string& severity) {
-  store.AppendEvent(comet::EventRecord{
+  store.AppendEvent(naim::EventRecord{
       0,
       plane_name,
       node_name,
@@ -118,71 +119,34 @@ void AppendControllerEvent(
   });
 }
 
-std::vector<comet::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
-    const comet::HostObservation& observation) {
+std::vector<naim::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
+    const naim::HostObservation& observation) {
   if (observation.instance_runtime_json.empty()) {
     return {};
   }
-  return comet::DeserializeRuntimeStatusListJson(observation.instance_runtime_json);
+  return naim::DeserializeRuntimeStatusListJson(observation.instance_runtime_json);
 }
 
 bool ObservationMatchesPlane(
-    const comet::HostObservation& observation,
+    const naim::HostObservation& observation,
     const std::string& plane_name) {
-  if (observation.plane_name == plane_name) {
-    return true;
-  }
-  if (observation.observed_state_json.empty()) {
-    return false;
-  }
-
-  const auto observed_state =
-      comet::DeserializeDesiredStateJson(observation.observed_state_json);
-  if (observed_state.plane_name == plane_name) {
-    return true;
-  }
-  for (const auto& disk : observed_state.disks) {
-    if (disk.plane_name == plane_name) {
-      return true;
-    }
-  }
-  for (const auto& instance : observed_state.instances) {
-    if (instance.plane_name == plane_name) {
-      return true;
-    }
-  }
-  try {
-    const auto instance_statuses = ParseInstanceRuntimeStatuses(observation);
-    for (const auto& status : instance_statuses) {
-      const std::string worker_prefix = "worker-" + plane_name + "-";
-      if (status.instance_name == "infer-" + plane_name ||
-          status.instance_name == "worker-" + plane_name ||
-          status.instance_name.rfind(worker_prefix, 0) == 0) {
-        return true;
-      }
-    }
-  } catch (const std::exception&) {
-  }
-  return false;
+  const naim::controller::PlaneObservationMatcher plane_observation_matcher;
+  return plane_observation_matcher.ObservationMatchesPlane(observation, plane_name);
 }
 
-std::vector<comet::HostObservation> FilterHostObservationsForPlane(
-    const std::vector<comet::HostObservation>& observations,
+std::vector<naim::HostObservation> FilterHostObservationsForPlane(
+    const std::vector<naim::HostObservation>& observations,
     const std::string& plane_name) {
-  std::vector<comet::HostObservation> result;
-  for (const auto& observation : observations) {
-    if (ObservationMatchesPlane(observation, plane_name)) {
-      result.push_back(observation);
-    }
-  }
-  return result;
+  const naim::controller::PlaneObservationMatcher plane_observation_matcher;
+  return plane_observation_matcher.FilterHostObservationsForPlane(
+      observations, plane_name);
 }
 
-bool CanFinalizeDeletedPlane(comet::ControllerStore& store, const std::string& plane_name) {
+bool CanFinalizeDeletedPlane(naim::ControllerStore& store, const std::string& plane_name) {
   const auto pending_assignments = store.LoadHostAssignments(
-      std::nullopt, comet::HostAssignmentStatus::Pending, plane_name);
+      std::nullopt, naim::HostAssignmentStatus::Pending, plane_name);
   const auto claimed_assignments = store.LoadHostAssignments(
-      std::nullopt, comet::HostAssignmentStatus::Claimed, plane_name);
+      std::nullopt, naim::HostAssignmentStatus::Claimed, plane_name);
   if (!pending_assignments.empty() || !claimed_assignments.empty()) {
     return false;
   }
@@ -198,7 +162,7 @@ HttpResponse BuildJsonResponse(
     if (!enriched.contains("api_version")) {
       enriched["api_version"] = "v1";
     }
-    const HttpRequest* current_request = comet::controller::ControllerRequestContext::Current();
+    const HttpRequest* current_request = naim::controller::ControllerRequestContext::Current();
     if (current_request != nullptr && !enriched.contains("request")) {
       enriched["request"] = {
           {"path", current_request->path},
@@ -238,4 +202,4 @@ HttpResponse BuildJsonResponse(
   return HttpResponse{status_code, "application/json", enriched.dump(), headers};
 }
 
-}  // namespace comet::controller::composition_support
+}  // namespace naim::controller::composition_support

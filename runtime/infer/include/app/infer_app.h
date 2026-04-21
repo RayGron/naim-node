@@ -1,6 +1,6 @@
 #pragma once
 
-namespace comet::infer {
+namespace naim::infer {
 
 class InferApp final {
  public:
@@ -16,4 +16,4 @@ class InferApp final {
   char** argv_;
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

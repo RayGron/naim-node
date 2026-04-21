@@ -4,7 +4,7 @@
 #include <iostream>
 #include <set>
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace fs = std::filesystem;
 
@@ -15,8 +15,8 @@ void LauncherDoctorService::Run(
     const fs::path& self_path,
     const std::optional<std::string>& role) const {
   const std::set<std::string> required_commands = {"docker"};
-  const fs::path controller_binary = self_path.parent_path() / "comet-controller";
-  const fs::path hostd_binary = self_path.parent_path() / "comet-hostd";
+  const fs::path controller_binary = self_path.parent_path() / "naim-controller";
+  const fs::path hostd_binary = self_path.parent_path() / "naim-hostd";
   std::cout << "doctor\n";
   std::cout << "binary=" << self_path << "\n";
   if (!role.has_value() || *role == "controller") {
@@ -35,4 +35,4 @@ void LauncherDoctorService::Run(
             << (process_runner_.CommandExists("systemd-analyze") ? "yes" : "no") << "\n";
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

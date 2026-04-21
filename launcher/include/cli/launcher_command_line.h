@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class LauncherCommandLine {
  public:
@@ -29,4 +29,4 @@ class LauncherCommandLine {
   std::vector<std::string> args_;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

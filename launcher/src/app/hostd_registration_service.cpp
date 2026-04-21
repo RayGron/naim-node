@@ -7,9 +7,9 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace fs = std::filesystem;
 
@@ -21,9 +21,9 @@ void HostdRegistrationService::Connect(const LauncherCommandLine& command_line) 
     throw std::runtime_error("--db, --node and --public-key are required for connect-hostd");
   }
 
-  comet::ControllerStore store(*db_path);
+  naim::ControllerStore store(*db_path);
   store.Initialize();
-  comet::RegisteredHostRecord record;
+  naim::RegisteredHostRecord record;
   record.node_name = *node_name;
   record.advertised_address = command_line.FindFlagValue("--address").value_or("");
   record.public_key_base64 = ReadPublicKeyBase64Argument(*public_key);
@@ -34,9 +34,9 @@ void HostdRegistrationService::Connect(const LauncherCommandLine& command_line) 
   record.registration_state = "registered";
   record.session_state = "disconnected";
   record.capabilities_json = "{}";
-  record.status_message = "registered by comet-node connect-hostd";
+  record.status_message = "registered by naim-node connect-hostd";
   store.UpsertRegisteredHost(record);
-  store.AppendEvent(comet::EventRecord{
+  store.AppendEvent(naim::EventRecord{
       0,
       "",
       *node_name,
@@ -47,7 +47,7 @@ void HostdRegistrationService::Connect(const LauncherCommandLine& command_line) 
       "registered",
       "info",
       "registered hostd node",
-      "{\"source\":\"comet-node connect-hostd\"}",
+      "{\"source\":\"naim-node connect-hostd\"}",
       "",
   });
   std::cout << "registered hostd node=" << *node_name << "\n";
@@ -83,4 +83,4 @@ std::string HostdRegistrationService::Trim(const std::string& value) const {
   return value.substr(begin, end - begin);
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

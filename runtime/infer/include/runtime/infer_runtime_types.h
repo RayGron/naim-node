@@ -5,7 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::infer {
+namespace naim::infer {
 
 struct RuntimeConfig {
   nlohmann::json raw;
@@ -41,4 +41,4 @@ struct RuntimeConfig {
   nlohmann::json serving_workers = nlohmann::json::array();
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

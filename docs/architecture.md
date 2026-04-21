@@ -1,209 +1,136 @@
 # Architecture Notes
 
-## Refactoring Snapshot
+`naim-node` now sits inside a two-part product architecture:
 
-Последний зафиксированный structural refactoring snapshot:
+- `naim` is the control point and operator-facing management surface
+- `naim-node` is the managed host agent package that realizes work on connected nodes
 
-- report: `docs/refactoring-report-2026-03-28.md`
-- architecture scheme: `docs/refactored-architecture-2026-03-28.md`
+This repository contains the current implementation of both sides:
 
-## Roles
+- `naim-controller` is the current implementation of the `naim` control point
+- `naim-hostd` is the current implementation of the `naim-node` host agent
+- `naim-node` is the launcher that can install and run either role, including a co-located setup
 
-- `comet-controller` owns desired state, scheduling decisions, reconciliation, and API surface
-- `comet-hostd` owns local execution on one node: disks, mounts, compose artifacts, container lifecycle, telemetry
-- disk declarations and realized disk runtime state are now stored separately, so controller/hostd can compare the desired disk inventory with the current realized host-side lifecycle instead of overloading one state model for both
-- the host agent now has a privileged Linux disk lifecycle path (`image -> loop -> mkfs -> mount`) plus an explicit unprivileged directory-backed fallback for local development and smoke scenarios
-- controller reporting can now show both declared disk inventory and realized disk lifecycle separately, including node-scoped disk views for operator inspection
-- the controller now also has a native HTTP server seam (`serve`) with JSON health, state, host-assignment, host-observation, host-health, node-availability, disk-state, rollout-action, and rebalance-plan endpoints, plus the first safe mutating orchestration endpoints for `scheduler-tick`, `reconcile-rebalance-proposals`, `reconcile-rollout-actions`, `apply-rebalance-proposal`, `set-rollout-action-status`, `enqueue-rollout-eviction`, and `apply-ready-rollout-action`
-- the first realtime Phase H seam now exists as `GET /api/v1/events/stream`, which streams persisted controller/hostd events from `event_log` as SSE with `Last-Event-ID` / `since_id` support and keepalive frames
-- the first browser-facing Phase H aggregate read model now exists as `GET /api/v1/dashboard`, which exposes compact plane/node/runtime/assignment/rollout/event summaries for the future web UI
-- the controller now also has a static asset serving seam through `serve --ui-root <dir>`; this remains a development fallback and local inspection seam, not the target production browser-hosting path
-- the first operator UI exists today as a plain static bundle under `ui/operator/`, but the production Phase H direction is now a separate global `comet-web-ui` sidecar that serves a React operator UI and reverse-proxies controller REST/SSE
-- the first controller-managed `comet-web-ui` lifecycle seam now exists through `ensure-web-ui`, `show-web-ui-status`, and `stop-web-ui`; it materializes controller-local compose/config under `var/web-ui` and can run that sidecar through Docker Compose when requested
-- the controller now also owns conversation persistence for interaction traffic:
-  - user-scoped conversation sessions stay in controller SQLite
-  - prompt reconstruction is controller-owned, not runtime-owned
-  - older turns can be compacted into structured summary blocks while the recent tail stays verbatim
-  - inactive sessions can be archived into compressed `zstd` payloads and restored on demand
-- the browser-facing runtime architecture is now explicitly layered as:
-  - `Level 0`: `comet-web-ui`
-  - `Level 1`: `comet-controller`
-  - `Level 2`: infer runtime
-  - `Level 3`: worker runtime
-- the target browser deployment model is now:
-  - one global `comet-web-ui` sidecar on the controller host
-  - browser traffic terminates at `comet-web-ui`
-  - `comet-web-ui` serves UI assets and reverse-proxies `/api/*` and `/api/v1/events/stream` to `comet-controller`
-- React is now an accepted UI technology for Phase H, but `Node.js` remains build-time only and is not part of the shipped runtime path
-- `comet-controller` can now also operate as a thin remote operator CLI for the common controller workflows through `--controller`, `COMET_CONTROLLER`, and `~/.config/comet/controller`, so the first Phase F bridge now covers both REST and CLI-over-HTTP
-- `comet-node` is now the production-facing launcher binary for installation and service lifecycle:
-  - `controller`
-  - `hostd`
-  - `controller + local hostd`
-- public startup is now intentionally split into two surfaces:
-  - `user flow`
-    - `comet-node install controller --with-hostd --with-web-ui`
-    - `comet-node run controller`
-    - open Web UI
-    - load plane from the browser path
-  - `service flow`
-    - launcher install/run/service commands
-    - controller CLI/API automation
-    - host registry inspection and remote-hostd onboarding
-- remote execution no longer needs runtime shared SQLite access between controller and hostd:
-  - controller owns the SQLite state
-  - remote `hostd` uses controller-owned host-agent HTTP APIs
-  - default deployment mode is `hostd dials out`
-- `comet-node run controller` now passes the installed `artifacts_root` through to the HTTP server,
-  so browser-side bundle apply uses the same installed layout as launcher-driven startup instead of
-  falling back to `var/artifacts`
-- `comet-node run controller` also supports `--hostd-compose-mode exec|skip` so first-use startup
-  and UI onboarding can be validated independently from full infer/worker runtime image builds
-- inner controller↔hostd security now includes:
-  - long-lived host identity keys
-  - signed session open
-  - encrypted host-agent envelopes
-  - sequence-based replay protection
-  - session TTL and rekey threshold
-  - host revoke and host-key rotation
-- service deployment is Linux/WSL2 oriented:
-  - rendered `systemd` units for controller and hostd
-  - unit verification through `systemd-analyze verify`
-- the current Phase F API contract also injects `api_version` plus `request.path` / `request.method` into JSON responses and normalizes API errors under `status=error` with `error.code` / `error.message`
+The default remote-host pattern is no longer "controller reaches directly into every host". The
+canonical deployment model is that `naim-node` dials out to `naim`, which allows managed nodes to
+live behind NAT, firewalls, or dynamic addressing without requiring a permanent public IP.
 
-## Current Implementation Boundary
+## Product Split
 
-The first implementation slice is intentionally narrow:
+`naim` owns:
 
-- shared domain models exist in `common/`
-- a bundle importer reads `plane.json`, `infer.json`, and `workers/*.json`
-- the controller can validate and preview bundle results before import
-- the controller can compute a reconcile plan against current SQLite state
-- the controller can compute explicit per-node host execution plans
-- the planner converts desired state into per-node compose plans
-- the compose renderer emits deterministic `docker-compose.yml` content
-- `apply-bundle` materializes compose artifacts under `var/artifacts/<plane>/<node>/docker-compose.yml`
-- `apply-bundle` also materializes `var/artifacts/<plane>/infer-runtime.json` as the first direct replacement for legacy infer-side runtime config rendering
-- `hostd` writes that infer runtime manifest into `control_root` on the infer node shared disk, so runtime containers can consume it without depending on the controller artifact path at startup
-- `runtime/infer/inferctl.sh` consumes that manifest for validation, bootstrap, model-state planning, and launch control
-- `runtime/infer/runtime-profiles.json` and `inferctl.sh bootstrap-runtime|doctor` cover the preflight layer: profile selection, directory preparation, and local readiness checks
-- `inferctl.sh preload-model|cache-status|switch-model|show-active-model` now add a dry-run model lifecycle layer on top of that preflight path by materializing cache-registry and active-model state files under `control_root`, still without downloads or process launch
-- host-side staging can preserve the runtime-visible GGUF mount path separately from the host-local staging path, so `hostd`-materialized shared disks and the in-container `llama.cpp` loader stay consistent during real deployments
-- `inferctl.sh gateway-plan|gateway-status|status|stop` connect that model lifecycle back to gateway wiring and a combined readiness view under `control_root`
-- `inferctl.sh launch-runtime` now selects the in-process `llama.cpp` backend whenever the active model resolves to a local GGUF file; that backend is linked directly into `comet-inferctl` as a library, not driven through external `llama-cli` commands
-- the local HTTP runtime serves `/health`, `/v1/models`, `/v1/completions`, and `/v1/chat/completions` itself while keeping `runtime-status.json` current
-- infer compose healthchecks now probe the live infer HTTP health endpoint instead of only checking for a marker file
-- `hostd show-runtime-status` reads the same `runtime-status.json` from the infer node shared disk, so the host agent and infer-side helper share one runtime snapshot instead of maintaining separate ad-hoc summaries
-- when `hostd` reports observed state back to the controller, it now includes that serialized runtime snapshot too, so controller-side host observations and health views can show runtime readiness without talking to infer containers directly
-- interaction requests can now carry a controller-managed `session_id`, and the controller persists:
-  - canonical message history
-  - per-session context state such as applied skills and browsing mode
-  - prompt budgeting metadata such as `latest_prompt_tokens` and `estimated_context_tokens`
-  - structured summary blocks that replace older prompt segments during continuation requests
-- controller-side prompt assembly is now memory-aware:
-  - stored summary blocks are converted into a synthetic system instruction
-  - only the recent message tail plus request delta are sent verbatim to the runtime
-  - summary creation is triggered when the estimated prompt size exceeds a soft fraction of `max_model_len`
-- inactive interaction sessions can now move through an archive lifecycle:
-  - live rows stay in SQLite for active sessions
-  - archived sessions write compressed `.json.zst` payloads under `interaction-archives/<plane>/`
-  - archive metadata and checksums stay in controller state
-  - archived sessions are restored into live rows on first access
-- the controller can persist desired state in SQLite
-- the controller can queue per-node host assignments in SQLite for `hostd`
-- queued host assignments are versioned by desired generation, and older pending/claimed rows are superseded instead of being silently dropped
-- queued host assignments track `attempt_count/max_attempts`; transient hostd failures return a claimed assignment to `pending`, while exhausted assignments become `failed` until an operator explicitly requeues them
-- controller-side node availability overrides (`active`, `draining`, `unavailable`) are stored separately from desired state and determine whether new host assignments are emitted for a node
-- controller-side scheduling policy now validates worker GPU pinning, `share_mode`, `gpu_fraction`, `priority`, `preemptible`, and `memory_cap_mb` before desired state is persisted, and it produces per-`node/gpu` soft-share summaries, capacity/headroom views, rebalance hints, preemption order hints for `best-effort` workers, and ranked placement recommendations backed by node inventory `gpu_memory_mb`
-- placement recommendations now distinguish direct-fit targets from targets that only become viable after controlled `best-effort` eviction; this is currently exposed as controller-side policy/reporting and not yet as automatic live eviction during apply
-- workers now carry explicit `placement_mode` semantics: `manual` keeps placement strict, `auto` fills missing placement from ranked scheduler candidates, and `movable` lets the scheduler relocate or normalize a worker onto a better full-GPU placement when safe, while still requiring a materially better target before it overrides the current placement
-- explicit `movable` requests now stay on their requested placement until full-state scheduler analysis runs; after that, the controller exposes either a direct-fit rebalance proposal or a deferred scheduler decision when the next step would require controlled preemption
-- deferred scheduler decisions now also emit an explicit rollout action sequence, so controller output can tell the operator which `best-effort` workers to evict first and when to retry placement
-- those deferred rollout actions now feed back into host-assignment planning as scheduler-gate messages on the affected target nodes, keeping orchestration output aligned with scheduler state even before automatic eviction exists
-- the controller now exposes those persisted rollout actions through a dedicated CLI surface, so rollout orchestration can be inspected independently from raw scheduling reports
-- rollout actions are now persisted in controller SQLite with an explicit lifecycle (`pending`, `acknowledged`, `ready-to-retry`), which is the first controller-managed state machine layer on top of deferred scheduler decisions
-- once a deferred `retry-placement` action reaches `ready-to-retry`, the controller can materialize it into a new desired generation: evict recorded `best-effort` victims from desired state, apply the placement retry, regenerate scheduler output, and emit fresh host assignments for that new generation
-- deferred scheduler decisions now also have an explicit node-execution seam: the controller can enqueue `evict-workers` host assignments for victim nodes, `hostd` applies those temporary eviction states, and controller-side rollout reconciliation can then auto-advance the paired `retry-placement` into a new desired generation
-- controller output now derives a worker-level rollout lifecycle (`planned`, `eviction-enqueued`, `eviction-applied`, `retry-ready`, `retry-materialized`, `rollout-applied`) by combining persisted rollout actions with host assignments and host observations
-- preemption-aware placement now picks the minimal ordered set of `best-effort` victims required to satisfy fraction and memory constraints for a candidate target, rather than assuming every best-effort worker on that GPU must be evicted
-- controller-side rebalance planning now filters placement recommendations through observed host gates, so movable/auto workers only surface as ready targets when the destination node is not stale, failed, or runtime-failed
-- rebalance output now also carries an explicit controller decision layer (`propose`, `hold`, `defer`) so policy can distinguish between immediately acceptable moves, gated targets, and candidates that still require a controlled preemption workflow
-- rebalance output also carries an explicit rebalance class (`safe-direct`, `rollout-class`, `gated`, `stable`, `no-candidate`), so direct-fit controller-managed moves are separated from rollout/preemption work and from purely blocked states
-- safe-direct moves are filtered through a minimum usefulness threshold; technically possible but low-value direct moves remain `stable` with `state=below-threshold` instead of turning into actionable rebalance work
-- rebalance output now also includes a controller-side `rebalance-policy` summary, so actionable moves, active-rollout blockers, in-flight assignment blockers, observation-gated targets, stable holds, deferred preemption cases, and no-candidate cases are visible at a glance
-- the controller also emits a coarse `rebalance-loop-status` summary (`waiting-for-convergence`, `waiting-for-rollout`, `actionable`, `complete`) so the scheduler loop has an explicit stop/wait state instead of only per-worker recommendations
-- safe-direct rebalance is now also bounded by a persisted controller-side iteration budget; each materialized direct move increments that counter, fresh bundle/rollout generations reset it, and once the budget is exhausted the remaining direct-fit proposals stay visible but no further controller-managed direct rebalance is launched for that loop
-- direct-fit `propose` decisions can now be materialized into a new desired generation through `apply-rebalance-proposal`, making safe rebalance a controller-managed workflow instead of an import-time side effect
-- the controller can also reconcile those direct-fit proposals automatically through `reconcile-rebalance-proposals`, selecting the highest-scoring actionable move after rollout and in-flight assignment gates clear
-- controller-side rebalance now has an explicit cluster gate summary, so active rollout lifecycle, pending/claimed host assignments, and unconverged schedulable nodes can block new rebalance iterations until the cluster is stable again
-- observed GPU telemetry now also participates in target admission: the scheduler can hold a candidate on `compute-pressure` or `observed-insufficient-vram` instead of trusting only static fractions
-- host observations now also carry disk telemetry and network telemetry in normalized controller-visible envelopes
-- CPU telemetry is now also a required backend dependency for the browser-facing operator surface, rather than optional future enrichment
-- disk telemetry now covers both filesystem usage/capacity and block-device IO counters when a
-  realized disk resolves to a mounted block device, so controller views can inspect `read_bytes`,
-  `write_bytes`, `read_ios`, `write_ios`, accumulated IO time, and normalized disk fault counters
-  (`fault_count`, `warning_count`, `perf_counters_available`, `io_error_counters_available`) in
-  addition to mount health
-- controller SQLite now also stores a structured event log for host-observation, host-assignment, rollout, bundle, node-availability, and scheduler transitions
-- drain state now feeds placement itself: when a worker currently lives on a `draining` node, controller-side rebalance prefers an active off-node target and can emit `ready-drain-move` instead of keeping same-node upgrades on the draining host
-- the controller now persists scheduler runtime state of its own: plane-level active scheduler action, per-worker move/eviction bookkeeping, and per-node verification bookkeeping
-- that runtime state now feeds controller-side anti-flap holds such as `min-residency`, `cooldown`, `active-scheduler-action`, and `manual-intervention-required`
-- `scheduler-tick` is now the stepwise controller-managed scheduler loop entrypoint; a single tick advances exactly one safe orchestration step instead of chaining multiple moves at once
-- direct-fit rebalance now enters an explicit verification phase (`verifying-move`) after materialization; it is only considered successful once host observations report the target generation applied, runtime readiness, and matching GPU ownership for the moved worker over multiple stable samples
-- if that verification times out, the controller first records `rollback-planned`, and the next scheduler tick materializes rollback from the previously persisted desired state into `rollback-applied`; if rollback still does not verify, the worker is marked `manual-intervention-required`
-- when a node leaves `active`, the controller can enqueue a node-specific drain assignment so `hostd` removes node-local workloads
-- when a node transitions back to `active`, the controller can enqueue a node-specific resync assignment for the current desired generation if that node missed the latest rollout
-- `hostd` reports node-local observed state and heartbeat data back into controller SQLite, including the last applied generation and last assignment id
-- `comet-controller` derives a host-health view from those heartbeats so operators can distinguish online, stale, and never-seen nodes
-- `hostd` shows the concrete local operations implied by SQLite-backed desired state
-- `hostd` can apply node-local filesystem work from desired state, with optional `runtime-root` rebasing for safe local testing
-- `hostd` persists node-local applied state so later runs can reconcile deltas instead of always applying from scratch
+- node onboarding and registry
+- desired state, plane lifecycle, scheduling, and reconciliation
+- model-library workflows, including download, conversion, and quantization orchestration
+- authenticated HTTP APIs, operator UI, and browser-facing read models
+- cluster telemetry aggregation, node role derivation, and plane participation views
 
-## Why Start Here
+`naim-node` owns:
 
-This path exercises the main architecture seam:
+- local inventory scans for CPU, RAM, disk, GPU, and runtime posture
+- local realization of compose artifacts, runtime configs, disks, and containers
+- node-local telemetry and observed-state reporting
+- the secure outbound connection back to `naim`
 
-`desired state -> node plan -> compose artifact + infer runtime artifact -> host execution`
+## Node Onboarding And Roles
 
-That seam should stay stable even after the following pieces are added:
+Managed node lifecycle:
 
-- SQLite state and migrations application
-- JSON bundle import and validation
-- Docker API execution
-- REST API, SSE, multi-plane browser workflows, and the `comet-web-ui` sidecar
-- scheduler logic for sharing and draining GPUs
+1. the operator adds a node in `naim`
+2. `naim` generates a random onboarding key for that node
+3. the operator starts `naim-node` with that key in its local configuration
+4. `naim-node` authenticates and opens the outbound channel to `naim`
+5. if TLS/SSL already protects that channel, no extra stream-encryption layer is required
+6. otherwise the host-agent channel must apply its own stream encryption
+7. the node is scanned on connect and rescanned every hour
+8. `naim` derives the node role from the latest observed inventory and may change that role after
+   later rescans
 
-The interaction path now has a second stable seam of its own:
+Canonical role rules:
 
-`client request -> controller-owned session lookup/restore -> summary-assisted prompt reconstruction -> runtime inference -> controller-owned session persistence/archive`
+- `Storage`
+  - no GPU
+  - disk capacity `> 100 GB`
+- `Worker`
+  - one or more GPUs
+  - RAM `>= 32 GB`
+  - disk capacity `> 100 GB`
 
-## Phase H Direction
+Storage capability is tracked independently from the single `derived_role`. A node can therefore
+be derived as `Worker` and also be storage-role eligible when it has sufficient storage capacity.
 
-Phase H no longer targets controller-hosted static UI as the production endpoint.
+Nodes that do not match either rule remain connected and observable, but they are not eligible for
+role-dependent placement until later scans show a matching inventory.
 
-The current `serve --ui-root` path stays in the repository for:
+## Placement Contracts
 
-- local development
-- smoke validation
-- low-friction inspection during backend bring-up
+### Model Library
 
-The production Phase H target is:
+Model import and quantization are `naim` workflows, but they are realized on connected
+`naim-node` hosts.
 
-- a separate controller-managed `comet-web-ui` container
-- React-based operator UI assets built ahead of time
-- controller API and SSE consumed through a reverse-proxy seam owned by `comet-web-ui`
-- multi-plane browser workflows, not only the current single-plane dashboard
+Current architectural contract:
 
-Current implementation status inside that target:
+- when a model is uploaded or imported, the operator chooses a destination node
+- only nodes with enough free capacity for the full resulting artifact are eligible targets
+- without quantization, eligible targets may be either `Storage` or `Worker`
+- with quantization, eligible targets must be `Worker`
+- when quantization is requested, the same `Worker` both stores and quantizes the model
+- the node list shown in `naim` must expose role, capacity, telemetry, and current plane
+  participation so that placement is explainable
 
-- the React workspace now exists under `ui/operator-react`
-- the `comet/web-ui:dev` image builds that workspace in a multi-stage Dockerfile
-- `serve --ui-root` remains a dev fallback and can serve `ui/operator-react/dist` for local inspection
-- a live Phase H harness now validates sidecar-proxied REST and SSE through `scripts/check-live-phase-h.sh`
+### Plane Placement
 
-This also changes the backend requirements for Phase H:
+Current plane deployment contract:
 
-- controller/store/planner must become plane-scoped and multi-plane safe
-- `stop-plane` means scale runtime to zero while preserving configuration
-- `delete-plane` remains a separate destructive action
-- event taxonomy and telemetry need to remain browser-consumable through the sidecar proxy path
+- each plane chooses an execution node when it is created or edited
+- desired-state v2 stores this selection as `placement.execution_node`
+- execution-node selection is not exclusive; multiple planes may run on the same connected node
+- any connected node that passes role, capacity, and policy checks may accept a plane
+- by default all plane containers run on that selected execution node
+- `app` containers are the exception and may be deployed to an external host over SSH
+- when a plane runs replicated `skills-<plane>` containers, they must live on the same machine as
+  the plane's `app` container, or on the selected execution node when there is no external app host
+- plane creation must capture the SSH address plus either a key path or username/password for that
+  external app host
+- plane creation still captures worker count and soft GPU allocation intent
+- workers may share GPUs; the allocation is soft rather than exclusive
+
+The current implementation keeps worker count and infer topology tightly coupled, but the hard
+validator guarantee today is narrower: for replica-parallel `llama.cpp + llama_rpc`, `runtime.workers`
+must be divisible by `infer.replicas`. Documentation should not overstate this as a universal
+`worker_count == infer_count` invariant.
+
+## Runtime And Data Flow
+
+The main architecture seam is:
+
+`desired state -> node registry + scheduler -> host assignments -> naim-node realization -> telemetry/observations -> controller-derived readiness`
+
+The interaction seam remains controller-owned:
+
+`client request -> naim controller session lookup/restore -> prompt reconstruction -> runtime inference -> controller persistence + response shaping`
+
+Runtime containers are still materialized from controller-rendered artifacts and node-local runtime
+configs, but the networked node registry is now a first-class architectural layer between
+controller policy and runtime execution.
+
+## Supported Topologies
+
+The architecture must support all of these as normal cases:
+
+- remote `naim` with many outbound-connected `naim-node` agents
+- mixed clusters where some nodes are `Storage` and others are `Worker`
+- a co-located install where `naim` and `naim-node` run on the same machine
+
+In the co-located case, the machine participates in the node registry like any other managed node.
+Co-location is a supported deployment shape, not a special debug-only shortcut.
+
+## Related Long-Form Docs
+
+The long-form canonical architecture set lives in [`../naim-docs/`](../naim-docs):
+
+- [`overview/naim-node-overview.md`](../naim-docs/overview/naim-node-overview.md)
+- [`design/naim-node-design.md`](../naim-docs/design/naim-node-design.md)
+- [`architecture/detailed-architecture.md`](../naim-docs/architecture/detailed-architecture.md)
+- [`architecture/component-reference.md`](../naim-docs/architecture/component-reference.md)

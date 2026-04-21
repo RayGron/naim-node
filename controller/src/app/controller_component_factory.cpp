@@ -2,7 +2,7 @@
 
 #include "app/controller_component_factory_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::unique_ptr<BundleCliService> ControllerComponentFactory::CreateBundleCliService() const {
   return component_factory_support::CreateBundleCliService();
@@ -84,4 +84,4 @@ SchedulerHttpService ControllerComponentFactory::CreateSchedulerHttpService(
   return component_factory_support::CreateSchedulerHttpService(read_model_service);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

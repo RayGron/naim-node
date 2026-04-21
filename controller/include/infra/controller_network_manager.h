@@ -3,15 +3,15 @@
 #include <map>
 #include <string>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
 struct HttpResponse;
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerNetworkManager {
  public:
-  using SocketHandle = comet::platform::SocketHandle;
+  using SocketHandle = naim::platform::SocketHandle;
 
   static std::string SocketErrorMessage();
   static void CloseSocket(SocketHandle fd);
@@ -38,4 +38,4 @@ class ControllerNetworkManager {
   static std::string LowercaseCopy(const std::string& value);
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

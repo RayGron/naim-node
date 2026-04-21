@@ -23,14 +23,14 @@ if ($TargetArch -notin @('x64', 'arm64')) {
 }
 $buildDir = Join-Path $repoRoot "build\windows\$TargetArch"
 $distDir = Join-Path $repoRoot "dist\windows\$TargetArch"
-$packagePath = Join-Path $distDir "comet-node-windows-$TargetArch.zip"
+$packagePath = Join-Path $distDir "naim-node-windows-$TargetArch.zip"
 $artifactNames = @(
-  'comet-node.exe',
-  'comet-controller.exe',
-  'comet-hostd.exe',
-  'comet-inferctl.exe',
-  'comet-workerd.exe',
-  'comet-common.lib'
+  'naim-node.exe',
+  'naim-controller.exe',
+  'naim-hostd.exe',
+  'naim-inferctl.exe',
+  'naim-workerd.exe',
+  'naim-common.lib'
 )
 $artifactPaths = @()
 

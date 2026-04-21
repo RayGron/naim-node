@@ -19,14 +19,15 @@
 #include <unistd.h>
 #endif
 
-#include "comet/core/platform_compat.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/core/platform_compat.h"
+#include "naim/state/sqlite_store.h"
+#include "model/model_library_node_placement.h"
 
 using nlohmann::json;
 
 namespace {
 
-constexpr std::string_view kJobMetadataPrefix = ".comet-model-job-";
+constexpr std::string_view kJobMetadataPrefix = ".naim-model-job-";
 constexpr std::string_view kJobMetadataSuffix = ".json";
 constexpr std::array<std::string_view, 5> kKnownGgufQuantizations = {
     "FP16",
@@ -72,12 +73,12 @@ bool ShouldScanDefaultModelRoots(const std::string& db_path) {
   if (error) {
     return false;
   }
-  return normalized == "/var/lib/comet-node/hostd-state/controller.sqlite" ||
-         normalized == "/var/lib/comet-node/controller.sqlite";
+  return normalized == "/var/lib/naim-node/hostd-state/controller.sqlite" ||
+         normalized == "/var/lib/naim-node/controller.sqlite";
 }
 
 bool IsDownloadJobComplete(
-    const comet::ModelLibraryDownloadJobRecord& job) {
+    const naim::ModelLibraryDownloadJobRecord& job) {
   if (job.status != "completed") {
     return false;
   }
@@ -113,7 +114,7 @@ std::uintmax_t ExistingDownloadBytesForTarget(
 }
 
 std::uintmax_t ExistingDownloadBytesForJob(
-    const comet::ModelLibraryDownloadJobRecord& job) {
+    const naim::ModelLibraryDownloadJobRecord& job) {
   std::uintmax_t total = 0;
   for (const auto& target_path_text : job.target_paths) {
     total += ExistingDownloadBytesForTarget(std::filesystem::path(target_path_text));
@@ -132,11 +133,35 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
   ResumePersistentJobs(db_path);
   const auto roots = DiscoverRoots(db_path);
   const auto entries = ScanEntries(db_path);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto worker_path = store.LoadControllerSetting("skills_factory_worker_model_path");
+  std::map<std::string, ModelLibraryNodeSummary> node_summaries;
+  for (const auto& host : store.LoadRegisteredHosts()) {
+    const auto summary = ModelLibraryNodePlacement::BuildSummary(host);
+    if (summary.node_name.empty()) {
+      continue;
+    }
+    node_summaries[summary.node_name] = summary;
+  }
   json items = json::array();
   for (const auto& entry : entries) {
+    std::optional<std::string> node_name;
+    for (const auto& [candidate_node_name, summary] : node_summaries) {
+      if (summary.storage_root.empty()) {
+        continue;
+      }
+      if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
+              summary.derived_role,
+              summary.storage_role_enabled,
+              false)) {
+        continue;
+      }
+      if (NormalizePathString(std::filesystem::path(summary.storage_root)) == entry.root) {
+        node_name = candidate_node_name;
+        break;
+      }
+    }
     items.push_back(json{
         {"path", entry.path},
         {"name", entry.name},
@@ -152,6 +177,7 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
         {"part_count", entry.part_count},
         {"referenced_by", entry.referenced_by},
         {"deletable", entry.deletable},
+        {"node_name", node_name.has_value() ? json(*node_name) : json(nullptr)},
         {"skills_factory_worker", worker_path.has_value() && *worker_path == entry.path},
     });
   }
@@ -162,7 +188,45 @@ json ModelLibraryService::BuildPayload(const std::string& db_path) const {
     }
     jobs.push_back(BuildJobPayload(job));
   }
-  return json{{"items", items}, {"roots", roots}, {"jobs", jobs}};
+  json nodes = json::array();
+  for (const auto& [node_name, summary] : node_summaries) {
+    nodes.push_back(json{
+        {"node_name", node_name},
+        {"registration_state", summary.registration_state},
+        {"session_state", summary.session_state},
+        {"derived_role", summary.derived_role.empty() ? json(nullptr) : json(summary.derived_role)},
+        {"role_eligible",
+         ModelLibraryNodePlacement::AllowsModelPlacementRole(
+             summary.derived_role,
+             summary.storage_role_enabled,
+             false)},
+        {"storage_role_enabled", summary.storage_role_enabled},
+        {"role_reason", summary.role_reason.empty() ? json(nullptr) : json(summary.role_reason)},
+        {"storage_root", summary.storage_root.empty() ? json(nullptr) : json(summary.storage_root)},
+        {"storage_total_bytes",
+         summary.has_storage_capacity ? json(summary.storage_total_bytes) : json(nullptr)},
+        {"storage_free_bytes",
+         summary.has_storage_capacity ? json(summary.storage_free_bytes) : json(nullptr)},
+    });
+  }
+  return json{{"items", items}, {"roots", roots}, {"jobs", jobs}, {"nodes", nodes}};
+}
+
+nlohmann::json ModelLibraryService::BuildJobsPayload(const std::string& db_path) const {
+  ResumePersistentJobs(db_path);
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  json jobs = json::array();
+  for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (job.hidden) {
+      continue;
+    }
+    jobs.push_back(BuildJobPayload(job));
+  }
+  return json{
+      {"jobs", jobs},
+      {"generated_at", support_.utc_now_sql_timestamp()},
+  };
 }
 
 HttpResponse ModelLibraryService::SetSkillsFactoryWorker(
@@ -190,7 +254,7 @@ HttpResponse ModelLibraryService::SetSkillsFactoryWorker(
         {});
   }
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   store.UpsertControllerSetting("skills_factory_worker_model_path", normalized_path);
   return support_.build_json_response(
@@ -278,7 +342,8 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     const std::string& db_path,
     const HttpRequest& request) const {
   const json body = support_.parse_json_request_body(request);
-  const std::string target_root = body.value("target_root", std::string{});
+  std::string target_root = body.value("target_root", std::string{});
+  const std::string target_node_name = body.value("target_node_name", std::string{});
   const std::string target_subdir = body.value("target_subdir", std::string{});
   const std::string model_id = body.value("model_id", std::string{});
   const std::string source_url = body.value("source_url", std::string{});
@@ -289,15 +354,86 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     source_urls.push_back(source_url);
   }
   const std::string detected_source_format = DetectModelSourceFormat(source_urls);
-  const std::string desired_output_format = NormalizeModelOutputFormat(
-      body.value("format", detected_source_format));
+  std::string requested_output_format = body.value("format", detected_source_format);
+  {
+    std::string normalized_request = requested_output_format;
+    std::transform(
+        normalized_request.begin(),
+        normalized_request.end(),
+        normalized_request.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (normalized_request == "source" || normalized_request == "raw" ||
+        normalized_request == "original" || normalized_request == "no-conversion" ||
+        normalized_request == "none") {
+      requested_output_format = detected_source_format;
+    }
+  }
+  const std::string desired_output_format = NormalizeModelOutputFormat(requested_output_format);
   const std::vector<std::string> quantizations;
   const bool keep_base_gguf = true;
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  if (!target_node_name.empty()) {
+    const auto host = store.LoadRegisteredHost(target_node_name);
+    if (!host.has_value()) {
+      return support_.build_json_response(
+          404,
+          json{{"status", "not_found"},
+               {"message", "target_node_name does not match a registered host"}},
+          {});
+    }
+    const auto summary = ModelLibraryNodePlacement::BuildSummary(*host);
+    if (summary.registration_state != "registered" || summary.session_state != "connected") {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", "target_node_name must reference a connected registered host"}},
+          {});
+    }
+    if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
+            summary.derived_role,
+            summary.storage_role_enabled,
+            false)) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", "target_node_name must have storage role enabled or derived_role storage/worker"}},
+          {});
+    }
+    if (summary.storage_root.empty() || !IsUsableAbsoluteHostPath(summary.storage_root)) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", "target_node_name does not advertise a usable storage_root"}},
+          {});
+    }
+    target_root = summary.storage_root;
+    std::uintmax_t required_bytes = 0;
+    bool have_required_bytes = !source_urls.empty();
+    for (const auto& candidate_url : source_urls) {
+      const auto content_length = ProbeContentLength(candidate_url);
+      if (!content_length.has_value()) {
+        have_required_bytes = false;
+        break;
+      }
+      required_bytes += *content_length;
+    }
+    if (have_required_bytes && summary.has_storage_capacity &&
+        summary.storage_free_bytes < required_bytes) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", "target_node_name does not have enough free storage capacity"},
+               {"required_bytes", required_bytes},
+               {"available_bytes", summary.storage_free_bytes}},
+          {});
+    }
+  }
   if (target_root.empty() || !IsUsableAbsoluteHostPath(target_root)) {
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
-             {"message", "target_root must be an absolute host path"}},
+             {"message", "target_node_name or target_root must resolve to an absolute host path"}},
         {});
   }
   if (source_urls.empty()) {
@@ -318,7 +454,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
     return support_.build_json_response(
         400,
         json{{"status", "bad_request"},
-             {"message", "format must be gguf or safetensors"}},
+             {"message", "format must be gguf, safetensors, or source"}},
         {});
   }
   if (detected_source_format == "gguf" && desired_output_format != "gguf") {
@@ -338,6 +474,13 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   try {
     if (detected_source_format == "safetensors" &&
         desired_output_format == "gguf") {
+      if (!target_node_name.empty()) {
+        return support_.build_json_response(
+            400,
+            json{{"status", "bad_request"},
+                 {"message", "storage-node downloads cannot run safetensors-to-GGUF conversion yet"}},
+            {});
+      }
       const std::string job_id = GenerateJobId();
       const std::filesystem::path staging_directory =
           destination_root /
@@ -360,6 +503,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
       job.id = job_id;
       job.job_kind = "download";
       job.model_id = model_id;
+      job.node_name = target_node_name;
       job.target_root = NormalizePathString(std::filesystem::path(target_root));
       job.target_subdir = target_subdir;
       job.detected_source_format = detected_source_format;
@@ -373,8 +517,6 @@ HttpResponse ModelLibraryService::EnqueueDownload(
       job.part_count = static_cast<int>(source_urls.size());
       job.created_at = support_.utc_now_sql_timestamp();
       job.updated_at = job.created_at;
-      comet::ControllerStore store(db_path);
-      store.Initialize();
       store.UpsertModelLibraryDownloadJob(job);
       PersistDownloadJobMetadata(job);
       StartDownloadJob(db_path, job_id);
@@ -405,6 +547,7 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   job.id = job_id;
   job.job_kind = "download";
   job.model_id = model_id;
+  job.node_name = target_node_name;
   job.target_root = NormalizePathString(std::filesystem::path(target_root));
   job.target_subdir = target_subdir;
   job.detected_source_format = detected_source_format;
@@ -417,9 +560,40 @@ HttpResponse ModelLibraryService::EnqueueDownload(
   job.part_count = static_cast<int>(source_urls.size());
   job.created_at = support_.utc_now_sql_timestamp();
   job.updated_at = job.created_at;
-  comet::ControllerStore store(db_path);
-  store.Initialize();
   store.UpsertModelLibraryDownloadJob(job);
+  if (!target_node_name.empty()) {
+    naim::HostAssignment assignment;
+    assignment.node_name = target_node_name;
+    assignment.plane_name = "model-library:" + job_id;
+    assignment.desired_generation = 0;
+    assignment.max_attempts = 3;
+    assignment.assignment_type = "model-library-download";
+    assignment.desired_state_json =
+        json{
+            {"job_id", job_id},
+            {"model_id", model_id},
+            {"source_urls", source_urls},
+            {"target_paths", target_paths},
+            {"target_root", job.target_root},
+            {"target_subdir", target_subdir},
+        }
+            .dump();
+    assignment.artifacts_root = job.target_root;
+    assignment.status_message = "queued model library download";
+    assignment.progress_json =
+        json{{"phase", "queued"},
+             {"title", "Model download queued"},
+             {"detail", "Waiting for storage node to claim the download assignment."},
+             {"percent", 0}}
+            .dump();
+    store.EnqueueHostAssignments(
+        {assignment},
+        "superseded by a newer model library download assignment");
+    return support_.build_json_response(
+        202,
+        json{{"status", "accepted"}, {"job", BuildJobPayload(job)}},
+        {});
+  }
   PersistDownloadJobMetadata(job);
   StartDownloadJob(db_path, job_id);
   return support_.build_json_response(
@@ -433,6 +607,7 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
     const HttpRequest& request) const {
   const json body = support_.parse_json_request_body(request);
   const std::string source_path_value = body.value("source_path", std::string{});
+  const std::string target_node_name = body.value("target_node_name", std::string{});
   const std::string quantization = Trim(
       body.value("quantization", std::string(kDefaultGgufQuantization)));
   const bool replace_existing = body.value("replace_existing", true);
@@ -500,6 +675,51 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
         {});
   }
 
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  std::optional<ModelLibraryNodeSummary> source_node_summary;
+  for (const auto& host : store.LoadRegisteredHosts()) {
+    const auto summary = ModelLibraryNodePlacement::BuildSummary(host);
+    if (summary.storage_root.empty() || !IsUsableAbsoluteHostPath(summary.storage_root)) {
+      continue;
+    }
+    if (ModelLibraryNodePlacement::PathBelongsToRoot(
+            source_path,
+            std::filesystem::path(summary.storage_root))) {
+      source_node_summary = summary;
+      break;
+    }
+  }
+  if (!target_node_name.empty()) {
+    if (!source_node_summary.has_value() || source_node_summary->node_name != target_node_name) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", "target_node_name must match the node that stores source_path"}},
+          {});
+    }
+  }
+  if (source_node_summary.has_value()) {
+    if (source_node_summary->registration_state != "registered" ||
+        source_node_summary->session_state != "connected") {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", "quantization source node must be connected"}},
+          {});
+    }
+    if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
+            source_node_summary->derived_role,
+            source_node_summary->storage_role_enabled,
+            true)) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", "quantization requires source_path to live on a worker node"}},
+          {});
+    }
+  }
+
   const auto base_stem = StripKnownQuantizationSuffix(source_path.stem().string());
   const auto retained_output_path =
       source_path.parent_path() / (base_stem + "-" + normalized_quantizations.front() + ".gguf");
@@ -521,6 +741,8 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
     job.id = job_id;
     job.job_kind = "quantization";
     job.model_id = BuildQuantizedDisplayName(entry_it->name, normalized_quantizations.front());
+    job.node_name = source_node_summary.has_value() ? source_node_summary->node_name
+                                                    : target_node_name;
     job.target_root = NormalizePathString(source_path.parent_path());
     job.target_subdir = "";
     job.detected_source_format = "gguf";
@@ -537,8 +759,6 @@ HttpResponse ModelLibraryService::EnqueueQuantization(
     job.keep_base_gguf = true;
     job.created_at = support_.utc_now_sql_timestamp();
     job.updated_at = job.created_at;
-    comet::ControllerStore store(db_path);
-    store.Initialize();
     store.UpsertModelLibraryDownloadJob(job);
     PersistDownloadJobMetadata(job);
     StartDownloadJob(db_path, job_id);
@@ -741,7 +961,7 @@ HttpResponse ModelLibraryService::DeleteDownloadJob(
     }
   }
   ClearStopRequest(*job_id);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   RemoveDownloadJobMetadata(*job);
   store.DeleteModelLibraryDownloadJob(*job_id);
@@ -844,7 +1064,7 @@ std::string ModelLibraryService::NormalizePathString(
 
 bool ModelLibraryService::IsUsableAbsoluteHostPath(const std::string& value) {
   return !value.empty() && value.front() == '/' &&
-         value.rfind("/comet/", 0) != 0;
+         value.rfind("/naim/", 0) != 0;
 }
 
 std::string ModelLibraryService::FilenameFromUrl(
@@ -887,8 +1107,8 @@ std::optional<std::uintmax_t> ModelLibraryService::ProbeContentLength(
     const std::string& source_url) const {
   const std::string temp_headers =
       (std::filesystem::temp_directory_path() /
-       ("comet-model-head-" +
-        std::to_string(comet::platform::CurrentProcessId()) + "-" +
+       ("naim-model-head-" +
+        std::to_string(naim::platform::CurrentProcessId()) + "-" +
         std::to_string(state_->job_counter.fetch_add(1)) + ".txt"))
           .string();
   const std::string command =
@@ -1073,10 +1293,22 @@ std::string ModelLibraryService::BuildQuantizedDisplayName(
 
 std::vector<std::string> ModelLibraryService::DiscoverRoots(
     const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   const auto desired_states = store.LoadDesiredStates();
   const auto jobs = store.LoadModelLibraryDownloadJobs();
   std::set<std::string> roots;
+  for (const auto& host : store.LoadRegisteredHosts()) {
+    const auto summary = ModelLibraryNodePlacement::BuildSummary(host);
+    if (!ModelLibraryNodePlacement::AllowsModelPlacementRole(
+            summary.derived_role,
+            summary.storage_role_enabled,
+            false)) {
+      continue;
+    }
+    if (IsUsableAbsoluteHostPath(summary.storage_root)) {
+      roots.insert(NormalizePathString(std::filesystem::path(summary.storage_root)));
+    }
+  }
   if (ShouldScanDefaultModelRoots(db_path)) {
     for (const std::string& candidate : {
              std::string("/mnt/shared-storage/models"),
@@ -1087,7 +1319,7 @@ std::vector<std::string> ModelLibraryService::DiscoverRoots(
       }
     }
   }
-  if (const char* env_value = std::getenv("COMET_NODE_MODEL_LIBRARY_ROOTS");
+  if (const char* env_value = std::getenv("NAIM_NODE_MODEL_LIBRARY_ROOTS");
       env_value != nullptr && *env_value != '\0') {
     std::string current;
     for (char ch : std::string(env_value)) {
@@ -1183,6 +1415,7 @@ void ModelLibraryService::PersistDownloadJobMetadata(
       {"status", job.status},
       {"phase", job.phase},
       {"model_id", job.model_id},
+      {"node_name", job.node_name},
       {"target_root", job.target_root},
       {"target_subdir", job.target_subdir},
       {"detected_source_format", job.detected_source_format},
@@ -1229,7 +1462,7 @@ void ModelLibraryService::RemoveDownloadJobMetadata(
 
 void ModelLibraryService::RecoverPersistentJobsFromMetadata(
     const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   std::set<std::string> existing_job_ids;
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
@@ -1287,6 +1520,7 @@ void ModelLibraryService::RecoverPersistentJobsFromMetadata(
       job.status = payload.value("status", std::string("queued"));
       job.phase = payload.value("phase", job.status);
       job.model_id = payload.value("model_id", std::string{});
+      job.node_name = payload.value("node_name", std::string{});
       job.target_root = payload.value("target_root", std::string{});
       job.target_subdir = payload.value("target_subdir", std::string{});
       job.detected_source_format =
@@ -1360,7 +1594,7 @@ void ModelLibraryService::RecoverPersistentJobsFromMetadata(
 
 std::map<std::string, std::vector<std::string>>
 ModelLibraryService::BuildReferenceMap(const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   const auto desired_states = store.LoadDesiredStates();
   std::map<std::string, std::vector<std::string>> references;
   for (const auto& desired_state : desired_states) {
@@ -1386,6 +1620,7 @@ json ModelLibraryService::BuildJobPayload(
       {"status", job.status},
       {"phase", job.phase.empty() ? job.status : job.phase},
       {"model_id", job.model_id},
+      {"node_name", job.node_name.empty() ? json(nullptr) : json(job.node_name)},
       {"target_root", job.target_root},
       {"target_subdir", job.target_subdir},
       {"detected_source_format",
@@ -1430,9 +1665,12 @@ void ModelLibraryService::ResumePersistentJobs(const std::string& db_path) const
     state_->resumed_db_paths.insert(db_path);
   }
   RecoverPersistentJobsFromMetadata(db_path);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (!job.node_name.empty()) {
+      continue;
+    }
     if (job.status == "queued" || job.status == "running") {
       StartDownloadJob(db_path, job.id);
     }
@@ -1465,7 +1703,7 @@ std::optional<ModelLibraryService::ModelLibraryDownloadJob>
 ModelLibraryService::LoadDownloadJob(
     const std::string& db_path,
     const std::string& job_id) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   return store.LoadModelLibraryDownloadJob(job_id);
 }
@@ -1474,7 +1712,7 @@ void ModelLibraryService::UpdateJob(
     const std::string& db_path,
     const std::string& job_id,
     const std::function<void(ModelLibraryDownloadJob&)>& update) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   auto job = store.LoadModelLibraryDownloadJob(job_id);
   if (!job.has_value()) {
@@ -1524,7 +1762,7 @@ std::vector<ModelLibraryService::ModelLibraryEntry>
 ModelLibraryService::ScanEntries(const std::string& db_path) const {
   const auto roots = DiscoverRoots(db_path);
   const auto reference_map = BuildReferenceMap(db_path);
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   PendingDownloadState pending_downloads;
   for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
@@ -1658,6 +1896,122 @@ ModelLibraryService::ScanEntries(const std::string& db_path) const {
       }
       entries_by_path[entry.path] = std::move(entry);
     }
+  }
+
+  for (const auto& job : store.LoadModelLibraryDownloadJobs()) {
+    if (job.status != "completed" || job.node_name.empty()) {
+      continue;
+    }
+    const auto job_paths =
+        job.retained_output_paths.empty() ? job.target_paths : job.retained_output_paths;
+    if (job_paths.empty()) {
+      continue;
+    }
+    std::vector<std::string> normalized_paths;
+    normalized_paths.reserve(job_paths.size());
+    for (const auto& path_text : job_paths) {
+      if (!IsUsableAbsoluteHostPath(path_text)) {
+        continue;
+      }
+      normalized_paths.push_back(NormalizePathString(std::filesystem::path(path_text)));
+    }
+    if (normalized_paths.empty()) {
+      continue;
+    }
+    std::sort(normalized_paths.begin(), normalized_paths.end());
+    normalized_paths.erase(
+        std::unique(normalized_paths.begin(), normalized_paths.end()),
+        normalized_paths.end());
+
+    const std::filesystem::path first_path(normalized_paths.front());
+    const std::string root =
+        IsUsableAbsoluteHostPath(job.target_root)
+            ? NormalizePathString(std::filesystem::path(job.target_root))
+            : NormalizePathString(first_path.parent_path());
+    const auto size_bytes =
+        job.bytes_total.has_value()
+            ? static_cast<std::uintmax_t>(*job.bytes_total)
+            : static_cast<std::uintmax_t>(job.bytes_done);
+
+    if (normalized_paths.size() > 1) {
+      std::string multipart_prefix;
+      int part_index = 0;
+      int part_total = 0;
+      const bool multipart =
+          ParseMultipartGgufFilename(
+              first_path.filename().string(),
+              &multipart_prefix,
+              &part_index,
+              &part_total);
+      const std::string group_key =
+          multipart
+              ? NormalizePathString(first_path.parent_path() / multipart_prefix)
+              : normalized_paths.front();
+      if (entries_by_path.count(group_key) != 0) {
+        continue;
+      }
+      ModelLibraryEntry entry;
+      entry.path = normalized_paths.front();
+      entry.name = multipart ? multipart_prefix : first_path.filename().string();
+      entry.kind = multipart ? "multipart-gguf" : "file";
+      entry.format = "gguf";
+      entry.root = root;
+      entry.paths = normalized_paths;
+      entry.size_bytes = size_bytes;
+      entry.part_count = static_cast<int>(normalized_paths.size());
+      entry.quantization = DetectEntryQuantization(
+          multipart ? multipart_prefix : first_path.stem().string());
+      bool referenced = false;
+      for (const auto& path : normalized_paths) {
+        if (const auto reference_it = reference_map.find(path);
+            reference_it != reference_map.end()) {
+          referenced = true;
+          entry.referenced_by.insert(
+              entry.referenced_by.end(),
+              reference_it->second.begin(),
+              reference_it->second.end());
+        }
+      }
+      if (referenced) {
+        std::sort(entry.referenced_by.begin(), entry.referenced_by.end());
+        entry.referenced_by.erase(
+            std::unique(entry.referenced_by.begin(), entry.referenced_by.end()),
+            entry.referenced_by.end());
+        entry.deletable = false;
+      }
+      entries_by_path[group_key] = std::move(entry);
+      continue;
+    }
+
+    const std::string normalized_path = normalized_paths.front();
+    if (entries_by_path.count(normalized_path) != 0) {
+      continue;
+    }
+    ModelLibraryEntry entry;
+    entry.path = normalized_path;
+    entry.name = first_path.filename().string();
+    entry.kind = "file";
+    entry.format = EndsWithIgnoreCase(entry.name, ".gguf") ? "gguf" : job.desired_output_format;
+    if (entry.format.empty()) {
+      entry.format = "unknown";
+    }
+    entry.root = root;
+    entry.paths = {normalized_path};
+    entry.size_bytes = size_bytes;
+    entry.quantization =
+        entry.format == "gguf" ? DetectEntryQuantization(first_path.stem().string()) : "base";
+    if (entry.quantization != "base") {
+      entry.quantized_from_path =
+          NormalizePathString(
+              first_path.parent_path() /
+              (StripKnownQuantizationSuffix(first_path.stem().string()) + ".gguf"));
+    }
+    if (const auto reference_it = reference_map.find(entry.path);
+        reference_it != reference_map.end()) {
+      entry.referenced_by = reference_it->second;
+      entry.deletable = false;
+    }
+    entries_by_path[normalized_path] = std::move(entry);
   }
 
   for (auto& [group_key, group] : multipart_groups) {
@@ -1896,7 +2250,7 @@ void ModelLibraryService::StartDownloadJob(
       service.state_->active_job_ids.erase(job_id);
     };
     try {
-      comet::ControllerStore store(db_path);
+      naim::ControllerStore store(db_path);
       store.Initialize();
       auto snapshot = store.LoadModelLibraryDownloadJob(job_id);
       if (!snapshot.has_value()) {

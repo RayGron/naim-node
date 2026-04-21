@@ -9,7 +9,7 @@
 #include "app/controller_service_interfaces.h"
 #include "auth/auth_support_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerComponentFactory;
 
@@ -46,4 +46,4 @@ class ControllerCompositionRoot final : public IControllerServeService {
   std::unique_ptr<IWebUiService> web_ui_service_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

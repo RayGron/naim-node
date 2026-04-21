@@ -23,29 +23,29 @@ int GetEnvIntOr(const char* name, int fallback) {
 
 int main() {
   try {
-    comet::skills::SkillsRuntimeConfig config;
-    config.plane_name = GetEnvOr("COMET_PLANE_NAME", "unknown");
-    config.instance_name = GetEnvOr("COMET_INSTANCE_NAME", "skills-unknown");
-    config.instance_role = GetEnvOr("COMET_INSTANCE_ROLE", "skills");
-    config.node_name = GetEnvOr("COMET_NODE_NAME", "unknown");
-    config.control_root = GetEnvOr("COMET_CONTROL_ROOT", "");
-    config.controller_url = GetEnvOr("COMET_CONTROLLER_URL", "http://controller.internal:18080");
-    config.db_path = GetEnvOr("COMET_SKILLS_DB_PATH", "/comet/private/skills.sqlite");
+    naim::skills::SkillsRuntimeConfig config;
+    config.plane_name = GetEnvOr("NAIM_PLANE_NAME", "unknown");
+    config.instance_name = GetEnvOr("NAIM_INSTANCE_NAME", "skills-unknown");
+    config.instance_role = GetEnvOr("NAIM_INSTANCE_ROLE", "skills");
+    config.node_name = GetEnvOr("NAIM_NODE_NAME", "unknown");
+    config.control_root = GetEnvOr("NAIM_CONTROL_ROOT", "");
+    config.controller_url = GetEnvOr("NAIM_CONTROLLER_URL", "http://controller.internal:18080");
+    config.db_path = GetEnvOr("NAIM_SKILLS_DB_PATH", "/naim/private/skills.sqlite");
     config.status_path =
-        GetEnvOr("COMET_SKILLS_RUNTIME_STATUS_PATH", "/comet/private/skills-runtime-status.json");
-    config.port = GetEnvIntOr("COMET_SKILLS_PORT", 18120);
+        GetEnvOr("NAIM_SKILLS_RUNTIME_STATUS_PATH", "/naim/private/skills-runtime-status.json");
+    config.port = GetEnvIntOr("NAIM_SKILLS_PORT", 18120);
 
-    std::cout << "[comet-skills] booting plane=" << config.plane_name
+    std::cout << "[naim-skills] booting plane=" << config.plane_name
               << " instance=" << config.instance_name << "\n";
-    std::cout << "[comet-skills] db_path=" << config.db_path.string() << "\n";
-    std::cout << "[comet-skills] status_path=" << config.status_path.string() << "\n";
-    std::cout << "[comet-skills] port=" << config.port << "\n";
+    std::cout << "[naim-skills] db_path=" << config.db_path.string() << "\n";
+    std::cout << "[naim-skills] status_path=" << config.status_path.string() << "\n";
+    std::cout << "[naim-skills] port=" << config.port << "\n";
     std::cout.flush();
 
-    comet::skills::SkillsServer server(std::move(config));
+    naim::skills::SkillsServer server(std::move(config));
     return server.Run();
   } catch (const std::exception& error) {
-    std::cerr << "comet-skillsd: " << error.what() << "\n";
+    std::cerr << "naim-skillsd: " << error.what() << "\n";
     return 1;
   }
 }

@@ -13,10 +13,10 @@
 #include "auth/auth_http_service.h"
 #include "auth/auth_http_support.h"
 #include "auth/auth_support_service.h"
-#include "comet/security/crypto_utils.h"
-#include "comet/state/desired_state_v2_renderer.h"
-#include "comet/state/desired_state_v2_validator.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/security/crypto_utils.h"
+#include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/desired_state_v2_validator.h"
+#include "naim/state/sqlite_store.h"
 
 namespace fs = std::filesystem;
 
@@ -70,7 +70,7 @@ struct TempDir {
 
 TempDir MakeTempDir(const std::string& prefix) {
   TempDir dir;
-  std::string token = comet::RandomTokenBase64(8);
+  std::string token = naim::RandomTokenBase64(8);
   for (char& ch : token) {
     const unsigned char byte = static_cast<unsigned char>(ch);
     if (!std::isalnum(byte) && ch != '-' && ch != '_') {
@@ -82,7 +82,7 @@ TempDir MakeTempDir(const std::string& prefix) {
   return dir;
 }
 
-comet::DesiredState BuildProtectedDesiredState(const std::string& plane_name) {
+naim::DesiredState BuildProtectedDesiredState(const std::string& plane_name) {
   json value{
       {"version", 2},
       {"plane_name", plane_name},
@@ -104,13 +104,13 @@ comet::DesiredState BuildProtectedDesiredState(const std::string& plane_name) {
        }},
       {"app", {{"enabled", false}}},
   };
-  comet::DesiredStateV2Validator::ValidateOrThrow(value);
-  return comet::DesiredStateV2Renderer::Render(value);
+  naim::DesiredStateV2Validator::ValidateOrThrow(value);
+  return naim::DesiredStateV2Renderer::Render(value);
 }
 
 std::string ExtractCookieToken(const std::string& set_cookie) {
-  const auto prefix = std::string("comet.sid=");
-  Expect(set_cookie.rfind(prefix, 0) == 0, "Set-Cookie must start with comet.sid=");
+  const auto prefix = std::string("naim.sid=");
+  Expect(set_cookie.rfind(prefix, 0) == 0, "Set-Cookie must start with naim.sid=");
   const auto semicolon = set_cookie.find(';', prefix.size());
   const auto token =
       set_cookie.substr(prefix.size(), semicolon == std::string::npos ? std::string::npos
@@ -120,14 +120,14 @@ std::string ExtractCookieToken(const std::string& set_cookie) {
 }
 
 void TestSshVerifyCanIssueCookieOnlySession() {
-  auto temp = MakeTempDir("comet-auth-http-tests");
+  auto temp = MakeTempDir("naim-auth-http-tests");
   const auto db_path = temp.path / "controller.sqlite";
 
-  comet::ControllerStore store(db_path.string());
+  naim::ControllerStore store(db_path.string());
   store.Initialize();
   store.ReplaceDesiredState(BuildProtectedDesiredState("maglev"), 1);
   const auto user =
-      store.CreateBootstrapAdmin("baal", comet::HashPassword("secret"));
+      store.CreateBootstrapAdmin("baal", naim::HashPassword("secret"));
 
   const auto key_path = temp.path / "id_ed25519";
   const auto message_path = temp.path / "message.txt";
@@ -139,7 +139,7 @@ void TestSshVerifyCanIssueCookieOnlySession() {
   AuthSupportService auth_support;
   const auto fingerprint =
       auth_support.ComputeSshPublicKeyFingerprint(public_key);
-  store.InsertUserSshKey(comet::UserSshKeyRecord{
+  store.InsertUserSshKey(naim::UserSshKeyRecord{
       0,
       user.id,
       "test-key",
@@ -173,7 +173,7 @@ void TestSshVerifyCanIssueCookieOnlySession() {
   WriteFile(message_path, message);
   RunShellOrThrow(
       "ssh-keygen -Y sign -f '" + key_path.string() +
-          "' -n comet-plane-auth '" + message_path.string() +
+          "' -n naim-plane-auth '" + message_path.string() +
           "' >/dev/null 2>/dev/null",
       "failed to sign ssh challenge");
   const auto signature = ReadFile(message_path.string() + ".sig");
@@ -211,13 +211,13 @@ void TestSshVerifyCanIssueCookieOnlySession() {
       ExtractCookieToken(verify_response->headers.at("Set-Cookie"));
   HttpRequest protected_request;
   protected_request.path = "/api/v1/planes/maglev/skills";
-  protected_request.headers["cookie"] = "comet.sid=" + session_token;
+  protected_request.headers["cookie"] = "naim.sid=" + session_token;
   const auto authenticated =
       auth_support.AuthenticateProtectedPlaneRequest(
           store, protected_request, "maglev");
   Expect(
       authenticated.has_value(),
-      "protected-plane auth should accept comet.sid issued by ssh verify");
+      "protected-plane auth should accept naim.sid issued by ssh verify");
 
   std::cout << "ok: ssh-verify-cookie-only-session" << '\n';
 }

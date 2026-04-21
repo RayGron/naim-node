@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller::plane_support {
+namespace naim::controller::plane_support {
 
 ControllerPrintService CreateControllerPrintService(
     const ControllerRuntimeSupportService& runtime_support_service);
@@ -37,4 +37,4 @@ PlaneService CreatePlaneService(
 
 HostRegistryService CreateHostRegistryService(const std::string& db_path);
 
-}  // namespace comet::controller::plane_support
+}  // namespace naim::controller::plane_support

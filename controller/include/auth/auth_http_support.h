@@ -12,8 +12,8 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
 class AuthHttpSupport final {
  public:
@@ -23,15 +23,15 @@ class AuthHttpSupport final {
       int status_code,
       const nlohmann::json& payload,
       const std::map<std::string, std::string>& headers) const;
-  nlohmann::json BuildUserPayload(const comet::UserRecord& user) const;
-  nlohmann::json BuildInvitePayload(const comet::RegistrationInviteRecord& invite) const;
-  nlohmann::json BuildSshKeyPayload(const comet::UserSshKeyRecord& ssh_key) const;
-  std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>>
+  nlohmann::json BuildUserPayload(const naim::UserRecord& user) const;
+  nlohmann::json BuildInvitePayload(const naim::RegistrationInviteRecord& invite) const;
+  nlohmann::json BuildSshKeyPayload(const naim::UserSshKeyRecord& ssh_key) const;
+  std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>
   AuthenticateControllerUserSession(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const HttpRequest& request) const;
-  std::optional<comet::UserRecord> RequireControllerAdminUser(
-      comet::ControllerStore& store,
+  std::optional<naim::UserRecord> RequireControllerAdminUser(
+      naim::ControllerStore& store,
       const HttpRequest& request) const;
   std::string ResolveWebAuthnRpId(const HttpRequest& request) const;
   std::string ResolveWebAuthnOrigin(const HttpRequest& request) const;
@@ -44,7 +44,7 @@ class AuthHttpSupport final {
       const HttpRequest& request) const;
   std::string ClearSessionCookieHeader(const HttpRequest& request) const;
   std::string CreateControllerSession(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       int user_id,
       const std::string& session_kind,
       const std::string& plane_name) const;
@@ -77,25 +77,25 @@ class AuthHttpSupport final {
       const std::map<std::string, std::string>& headers) const {
     return BuildJsonResponse(status_code, payload, headers);
   }
-  nlohmann::json build_user_payload(const comet::UserRecord& user) const {
+  nlohmann::json build_user_payload(const naim::UserRecord& user) const {
     return BuildUserPayload(user);
   }
   nlohmann::json build_invite_payload(
-      const comet::RegistrationInviteRecord& invite) const {
+      const naim::RegistrationInviteRecord& invite) const {
     return BuildInvitePayload(invite);
   }
   nlohmann::json build_ssh_key_payload(
-      const comet::UserSshKeyRecord& ssh_key) const {
+      const naim::UserSshKeyRecord& ssh_key) const {
     return BuildSshKeyPayload(ssh_key);
   }
-  std::optional<std::pair<comet::UserRecord, comet::AuthSessionRecord>>
+  std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>
   authenticate_controller_user_session(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const HttpRequest& request) const {
     return AuthenticateControllerUserSession(store, request);
   }
-  std::optional<comet::UserRecord> require_controller_admin_user(
-      comet::ControllerStore& store,
+  std::optional<naim::UserRecord> require_controller_admin_user(
+      naim::ControllerStore& store,
       const HttpRequest& request) const {
     return RequireControllerAdminUser(store, request);
   }
@@ -122,7 +122,7 @@ class AuthHttpSupport final {
     return ClearSessionCookieHeader(request);
   }
   std::string create_controller_session(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       int user_id,
       const std::string& session_kind,
       const std::string& plane_name) const {
@@ -185,5 +185,5 @@ class AuthHttpSupport final {
 
  private:
   AuthSupportService& auth_support_;
-  comet::controller::AuthPayloadService auth_payload_service_;
+  naim::controller::AuthPayloadService auth_payload_service_;
 };

@@ -1,10 +1,10 @@
-#include "comet/state/demo_state.h"
+#include "naim/state/demo_state.h"
 
 #include <utility>
 
-#include "comet/runtime/infer_runtime_config.h"
+#include "naim/runtime/infer_runtime_config.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -35,30 +35,30 @@ InstanceSpec MakeInfer() {
   instance.role = InstanceRole::Infer;
   instance.plane_name = "alpha";
   instance.node_name = "node-a";
-  instance.image = "comet/infer-runtime:dev";
-  instance.command = "/runtime/bin/comet-inferctl container-boot";
+  instance.image = "naim/infer-runtime:dev";
+  instance.command = "/runtime/bin/naim-inferctl container-boot";
   instance.private_disk_name = "infer-main-private";
   instance.shared_disk_name = "plane-alpha-shared";
   instance.environment = {
-      {"COMET_PLANE_NAME", "alpha"},
-      {"COMET_INSTANCE_NAME", "infer-main"},
-      {"COMET_INSTANCE_ROLE", "infer"},
-      {"COMET_NODE_NAME", "node-a"},
-      {"COMET_INFER_RUNTIME_BACKEND", "auto"},
-      {"COMET_CONTROLLER_URL", "http://controller.internal:8080"},
-      {"COMET_CONTROL_ROOT", "/comet/shared/control/alpha"},
-      {"COMET_INFER_RUNTIME_CONFIG",
-       InferRuntimeConfigControlPath("/comet/shared/control/alpha", "infer-main")},
-      {"COMET_INFERENCE_PORT", "8000"},
-      {"COMET_GATEWAY_PORT", "8080"},
-      {"COMET_LLAMA_PORT", "8000"},
-      {"COMET_SHARED_DISK_PATH", "/comet/shared"},
-      {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
+      {"NAIM_PLANE_NAME", "alpha"},
+      {"NAIM_INSTANCE_NAME", "infer-main"},
+      {"NAIM_INSTANCE_ROLE", "infer"},
+      {"NAIM_NODE_NAME", "node-a"},
+      {"NAIM_INFER_RUNTIME_BACKEND", "auto"},
+      {"NAIM_CONTROLLER_URL", "http://controller.internal:8080"},
+      {"NAIM_CONTROL_ROOT", "/naim/shared/control/alpha"},
+      {"NAIM_INFER_RUNTIME_CONFIG",
+       InferRuntimeConfigControlPath("/naim/shared/control/alpha", "infer-main")},
+      {"NAIM_INFERENCE_PORT", "8000"},
+      {"NAIM_GATEWAY_PORT", "8080"},
+      {"NAIM_LLAMA_PORT", "8000"},
+      {"NAIM_SHARED_DISK_PATH", "/naim/shared"},
+      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
   };
   instance.labels = {
-      {"comet.plane", "alpha"},
-      {"comet.role", "infer"},
-      {"comet.node", "node-a"},
+      {"naim.plane", "alpha"},
+      {"naim.role", "infer"},
+      {"naim.node", "node-a"},
   };
   instance.private_disk_size_gb = 80;
   return instance;
@@ -79,27 +79,27 @@ InstanceSpec MakeWorker(
   instance.role = InstanceRole::Worker;
   instance.plane_name = "alpha";
   instance.node_name = std::move(node_name);
-  instance.image = "comet/worker-runtime:dev";
-  instance.command = "/runtime/bin/comet-workerd";
+  instance.image = "naim/worker-runtime:dev";
+  instance.command = "/runtime/bin/naim-workerd";
   instance.private_disk_name = instance.name + "-private";
   instance.shared_disk_name = "plane-alpha-shared";
   instance.depends_on = std::move(depends_on);
   instance.environment = {
-      {"COMET_PLANE_NAME", "alpha"},
-      {"COMET_INSTANCE_NAME", instance.name},
-      {"COMET_INSTANCE_ROLE", "worker"},
-      {"COMET_NODE_NAME", instance.node_name},
-      {"COMET_GPU_DEVICE", gpu_device},
-      {"COMET_WORKER_BOOT_MODE", "llama-load"},
-      {"COMET_CONTROL_ROOT", "/comet/shared/control/alpha"},
-      {"COMET_SHARED_DISK_PATH", "/comet/shared"},
-      {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
-      {"COMET_WORKER_RUNTIME_STATUS_PATH", "/comet/private/worker-runtime-status.json"},
+      {"NAIM_PLANE_NAME", "alpha"},
+      {"NAIM_INSTANCE_NAME", instance.name},
+      {"NAIM_INSTANCE_ROLE", "worker"},
+      {"NAIM_NODE_NAME", instance.node_name},
+      {"NAIM_GPU_DEVICE", gpu_device},
+      {"NAIM_WORKER_BOOT_MODE", "llama-load"},
+      {"NAIM_CONTROL_ROOT", "/naim/shared/control/alpha"},
+      {"NAIM_SHARED_DISK_PATH", "/naim/shared"},
+      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
+      {"NAIM_WORKER_RUNTIME_STATUS_PATH", "/naim/private/worker-runtime-status.json"},
   };
   instance.labels = {
-      {"comet.plane", "alpha"},
-      {"comet.role", "worker"},
-      {"comet.node", instance.node_name},
+      {"naim.plane", "alpha"},
+      {"naim.role", "worker"},
+      {"naim.node", instance.node_name},
   };
   instance.gpu_device = std::move(gpu_device);
   instance.placement_mode = PlacementMode::Manual;
@@ -118,7 +118,7 @@ DesiredState BuildDemoState() {
   DesiredState state;
   state.plane_name = "alpha";
   state.plane_shared_disk_name = "plane-alpha-shared";
-  state.control_root = "/comet/shared/control/alpha";
+  state.control_root = "/naim/shared/control/alpha";
   state.inference.primary_infer_node = "node-a";
   state.gateway.listen_host = "0.0.0.0";
   state.gateway.listen_port = 8080;
@@ -147,8 +147,8 @@ DesiredState BuildDemoState() {
           "alpha",
           "alpha",
           "node-a",
-          "/var/lib/comet/disks/planes/alpha/shared",
-          "/comet/shared",
+          "/var/lib/naim/disks/planes/alpha/shared",
+          "/naim/shared",
           200),
       MakeDisk(
           "infer-main-private",
@@ -156,8 +156,8 @@ DesiredState BuildDemoState() {
           "alpha",
           "infer-main",
           "node-a",
-          "/var/lib/comet/disks/instances/infer-main/private",
-          "/comet/private",
+          "/var/lib/naim/disks/instances/infer-main/private",
+          "/naim/private",
           80),
       MakeDisk(
           "worker-a-private",
@@ -165,8 +165,8 @@ DesiredState BuildDemoState() {
           "alpha",
           "worker-a",
           "node-a",
-          "/var/lib/comet/disks/instances/worker-a/private",
-          "/comet/private",
+          "/var/lib/naim/disks/instances/worker-a/private",
+          "/naim/private",
           40),
       MakeDisk(
           "worker-b-private",
@@ -174,8 +174,8 @@ DesiredState BuildDemoState() {
           "alpha",
           "worker-b",
           "node-b",
-          "/var/lib/comet/disks/instances/worker-b/private",
-          "/comet/private",
+          "/var/lib/naim/disks/instances/worker-b/private",
+          "/naim/private",
           40),
       MakeDisk(
           "plane-alpha-shared",
@@ -183,8 +183,8 @@ DesiredState BuildDemoState() {
           "alpha",
           "alpha",
           "node-b",
-          "/var/lib/comet/disks/planes/alpha/shared",
-          "/comet/shared",
+          "/var/lib/naim/disks/planes/alpha/shared",
+          "/naim/shared",
           200),
   };
 
@@ -220,4 +220,4 @@ DesiredState BuildDemoState() {
   return state;
 }
 
-}  // namespace comet
+}  // namespace naim

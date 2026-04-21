@@ -11,7 +11,7 @@
 #include <unistd.h>
 #endif
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 SignalManager* SignalManager::active_manager_ = nullptr;
 
@@ -135,4 +135,4 @@ std::vector<int> SignalManager::SnapshotTrackedChildren() const {
   return child_pids_;
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

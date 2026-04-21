@@ -2,7 +2,7 @@
 
 #include "app/controller_scheduler_service_builder.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 SchedulerService ControllerSchedulerServiceFactory::CreateSchedulerService(
     const std::string& db_path,
@@ -10,4 +10,4 @@ SchedulerService ControllerSchedulerServiceFactory::CreateSchedulerService(
   return BuildControllerSchedulerService(db_path, artifacts_root);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

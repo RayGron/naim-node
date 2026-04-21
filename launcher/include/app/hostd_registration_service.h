@@ -5,7 +5,7 @@
 
 #include "cli/launcher_command_line.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class HostdRegistrationService {
  public:
@@ -17,4 +17,4 @@ class HostdRegistrationService {
   std::string Trim(const std::string& value) const;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

@@ -5,11 +5,11 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 #include "plane/plane_mutation_service.h"
 #include "skills/plane_skill_runtime_sync_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneSkillCatalogService final {
  public:
@@ -58,7 +58,7 @@ class PlaneSkillCatalogService final {
     bool internal = false;
     bool enabled = true;
     std::vector<std::string> session_ids;
-    std::vector<std::string> comet_links;
+    std::vector<std::string> naim_links;
   };
 
   static PlaneSkillInput ParsePlaneSkillInput(
@@ -67,8 +67,8 @@ class PlaneSkillCatalogService final {
   static std::string GenerateSkillId();
 
   nlohmann::json BuildSkillPayload(
-      comet::ControllerStore& store,
-      const comet::DesiredState& desired_state,
+      naim::ControllerStore& store,
+      const naim::DesiredState& desired_state,
       const std::string& plane_name,
       const std::string& skill_id) const;
 
@@ -77,4 +77,4 @@ class PlaneSkillCatalogService final {
   ResolveArtifactsRootFn resolve_artifacts_root_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

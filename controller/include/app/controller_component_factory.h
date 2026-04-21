@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerComponentFactory final {
  public:
@@ -33,4 +33,4 @@ class ControllerComponentFactory final {
       const ReadModelService& read_model_service) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -7,17 +7,17 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/state/sqlite_store.h"
-#include "comet/state/state_json.h"
+#include "naim/state/sqlite_store.h"
+#include "naim/state/state_json.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
 using nlohmann::json;
 
 std::vector<std::string> LoadPlaneNamesUsingSkill(
-    const std::vector<comet::DesiredState>& states,
+    const std::vector<naim::DesiredState>& states,
     const std::string& skill_id) {
   std::vector<std::string> result;
   for (const auto& state : states) {
@@ -225,15 +225,15 @@ SkillsFactoryService::GroupMutationInput SkillsFactoryService::ParseGroupMutatio
 }
 
 std::vector<std::string> SkillsFactoryService::LoadPlanesUsingSkill(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& skill_id) const {
   return LoadPlaneNamesUsingSkill(store.LoadDesiredStates(), skill_id);
 }
 
 nlohmann::json SkillsFactoryService::BuildSkillPayload(
     const std::string& db_path,
-    const comet::SkillsFactorySkillRecord& skill) const {
-  comet::ControllerStore store(db_path);
+    const naim::SkillsFactorySkillRecord& skill) const {
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto plane_names = LoadPlanesUsingSkill(store, skill.id);
   return json{
@@ -252,7 +252,7 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
 }
 
 nlohmann::json SkillsFactoryService::BuildListPayload(const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   json items = json::array();
   for (const auto& skill : store.LoadSkillsFactorySkills()) {
@@ -268,7 +268,7 @@ nlohmann::json SkillsFactoryService::BuildListPayload(const std::string& db_path
 nlohmann::json SkillsFactoryService::BuildSkillPayload(
     const std::string& db_path,
     const std::string& skill_id) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto skill = store.LoadSkillsFactorySkill(skill_id);
   if (!skill.has_value()) {
@@ -280,13 +280,13 @@ nlohmann::json SkillsFactoryService::BuildSkillPayload(
 nlohmann::json SkillsFactoryService::CreateSkill(
     const std::string& db_path,
     const nlohmann::json& payload) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   auto input = ParseCanonicalSkillInput(payload, false);
   if (input.id.empty()) {
     input.id = GenerateSkillId();
   }
-  comet::SkillsFactorySkillRecord skill;
+  naim::SkillsFactorySkillRecord skill;
   skill.id = input.id;
   skill.name = input.name;
   skill.group_path = input.group_path;
@@ -296,7 +296,7 @@ nlohmann::json SkillsFactoryService::CreateSkill(
   skill.internal = input.internal;
   store.UpsertSkillsFactorySkill(skill);
   if (!skill.group_path.empty()) {
-    store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+    store.UpsertSkillsFactoryGroup(naim::SkillsFactoryGroupRecord{
         skill.group_path,
         "",
         "",
@@ -308,10 +308,10 @@ nlohmann::json SkillsFactoryService::CreateSkill(
 nlohmann::json SkillsFactoryService::CreateGroup(
     const std::string& db_path,
     const nlohmann::json& payload) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto input = ParseGroupMutationInput(payload, "path");
-  store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+  store.UpsertSkillsFactoryGroup(naim::SkillsFactoryGroupRecord{
       input.path,
       "",
       "",
@@ -335,7 +335,7 @@ nlohmann::json SkillsFactoryService::RenameGroup(
     throw std::invalid_argument("to_path must not be nested inside from_path");
   }
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto groups = store.LoadSkillsFactoryGroups();
   bool matched_group = false;
@@ -361,7 +361,7 @@ nlohmann::json SkillsFactoryService::RenameGroup(
     if (!PathMatchesOrIsDescendant(group.path, from_input.path)) {
       continue;
     }
-    store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+    store.UpsertSkillsFactoryGroup(naim::SkillsFactoryGroupRecord{
         RewriteGroupPathPrefix(group.path, from_input.path, to_input.path),
         group.created_at,
         group.updated_at,
@@ -372,7 +372,7 @@ nlohmann::json SkillsFactoryService::RenameGroup(
       store.DeleteSkillsFactoryGroup(group.path);
     }
   }
-  store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+  store.UpsertSkillsFactoryGroup(naim::SkillsFactoryGroupRecord{
       to_input.path,
       "",
       "",
@@ -388,7 +388,7 @@ nlohmann::json SkillsFactoryService::DeleteGroup(
     const std::string& db_path,
     const nlohmann::json& payload) const {
   const auto input = ParseGroupMutationInput(payload, "path");
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   bool matched_group = false;
@@ -421,7 +421,7 @@ nlohmann::json SkillsFactoryService::UpdateSkill(
     const nlohmann::json& payload,
     bool partial,
     const std::string&) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   auto current = store.LoadSkillsFactorySkill(skill_id);
   if (!current.has_value()) {
@@ -448,7 +448,7 @@ nlohmann::json SkillsFactoryService::UpdateSkill(
   }
   store.UpsertSkillsFactorySkill(*current);
   if (!current->group_path.empty()) {
-    store.UpsertSkillsFactoryGroup(comet::SkillsFactoryGroupRecord{
+    store.UpsertSkillsFactoryGroup(naim::SkillsFactoryGroupRecord{
         current->group_path,
         "",
         "",
@@ -461,7 +461,7 @@ nlohmann::json SkillsFactoryService::UpdateSkill(
 void SkillsFactoryService::SyncAffectedPlanes(
     const std::string& db_path,
     const std::vector<std::string>& plane_names) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   for (const auto& plane_name : plane_names) {
     const auto desired_state = store.LoadDesiredState(plane_name);
@@ -475,7 +475,7 @@ nlohmann::json SkillsFactoryService::DeleteSkill(
     const std::string& db_path,
     const std::string& skill_id,
     const std::string& fallback_artifacts_root) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   if (!store.LoadSkillsFactorySkill(skill_id).has_value()) {
     throw std::runtime_error("skill '" + skill_id + "' not found");
@@ -493,7 +493,7 @@ nlohmann::json SkillsFactoryService::DeleteSkill(
         db_path, desired_state.plane_name, fallback_artifacts_root);
     const auto result = plane_mutation_service_.ExecuteUpsertPlaneStateAction(
         db_path,
-        comet::SerializeDesiredStateJson(next_state),
+        naim::SerializeDesiredStateJson(next_state),
         artifacts_root,
         desired_state.plane_name,
         "skills-factory:detach");
@@ -510,4 +510,4 @@ nlohmann::json SkillsFactoryService::DeleteSkill(
   return json{{"status", "deleted"}, {"skill_id", skill_id}};
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

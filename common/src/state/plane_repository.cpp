@@ -1,11 +1,11 @@
-#include "comet/state/plane_repository.h"
+#include "naim/state/plane_repository.h"
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
 #include <array>
 #include <stdexcept>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -151,4 +151,4 @@ PlaneRecord PlaneRepository::ReadPlane(sqlite3_stmt* statement) {
   return plane;
 }
 
-}  // namespace comet
+}  // namespace naim

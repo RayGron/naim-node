@@ -1,6 +1,6 @@
 #include "infra/controller_request_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 nlohmann::json ControllerRequestSupport::ParseJsonRequestBody(
     const HttpRequest& request) const {
@@ -16,4 +16,4 @@ std::string ControllerRequestSupport::ResolveArtifactsRoot(
   return artifacts_root_arg.value_or(fallback_artifacts_root);
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

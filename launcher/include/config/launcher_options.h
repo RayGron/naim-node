@@ -5,7 +5,7 @@
 
 #include "config/install_layout.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace fs = std::filesystem;
 
@@ -26,11 +26,13 @@ struct HostdInstallOptions {
   fs::path binary_path;
   std::string controller_url;
   std::string controller_fingerprint;
+  std::string onboarding_key;
   std::string node_name;
   std::string transport_mode = "out";
   std::string execution_mode = "mixed";
   std::string listen_address;
   std::string compose_mode = "exec";
+  int inventory_scan_interval_sec = 3600;
 };
 
 struct ControllerRunOptions {
@@ -57,12 +59,15 @@ struct HostdRunOptions {
   fs::path db_path;
   std::string controller_url;
   std::string controller_fingerprint;
+  std::string onboarding_key;
   std::string node_name;
+  std::string storage_root;
   fs::path runtime_root;
   fs::path state_root;
   fs::path host_private_key_path;
   std::string compose_mode = "exec";
   int poll_interval_sec = 2;
+  int inventory_scan_interval_sec = 3600;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

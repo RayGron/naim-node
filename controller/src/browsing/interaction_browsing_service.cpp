@@ -1,11 +1,14 @@
 #include "browsing/interaction_browsing_service.h"
 
+#include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <string_view>
 
 #include "browsing/plane_browsing_service.h"
+#include "interaction/interaction_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -28,20 +31,36 @@ nlohmann::json ParseJsonBodyOrObject(const std::string& body) {
   return parsed.is_discarded() ? nlohmann::json::object() : parsed;
 }
 
-std::string LastUserMessageContent(const nlohmann::json& payload) {
-  if (!payload.contains("messages") || !payload.at("messages").is_array()) {
-    return "";
-  }
-  const auto& messages = payload.at("messages");
-  for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-    if ((*it).is_object() &&
-        (*it).value("role", std::string{}) == "user" &&
-        (*it).contains("content") &&
-        (*it).at("content").is_string()) {
-      return (*it).at("content").get<std::string>();
-    }
-  }
-  return "";
+std::string LowercaseAscii(std::string value) {
+  std::transform(
+      value.begin(),
+      value.end(),
+      value.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
+bool ContainsAnyLiteral(
+    const std::string& haystack,
+    const std::initializer_list<std::string_view>& needles) {
+  return std::any_of(
+      needles.begin(),
+      needles.end(),
+      [&](const std::string_view needle) {
+        return haystack.find(needle) != std::string::npos;
+      });
+}
+
+bool ContainsAnyAscii(
+    const std::string& haystack,
+    const std::initializer_list<std::string_view>& needles) {
+  const std::string lowered = LowercaseAscii(haystack);
+  return std::any_of(
+      needles.begin(),
+      needles.end(),
+      [&](const std::string_view needle) {
+        return lowered.find(LowercaseAscii(std::string(needle))) != std::string::npos;
+      });
 }
 
 nlohmann::json BuildDisabledWebGatewayContext() {
@@ -148,14 +167,27 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
     return std::nullopt;
   }
 
+  if (const auto local_context = BuildLocalEnabledIdleContext(*context);
+      local_context.has_value()) {
+    ApplyWebGatewayPayload(
+        context,
+        *local_context,
+        local_context->value("response_policy", nlohmann::json::object()),
+        "WebGateway state: enabled_not_needed. Use only the WebGateway evidence and policy provided with this request. Do not claim extra online verification beyond that evidence.\n\nWebGateway determined that no web lookup was needed for this request. Answer directly without claiming fresh web verification.",
+        std::nullopt,
+        "not_needed");
+    PersistBrowsingMode(*local_context, context);
+    return std::nullopt;
+  }
+
   nlohmann::json resolve_payload = {
       {"plane_name", resolution.desired_state.plane_name},
       {"conversation_slice",
        context->payload.contains("messages") && context->payload.at("messages").is_array()
            ? context->payload.at("messages")
            : nlohmann::json::array()},
-      {"latest_user_message", LastUserMessageContent(context->payload)},
-      {"web_mode", "auto"},
+      {"latest_user_message", LastUserMessageContent(*context)},
+      {"web_mode", ReadPersistedBrowsingMode(*context)},
       {"plane_policy",
        nlohmann::json{
            {"enabled", true},
@@ -219,6 +251,7 @@ InteractionBrowsingService::ResolveInteractionBrowsing(
       ReadJsonStringOrDefault(payload, "model_instruction"),
       refusal,
       ReadJsonStringOrDefault(payload, "decision", "disabled"));
+  PersistBrowsingMode(webgateway_context, context);
   return std::nullopt;
 }
 
@@ -264,4 +297,141 @@ void InteractionBrowsingService::ReviewInteractionResponse(
   }
 }
 
-}  // namespace comet::controller
+std::string InteractionBrowsingService::ReadPersistedBrowsingMode(
+    const InteractionRequestContext& context) const {
+  const nlohmann::json& state =
+      context.payload.contains(kInteractionSessionContextStatePayloadKey) &&
+              context.payload.at(kInteractionSessionContextStatePayloadKey).is_object()
+          ? context.payload.at(kInteractionSessionContextStatePayloadKey)
+          : context.session_context_state;
+  if (!state.is_object()) {
+    return "auto";
+  }
+  const std::string mode = state.value("browsing_mode", std::string{});
+  if (mode == "enabled" || mode == "disabled") {
+    return mode;
+  }
+  return "auto";
+}
+
+std::string InteractionBrowsingService::LastUserMessageContent(
+    const InteractionRequestContext& context) const {
+  if (!context.payload.contains("messages") ||
+      !context.payload.at("messages").is_array()) {
+    return "";
+  }
+  const auto& messages = context.payload.at("messages");
+  for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+    if ((*it).is_object() &&
+        (*it).value("role", std::string{}) == "user" &&
+        (*it).contains("content") &&
+        (*it).at("content").is_string()) {
+      return (*it).at("content").get<std::string>();
+    }
+  }
+  return "";
+}
+
+bool InteractionBrowsingService::LatestMessageRequestsLookup(
+    const InteractionRequestContext& context) const {
+  const std::string latest = LastUserMessageContent(context);
+  if (latest.empty()) {
+    return false;
+  }
+  if (ContainsAnyLiteral(latest, {"http://", "https://"})) {
+    return true;
+  }
+  if (ContainsAnyAscii(
+          latest,
+          {"enable web",
+           "disable web",
+           "web for this chat",
+           "search online",
+           "search the web",
+           "use the web",
+           "latest",
+           "current",
+           "recent",
+           "today",
+           "news",
+           "source",
+           "sources",
+           "citation",
+           "citations",
+           "online",
+           "fresh",
+           "включи веб",
+           "выключи веб",
+           "используй веб",
+           "используй интернет",
+           "найди в интернете",
+           "поиск в интернете",
+           "последн",
+           "сегодня",
+           "источник",
+           "источники",
+           "ссылка",
+           "ссылки"})) {
+    return true;
+  }
+  return false;
+}
+
+std::optional<nlohmann::json> InteractionBrowsingService::BuildLocalEnabledIdleContext(
+    const InteractionRequestContext& context) const {
+  if (ReadPersistedBrowsingMode(context) != "enabled" ||
+      LatestMessageRequestsLookup(context)) {
+    return std::nullopt;
+  }
+  return nlohmann::json{
+      {"mode", "enabled"},
+      {"mode_source", "session_context"},
+      {"plane_enabled", true},
+      {"ready", false},
+      {"session_backend", "broker_fallback"},
+      {"rendered_browser_enabled", true},
+      {"rendered_browser_ready", false},
+      {"login_enabled", false},
+      {"toggle_only", false},
+      {"decision", "not_needed"},
+      {"reason", "context_not_needed"},
+      {"lookup_state", "enabled_not_needed"},
+      {"lookup_attempted", false},
+      {"lookup_required", false},
+      {"evidence_attached", false},
+      {"searches", nlohmann::json::array()},
+      {"sources", nlohmann::json::array()},
+      {"errors", nlohmann::json::array()},
+      {"refusal", nullptr},
+      {"response_policy", nlohmann::json::object()},
+      {"indicator", nlohmann::json{{"compact", "web:on idle"}}},
+      {"trace",
+       nlohmann::json::array({nlohmann::json{{"stage", "mode"},
+                                             {"status", "enabled_idle"},
+                                             {"compact", "web:on idle"}}})},
+  };
+}
+
+void InteractionBrowsingService::PersistBrowsingMode(
+    const nlohmann::json& webgateway_context,
+    InteractionRequestContext* context) const {
+  if (context == nullptr || !webgateway_context.is_object()) {
+    return;
+  }
+  std::string persisted_mode = "disabled";
+  if (webgateway_context.value("mode", std::string{}) == "enabled") {
+    persisted_mode = "enabled";
+  }
+  if (!context->session_context_state.is_object()) {
+    context->session_context_state = nlohmann::json::object();
+  }
+  context->session_context_state["browsing_mode"] = persisted_mode;
+  if (!context->payload.contains(kInteractionSessionContextStatePayloadKey) ||
+      !context->payload.at(kInteractionSessionContextStatePayloadKey).is_object()) {
+    context->payload[kInteractionSessionContextStatePayloadKey] = nlohmann::json::object();
+  }
+  context->payload[kInteractionSessionContextStatePayloadKey]["browsing_mode"] =
+      persisted_mode;
+}
+
+}  // namespace naim::controller

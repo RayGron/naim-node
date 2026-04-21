@@ -5,7 +5,7 @@
 #include <optional>
 #include <vector>
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class SignalManager {
  public:
@@ -35,4 +35,4 @@ class SignalManager {
   std::vector<int> child_pids_;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

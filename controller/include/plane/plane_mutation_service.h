@@ -7,15 +7,15 @@
 #include "infra/controller_action.h"
 #include "plane/plane_service.h"
 
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneMutationService {
  public:
   using ApplyDesiredStateFn = std::function<int(
       const std::string&,
-      const comet::DesiredState&,
+      const naim::DesiredState&,
       const std::string&,
       const std::string&)>;
   using MakePlaneServiceFn = std::function<PlaneService(const std::string&)>;
@@ -50,4 +50,4 @@ class PlaneMutationService {
   Deps deps_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

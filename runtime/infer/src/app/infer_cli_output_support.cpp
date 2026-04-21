@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace comet::infer::cli_output_support {
+namespace naim::infer::cli_output_support {
 
 namespace fs = std::filesystem;
 using control_support::BuildControlPaths;
@@ -206,4 +206,4 @@ void PrintLaunchPlan(const RuntimeConfig& config) {
             << " server_name:" << config.gateway_server_name << "\n";
 }
 
-}  // namespace comet::infer::cli_output_support
+}  // namespace naim::infer::cli_output_support

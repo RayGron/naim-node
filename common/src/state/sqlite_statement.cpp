@@ -1,8 +1,8 @@
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
 #include <stdexcept>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -101,4 +101,4 @@ sqlite3_stmt* SqliteStatement::raw() const {
   return statement_;
 }
 
-}  // namespace comet
+}  // namespace naim

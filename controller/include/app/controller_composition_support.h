@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller::composition_support {
+namespace naim::controller::composition_support {
 
 std::string Trim(const std::string& value);
 
@@ -15,7 +15,7 @@ std::optional<int> FindQueryInt(
     const std::string& key);
 
 void AppendControllerEvent(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& category,
     const std::string& event_type,
     const std::string& message,
@@ -27,22 +27,22 @@ void AppendControllerEvent(
     const std::optional<int>& rollout_action_id = std::nullopt,
     const std::string& severity = "info");
 
-std::vector<comet::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
-    const comet::HostObservation& observation);
+std::vector<naim::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
+    const naim::HostObservation& observation);
 
 bool ObservationMatchesPlane(
-    const comet::HostObservation& observation,
+    const naim::HostObservation& observation,
     const std::string& plane_name);
 
-std::vector<comet::HostObservation> FilterHostObservationsForPlane(
-    const std::vector<comet::HostObservation>& observations,
+std::vector<naim::HostObservation> FilterHostObservationsForPlane(
+    const std::vector<naim::HostObservation>& observations,
     const std::string& plane_name);
 
-bool CanFinalizeDeletedPlane(comet::ControllerStore& store, const std::string& plane_name);
+bool CanFinalizeDeletedPlane(naim::ControllerStore& store, const std::string& plane_name);
 
 HttpResponse BuildJsonResponse(
     int status_code,
     const nlohmann::json& payload,
     const std::map<std::string, std::string>& headers = {});
 
-}  // namespace comet::controller::composition_support
+}  // namespace naim::controller::composition_support

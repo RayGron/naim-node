@@ -1,12 +1,12 @@
-#include "comet/state/scheduler_repository.h"
+#include "naim/state/scheduler_repository.h"
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
 #include <stdexcept>
 
 #include <nlohmann/json.hpp>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -415,4 +415,4 @@ SchedulerNodeRuntime SchedulerRepository::ReadSchedulerNodeRuntime(
   return runtime;
 }
 
-}  // namespace comet
+}  // namespace naim

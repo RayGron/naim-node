@@ -6,30 +6,31 @@
 
 #include "infra/controller_runtime_support_service.h"
 
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class DesiredStatePolicyService {
  public:
   std::optional<std::string> DescribeUnsupportedControllerLocalRuntime(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::string& node_name) const;
 
   void ApplyRegisteredHostExecutionModes(
-      comet::ControllerStore& store,
-      comet::DesiredState* desired_state) const;
+      naim::ControllerStore& store,
+      naim::DesiredState* desired_state) const;
 
   void ResolveDesiredStateDynamicPlacements(
-      comet::ControllerStore& store,
-      comet::DesiredState* desired_state) const;
+      naim::ControllerStore& store,
+      naim::DesiredState* desired_state) const;
 
   void ValidateDesiredStateForControllerAdmission(
-      const comet::DesiredState& desired_state) const;
+      naim::ControllerStore& store,
+      const naim::DesiredState& desired_state) const;
 
   void ValidateDesiredStateExecutionModes(
-      const comet::DesiredState& desired_state) const;
+      const naim::DesiredState& desired_state) const;
 
  private:
   struct PlacementUsage {
@@ -52,49 +53,56 @@ class DesiredStatePolicyService {
   };
 
   std::string CurrentControllerPlatform() const;
-  const comet::NodeInventory* FindPlaneNodeInventory(
-      const comet::DesiredState& desired_state,
+  const naim::NodeInventory* FindPlaneNodeInventory(
+      const naim::DesiredState& desired_state,
       const std::string& node_name) const;
   bool PlaneNodeUsesGpuRuntime(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::string& node_name) const;
   bool NodeAllowsInstanceRole(
-      comet::HostExecutionMode execution_mode,
-      comet::InstanceRole role) const;
+      naim::HostExecutionMode execution_mode,
+      naim::InstanceRole role) const;
   std::string EffectiveWorkerSelectionPolicy(
-      const comet::DesiredState& state) const;
+      const naim::DesiredState& state) const;
   int AutoPlacementPolicyRank(
       const std::string& policy,
       const AutoPlacementDecision& candidate) const;
   int ScoreAutoPlacementCandidate(
-      const comet::NodeInventory& node,
+      const naim::NodeInventory& node,
       const std::string& gpu_device,
       const PlacementUsage& usage,
-      const comet::InferenceRuntimeSettings& inference,
+      const naim::InferenceRuntimeSettings& inference,
       int observed_free_vram_mb,
       int observed_utilization_pct,
       const std::optional<std::string>& preferred_node_name,
       const std::optional<std::string>& preferred_gpu_device) const;
+  bool HybridGpuAlreadyAssigned(
+      const naim::DesiredState& desired_state,
+      const naim::InstanceSpec& current_worker,
+      const std::string& node_name,
+      const std::string& gpu_device) const;
+  bool UsesLlamaRpcRuntime(const naim::DesiredState& desired_state) const;
   void ReservePlacement(
       std::map<std::pair<std::string, std::string>, PlacementUsage>* placement_usage,
-      const comet::InstanceSpec& worker) const;
-  const comet::InstanceSpec* FindInferInstance(
-      const comet::DesiredState& desired_state) const;
+      const naim::InstanceSpec& worker) const;
+  const naim::InstanceSpec* FindInferInstance(
+      const naim::DesiredState& desired_state) const;
+  std::string InferInstanceNameForWorker(const naim::InstanceSpec& instance) const;
   void RefreshDerivedWorkerMetadata(
-      comet::DesiredState* desired_state) const;
+      naim::DesiredState* desired_state) const;
   void ApplyObservedHostGpuInventory(
-      comet::ControllerStore& store,
-      comet::DesiredState* desired_state) const;
+      naim::ControllerStore& store,
+      naim::DesiredState* desired_state) const;
   std::optional<AutoPlacementDecision> SelectAutoPlacement(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::map<std::pair<std::string, std::string>, PlacementUsage>& placement_usage,
       const std::map<std::pair<std::string, std::string>, std::pair<int, int>>&
           observed_gpu_headroom,
-      const comet::InstanceSpec& worker,
+      const naim::InstanceSpec& worker,
       const std::optional<std::string>& requested_node_name,
       const std::optional<std::string>& requested_gpu_device) const;
 
   ControllerRuntimeSupportService runtime_support_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

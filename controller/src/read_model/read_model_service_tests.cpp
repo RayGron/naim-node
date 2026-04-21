@@ -5,9 +5,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/sqlite_store.h"
-#include "comet/state/state_json.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/sqlite_store.h"
+#include "naim/state/state_json.h"
 #include "infra/controller_runtime_support_service.h"
 #include "read_model/read_model_service.h"
 
@@ -23,70 +23,74 @@ void Expect(bool condition, const std::string& message) {
 }
 
 std::string MakeTempDbPath(const std::string& test_name) {
-  const fs::path root = fs::temp_directory_path() / "comet-read-model-tests" / test_name;
+  const fs::path root = fs::temp_directory_path() / "naim-read-model-tests" / test_name;
   std::error_code error;
   fs::remove_all(root, error);
   fs::create_directories(root);
   return (root / "controller.sqlite").string();
 }
 
-comet::DesiredState BuildMixedObservedState() {
-  comet::DesiredState state;
+naim::DesiredState BuildMixedObservedState() {
+  naim::DesiredState state;
   state.plane_name = "";
 
-  comet::NodeInventory node;
+  naim::NodeInventory node;
   node.name = "local-hostd";
   node.gpu_devices = {"0", "1", "2"};
   state.nodes.push_back(node);
 
-  state.disks.push_back(comet::DiskSpec{
+  state.disks.push_back(naim::DiskSpec{
       "lt-shared",
-      comet::DiskKind::PlaneShared,
+      naim::DiskKind::PlaneShared,
       "lt-cypher-ai",
       "lt-cypher-ai",
       "local-hostd",
       "/lt/shared",
-      "/comet/shared",
+      "/naim/shared",
       100,
   });
-  state.disks.push_back(comet::DiskSpec{
+  state.disks.push_back(naim::DiskSpec{
       "maglev-shared",
-      comet::DiskKind::PlaneShared,
+      naim::DiskKind::PlaneShared,
       "maglev",
       "maglev",
       "local-hostd",
       "/maglev/shared",
-      "/comet/shared",
+      "/naim/shared",
       100,
   });
 
   const auto push_instance =
       [&](const std::string& name,
-          comet::InstanceRole role,
+          naim::InstanceRole role,
           const std::string& plane_name,
           const std::optional<std::string>& gpu_device) {
-        comet::InstanceSpec instance;
+        naim::InstanceSpec instance;
         instance.name = name;
         instance.role = role;
         instance.plane_name = plane_name;
         instance.node_name = "local-hostd";
-        instance.image = "comet/runtime:dev";
+        instance.image = "naim/runtime:dev";
         instance.command = "sleep infinity";
         instance.gpu_device = gpu_device;
         state.instances.push_back(std::move(instance));
       };
 
-  push_instance("infer-lt-cypher-ai", comet::InstanceRole::Infer, "lt-cypher-ai", std::nullopt);
-  push_instance("worker-lt-cypher-ai", comet::InstanceRole::Worker, "lt-cypher-ai", "0");
-  push_instance("infer-maglev", comet::InstanceRole::Infer, "maglev", std::nullopt);
-  push_instance("worker-maglev-a", comet::InstanceRole::Worker, "maglev", "1");
-  push_instance("worker-maglev-b", comet::InstanceRole::Worker, "maglev", "2");
+  push_instance("infer-lt-cypher-ai", naim::InstanceRole::Infer, "lt-cypher-ai", std::nullopt);
+  push_instance("worker-lt-cypher-ai", naim::InstanceRole::Worker, "lt-cypher-ai", "0");
+  push_instance("app-lt-cypher-ai", naim::InstanceRole::App, "lt-cypher-ai", std::nullopt);
+  push_instance("infer-maglev", naim::InstanceRole::Infer, "maglev", std::nullopt);
+  push_instance("worker-maglev-a", naim::InstanceRole::Worker, "maglev", "1");
+  push_instance("worker-maglev-b", naim::InstanceRole::Worker, "maglev", "2");
+  push_instance("app-maglev", naim::InstanceRole::App, "maglev", std::nullopt);
+  push_instance("skills-maglev", naim::InstanceRole::Skills, "maglev", std::nullopt);
+  push_instance("webgateway-maglev", naim::InstanceRole::Browsing, "maglev", std::nullopt);
 
   const auto make_worker_member =
       [](const std::string& name,
          const std::string& infer_instance_name,
          const std::string& gpu_device) {
-        comet::WorkerGroupMemberSpec member;
+        naim::WorkerGroupMemberSpec member;
         member.name = name;
         member.infer_instance_name = infer_instance_name;
         member.node_name = "local-hostd";
@@ -95,7 +99,7 @@ comet::DesiredState BuildMixedObservedState() {
       };
   const auto make_runtime_gpu_node =
       [](const std::string& name, const std::string& gpu_device) {
-        comet::RuntimeGpuNode node;
+        naim::RuntimeGpuNode node;
         node.name = name;
         node.node_name = "local-hostd";
         node.gpu_device = gpu_device;
@@ -119,66 +123,75 @@ comet::DesiredState BuildMixedObservedState() {
 
 void TestPlaneScopedHostObservationsPayloadFiltersForeignEntities() {
   const std::string db_path = MakeTempDbPath("plane-scoped-observations");
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
-  const comet::controller::ControllerRuntimeSupportService runtime_support_service;
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
   const std::string now = runtime_support_service.UtcNowSqlTimestamp();
 
-  comet::HostObservation observation;
+  naim::HostObservation observation;
   observation.node_name = "local-hostd";
-  observation.status = comet::HostObservationStatus::Applied;
+  observation.status = naim::HostObservationStatus::Applied;
   observation.heartbeat_at = now;
   observation.observed_state_json =
-      comet::SerializeDesiredStateJson(BuildMixedObservedState());
+      naim::SerializeDesiredStateJson(BuildMixedObservedState());
 
-  comet::RuntimeStatus lt_runtime_status;
+  naim::RuntimeStatus lt_runtime_status;
   lt_runtime_status.plane_name = "lt-cypher-ai";
   lt_runtime_status.instance_name = "infer-lt-cypher-ai";
   lt_runtime_status.runtime_backend = "llama.cpp";
   lt_runtime_status.runtime_phase = "running";
   lt_runtime_status.launch_ready = true;
-  observation.runtime_status_json = comet::SerializeRuntimeStatusJson(lt_runtime_status);
+  observation.runtime_status_json = naim::SerializeRuntimeStatusJson(lt_runtime_status);
 
-  observation.instance_runtime_json = comet::SerializeRuntimeStatusListJson({
-      comet::RuntimeProcessStatus{
+  observation.instance_runtime_json = naim::SerializeRuntimeStatusListJson({
+      naim::RuntimeProcessStatus{
           "infer-lt-cypher-ai", "infer", "local-hostd", "", "", "running", now, now, 101, 0,
           true},
-      comet::RuntimeProcessStatus{
+      naim::RuntimeProcessStatus{
           "worker-lt-cypher-ai", "worker", "local-hostd", "", "0", "running", now, now, 102, 0,
           true},
-      comet::RuntimeProcessStatus{
+      naim::RuntimeProcessStatus{
+          "app-lt-cypher-ai", "app", "local-hostd", "", "", "running", now, now, 103, 0, true},
+      naim::RuntimeProcessStatus{
           "infer-maglev", "infer", "local-hostd", "", "", "running", now, now, 201, 0, true},
-      comet::RuntimeProcessStatus{
+      naim::RuntimeProcessStatus{
           "worker-maglev-a", "worker", "local-hostd", "", "1", "running", now, now, 202, 0,
           true},
-      comet::RuntimeProcessStatus{
+      naim::RuntimeProcessStatus{
           "worker-maglev-b", "worker", "local-hostd", "", "2", "running", now, now, 203, 0,
+          true},
+      naim::RuntimeProcessStatus{
+          "app-maglev", "app", "local-hostd", "", "", "running", now, now, 204, 0, true},
+      naim::RuntimeProcessStatus{
+          "skills-maglev", "skills", "local-hostd", "", "", "running", now, now, 205, 0, true},
+      naim::RuntimeProcessStatus{
+          "webgateway-maglev", "browsing", "local-hostd", "", "", "running", now, now, 206, 0,
           true},
   });
 
-  comet::GpuTelemetrySnapshot gpu_telemetry;
+  naim::GpuTelemetrySnapshot gpu_telemetry;
   gpu_telemetry.source = "nvidia-smi";
   gpu_telemetry.collected_at = now;
   gpu_telemetry.devices = {
-      comet::GpuDeviceTelemetry{
+      naim::GpuDeviceTelemetry{
           "0", 24576, 8192, 16384, 10, 0, false,
-          {comet::GpuProcessTelemetry{102, 8192, "worker-lt-cypher-ai"}}},
-      comet::GpuDeviceTelemetry{
+          {naim::GpuProcessTelemetry{102, 8192, "worker-lt-cypher-ai"}}},
+      naim::GpuDeviceTelemetry{
           "1", 24576, 8192, 16384, 20, 0, false,
-          {comet::GpuProcessTelemetry{202, 6144, "worker-maglev-a"},
-           comet::GpuProcessTelemetry{999, 2048, "unknown"}}},
+          {naim::GpuProcessTelemetry{202, 6144, "worker-maglev-a"},
+           naim::GpuProcessTelemetry{999, 2048, "unknown"}}},
   };
-  observation.gpu_telemetry_json = comet::SerializeGpuTelemetryJson(gpu_telemetry);
+  observation.gpu_telemetry_json = naim::SerializeGpuTelemetryJson(gpu_telemetry);
 
-  comet::DiskTelemetrySnapshot disk_telemetry;
+  naim::DiskTelemetrySnapshot disk_telemetry;
   disk_telemetry.source = "hostd";
   disk_telemetry.collected_at = now;
   const auto make_disk_telemetry_record =
       [](const std::string& disk_name,
          const std::string& plane_name,
          const std::string& mount_point) {
-        comet::DiskTelemetryRecord record;
+        naim::DiskTelemetryRecord record;
         record.disk_name = disk_name;
         record.plane_name = plane_name;
         record.node_name = "local-hostd";
@@ -191,11 +204,11 @@ void TestPlaneScopedHostObservationsPayloadFiltersForeignEntities() {
       make_disk_telemetry_record("lt-shared", "lt-cypher-ai", "/lt/shared"),
       make_disk_telemetry_record("maglev-shared", "maglev", "/maglev/shared"),
   };
-  observation.disk_telemetry_json = comet::SerializeDiskTelemetryJson(disk_telemetry);
+  observation.disk_telemetry_json = naim::SerializeDiskTelemetryJson(disk_telemetry);
 
   store.UpsertHostObservation(observation);
 
-  const comet::controller::ReadModelService service(runtime_support_service);
+  const naim::controller::ReadModelService service(runtime_support_service);
   const json payload =
       service.BuildHostObservationsPayload(db_path, std::nullopt, "maglev", 300);
 
@@ -214,7 +227,7 @@ void TestPlaneScopedHostObservationsPayloadFiltersForeignEntities() {
       observed_state.at("plane_name").get<std::string>() == "maglev",
       "observed_state should be rewritten to the selected plane");
   Expect(
-      observed_state.at("instances").size() == 3,
+      observed_state.at("instances").size() == 6,
       "observed_state should contain only maglev instances");
   for (const auto& instance : observed_state.at("instances")) {
     Expect(
@@ -223,13 +236,27 @@ void TestPlaneScopedHostObservationsPayloadFiltersForeignEntities() {
   }
 
   const json instance_runtimes = item.at("instance_runtimes").at("items");
-  Expect(instance_runtimes.size() == 3, "expected only maglev runtime processes");
+  Expect(instance_runtimes.size() == 6, "expected only maglev runtime processes");
+  bool saw_app_runtime = false;
+  bool saw_skills_runtime = false;
+  bool saw_webgateway_runtime = false;
   for (const auto& runtime_item : instance_runtimes) {
     const std::string instance_name = runtime_item.at("instance_name").get<std::string>();
     Expect(
         instance_name.find("lt-cypher-ai") == std::string::npos,
         "foreign runtime process leaked into plane-scoped payload");
+    saw_app_runtime = saw_app_runtime || instance_name == "app-maglev";
+    saw_skills_runtime = saw_skills_runtime || instance_name == "skills-maglev";
+    saw_webgateway_runtime =
+        saw_webgateway_runtime || instance_name == "webgateway-maglev";
   }
+  Expect(saw_app_runtime, "app runtime status should be retained in plane-scoped payload");
+  Expect(
+      saw_skills_runtime,
+      "skills runtime status should be retained in plane-scoped payload");
+  Expect(
+      saw_webgateway_runtime,
+      "webgateway runtime status should be retained in plane-scoped payload");
 
   const json gpu_devices = item.at("gpu_telemetry").at("devices");
   Expect(gpu_devices.size() == 2, "gpu device list should remain node-scoped");

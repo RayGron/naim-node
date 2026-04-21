@@ -1,10 +1,10 @@
-#include "comet/runtime/model_adapter.h"
+#include "naim/runtime/model_adapter.h"
 
 #include <algorithm>
 #include <cctype>
 #include <sstream>
 
-namespace comet::runtime {
+namespace naim::runtime {
 
 namespace {
 
@@ -414,4 +414,4 @@ std::string ToString(ModelFamily family) {
   return "generic";
 }
 
-}  // namespace comet::runtime
+}  // namespace naim::runtime

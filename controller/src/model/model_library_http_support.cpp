@@ -10,7 +10,7 @@ HttpResponse ModelLibraryHttpSupport::build_json_response(
     int status_code,
     const nlohmann::json& payload,
     const std::map<std::string, std::string>& headers) const {
-  return comet::controller::composition_support::BuildJsonResponse(
+  return naim::controller::composition_support::BuildJsonResponse(
       status_code,
       payload,
       headers);

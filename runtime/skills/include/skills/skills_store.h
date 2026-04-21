@@ -9,7 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
-namespace comet::skills {
+namespace naim::skills {
 
 class ApiError final : public std::exception {
  public:
@@ -50,7 +50,7 @@ class SkillsStore final {
  private:
   struct SkillArrays {
     std::vector<std::string> session_ids;
-    std::vector<std::string> comet_links;
+    std::vector<std::string> naim_links;
   };
 
   void InitializeSchema();
@@ -67,7 +67,7 @@ class SkillsStore final {
   void ReplaceArraysLocked(
       const std::string& skill_id,
       const std::vector<std::string>& session_ids,
-      const std::vector<std::string>& comet_links);
+      const std::vector<std::string>& naim_links);
   std::optional<nlohmann::json> FindSkillLocked(
       const std::string& skill_id,
       bool enabled_only);
@@ -77,4 +77,4 @@ class SkillsStore final {
   std::mutex mutex_;
 };
 
-}  // namespace comet::skills
+}  // namespace naim::skills

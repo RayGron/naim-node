@@ -1,44 +1,58 @@
 #include "plane/plane_registry_service.h"
 
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
 #include "host/host_assignment_reconciliation_service.h"
-#include "plane/plane_deletion_support.h"
+#include "plane/plane_placement_payload_builder.h"
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 
-PlaneRegistryService::PlaneRegistryService(Deps deps) : deps_(std::move(deps)) {}
+PlaneRegistryService::PlaneRegistryService(
+    std::shared_ptr<const PlaneLifecycleSupport> lifecycle_support,
+    std::shared_ptr<const PlaneRegistryQuerySupport> query_support)
+    : lifecycle_support_(std::move(lifecycle_support)),
+      query_support_(std::move(query_support)) {}
 
 json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const {
-  if (!deps_.can_finalize_deleted_plane || !deps_.event_appender ||
-      !deps_.filter_host_observations_for_plane ||
-      !deps_.compute_effective_applied_generation ||
-      !deps_.build_latest_assignments_by_node) {
+  if (!lifecycle_support_ || !query_support_) {
     throw std::runtime_error(
         "plane registry service dependencies are not configured");
   }
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const HostAssignmentReconciliationService reconciliation_service;
 
-  plane_deletion_support::FinalizeDeletedPlanesIfReady(
-      store,
-      deps_.can_finalize_deleted_plane,
-      deps_.event_appender);
+  for (const auto& plane : store.LoadPlanes()) {
+    if (plane.state != "deleting" ||
+        !lifecycle_support_->CanFinalizeDeletedPlane(store, plane.name)) {
+      continue;
+    }
+    store.DeletePlane(plane.name);
+    lifecycle_support_->AppendPlaneEvent(
+        store,
+        "deleted",
+        "plane deleted from controller registry after cleanup convergence",
+        nlohmann::json{
+            {"plane_name", plane.name},
+            {"deleted_generation", plane.generation},
+        },
+        "");
+  }
 
   json items = json::array();
   for (const auto& plane : store.LoadPlanes()) {
     const auto desired_state = store.LoadDesiredState(plane.name);
     const auto desired_generation = store.LoadDesiredGeneration(plane.name);
-    const auto observations = deps_.filter_host_observations_for_plane(
+    const auto observations = query_support_->FilterHostObservationsForPlane(
         store.LoadHostObservations(),
         plane.name);
     const int effective_applied_generation =
-        deps_.compute_effective_applied_generation(
+        query_support_->ComputeEffectiveAppliedGeneration(
             plane,
             desired_state,
             desired_generation,
@@ -50,16 +64,16 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
     const auto assignments =
         store.LoadHostAssignments(std::nullopt, std::nullopt, plane.name);
     const auto latest_assignments_by_node =
-        deps_.build_latest_assignments_by_node(assignments);
+        query_support_->BuildLatestAssignmentsByNode(assignments);
     int failed_assignments = 0;
     int in_flight_assignments = 0;
     for (const auto& [node_name, assignment] : latest_assignments_by_node) {
       (void)node_name;
-      if (assignment.status == comet::HostAssignmentStatus::Failed) {
+      if (assignment.status == naim::HostAssignmentStatus::Failed) {
         ++failed_assignments;
       } else if (
-          assignment.status == comet::HostAssignmentStatus::Pending ||
-          assignment.status == comet::HostAssignmentStatus::Claimed) {
+          assignment.status == naim::HostAssignmentStatus::Pending ||
+          assignment.status == naim::HostAssignmentStatus::Claimed) {
         ++in_flight_assignments;
       }
     }
@@ -85,6 +99,10 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
         {"shared_disk_name", plane.shared_disk_name},
         {"control_root", plane.control_root},
         {"created_at", plane.created_at},
+        {"placement",
+         desired_state.has_value()
+             ? PlanePlacementPayloadBuilder(*desired_state).Build()
+             : json(nullptr)},
         {"node_count",
          desired_state.has_value() ? json(desired_state->nodes.size())
                                    : json(nullptr)},
@@ -98,10 +116,10 @@ json PlaneRegistryService::BuildPlanesPayload(const std::string& db_path) const 
   }
 
   return json{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"items", std::move(items)},
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

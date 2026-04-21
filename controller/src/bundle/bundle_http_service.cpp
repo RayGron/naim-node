@@ -5,8 +5,8 @@
 using nlohmann::json;
 
 BundleHttpService::BundleHttpService(
-    const comet::controller::IBundleCliService& bundle_cli_service,
-    comet::controller::ControllerRequestSupport request_support)
+    const naim::controller::IBundleCliService& bundle_cli_service,
+    naim::controller::ControllerRequestSupport request_support)
     : bundle_cli_service_(bundle_cli_service),
       request_support_(std::move(request_support)) {}
 
@@ -47,7 +47,7 @@ std::optional<HttpResponse> BundleHttpService::HandleRequest(
     try {
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               bundle_cli_service_.ExecuteValidateBundleAction(*bundle_dir)),
           {});
     } catch (const std::exception& error) {
@@ -76,7 +76,7 @@ std::optional<HttpResponse> BundleHttpService::HandleRequest(
     try {
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               bundle_cli_service_.ExecutePreviewBundleAction(
                   *bundle_dir,
                   FindQueryString(request, "node"))),
@@ -107,7 +107,7 @@ std::optional<HttpResponse> BundleHttpService::HandleRequest(
     try {
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               bundle_cli_service_.ExecuteImportBundleAction(db_path, *bundle_dir)),
           {});
     } catch (const std::exception& error) {
@@ -136,7 +136,7 @@ std::optional<HttpResponse> BundleHttpService::HandleRequest(
     try {
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               bundle_cli_service_.ExecuteApplyBundleAction(
                   db_path,
                   *bundle_dir,

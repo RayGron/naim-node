@@ -7,7 +7,7 @@
 
 #include "plane/plane_deletion_support.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerStateService {
  public:
@@ -26,4 +26,4 @@ class ControllerStateService {
   Deps deps_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

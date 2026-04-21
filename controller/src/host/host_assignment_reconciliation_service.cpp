@@ -2,11 +2,11 @@
 
 #include <set>
 
-namespace comet::controller {
+namespace naim::controller {
 
 HostAssignmentReconciliationService::Result
 HostAssignmentReconciliationService::Reconcile(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::optional<std::string>& plane_name) const {
   const auto claimed_assignments = LoadClaimedApplyAssignments(store, plane_name);
   if (claimed_assignments.empty()) {
@@ -26,10 +26,10 @@ HostAssignmentReconciliationService::Reconcile(
 
 HostAssignmentReconciliationService::Result
 HostAssignmentReconciliationService::ReconcilePlane(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& plane_name,
-    const std::vector<comet::HostAssignment>& claimed_assignments,
-    const std::vector<comet::HostObservation>& observations) const {
+    const std::vector<naim::HostAssignment>& claimed_assignments,
+    const std::vector<naim::HostObservation>& observations) const {
   const auto plane = store.LoadPlane(plane_name);
   const auto latest_assignments_by_node =
       BuildLatestAssignmentsByNode(store.LoadHostAssignments(std::nullopt, std::nullopt, plane_name));
@@ -43,7 +43,7 @@ HostAssignmentReconciliationService::ReconcilePlane(
     if (ShouldSupersedeClaimedAssignment(assignment, latest_assignments_by_node)) {
       if (store.TransitionClaimedHostAssignment(
               assignment.id,
-              comet::HostAssignmentStatus::Superseded,
+              naim::HostAssignmentStatus::Superseded,
               "superseded by controller reconciliation after a newer assignment replaced it")) {
         ++result.superseded;
       }
@@ -54,7 +54,7 @@ HostAssignmentReconciliationService::ReconcilePlane(
     if (ShouldMarkClaimedAssignmentApplied(assignment, plane, observation)) {
       if (store.TransitionClaimedHostAssignment(
               assignment.id,
-              comet::HostAssignmentStatus::Applied,
+              naim::HostAssignmentStatus::Applied,
               "marked applied by controller reconciliation after plane convergence")) {
         ++result.applied;
       }
@@ -64,13 +64,13 @@ HostAssignmentReconciliationService::ReconcilePlane(
   return result;
 }
 
-std::vector<comet::HostAssignment>
+std::vector<naim::HostAssignment>
 HostAssignmentReconciliationService::LoadClaimedApplyAssignments(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::optional<std::string>& plane_name) const {
-  std::vector<comet::HostAssignment> claimed_apply_assignments;
+  std::vector<naim::HostAssignment> claimed_apply_assignments;
   for (const auto& assignment :
-       store.LoadHostAssignments(std::nullopt, comet::HostAssignmentStatus::Claimed, plane_name)) {
+       store.LoadHostAssignments(std::nullopt, naim::HostAssignmentStatus::Claimed, plane_name)) {
     if (assignment.assignment_type == "apply-node-state") {
       claimed_apply_assignments.push_back(assignment);
     }
@@ -79,7 +79,7 @@ HostAssignmentReconciliationService::LoadClaimedApplyAssignments(
 }
 
 std::vector<std::string> HostAssignmentReconciliationService::BuildPlaneNames(
-    const std::vector<comet::HostAssignment>& claimed_assignments) const {
+    const std::vector<naim::HostAssignment>& claimed_assignments) const {
   std::set<std::string> plane_names;
   for (const auto& assignment : claimed_assignments) {
     plane_names.insert(assignment.plane_name);
@@ -87,10 +87,10 @@ std::vector<std::string> HostAssignmentReconciliationService::BuildPlaneNames(
   return {plane_names.begin(), plane_names.end()};
 }
 
-std::map<std::string, comet::HostAssignment>
+std::map<std::string, naim::HostAssignment>
 HostAssignmentReconciliationService::BuildLatestAssignmentsByNode(
-    const std::vector<comet::HostAssignment>& assignments) const {
-  std::map<std::string, comet::HostAssignment> latest_assignments_by_node;
+    const std::vector<naim::HostAssignment>& assignments) const {
+  std::map<std::string, naim::HostAssignment> latest_assignments_by_node;
   for (const auto& assignment : assignments) {
     auto it = latest_assignments_by_node.find(assignment.node_name);
     if (it == latest_assignments_by_node.end() || assignment.id > it->second.id) {
@@ -100,9 +100,9 @@ HostAssignmentReconciliationService::BuildLatestAssignmentsByNode(
   return latest_assignments_by_node;
 }
 
-std::optional<comet::HostObservation>
+std::optional<naim::HostObservation>
 HostAssignmentReconciliationService::FindObservationForNode(
-    const std::vector<comet::HostObservation>& observations,
+    const std::vector<naim::HostObservation>& observations,
     const std::string& node_name) const {
   for (const auto& observation : observations) {
     if (observation.node_name == node_name) {
@@ -113,8 +113,8 @@ HostAssignmentReconciliationService::FindObservationForNode(
 }
 
 bool HostAssignmentReconciliationService::ShouldSupersedeClaimedAssignment(
-    const comet::HostAssignment& assignment,
-    const std::map<std::string, comet::HostAssignment>& latest_assignments_by_node) const {
+    const naim::HostAssignment& assignment,
+    const std::map<std::string, naim::HostAssignment>& latest_assignments_by_node) const {
   const auto latest_assignment_it = latest_assignments_by_node.find(assignment.node_name);
   if (latest_assignment_it == latest_assignments_by_node.end()) {
     return false;
@@ -123,20 +123,23 @@ bool HostAssignmentReconciliationService::ShouldSupersedeClaimedAssignment(
 }
 
 bool HostAssignmentReconciliationService::ShouldMarkClaimedAssignmentApplied(
-    const comet::HostAssignment& assignment,
-    const std::optional<comet::PlaneRecord>& plane,
-    const std::optional<comet::HostObservation>& observation) const {
+    const naim::HostAssignment& assignment,
+    const std::optional<naim::PlaneRecord>& plane,
+    const std::optional<naim::HostObservation>& observation) const {
   if (!plane.has_value() || plane->applied_generation < assignment.desired_generation) {
     return false;
   }
-  if (!observation.has_value()) {
-    return true;
+  if (!observation.has_value() ||
+      observation->plane_name != assignment.plane_name ||
+      observation->status == naim::HostObservationStatus::Failed) {
+    return false;
   }
-  if (observation->status == comet::HostObservationStatus::Failed) {
+  if (!observation->last_assignment_id.has_value() ||
+      *observation->last_assignment_id < assignment.id) {
     return false;
   }
   return observation->applied_generation.has_value() &&
          *observation->applied_generation >= assignment.desired_generation;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

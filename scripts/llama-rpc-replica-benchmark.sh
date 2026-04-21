@@ -33,12 +33,12 @@ else
 fi
 BENCH_ROOT="${BENCH_ROOT:-$BENCH_ROOT_DEFAULT}"
 
-RPC_SERVER_BIN="${COMET_RPC_SERVER_BIN:-$BUILD_DIR/bin/rpc-server}"
-LLAMA_SERVER_BIN="${COMET_LLAMA_SERVER_BIN:-$BUILD_DIR/bin/llama-server}"
-WORKER_BIN="$BUILD_DIR/comet-workerd"
-INFER_BIN="$BUILD_DIR/comet-inferctl"
+RPC_SERVER_BIN="${NAIM_RPC_SERVER_BIN:-$BUILD_DIR/bin/rpc-server}"
+LLAMA_SERVER_BIN="${NAIM_LLAMA_SERVER_BIN:-$BUILD_DIR/bin/llama-server}"
+WORKER_BIN="$BUILD_DIR/naim-workerd"
+INFER_BIN="$BUILD_DIR/naim-inferctl"
 BENCH_BIN="$ROOT_DIR/scripts/benchmark-openai-multi-base.sh"
-DEVTOOL_BIN="$ROOT_DIR/scripts/comet-devtool.sh"
+DEVTOOL_BIN="$ROOT_DIR/scripts/naim-devtool.sh"
 
 cleanup() {
   set +e
@@ -87,32 +87,32 @@ for ((idx=0; idx<REPLICA_COUNT; idx++)); do
   rpc_port=$((RPC_BASE_PORT + idx * 100))
 
   CUDA_VISIBLE_DEVICES="${GPUS[$idx]}" \
-  COMET_RPC_SERVER_BIN="$RPC_SERVER_BIN" \
-  COMET_PLANE_NAME="llama-rpc-replica-$idx" \
-  COMET_INSTANCE_NAME="worker-$idx" \
-  COMET_INSTANCE_ROLE=worker \
-  COMET_NODE_NAME=local-hostd \
-  COMET_CONTROL_ROOT="$replica_root/control" \
-  COMET_WORKER_RUNTIME_STATUS_PATH="$replica_root/control/worker-group/worker-$idx.json" \
-  COMET_WORKER_BOOT_MODE=llama-rpc \
-  COMET_DISTRIBUTED_BACKEND=llama_rpc \
-  COMET_WORKER_RPC_HOST=127.0.0.1 \
-  COMET_WORKER_RPC_PORT="$rpc_port" \
-  COMET_WORKER_RPC_ENDPOINT="127.0.0.1:$rpc_port" \
-  COMET_WORKER_THREADS="$THREADS" \
-  COMET_WORKER_CTX_SIZE="$CTX_SIZE" \
-  COMET_PRIVATE_DISK_PATH="$replica_root/worker-private" \
+  NAIM_RPC_SERVER_BIN="$RPC_SERVER_BIN" \
+  NAIM_PLANE_NAME="llama-rpc-replica-$idx" \
+  NAIM_INSTANCE_NAME="worker-$idx" \
+  NAIM_INSTANCE_ROLE=worker \
+  NAIM_NODE_NAME=local-hostd \
+  NAIM_CONTROL_ROOT="$replica_root/control" \
+  NAIM_WORKER_RUNTIME_STATUS_PATH="$replica_root/control/worker-group/worker-$idx.json" \
+  NAIM_WORKER_BOOT_MODE=llama-rpc \
+  NAIM_DISTRIBUTED_BACKEND=llama_rpc \
+  NAIM_WORKER_RPC_HOST=127.0.0.1 \
+  NAIM_WORKER_RPC_PORT="$rpc_port" \
+  NAIM_WORKER_RPC_ENDPOINT="127.0.0.1:$rpc_port" \
+  NAIM_WORKER_THREADS="$THREADS" \
+  NAIM_WORKER_CTX_SIZE="$CTX_SIZE" \
+  NAIM_PRIVATE_DISK_PATH="$replica_root/worker-private" \
   "$WORKER_BIN" > "$replica_root/worker.log" 2>&1 &
   echo $! >> "$BENCH_ROOT/workers.pids"
 
   CUDA_VISIBLE_DEVICES='' \
-  COMET_INFER_PROFILES_PATH="$ROOT_DIR/runtime/infer/runtime-profiles.json" \
-  COMET_LLAMA_SERVER_BIN="$LLAMA_SERVER_BIN" \
-  COMET_CONTROL_ROOT="$replica_root/control" \
-  COMET_PLANE_NAME="llama-rpc-replica-$idx" \
-  COMET_INSTANCE_NAME="infer-llama-rpc-replica-$idx" \
-  COMET_INSTANCE_ROLE=infer \
-  COMET_NODE_NAME=local-hostd \
+  NAIM_INFER_PROFILES_PATH="$ROOT_DIR/runtime/infer/runtime-profiles.json" \
+  NAIM_LLAMA_SERVER_BIN="$LLAMA_SERVER_BIN" \
+  NAIM_CONTROL_ROOT="$replica_root/control" \
+  NAIM_PLANE_NAME="llama-rpc-replica-$idx" \
+  NAIM_INSTANCE_NAME="infer-llama-rpc-replica-$idx" \
+  NAIM_INSTANCE_ROLE=infer \
+  NAIM_NODE_NAME=local-hostd \
   "$INFER_BIN" launch-runtime --config "$replica_root/infer-runtime.json" --backend auto \
     > "$replica_root/infer.log" 2>&1 &
   echo $! >> "$BENCH_ROOT/infer.pids"

@@ -1,8 +1,8 @@
-#include "comet/state/observation_repository.h"
+#include "naim/state/observation_repository.h"
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -138,4 +138,4 @@ HostObservation ObservationRepository::ReadHostObservation(sqlite3_stmt* stateme
   return observation;
 }
 
-}  // namespace comet
+}  // namespace naim

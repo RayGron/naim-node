@@ -14,11 +14,11 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 #include "http/controller_http_types.h"
 #include "http/controller_http_transport.h"
 
-namespace comet::browsing {
+namespace naim::browsing {
 
 class CefBrowserBackend;
 
@@ -69,9 +69,9 @@ struct BrowsingRuntimeConfig {
   std::string node_name = "unknown";
   std::string control_root;
   std::string controller_url = "http://controller.internal:18080";
-  std::filesystem::path status_path = "/comet/private/webgateway-runtime-status.json";
-  std::filesystem::path state_root = "/comet/private/sessions";
-  std::filesystem::path ready_path = "/tmp/comet-ready";
+  std::filesystem::path status_path = "/naim/private/webgateway-runtime-status.json";
+  std::filesystem::path state_root = "/naim/private/sessions";
+  std::filesystem::path ready_path = "/tmp/naim-ready";
   std::string listen_host = "0.0.0.0";
   int port = 18130;
   BrowsingPolicy policy;
@@ -126,7 +126,7 @@ class BrowsingServer final {
   };
 
   void AcceptLoop();
-  void HandleClient(comet::platform::SocketHandle client_fd);
+  void HandleClient(naim::platform::SocketHandle client_fd);
   HttpResponse HandleRequest(const HttpRequest& request);
   HttpResponse HandleGet(const HttpRequest& request);
   HttpResponse HandlePost(const HttpRequest& request);
@@ -165,10 +165,10 @@ class BrowsingServer final {
 
   BrowsingRuntimeConfig config_;
   std::atomic<bool> stop_requested_{false};
-  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
   std::unique_ptr<CefBrowserBackend> cef_backend_;
   mutable std::mutex sessions_mutex_;
   std::unordered_map<std::string, SessionRecord> sessions_;
 };
 
-}  // namespace comet::browsing
+}  // namespace naim::browsing

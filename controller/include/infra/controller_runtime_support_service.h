@@ -5,23 +5,23 @@
 #include <string>
 #include <vector>
 
-#include "comet/core/platform_compat.h"
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/core/platform_compat.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerRuntimeSupportService {
  public:
-  std::map<std::string, comet::NodeAvailabilityOverride> BuildAvailabilityOverrideMap(
-      const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) const;
+  std::map<std::string, naim::NodeAvailabilityOverride> BuildAvailabilityOverrideMap(
+      const std::vector<naim::NodeAvailabilityOverride>& availability_overrides) const;
 
-  comet::NodeAvailability ResolveNodeAvailability(
-      const std::map<std::string, comet::NodeAvailabilityOverride>& availability_overrides,
+  naim::NodeAvailability ResolveNodeAvailability(
+      const std::map<std::string, naim::NodeAvailabilityOverride>& availability_overrides,
       const std::string& node_name) const;
 
-  std::optional<comet::HostObservation> FindHostObservationForNode(
-      const std::vector<comet::HostObservation>& observations,
+  std::optional<naim::HostObservation> FindHostObservationForNode(
+      const std::vector<naim::HostObservation>& observations,
       const std::string& node_name) const;
 
   std::optional<long long> HeartbeatAgeSeconds(const std::string& heartbeat_at) const;
@@ -32,26 +32,26 @@ class ControllerRuntimeSupportService {
       const std::optional<long long>& age_seconds,
       int stale_after_seconds) const;
 
-  std::optional<comet::RuntimeStatus> ParseRuntimeStatus(
-      const comet::HostObservation& observation) const;
+  std::optional<naim::RuntimeStatus> ParseRuntimeStatus(
+      const naim::HostObservation& observation) const;
 
-  std::vector<comet::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
-      const comet::HostObservation& observation) const;
+  std::vector<naim::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
+      const naim::HostObservation& observation) const;
 
-  std::optional<comet::GpuTelemetrySnapshot> ParseGpuTelemetry(
-      const comet::HostObservation& observation) const;
+  std::optional<naim::GpuTelemetrySnapshot> ParseGpuTelemetry(
+      const naim::HostObservation& observation) const;
 
-  std::optional<comet::DiskTelemetrySnapshot> ParseDiskTelemetry(
-      const comet::HostObservation& observation) const;
+  std::optional<naim::DiskTelemetrySnapshot> ParseDiskTelemetry(
+      const naim::HostObservation& observation) const;
 
-  std::optional<comet::NetworkTelemetrySnapshot> ParseNetworkTelemetry(
-      const comet::HostObservation& observation) const;
+  std::optional<naim::NetworkTelemetrySnapshot> ParseNetworkTelemetry(
+      const naim::HostObservation& observation) const;
 
-  std::optional<comet::CpuTelemetrySnapshot> ParseCpuTelemetry(
-      const comet::HostObservation& observation) const;
+  std::optional<naim::CpuTelemetrySnapshot> ParseCpuTelemetry(
+      const naim::HostObservation& observation) const;
 
  private:
   std::time_t ToUtcTime(std::tm* timestamp) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

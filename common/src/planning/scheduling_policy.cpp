@@ -1,4 +1,4 @@
-#include "comet/planning/scheduling_policy.h"
+#include "naim/planning/scheduling_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -1003,4 +1003,4 @@ void RequireSchedulingPolicy(const DesiredState& state) {
   throw std::runtime_error(message.str());
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -3,7 +3,7 @@
 #include "app/controller_composition_root.h"
 #include "app/controller_main_includes.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerApp::ControllerApp(int argc, char** argv) : cli_(argc, argv) {}
 
@@ -53,4 +53,4 @@ std::string ControllerApp::ResolveDbPath(const std::optional<std::string>& db_ar
   return (std::filesystem::path("var") / "controller.sqlite").string();
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

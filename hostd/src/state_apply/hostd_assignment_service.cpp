@@ -4,11 +4,11 @@
 #include <stdexcept>
 
 #include "backend/local_db_hostd_backend.h"
-#include "comet/state/state_json.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/state_json.h"
+#include "naim/state/sqlite_store.h"
 #include "state_apply/hostd_assignment_lock.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 HostdAssignmentService::HostdAssignmentService(
     const IHostdBackendFactory& backend_factory,
@@ -43,7 +43,7 @@ void HostdAssignmentService::ApplyStateOps(
     const std::optional<std::string>& runtime_root,
     const std::string& state_root,
     const ComposeMode compose_mode) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   LocalDbHostdBackend backend(db_path);
   const auto state = store.LoadDesiredState();
@@ -52,10 +52,10 @@ void HostdAssignmentService::ApplyStateOps(
   }
   const auto desired_generation = store.LoadDesiredGeneration();
 
-  const comet::DesiredState rebased_full_state =
+  const naim::DesiredState rebased_full_state =
       support_.RebaseStateForRuntimeRoot(*state, storage_root, runtime_root);
-  const comet::DesiredState desired_node_state =
-      comet::SliceDesiredStateForNode(rebased_full_state, node_name);
+  const naim::DesiredState desired_node_state =
+      naim::SliceDesiredStateForNode(rebased_full_state, node_name);
 
   std::cout << "db=" << db_path << "\n";
   try {
@@ -74,8 +74,9 @@ void HostdAssignmentService::ApplyStateOps(
         backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
-            comet::HostObservationStatus::Applied,
+            naim::HostObservationStatus::Applied,
             desired_generation.has_value()
                 ? "applied desired generation " + std::to_string(*desired_generation)
                 : "applied desired state"),
@@ -85,8 +86,9 @@ void HostdAssignmentService::ApplyStateOps(
         backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
-            comet::HostObservationStatus::Failed,
+            naim::HostObservationStatus::Failed,
             error.what()),
         "hostd observed-state-update");
     throw;
@@ -98,6 +100,7 @@ void HostdAssignmentService::ApplyNextAssignment(
     const std::optional<std::string>& controller_url,
     const std::optional<std::string>& host_private_key_path,
     const std::optional<std::string>& controller_fingerprint,
+    const std::optional<std::string>& onboarding_key,
     const std::string& node_name,
     const std::string& storage_root,
     const std::optional<std::string>& runtime_root,
@@ -113,7 +116,10 @@ void HostdAssignmentService::ApplyNextAssignment(
       db_path,
       controller_url,
       host_private_key_path,
-      controller_fingerprint);
+      controller_fingerprint,
+      onboarding_key,
+      node_name,
+      storage_root);
   const auto assignment = backend->ClaimNextHostAssignment(node_name);
   if (!assignment.has_value()) {
     std::cout << "no pending assignments for node=" << node_name << "\n";
@@ -140,6 +146,85 @@ void HostdAssignmentService::ApplyNextAssignment(
       assignment->status_message.empty() ? "" : " [" + assignment->status_message + "]";
 
   try {
+    if (assignment->assignment_type == "model-library-download") {
+      support_.PublishAssignmentProgress(
+          backend.get(),
+          assignment->id,
+          support_.BuildAssignmentProgressPayload(
+              "starting",
+              "Starting model download",
+              "Storage node accepted the model library download assignment.",
+              5,
+              assignment->plane_name,
+              node_name));
+      support_.DownloadModelLibraryArtifacts(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      support_.PublishAssignmentProgress(
+          backend.get(),
+          assignment->id,
+          support_.BuildAssignmentProgressPayload(
+              "completed",
+              "Model download completed",
+              "Storage node finished the model library download assignment.",
+              100,
+              assignment->plane_name,
+              node_name));
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "downloaded model library artifacts on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      support_.AppendHostdEvent(
+          *backend,
+          "model-library",
+          "downloaded",
+          "downloaded model library artifacts on node " + node_name,
+          nlohmann::json{
+              {"assignment_type", assignment->assignment_type},
+              {"attempt_count", assignment->attempt_count},
+              {"max_attempts", assignment->max_attempts},
+          },
+          assignment->plane_name,
+          node_name,
+          "",
+          assignment->id,
+          std::nullopt,
+          "info");
+      return;
+    }
+    if (assignment->assignment_type == "model-artifact-read-chunk") {
+      support_.ReadModelArtifactChunk(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "read model artifact chunk on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      return;
+    }
+    if (assignment->assignment_type == "model-artifact-build-manifest") {
+      support_.BuildModelArtifactManifest(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "built model artifact manifest on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      return;
+    }
+
     if (assignment->assignment_type != "apply-node-state" &&
         assignment->assignment_type != "drain-node-state" &&
         assignment->assignment_type != "stop-plane-state" &&
@@ -148,8 +233,8 @@ void HostdAssignmentService::ApplyNextAssignment(
       throw std::runtime_error("unsupported assignment type '" + assignment->assignment_type + "'");
     }
 
-    const comet::DesiredState rebased_state = support_.RebaseStateForRuntimeRoot(
-        comet::DeserializeDesiredStateJson(assignment->desired_state_json),
+    const naim::DesiredState rebased_state = support_.RebaseStateForRuntimeRoot(
+        naim::DeserializeDesiredStateJson(assignment->desired_state_json),
         storage_root,
         runtime_root);
     const bool is_drain_assignment = assignment->assignment_type == "drain-node-state";
@@ -188,8 +273,9 @@ void HostdAssignmentService::ApplyNextAssignment(
         *backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
-            comet::HostObservationStatus::Applying,
+            naim::HostObservationStatus::Applying,
             applying_status_message,
             assignment->id),
         "hostd observed-state-update");
@@ -221,8 +307,9 @@ void HostdAssignmentService::ApplyNextAssignment(
         *backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
-            comet::HostObservationStatus::Applied,
+            naim::HostObservationStatus::Applied,
             (is_drain_assignment ? "drained node for desired generation "
                                  : (is_stop_assignment
                                         ? "stopped plane state for desired generation "
@@ -235,7 +322,7 @@ void HostdAssignmentService::ApplyNextAssignment(
 
     backend->TransitionClaimedHostAssignment(
         assignment->id,
-        comet::HostAssignmentStatus::Applied,
+        naim::HostAssignmentStatus::Applied,
         (is_drain_assignment ? "drained node for desired generation "
                              : (is_stop_assignment
                                     ? "stopped plane state for desired generation "
@@ -279,22 +366,23 @@ void HostdAssignmentService::ApplyNextAssignment(
         *backend,
         support_.BuildObservedStateSnapshot(
             node_name,
+            storage_root,
             state_root,
-            comet::HostObservationStatus::Failed,
+            naim::HostObservationStatus::Failed,
             error_message,
             assignment->id),
         "hostd observed-state-update");
     if (assignment->attempt_count < assignment->max_attempts) {
       backend->TransitionClaimedHostAssignment(
           assignment->id,
-          comet::HostAssignmentStatus::Pending,
+          naim::HostAssignmentStatus::Pending,
           "attempt " + std::to_string(assignment->attempt_count) + "/" +
               std::to_string(assignment->max_attempts) + " failed: " +
               error_message + assignment_context);
     } else {
       backend->TransitionClaimedHostAssignment(
           assignment->id,
-          comet::HostAssignmentStatus::Failed,
+          naim::HostAssignmentStatus::Failed,
           "attempt " + std::to_string(assignment->attempt_count) + "/" +
               std::to_string(assignment->max_attempts) + " exhausted: " +
               error_message + assignment_context);
@@ -320,4 +408,4 @@ void HostdAssignmentService::ApplyNextAssignment(
   }
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

@@ -5,12 +5,12 @@
 #include <string>
 #include <vector>
 
-#include "comet/state/sqlite_store.h"
-#include "comet/state/state_json.h"
+#include "naim/state/sqlite_store.h"
+#include "naim/state/state_json.h"
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 
 ControllerStateService::ControllerStateService(Deps deps) : deps_(std::move(deps)) {}
 
@@ -18,7 +18,7 @@ json ControllerStateService::BuildPayload(
     const std::string& db_path,
     const std::optional<std::string>& plane_name) const {
   json payload{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", db_path},
       {"db_exists", std::filesystem::exists(db_path)},
       {"plane_name", plane_name.has_value() ? json(*plane_name) : json(nullptr)},
@@ -31,7 +31,7 @@ json ControllerStateService::BuildPayload(
        }},
   };
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   if (plane_name.has_value()) {
@@ -55,7 +55,7 @@ json ControllerStateService::BuildPayload(
       plane_name.has_value() ? store.LoadDesiredState(*plane_name)
                              : store.LoadDesiredState();
   const auto desired_states =
-      plane_name.has_value() ? std::vector<comet::DesiredState>{}
+      plane_name.has_value() ? std::vector<naim::DesiredState>{}
                              : store.LoadDesiredStates();
 
   json plane_items = json::array();
@@ -83,9 +83,9 @@ json ControllerStateService::BuildPayload(
     json desired_state_v2_items = json::array();
     for (const auto& state : desired_states) {
       desired_state_items.push_back(
-          json::parse(comet::SerializeDesiredStateJson(state)));
+          json::parse(naim::SerializeDesiredStateJson(state)));
       desired_state_v2_items.push_back(
-          json::parse(comet::SerializeDesiredStateV2Json(state)));
+          json::parse(naim::SerializeDesiredStateV2Json(state)));
     }
     payload["desired_states"] = std::move(desired_state_items);
     payload["desired_states_v2"] = std::move(desired_state_v2_items);
@@ -96,13 +96,13 @@ json ControllerStateService::BuildPayload(
 
   payload["desired_state"] =
       desired_state.has_value()
-          ? json::parse(comet::SerializeDesiredStateJson(*desired_state))
+          ? json::parse(naim::SerializeDesiredStateJson(*desired_state))
           : json(nullptr);
   payload["desired_state_v2"] =
       desired_state.has_value()
-          ? json::parse(comet::SerializeDesiredStateV2Json(*desired_state))
+          ? json::parse(naim::SerializeDesiredStateV2Json(*desired_state))
           : json(nullptr);
   return payload;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -1,10 +1,10 @@
-#include "comet/runtime/model_adapter.h"
+#include "naim/runtime/model_adapter.h"
 
 #include <stdexcept>
 
-using comet::runtime::ModelAdapter;
-using comet::runtime::ModelFamily;
-using comet::runtime::ModelIdentity;
+using naim::runtime::ModelAdapter;
+using naim::runtime::ModelFamily;
+using naim::runtime::ModelIdentity;
 using nlohmann::json;
 
 namespace {

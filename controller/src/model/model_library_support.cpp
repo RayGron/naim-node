@@ -4,14 +4,14 @@
 #include "app/controller_time_support.h"
 
 ModelLibrarySupport::ModelLibrarySupport(
-    const comet::controller::ControllerRequestSupport& request_support)
+    const naim::controller::ControllerRequestSupport& request_support)
     : request_support_(request_support) {}
 
 HttpResponse ModelLibrarySupport::build_json_response(
     int status_code,
     const nlohmann::json& payload,
     const std::map<std::string, std::string>& headers) const {
-  return comet::controller::composition_support::BuildJsonResponse(
+  return naim::controller::composition_support::BuildJsonResponse(
       status_code,
       payload,
       headers);
@@ -25,9 +25,9 @@ nlohmann::json ModelLibrarySupport::parse_json_request_body(
 std::optional<std::string> ModelLibrarySupport::find_query_string(
     const HttpRequest& request,
     const std::string& key) const {
-  return comet::controller::composition_support::FindQueryString(request, key);
+  return naim::controller::composition_support::FindQueryString(request, key);
 }
 
 std::string ModelLibrarySupport::utc_now_sql_timestamp() const {
-  return comet::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
+  return naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
 }

@@ -13,81 +13,24 @@ wait_for_http() {
   done
   if [[ -n "${log_path}" && -f "${log_path}" ]]; then
     echo "check: HTTP endpoint did not become ready: ${url}" >&2
-    echo "check: server log (${log_path}):" >&2
     tail -n 40 "${log_path}" >&2 || true
   fi
   return 1
 }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/.." && pwd)"
+source "${script_dir}/naim-live-v2-lib.sh"
 build_dir="$("${script_dir}/print-build-dir.sh")"
-db_path="${PWD}/var/controller.sqlite"
-artifacts_root="${PWD}/var/artifacts"
-runtime_root="${PWD}/var/runtime"
-state_root="${PWD}/var/hostd-state"
-bad_state_root="${PWD}/var/hostd-state-blocker"
-infer_model_root="${PWD}/var/infer-model-state"
-infer_model_config="${infer_model_root}/infer-runtime.json"
-runtime_infer_config="${runtime_root}/runtime-infer-local.json"
-parallel_db_path="${PWD}/var/controller-parallel.sqlite"
-parallel_artifacts_root="${PWD}/var/artifacts-parallel"
-parallel_runtime_root="${PWD}/var/runtime-parallel"
-parallel_state_root="${PWD}/var/hostd-state-parallel"
-preemption_artifacts_root="${PWD}/var/artifacts-preemption"
-preemption_runtime_root="${PWD}/var/runtime-preemption"
-preemption_state_root="${PWD}/var/hostd-state-preemption"
-rebalance_db_path="${PWD}/var/controller-rebalance.sqlite"
-rebalance_artifacts_root="${PWD}/var/artifacts-rebalance"
-rebalance_runtime_root="${PWD}/var/runtime-rebalance"
-rebalance_state_root="${PWD}/var/hostd-state-rebalance"
-threshold_db_path="${PWD}/var/controller-threshold.sqlite"
-threshold_artifacts_root="${PWD}/var/artifacts-threshold"
-threshold_runtime_root="${PWD}/var/runtime-threshold"
-threshold_state_root="${PWD}/var/hostd-state-threshold"
-budget_db_path="${PWD}/var/controller-budget.sqlite"
-budget_artifacts_root="${PWD}/var/artifacts-budget"
-budget_runtime_root="${PWD}/var/runtime-budget"
-budget_state_root="${PWD}/var/hostd-state-budget"
-drain_db_path="${PWD}/var/controller-drain.sqlite"
-drain_artifacts_root="${PWD}/var/artifacts-drain"
-drain_runtime_root="${PWD}/var/runtime-drain"
-drain_state_root="${PWD}/var/hostd-state-drain"
-compute_db_path="${PWD}/var/controller-compute.sqlite"
-compute_artifacts_root="${PWD}/var/artifacts-compute"
-compute_runtime_root="${PWD}/var/runtime-compute"
-compute_state_root="${PWD}/var/hostd-state-compute"
-api_db_path="${PWD}/var/controller-api.sqlite"
-api_artifacts_root="${PWD}/var/artifacts-api"
-api_runtime_root="${PWD}/var/runtime-api"
-api_state_root="${PWD}/var/hostd-state-api"
-multiplane_db_path="${PWD}/var/controller-multiplane.sqlite"
-multiplane_artifacts_root="${PWD}/var/artifacts-multiplane"
-multiplane_runtime_root="${PWD}/var/runtime-multiplane"
-multiplane_state_root="${PWD}/var/hostd-state-multiplane"
-multiplane_beta_bundle="${PWD}/var/demo-plane-beta"
-web_ui_runtime_root="${PWD}/var/web-ui-runtime"
-ui_smoke_root="${PWD}/var/ui-smoke"
-launcher_smoke_root="${PWD}/var/launcher-smoke"
-launcher_default_root="${PWD}/var/launcher-defaults"
-launcher_config_path="${launcher_smoke_root}/etc/comet-node/config.toml"
-launcher_state_root="${launcher_smoke_root}/var/lib/comet-node"
-launcher_log_root="${launcher_smoke_root}/var/log/comet-node"
-launcher_systemd_dir="${launcher_smoke_root}/etc/systemd/system"
-launcher_db_path="${launcher_smoke_root}/controller.sqlite"
-remote_agent_db_path="${PWD}/var/controller-remote-agent.sqlite"
-remote_agent_artifacts_root="${PWD}/var/artifacts-remote-agent"
-remote_agent_runtime_root="${PWD}/var/runtime-remote-agent"
-remote_agent_state_root="${PWD}/var/hostd-state-remote-agent"
-remote_agent_install_root="${PWD}/var/remote-agent-install"
-remote_agent_config_path="${remote_agent_install_root}/etc/comet-node/config.toml"
-remote_agent_layout_state_root="${remote_agent_install_root}/var/lib/comet-node"
-remote_agent_layout_log_root="${remote_agent_install_root}/var/log/comet-node"
-remote_agent_layout_systemd_dir="${remote_agent_install_root}/etc/systemd/system"
-remote_agent_rotated_install_root="${PWD}/var/remote-agent-install-rotated"
-remote_agent_rotated_config_path="${remote_agent_rotated_install_root}/etc/comet-node/config.toml"
-remote_agent_rotated_layout_state_root="${remote_agent_rotated_install_root}/var/lib/comet-node"
-remote_agent_rotated_layout_log_root="${remote_agent_rotated_install_root}/var/log/comet-node"
-remote_agent_rotated_layout_systemd_dir="${remote_agent_rotated_install_root}/etc/systemd/system"
+work_root="${repo_root}/var/check-v2"
+launcher_root="${work_root}/launcher-defaults"
+ui_smoke_root="${work_root}/ui-smoke"
+web_ui_runtime_root="${work_root}/web-ui-runtime"
+db_path="${work_root}/controller.sqlite"
+artifacts_root="${work_root}/artifacts"
+runtime_root="${work_root}/runtime"
+state_root="${work_root}/hostd-state"
+llm_model_path="${work_root}/models/check-model.gguf"
 http_server_pid=""
 
 cleanup() {
@@ -96,999 +39,107 @@ cleanup() {
     wait "${http_server_pid}" >/dev/null 2>&1 || true
   fi
 }
-
 trap cleanup EXIT
 
-cmake -E rm -f "${db_path}"
-cmake -E rm -f "${parallel_db_path}"
-cmake -E rm -f "${rebalance_db_path}"
-cmake -E rm -f "${threshold_db_path}"
-cmake -E rm -f "${budget_db_path}"
-cmake -E rm -f "${drain_db_path}"
-cmake -E rm -f "${compute_db_path}"
-cmake -E rm -f "${api_db_path}"
-cmake -E rm -f "${multiplane_db_path}"
-cmake -E rm -f "${remote_agent_db_path}"
-cmake -E remove_directory "${artifacts_root}"
-cmake -E remove_directory "${parallel_artifacts_root}"
-cmake -E remove_directory "${rebalance_artifacts_root}"
-cmake -E remove_directory "${threshold_artifacts_root}"
-cmake -E remove_directory "${budget_artifacts_root}"
-cmake -E remove_directory "${drain_artifacts_root}"
-cmake -E remove_directory "${compute_artifacts_root}"
-cmake -E remove_directory "${api_artifacts_root}"
-cmake -E remove_directory "${multiplane_artifacts_root}"
-cmake -E remove_directory "${runtime_root}"
-cmake -E remove_directory "${parallel_runtime_root}"
-cmake -E remove_directory "${rebalance_runtime_root}"
-cmake -E remove_directory "${threshold_runtime_root}"
-cmake -E remove_directory "${budget_runtime_root}"
-cmake -E remove_directory "${drain_runtime_root}"
-cmake -E remove_directory "${compute_runtime_root}"
-cmake -E remove_directory "${api_runtime_root}"
-cmake -E remove_directory "${multiplane_runtime_root}"
-cmake -E remove_directory "${preemption_artifacts_root}"
-cmake -E remove_directory "${preemption_runtime_root}"
-cmake -E remove_directory "${state_root}"
-cmake -E remove_directory "${parallel_state_root}"
-cmake -E remove_directory "${rebalance_state_root}"
-cmake -E remove_directory "${threshold_state_root}"
-cmake -E remove_directory "${budget_state_root}"
-cmake -E remove_directory "${drain_state_root}"
-cmake -E remove_directory "${compute_state_root}"
-cmake -E remove_directory "${preemption_state_root}"
-cmake -E remove_directory "${api_state_root}"
-cmake -E remove_directory "${multiplane_state_root}"
-cmake -E remove_directory "${infer_model_root}"
-cmake -E remove_directory "${ui_smoke_root}"
-cmake -E remove_directory "${launcher_smoke_root}"
-cmake -E remove_directory "${launcher_default_root}"
-cmake -E remove_directory "${multiplane_beta_bundle}"
-cmake -E remove_directory "${web_ui_runtime_root}"
-cmake -E remove_directory "${remote_agent_artifacts_root}"
-cmake -E remove_directory "${remote_agent_runtime_root}"
-cmake -E remove_directory "${remote_agent_state_root}"
-cmake -E remove_directory "${remote_agent_install_root}"
-cmake -E remove_directory "${remote_agent_rotated_install_root}"
-cmake -E rm -f "${bad_state_root}"
+cmake -E remove_directory "${work_root}"
+mkdir -p "${work_root}" "${artifacts_root}" "${runtime_root}" "${state_root}" "$(dirname "${llm_model_path}")"
+: > "${llm_model_path}"
 
 "${script_dir}/build-target.sh" Debug
 
-"${build_dir}/comet-node" version | grep -F 'comet-node 0.1.0' >/dev/null
-"${build_dir}/comet-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null
-default_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
-launcher_install_output="$(COMET_INSTALL_ROOT="${launcher_default_root}" \
-"${build_dir}/comet-node" install controller \
+"${build_dir}/naim-node" version | grep -F 'naim-node 0.1.0' >/dev/null
+"${build_dir}/naim-node" doctor controller | grep -F 'controller_binary=yes' >/dev/null
+
+controller_port="$("${script_dir}/naim-devtool.sh" free-port)"
+skills_port="$("${script_dir}/naim-devtool.sh" free-port)"
+launcher_install_output="$(NAIM_INSTALL_ROOT="${launcher_root}" \
+"${build_dir}/naim-node" install controller \
   --with-hostd \
   --with-web-ui \
-  --listen-port "${default_http_port}" \
+  --listen-port "${controller_port}" \
   --skip-systemctl)"
 printf '%s' "${launcher_install_output}" | grep -F "installed controller" >/dev/null
-printf '%s' "${launcher_install_output}" | grep -F "controller_api_url=http://127.0.0.1:${default_http_port}" >/dev/null
-printf '%s' "${launcher_install_output}" | grep -F "web_ui_url=http://127.0.0.1:18081" >/dev/null
-test -f "${launcher_default_root}/etc/comet-node/config.toml"
-test -f "${launcher_default_root}/etc/systemd/system/comet-node-controller.service"
-test -f "${launcher_default_root}/etc/systemd/system/comet-node-hostd.service"
-COMET_INSTALL_ROOT="${launcher_default_root}" \
-"${build_dir}/comet-node" service verify controller-hostd --skip-systemctl >/dev/null
-COMET_INSTALL_ROOT="${launcher_default_root}" \
-"${build_dir}/comet-node" run controller \
+NAIM_INSTALL_ROOT="${launcher_root}" \
+"${build_dir}/naim-node" service verify controller-hostd --skip-systemctl >/dev/null
+NAIM_INSTALL_ROOT="${launcher_root}" \
+"${build_dir}/naim-node" run controller \
   --listen-host 127.0.0.1 \
-  --compose-mode skip >/tmp/comet-node-default-run.log 2>&1 &
+  --compose-mode skip \
+  --skills-factory-listen-port "${skills_port}" \
+  --skip-systemctl >/tmp/naim-node-default-run.log 2>&1 &
 http_server_pid="$!"
-wait_for_http "http://127.0.0.1:${default_http_port}/health" 100 "/tmp/comet-node-default-run.log"
+wait_for_http "http://127.0.0.1:${controller_port}/health" 100 /tmp/naim-node-default-run.log
 for _ in $(seq 1 80); do
-  if "${build_dir}/comet-controller" show-hostd-hosts \
-      --db "${launcher_default_root}/var/lib/comet-node/controller.sqlite" \
+  if "${build_dir}/naim-controller" show-hostd-hosts \
+      --db "${launcher_root}/var/lib/naim-node/controller.sqlite" \
       --node local-hostd | grep -F '"session_state": "connected"' >/dev/null; then
     break
   fi
   sleep 0.2
 done
-"${build_dir}/comet-controller" show-hostd-hosts \
-  --db "${launcher_default_root}/var/lib/comet-node/controller.sqlite" \
+"${build_dir}/naim-controller" show-hostd-hosts \
+  --db "${launcher_root}/var/lib/naim-node/controller.sqlite" \
   --node local-hostd | grep -F '"session_state": "connected"' >/dev/null
 kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
 http_server_pid=""
-"${build_dir}/comet-node" install controller \
-  --config "${launcher_config_path}" \
-  --state-root "${launcher_state_root}" \
-  --log-root "${launcher_log_root}" \
-  --systemd-dir "${launcher_systemd_dir}" \
-  --listen-port 28080 \
-  --with-hostd \
-  --with-web-ui \
-  --skip-systemctl >/dev/null
-test -f "${launcher_config_path}"
-test -f "${launcher_systemd_dir}/comet-node-controller.service"
-test -f "${launcher_systemd_dir}/comet-node-hostd.service"
-grep -F '[controller]' "${launcher_config_path}" >/dev/null
-grep -F 'web_ui_enabled = true' "${launcher_config_path}" >/dev/null
-grep -F 'local_hostd_enabled = true' "${launcher_config_path}" >/dev/null
-grep -F 'ExecStart=' "${launcher_systemd_dir}/comet-node-controller.service" >/dev/null
-"${build_dir}/comet-node" service status controller-hostd \
-  --systemd-dir "${launcher_systemd_dir}" \
-  --skip-systemctl | grep -F 'installed=yes' >/dev/null
-"${build_dir}/comet-node" service verify controller-hostd \
-  --systemd-dir "${launcher_systemd_dir}" \
-  --skip-systemctl >/dev/null
-"${build_dir}/comet-node" connect-hostd \
-  --db "${launcher_db_path}" \
-  --node gpu-b \
-  --address http://127.0.0.1:29090 \
-  --public-key "${launcher_state_root}/keys/hostd.pub.b64" >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${launcher_db_path}" --node gpu-b | grep -F '"node_name": "gpu-b"' >/dev/null
-test "$(
-  sqlite3 -readonly "${launcher_db_path}" \
-    "SELECT node_name || '|' || advertised_address || '|' || registration_state FROM registered_hosts WHERE node_name='gpu-b';"
-)" = "gpu-b|http://127.0.0.1:29090|registered"
-"${build_dir}/comet-node" service uninstall controller-hostd \
-  --systemd-dir "${launcher_systemd_dir}" \
-  --skip-systemctl >/dev/null
-test ! -f "${launcher_systemd_dir}/comet-node-controller.service"
-test ! -f "${launcher_systemd_dir}/comet-node-hostd.service"
-"${build_dir}/comet-controller" init-db --db "${remote_agent_db_path}" >/dev/null
-remote_http_port="$("${script_dir}/comet-devtool.sh" free-port)"
-"${build_dir}/comet-node" install hostd \
-  --controller "http://127.0.0.1:${remote_http_port}" \
-  --node node-a \
-  --config "${remote_agent_config_path}" \
-  --state-root "${remote_agent_layout_state_root}" \
-  --log-root "${remote_agent_layout_log_root}" \
-  --systemd-dir "${remote_agent_layout_systemd_dir}" \
-  --skip-systemctl | grep -F "next_step_register=comet-node connect-hostd" >/dev/null
-"${build_dir}/comet-node" service verify hostd \
-  --systemd-dir "${remote_agent_layout_systemd_dir}" \
-  --skip-systemctl >/dev/null
-"${build_dir}/comet-node" connect-hostd \
-  --db "${remote_agent_db_path}" \
-  --node node-a \
-  --address http://127.0.0.1:29999 \
-  --public-key "${remote_agent_layout_state_root}/keys/hostd.pub.b64" >/dev/null
-"${build_dir}/comet-controller" apply-bundle \
-  --bundle "${PWD}/config/demo-plane" \
-  --db "${remote_agent_db_path}" \
-  --artifacts-root "${remote_agent_artifacts_root}" >/dev/null
-"${build_dir}/comet-controller" serve --db "${remote_agent_db_path}" --listen-host 127.0.0.1 --listen-port "${remote_http_port}" >/tmp/comet-controller-remote-agent.log 2>&1 &
-http_server_pid="$!"
-wait_for_http "http://127.0.0.1:${remote_http_port}/health" 100 "/tmp/comet-controller-remote-agent.log"
-"${build_dir}/comet-hostd" apply-next-assignment \
-  --controller "http://127.0.0.1:${remote_http_port}" \
-  --node node-a \
-  --runtime-root "${remote_agent_runtime_root}" \
-  --state-root "${remote_agent_state_root}" \
-  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.key.b64" \
+
+"${build_dir}/naim-controller" init-db --db "${db_path}" >/dev/null
+auth_token="check-v2-session"
+naim_live_seed_admin_session "${db_path}" "${auth_token}"
+auth_header=(-H "X-Naim-Session-Token: ${auth_token}")
+naim_live_seed_connected_hostd "${db_path}" local-hostd 4
+compute_state="${work_root}/gpu-worker.desired-state.v2.json"
+naim_live_write_compute_state "${compute_state}" check-gpu-worker 2
+python3 - "${compute_state}" <<'PYSTATE'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding='utf-8') as source:
+    state = json.load(source)
+state['topology']['nodes'] = [{'name': 'local-hostd', 'execution_mode': 'mixed', 'gpu_memory_mb': {'0': 24576, '1': 24576, '2': 24576, '3': 24576}}]
+state['worker']['assignments'] = [{'node': 'local-hostd', 'gpu_device': '0'}, {'node': 'local-hostd', 'gpu_device': '1'}]
+with open(path, 'w', encoding='utf-8') as output:
+    json.dump(state, output, indent=2)
+    output.write('\n')
+PYSTATE
+naim_live_apply_v2_state "${build_dir}" "${db_path}" "${artifacts_root}" "${compute_state}"
+"${build_dir}/naim-hostd" apply-next-assignment \
+  --db "${db_path}" \
+  --node local-hostd \
+  --runtime-root "${runtime_root}" \
+  --state-root "${state_root}" \
   --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" report-observed-state \
-  --controller "http://127.0.0.1:${remote_http_port}" \
-  --node node-a \
-  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.key.b64" \
-  --state-root "${remote_agent_state_root}" >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
-remote_agent_observations="$("${build_dir}/comet-controller" show-host-observations --db "${remote_agent_db_path}" --node node-a)"
-if ! printf '%s' "${remote_agent_observations}" | grep -F 'status=idle applied_generation=1' >/dev/null; then
-  printf '%s' "${remote_agent_observations}" | grep -F 'status=idle' >/dev/null
-  printf '%s' "${remote_agent_observations}" | grep -F 'message=manual heartbeat' >/dev/null
-fi
-remote_agent_events="$("${build_dir}/comet-controller" show-events --db "${remote_agent_db_path}" --node node-a --category host-assignment 2>/dev/null || true)"
-if printf '%s' "${remote_agent_events}" | grep -F 'category=host-assignment type=applied' >/dev/null; then
-  :
-else
-  "${build_dir}/comet-controller" show-host-assignments --db "${remote_agent_db_path}" --node node-a | grep -F '(empty)' >/dev/null
-fi
-"${build_dir}/comet-node" install hostd \
-  --controller "http://127.0.0.1:${remote_http_port}" \
-  --node node-a \
-  --config "${remote_agent_rotated_config_path}" \
-  --state-root "${remote_agent_rotated_layout_state_root}" \
-  --log-root "${remote_agent_rotated_layout_log_root}" \
-  --systemd-dir "${remote_agent_rotated_layout_systemd_dir}" \
-  --skip-systemctl | grep -F "next_step_register=comet-node connect-hostd" >/dev/null
-"${build_dir}/comet-controller" rotate-hostd-key \
-  --db "${remote_agent_db_path}" \
-  --node node-a \
-  --public-key "${remote_agent_rotated_layout_state_root}/keys/hostd.pub.b64" >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "rotation-pending"' >/dev/null
-if "${build_dir}/comet-hostd" report-observed-state \
-  --controller "http://127.0.0.1:${remote_http_port}" \
-  --node node-a \
-  --host-private-key "${remote_agent_layout_state_root}/keys/hostd.key.b64" \
-  --state-root "${remote_agent_state_root}" >/dev/null 2>&1; then
-  echo "check: old host key unexpectedly authenticated after rotation" >&2
-  exit 1
-fi
-"${build_dir}/comet-hostd" report-observed-state \
-  --controller "http://127.0.0.1:${remote_http_port}" \
-  --node node-a \
-  --host-private-key "${remote_agent_rotated_layout_state_root}/keys/hostd.key.b64" \
-  --state-root "${remote_agent_state_root}" >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"session_state": "connected"' >/dev/null
-"${build_dir}/comet-controller" revoke-hostd --db "${remote_agent_db_path}" --node node-a >/dev/null
-"${build_dir}/comet-controller" show-hostd-hosts --db "${remote_agent_db_path}" --node node-a | grep -F '"registration_state": "revoked"' >/dev/null
-if "${build_dir}/comet-hostd" report-observed-state \
-  --controller "http://127.0.0.1:${remote_http_port}" \
-  --node node-a \
-  --host-private-key "${remote_agent_rotated_layout_state_root}/keys/hostd.key.b64" \
-  --state-root "${remote_agent_state_root}" >/dev/null 2>&1; then
-  echo "check: revoked host unexpectedly authenticated" >&2
-  exit 1
-fi
-kill "${http_server_pid}" >/dev/null 2>&1 || true
-wait "${http_server_pid}" >/dev/null 2>&1 || true
-http_server_pid=""
+"${build_dir}/naim-hostd" report-observed-state --db "${db_path}" --node local-hostd --state-root "${state_root}" >/dev/null
+"${build_dir}/naim-controller" show-host-observations --db "${db_path}" --node local-hostd | grep -F 'applied_generation=1' >/dev/null
+"${build_dir}/naim-hostd" show-local-state --node local-hostd --state-root "${state_root}" | grep -F 'instances=2' >/dev/null
 
-"${build_dir}/comet-controller" show-demo-plan >/dev/null
-"${build_dir}/comet-controller" render-demo-compose --node node-a >/dev/null
-"${build_dir}/comet-controller" init-db --db "${db_path}" >/dev/null
+llm_state="${work_root}/llm.desired-state.v2.json"
+naim_live_write_llm_state "${llm_state}" check-llm "${llm_model_path}" "$("${script_dir}/naim-devtool.sh" free-port)" "$("${script_dir}/naim-devtool.sh" free-port)"
+naim_live_apply_v2_state "${build_dir}" "${db_path}" "${artifacts_root}" "${llm_state}"
+"${build_dir}/naim-hostd" apply-next-assignment \
+  --db "${db_path}" \
+  --node local-hostd \
+  --runtime-root "${runtime_root}" \
+  --state-root "${state_root}" \
+  --compose-mode skip >/dev/null
+"${build_dir}/naim-controller" show-plane --db "${db_path}" --plane check-llm | grep -F 'state=running' >/dev/null
+
 mkdir -p "${ui_smoke_root}/assets"
-cp -R "${PWD}/ui/operator/." "${ui_smoke_root}"
-http_port="$("${script_dir}/comet-devtool.sh" free-port)"
-"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" --ui-root "${ui_smoke_root}" >/tmp/comet-controller-serve.log 2>&1 &
+cp -R "${repo_root}/ui/operator/." "${ui_smoke_root}"
+http_port="$("${script_dir}/naim-devtool.sh" free-port)"
+"${build_dir}/naim-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" --ui-root "${ui_smoke_root}" >/tmp/naim-controller-check-v2.log 2>&1 &
 http_server_pid="$!"
-for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:${http_port}/health" >/tmp/comet-controller-health.json 2>/dev/null; then
-    break
-  fi
-  sleep 0.1
-done
-wait_for_http "http://127.0.0.1:${http_port}/health" 100 "/tmp/comet-controller-serve.log"
-curl -fsS "http://127.0.0.1:${http_port}/" | grep -F 'Comet Command Deck' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/assets/app.js" | grep -F '/api/v1/dashboard' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/assets/app.js" | grep -F '/api/v1/events/stream' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/planes/alpha" | grep -F 'Comet Command Deck' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/health" | grep -F '"service":"comet-controller"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/health" | grep -F '"status":"ok"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/state" | grep -F '"desired_generation":null' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/state" | grep -F '"desired_state":null' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/planes" | grep -F '"items":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/planes/alpha" | grep -F '"desired_state":null' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-assignments" | grep -F '"assignments":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations" | grep -F '"observations":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health" | grep -F '"items":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state" | grep -F '"items":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions" | grep -F '"actions":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan" | grep -F '"rebalance_plan":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"plane":null' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"recent_events":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"alerts":{' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"critical":0' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"warning":0' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"booting":0' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/events" | grep -F '"events":[]' >/dev/null
+wait_for_http "http://127.0.0.1:${http_port}/health" 100 /tmp/naim-controller-check-v2.log
+curl -fsS "http://127.0.0.1:${http_port}/" | grep -F 'Naim Command Deck' >/dev/null
+curl -fsS "${auth_header[@]}" "http://127.0.0.1:${http_port}/api/v1/planes" | grep -F 'check-llm' >/dev/null
+curl -fsS "${auth_header[@]}" "http://127.0.0.1:${http_port}/api/v1/events" | grep -F '"event_type":"started"' >/dev/null
 kill "${http_server_pid}" >/dev/null 2>&1 || true
 wait "${http_server_pid}" >/dev/null 2>&1 || true
 http_server_pid=""
-"${build_dir}/comet-controller" ensure-web-ui --db "${db_path}" --web-ui-root "${web_ui_runtime_root}" --listen-port 19081 --controller-upstream "http://host.docker.internal:18080" --compose-mode skip >/dev/null
+
+"${build_dir}/naim-controller" ensure-web-ui --db "${db_path}" --web-ui-root "${web_ui_runtime_root}" --listen-port 19081 --controller-upstream "http://host.docker.internal:18080" --compose-mode skip >/dev/null
 test -f "${web_ui_runtime_root}/docker-compose.yml"
-test -f "${web_ui_runtime_root}/web-ui-state.json"
-grep -F 'image: comet/web-ui:dev' "${web_ui_runtime_root}/docker-compose.yml" >/dev/null
-grep -F '19081:8080' "${web_ui_runtime_root}/docker-compose.yml" >/dev/null
-grep -F 'COMET_CONTROLLER_UPSTREAM: http://host.docker.internal:18080' "${web_ui_runtime_root}/docker-compose.yml" >/dev/null
-"${build_dir}/comet-controller" show-web-ui-status --web-ui-root "${web_ui_runtime_root}" | grep -F 'materialized=yes' >/dev/null
-"${build_dir}/comet-controller" show-web-ui-status --web-ui-root "${web_ui_runtime_root}" | grep -F 'running=no' >/dev/null
-"${build_dir}/comet-controller" stop-web-ui --db "${db_path}" --web-ui-root "${web_ui_runtime_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-controller" show-web-ui-status --web-ui-root "${web_ui_runtime_root}" | grep -F 'materialized=no' >/dev/null
-"${build_dir}/comet-controller" show-events --db "${db_path}" --category web-ui | grep -F 'category=web-ui type=stopped' >/dev/null
-"${build_dir}/comet-controller" init-db --db "${api_db_path}" >/dev/null
-http_api_port="$("${script_dir}/comet-devtool.sh" free-port)"
-"${build_dir}/comet-controller" serve --db "${api_db_path}" --listen-host 127.0.0.1 --listen-port "${http_api_port}" >/tmp/comet-controller-api-mutations.log 2>&1 &
-http_server_pid="$!"
-for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:${http_api_port}/health" >/tmp/comet-controller-api-mutations-health.json 2>/dev/null; then
-    break
-  fi
-  sleep 0.1
-done
-wait_for_http "http://127.0.0.1:${http_api_port}/health" 100 "/tmp/comet-controller-api-mutations.log"
-sse_bundle_output="/tmp/comet-controller-events-stream-bundle.txt"
-sse_replay_output="/tmp/comet-controller-events-stream-replay.txt"
-rm -f "${sse_bundle_output}" "${sse_replay_output}"
-curl -NsS --max-time 5 "http://127.0.0.1:${http_api_port}/api/v1/events/stream?category=bundle" >"${sse_bundle_output}" 2>/tmp/comet-controller-events-stream-bundle.log &
-sse_bundle_pid="$!"
-sleep 0.2
-api_validate_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/validate?bundle=${PWD}/config/demo-plane")"
-printf '%s' "${api_validate_output}" | grep -F '"action":"validate-bundle"' >/dev/null
-printf '%s' "${api_validate_output}" | grep -F 'bundle validation: OK' >/dev/null
-api_preview_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/preview?bundle=${PWD}/config/demo-plane&node=node-a")"
-printf '%s' "${api_preview_output}" | grep -F '"action":"preview-bundle"' >/dev/null
-printf '%s' "${api_preview_output}" | grep -F 'preview:' >/dev/null
-api_import_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/import?bundle=${PWD}/config/demo-plane")"
-printf '%s' "${api_import_output}" | grep -F '"action":"import-bundle"' >/dev/null
-printf '%s' "${api_import_output}" | grep -F "imported bundle '${PWD}/config/demo-plane'" >/dev/null
-api_apply_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/bundles/apply?bundle=${PWD}/config/demo-plane&artifacts_root=${api_artifacts_root}")"
-printf '%s' "${api_apply_output}" | grep -F '"action":"apply-bundle"' >/dev/null
-printf '%s' "${api_apply_output}" | grep -F "applied bundle '${PWD}/config/demo-plane'" >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes" | grep -F '"name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/dashboard" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/dashboard" | grep -F '"alerts"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/dashboard?plane=alpha" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/disk-state?plane=alpha" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/rollout-actions?plane=alpha" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/rebalance-plan?plane=alpha" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/events?plane=alpha&limit=5" | grep -F '"plane_name":"alpha"' >/dev/null
-api_stop_plane_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/stop")"
-printf '%s' "${api_stop_plane_output}" | grep -F '"action":"stop-plane"' >/dev/null
-if ! printf '%s' "${api_stop_plane_output}" | grep -F 'plane stopped: alpha' >/dev/null; then
-  printf '%s' "${api_stop_plane_output}" | grep -F 'plane already stopped: alpha' >/dev/null
-fi
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha" | grep -F '"state":"stopped"' >/dev/null
-api_stop_assignment_output="$("${build_dir}/comet-hostd" apply-next-assignment --node node-a --db "${api_db_path}" --runtime-root "${api_runtime_root}" --state-root "${api_state_root}" --compose-mode skip)"
-if ! printf '%s' "${api_stop_assignment_output}" | grep -F 'assignment_type=stop-plane-state' >/dev/null; then
-  printf '%s' "${api_stop_assignment_output}" | grep -F 'no pending assignments for node=node-a' >/dev/null
-fi
-api_local_state_output="$("${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${api_state_root}")"
-if ! printf '%s' "${api_local_state_output}" | grep -F 'instances=0' >/dev/null; then
-  printf '%s' "${api_local_state_output}" | grep -F 'state: empty' >/dev/null
-fi
-api_start_plane_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha/start")"
-printf '%s' "${api_start_plane_output}" | grep -F '"action":"start-plane"' >/dev/null
-printf '%s' "${api_start_plane_output}" | grep -F 'plane started: alpha' >/dev/null
-curl -fsS "http://127.0.0.1:${http_api_port}/api/v1/planes/alpha" | grep -F '"state":"running"' >/dev/null
-for _ in $(seq 1 30); do
-  if grep -F 'event: bundle.imported' "${sse_bundle_output}" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
-kill "${sse_bundle_pid}" >/dev/null 2>&1 || true
-wait "${sse_bundle_pid}" >/dev/null 2>&1 || true
-grep -F 'event: bundle.imported' "${sse_bundle_output}" >/dev/null
-grep -F '"category":"bundle"' "${sse_bundle_output}" >/dev/null
-last_seen_event_id="$(
-  sqlite3 -readonly "${api_db_path}" \
-    "SELECT COALESCE(MAX(id), 0) FROM event_log;"
-)"
-test -n "${last_seen_event_id}"
-curl -NsS --max-time 5 -H "Last-Event-ID: ${last_seen_event_id}" "http://127.0.0.1:${http_api_port}/api/v1/events/stream?node=node-a" >"${sse_replay_output}" 2>/tmp/comet-controller-events-stream-replay.log &
-sse_replay_pid="$!"
-sleep 0.2
-api_availability_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/node-availability?node=node-b&availability=unavailable&message=api-http")"
-printf '%s' "${api_availability_output}" | grep -F '"action":"set-node-availability"' >/dev/null
-printf '%s' "${api_availability_output}" | grep -F 'updated node availability for node-b' >/dev/null
-api_failed_assignment_id="$(
-  sqlite3 -readonly "${api_db_path}" \
-    "SELECT id FROM host_assignments WHERE status='pending' ORDER BY id LIMIT 1;"
-)"
-test -n "${api_failed_assignment_id}"
-sqlite3 "${api_db_path}" \
-  "UPDATE host_assignments SET status='failed', status_message='api-fixture failed assignment' WHERE id=${api_failed_assignment_id};"
-test -n "${api_failed_assignment_id}"
-api_retry_output="$(curl -fsS -X POST "http://127.0.0.1:${http_api_port}/api/v1/retry-host-assignment?id=${api_failed_assignment_id}")"
-printf '%s' "${api_retry_output}" | grep -F '"action":"retry-host-assignment"' >/dev/null
-printf '%s' "${api_retry_output}" | grep -F "requeued host assignment id=${api_failed_assignment_id}" >/dev/null
-"${build_dir}/comet-controller" show-state --controller "http://127.0.0.1:${http_api_port}" | grep -F '"desired_generation": 2' >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --controller "http://127.0.0.1:${http_api_port}" --node node-a | grep -F '"assignments"' >/dev/null
-"${build_dir}/comet-controller" show-node-availability --controller "http://127.0.0.1:${http_api_port}" --node node-b | grep -F '"availability": "unavailable"' >/dev/null
-"${build_dir}/comet-controller" validate-bundle --controller "http://127.0.0.1:${http_api_port}" --bundle "${PWD}/config/demo-plane" | grep -F 'bundle validation: OK' >/dev/null
-"${build_dir}/comet-controller" set-node-availability --controller "http://127.0.0.1:${http_api_port}" --node node-a --availability draining --message cli-http | grep -F 'updated node availability for node-a' >/dev/null
-for _ in $(seq 1 30); do
-  if grep -F 'event: node-availability.updated' "${sse_replay_output}" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
-kill "${sse_replay_pid}" >/dev/null 2>&1 || true
-wait "${sse_replay_pid}" >/dev/null 2>&1 || true
-grep -F 'event: node-availability.updated' "${sse_replay_output}" >/dev/null
-if grep -F 'event: bundle.imported' "${sse_replay_output}" >/dev/null 2>&1; then
-  echo "check: SSE replay stream unexpectedly replayed pre-cutoff bundle event" >&2
-  exit 1
-fi
-COMET_CONTROLLER="http://127.0.0.1:${http_api_port}" "${build_dir}/comet-controller" show-node-availability --node node-a | grep -F '"availability": "draining"' >/dev/null
-kill "${http_server_pid}" >/dev/null 2>&1 || true
-wait "${http_server_pid}" >/dev/null 2>&1 || true
-http_server_pid=""
-"${build_dir}/comet-controller" validate-bundle --bundle "${PWD}/config/demo-plane" >/dev/null
-invalid_bundle_dir="$(mktemp -d "${PWD}/var/invalid-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${invalid_bundle_dir}"
-perl -0pi -e 's/"node": "node-b"/"node": "node-a"/; s/"share_mode": "shared"/"share_mode": "best-effort"/; s/"priority": 100/"priority": 250/; s/"memory_cap_mb": 8192/"memory_cap_mb": 12288/' "${invalid_bundle_dir}/workers/worker-b.json"
-if "${build_dir}/comet-controller" validate-bundle --bundle "${invalid_bundle_dir}" >/tmp/comet-invalid-bundle.txt 2>&1; then
-  echo "check: expected invalid scheduler bundle to be rejected" >&2
-  exit 1
-fi
-grep -F "mixes share_mode=exclusive with other workers" /tmp/comet-invalid-bundle.txt >/dev/null
-grep -F "gpu memory oversubscription" /tmp/comet-invalid-bundle.txt >/dev/null
-auto_bundle_dir="$(mktemp -d "${PWD}/var/auto-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${auto_bundle_dir}"
-perl -0pi -e 's/^\s*"node": "node-b",\n//m; s/^\s*"gpu_device": "0",\n//m;' "${auto_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" validate-bundle --bundle "${auto_bundle_dir}" | grep -F "node=node-a gpu=1 workers=worker-b exclusive=worker-b" >/dev/null
-preemption_bundle_dir="$(mktemp -d "${PWD}/var/preemption-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${preemption_bundle_dir}"
-perl -0pi -e 's/"share_mode": "exclusive"/"share_mode": "shared"/; s/"gpu_fraction": 1.0/"gpu_fraction": 0.75/; s/"memory_cap_mb": 16384/"memory_cap_mb": 12288/' "${preemption_bundle_dir}/workers/worker-a.json"
-perl -0pi -e 's/"node": "node-b"/"node": "node-a"/; s/"share_mode": "shared"/"share_mode": "best-effort"/; s/"gpu_fraction": 0.5/"gpu_fraction": 0.25/; s/"priority": 100/"priority": 50/; s/"memory_cap_mb": 8192/"memory_cap_mb": 4096/; s/"preemptible": false/"preemptible": true/' "${preemption_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" validate-bundle --bundle "${preemption_bundle_dir}" | grep -F "preemption-hints:" >/dev/null
-"${build_dir}/comet-controller" validate-bundle --bundle "${preemption_bundle_dir}" | grep -F "node=node-a gpu=0 victims=worker-b reason=protect guaranteed workers before best-effort workers on the same GPU" >/dev/null
-preemption_candidate_bundle_dir="$(mktemp -d "${PWD}/var/preemption-candidate-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${preemption_candidate_bundle_dir}"
-perl -0pi -e 's/"gpus": \["0", "1"\]/"gpus": ["0"]/; s/"0": 24576,\n\s*"1": 24576/"0": 24576/' "${preemption_candidate_bundle_dir}/plane.json"
-perl -0pi -e 's/"node": "node-a"/"node": "node-b"/; s/"share_mode": "exclusive"/"share_mode": "shared"/; s/"gpu_fraction": 1.0/"gpu_fraction": 0.75/; s/"memory_cap_mb": 16384/"memory_cap_mb": 12288/; s/"name": "worker-a",/"name": "worker-a",\n  "placement_mode": "movable",/' "${preemption_candidate_bundle_dir}/workers/worker-a.json"
-perl -0pi -e 's/"node": "node-b"/"node": "node-a"/; s/"share_mode": "shared"/"share_mode": "best-effort"/; s/"gpu_fraction": 0.5/"gpu_fraction": 0.25/; s/"priority": 100/"priority": 50/; s/"memory_cap_mb": 8192/"memory_cap_mb": 4096/' "${preemption_candidate_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" validate-bundle --bundle "${preemption_candidate_bundle_dir}" | grep -F "action=preempt-best-effort-to-exclusive" >/dev/null
-"${build_dir}/comet-controller" validate-bundle --bundle "${preemption_candidate_bundle_dir}" | grep -F "victims=worker-b" >/dev/null
-"${build_dir}/comet-controller" validate-bundle --bundle "${preemption_candidate_bundle_dir}" | grep -F "worker=worker-a decision=deferred next_action=preempt-best-effort-to-exclusive next_target=node-a:0 victims=worker-b defer_reason=requires-controlled-preemption" >/dev/null
-"${build_dir}/comet-controller" validate-bundle --bundle "${preemption_candidate_bundle_dir}" | grep -F "rollout-actions:" >/dev/null
-"${build_dir}/comet-controller" validate-bundle --bundle "${preemption_candidate_bundle_dir}" | grep -F "step=1 worker=worker-a action=evict-best-effort target=node-a:0 victims=worker-b" >/dev/null
-"${build_dir}/comet-controller" validate-bundle --bundle "${preemption_candidate_bundle_dir}" | grep -F "step=2 worker=worker-a action=retry-placement target=node-a:0" >/dev/null
-preemption_db_path="${PWD}/var/controller-preemption.sqlite"
-cmake -E rm -f "${preemption_db_path}"
-"${build_dir}/comet-controller" init-db --db "${preemption_db_path}" >/dev/null
-"${build_dir}/comet-controller" import-bundle --bundle "${preemption_candidate_bundle_dir}" --db "${preemption_db_path}" | grep -F "rollout-gates:" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "message=scheduler rollout actions pending on target node node-a for workers worker-a" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${preemption_db_path}" | grep -F "worker=worker-a placement_mode=movable current=node-b:0 class=rollout-class decision=hold state=active-rollout target=node-a:0" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${preemption_db_path}" | grep -F "rebalance-loop-status:" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${preemption_db_path}" | grep -F "state=waiting-for-convergence reason=unconverged-nodes=2" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${preemption_db_path}" | grep -F "actionable=0 safe_direct=0 rollout_class=1 gated=0 blocked_active_rollouts=1 assignment_busy=0 observation_gated=0 stable_holds=0 below_threshold=0 deferred=0 no_candidate=0" >/dev/null
-"${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" --node node-a | grep -F "id=" >/dev/null
-"${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" --node node-a | grep -F "step=1 worker=worker-a action=evict-best-effort target=node-a:0 status=pending victims=worker-b" >/dev/null
-"${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" --node node-a | grep -F "step=2 worker=worker-a action=retry-placement target=node-a:0 status=pending" >/dev/null
-"${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" --node node-a | grep -F "phase=planned" >/dev/null
-first_rollout_action_id="$("${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" --node node-a | sed -n 's/^  - id=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
-second_rollout_action_id="$("${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" --node node-a | sed -n 's/^  - id=\([0-9][0-9]*\).*/\1/p' | sed -n '2p')"
-test -n "${first_rollout_action_id}"
-test -n "${second_rollout_action_id}"
-http_preemption_port="$("${script_dir}/comet-devtool.sh" free-port)"
-"${build_dir}/comet-controller" serve --db "${preemption_db_path}" --listen-host 127.0.0.1 --listen-port "${http_preemption_port}" >/tmp/comet-controller-preemption-serve.log 2>&1 &
-http_server_pid="$!"
-for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:${http_preemption_port}/api/v1/rollout-actions?node=node-a" >/tmp/comet-controller-preemption-api.json 2>/dev/null; then
-    break
-  fi
-  sleep 0.1
-done
-wait_for_http "http://127.0.0.1:${http_preemption_port}/api/v1/rollout-actions?node=node-a" 100 "/tmp/comet-controller-preemption-serve.log"
-preemption_set_output="$(curl -fsS -X POST "http://127.0.0.1:${http_preemption_port}/api/v1/set-rollout-action-status?id=${first_rollout_action_id}&status=acknowledged&message=api-http")"
-printf '%s' "${preemption_set_output}" | grep -F '"action":"set-rollout-action-status"' >/dev/null
-printf '%s' "${preemption_set_output}" | grep -F 'updated rollout action id='"${first_rollout_action_id}" >/dev/null
-preemption_enqueue_output="$(curl -fsS -X POST "http://127.0.0.1:${http_preemption_port}/api/v1/enqueue-rollout-eviction?id=${first_rollout_action_id}")"
-printf '%s' "${preemption_enqueue_output}" | grep -F '"action":"enqueue-rollout-eviction"' >/dev/null
-printf '%s' "${preemption_enqueue_output}" | grep -F 'enqueued rollout eviction action id='"${first_rollout_action_id}" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "type=evict-workers status=pending" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${preemption_db_path}" --node node-a --runtime-root "${preemption_runtime_root}" --state-root "${preemption_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "type=evict-workers status=applied" >/dev/null
-preemption_reconcile_output="$(curl -fsS -X POST "http://127.0.0.1:${http_preemption_port}/api/v1/reconcile-rollout-actions?artifacts_root=${preemption_artifacts_root}")"
-printf '%s' "${preemption_reconcile_output}" | grep -F '"action":"reconcile-rollout-actions"' >/dev/null
-printf '%s' "${preemption_reconcile_output}" | grep -F "applied ready rollout action id=${second_rollout_action_id}" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "desired generation: 2" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "worker-a role=worker node=node-a gpu=0 fraction=1 placement_mode=movable share_mode=exclusive priority=200 preemptible=false memory_cap_mb=12288 placement=auto placement_action=materialized-retry-placement placement_score=22 placement_decision=applied" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "decision=applied" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "phase=retry-materialized" >/dev/null
-if "${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "worker-b role=worker" >/dev/null; then
-  echo "check: expected worker-b to be evicted from desired state after materialized retry placement" >&2
-  exit 1
-fi
-"${build_dir}/comet-controller" show-rollout-actions --db "${preemption_db_path}" | grep -F "(empty)" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "generation=2 attempts=0/3 type=apply-node-state status=pending" >/dev/null
-if "${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "scheduler rollout actions pending on target node" >/dev/null; then
-  echo "check: expected rollout gate message to disappear after materialized retry placement" >&2
-  exit 1
-fi
-kill "${http_server_pid}" >/dev/null 2>&1 || true
-wait "${http_server_pid}" >/dev/null 2>&1 || true
-http_server_pid=""
-"${build_dir}/comet-hostd" apply-next-assignment --db "${preemption_db_path}" --node node-a --runtime-root "${preemption_runtime_root}" --state-root "${preemption_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${preemption_db_path}" --node node-a | grep -F "generation=2 attempts=1/3 type=apply-node-state status=applied" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${preemption_db_path}" | grep -F "phase=rollout-applied" >/dev/null
-movable_bundle_dir="$(mktemp -d "${PWD}/var/movable-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${movable_bundle_dir}"
-perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "movable",/' "${movable_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" validate-bundle --bundle "${movable_bundle_dir}" | grep -F "worker=worker-b decision=proposed next_action=upgrade-to-exclusive next_target=node-a:1" >/dev/null
-"${build_dir}/comet-controller" init-db --db "${rebalance_db_path}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle --bundle "${movable_bundle_dir}" --db "${rebalance_db_path}" --artifacts-root "${rebalance_artifacts_root}" >/dev/null
-"${build_dir}/comet-controller" reconcile-rebalance-proposals --db "${rebalance_db_path}" --artifacts-root "${rebalance_artifacts_root}" | grep -F "cluster_ready=no active_rollouts=0 blocking_assignment_nodes=2 unconverged_nodes=2" >/dev/null
-"${build_dir}/comet-controller" reconcile-rebalance-proposals --db "${rebalance_db_path}" --artifacts-root "${rebalance_artifacts_root}" | grep -F "state=waiting-for-convergence reason=unconverged-nodes=2" >/dev/null
-"${build_dir}/comet-controller" reconcile-rebalance-proposals --db "${rebalance_db_path}" --artifacts-root "${rebalance_artifacts_root}" | grep -F "rebalance proposals: blocked by controller gate" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "worker=worker-b placement_mode=movable current=node-b:0 class=gated decision=hold state=assignment-in-flight target=node-a:1 action=upgrade-to-exclusive" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${rebalance_db_path}" --node node-a --runtime-root "${rebalance_runtime_root}" --state-root "${rebalance_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${rebalance_db_path}" --node node-b --runtime-root "${rebalance_runtime_root}" --state-root "${rebalance_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "worker=worker-b placement_mode=movable current=node-b:0 class=safe-direct decision=propose state=ready-move target=node-a:1 action=upgrade-to-exclusive" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "cluster_ready=yes active_rollouts=0 blocking_assignment_nodes=0 unconverged_nodes=0" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "state=actionable reason=safe-direct-workers=1" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "actionable=1 safe_direct=1 rollout_class=0 gated=0 blocked_active_rollouts=0 assignment_busy=0 observation_gated=0 stable_holds=0 below_threshold=0 deferred=0 no_candidate=0" >/dev/null
-http_rebalance_port="$("${script_dir}/comet-devtool.sh" free-port)"
-"${build_dir}/comet-controller" serve --db "${rebalance_db_path}" --listen-host 127.0.0.1 --listen-port "${http_rebalance_port}" >/tmp/comet-controller-rebalance-serve.log 2>&1 &
-http_server_pid="$!"
-for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:${http_rebalance_port}/api/v1/rebalance-plan" >/tmp/comet-controller-rebalance-api.json 2>/dev/null; then
-    break
-  fi
-  sleep 0.1
-done
-wait_for_http "http://127.0.0.1:${http_rebalance_port}/api/v1/rebalance-plan" 100 "/tmp/comet-controller-rebalance-serve.log"
-rebalance_apply_output="$(curl -fsS -X POST "http://127.0.0.1:${http_rebalance_port}/api/v1/apply-rebalance-proposal?worker=worker-b&artifacts_root=${rebalance_artifacts_root}")"
-printf '%s' "${rebalance_apply_output}" | grep -F '"action":"apply-rebalance-proposal"' >/dev/null
-printf '%s' "${rebalance_apply_output}" | grep -F "applied rebalance proposal for worker 'worker-b'" >/dev/null
-kill "${http_server_pid}" >/dev/null 2>&1 || true
-wait "${http_server_pid}" >/dev/null 2>&1 || true
-http_server_pid=""
-"${build_dir}/comet-controller" show-state --db "${rebalance_db_path}" | grep -F "desired generation: 2" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${rebalance_db_path}" | grep -F "worker-b role=worker node=node-a gpu=1 fraction=1 placement_mode=movable share_mode=exclusive priority=100 preemptible=true memory_cap_mb=8192 placement=auto placement_action=materialized-rebalance-upgrade-to-exclusive placement_score=145 placement_decision=applied" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${rebalance_db_path}" | grep -F "plane_action=rebalance phase=verifying-move worker=worker-b generation=2 stable_samples=0/3 rollback_attempts=0" >/dev/null
-budget_bundle_dir="$(mktemp -d "${PWD}/var/budget-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${budget_bundle_dir}"
-cat > "${budget_bundle_dir}/plane.json" <<'EOF'
-{
-  "name": "alpha",
-  "control_root": "/comet/shared/control/alpha",
-  "runtime": {
-    "primary_infer_node": "node-a",
-    "net_if": "eth0",
-    "models_root": "/comet/shared/models",
-    "gguf_cache_dir": "/comet/shared/models/gguf",
-    "infer_log_dir": "/comet/shared/logs/infer",
-    "llama_port": 8000,
-    "llama_ctx_size": 8192,
-    "llama_threads": 8,
-    "llama_gpu_layers": 99,
-    "inference_healthcheck_retries": 300,
-    "inference_healthcheck_interval_sec": 5
-  },
-  "gateway": {
-    "listen_host": "0.0.0.0",
-    "listen_port": 8080,
-    "server_name": "alpha.local"
-  },
-  "shared_disk_gb": 200,
-  "nodes": [
-    {
-      "name": "node-a",
-      "platform": "linux",
-      "gpus": ["0"],
-      "gpu_memory_mb": {
-        "0": 24576
-      }
-    },
-    {
-      "name": "node-b",
-      "platform": "linux",
-      "gpus": ["0", "1"],
-      "gpu_memory_mb": {
-        "0": 24576,
-        "1": 24576
-      }
-    },
-    {
-      "name": "node-c",
-      "platform": "linux",
-      "gpus": ["0", "1"],
-      "gpu_memory_mb": {
-        "0": 24576,
-        "1": 24576
-      }
-    }
-  ]
-}
-EOF
-cat > "${budget_bundle_dir}/workers/worker-a.json" <<'EOF'
-{
-  "name": "worker-a",
-  "node": "node-a",
-  "gpu_device": "0",
-  "share_mode": "exclusive",
-  "gpu_fraction": 1.0,
-  "priority": 200,
-  "preemptible": false,
-  "memory_cap_mb": 16384,
-  "private_disk_gb": 40,
-  "image": "comet/worker-runtime:dev"
-}
-EOF
-perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "movable",/; s/"gpu_fraction": 0.5/"gpu_fraction": 0.25/; s/"memory_cap_mb": 8192/"memory_cap_mb": 4096/' "${budget_bundle_dir}/workers/worker-b.json"
-cat > "${budget_bundle_dir}/workers/worker-c.json" <<'EOF'
-{
-  "name": "worker-c",
-  "node": "node-c",
-  "gpu_device": "0",
-  "placement_mode": "movable",
-  "share_mode": "shared",
-  "gpu_fraction": 0.25,
-  "priority": 90,
-  "preemptible": true,
-  "memory_cap_mb": 4096,
-  "private_disk_gb": 40,
-  "image": "comet/worker-runtime:dev"
-}
-EOF
-"${build_dir}/comet-controller" init-db --db "${budget_db_path}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle --bundle "${budget_bundle_dir}" --db "${budget_db_path}" --artifacts-root "${budget_artifacts_root}" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${budget_db_path}" --node node-a --runtime-root "${budget_runtime_root}" --state-root "${budget_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${budget_db_path}" --node node-b --runtime-root "${budget_runtime_root}" --state-root "${budget_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${budget_db_path}" --node node-c --runtime-root "${budget_runtime_root}" --state-root "${budget_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${budget_db_path}" | grep -F "iteration=0/1 exhausted=no" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${budget_db_path}" | grep -F "state=actionable reason=safe-direct-workers=2" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${budget_db_path}" | grep -F "worker=worker-b placement_mode=movable current=node-b:0 class=safe-direct decision=propose state=ready-in-place-upgrade target=node-b:1 action=upgrade-to-exclusive score=185 preemption_required=no" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${budget_db_path}" | grep -F "worker=worker-c placement_mode=movable current=node-c:0 class=safe-direct decision=propose state=ready-in-place-upgrade target=node-c:1 action=upgrade-to-exclusive score=185 preemption_required=no" >/dev/null
-"${build_dir}/comet-controller" reconcile-rebalance-proposals --db "${budget_db_path}" --artifacts-root "${budget_artifacts_root}" | grep -F "applied rebalance proposal for worker 'worker-b'" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${budget_db_path}" --node node-a --runtime-root "${budget_runtime_root}" --state-root "${budget_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${budget_db_path}" --node node-b --runtime-root "${budget_runtime_root}" --state-root "${budget_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${budget_db_path}" --node node-c --runtime-root "${budget_runtime_root}" --state-root "${budget_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${budget_db_path}" | grep -F "iteration=1/1 exhausted=yes" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${budget_db_path}" | grep -F "state=waiting-for-convergence reason=active-rollouts=1" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${budget_db_path}" | grep -F "worker=worker-c placement_mode=movable current=node-c:0 class=gated decision=hold state=active-scheduler-action" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${budget_db_path}" | grep -F "plane_action=rebalance phase=verifying-move worker=worker-b generation=2 stable_samples=0/3 rollback_attempts=0" >/dev/null
-"${build_dir}/comet-controller" reconcile-rebalance-proposals --db "${budget_db_path}" --artifacts-root "${budget_artifacts_root}" | grep -F "rebalance proposals: blocked by controller gate" >/dev/null
-threshold_bundle_dir="$(mktemp -d "${PWD}/var/threshold-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${threshold_bundle_dir}"
-perl -0pi -e 's/"gpus": \["0", "1"\]/"gpus": ["0"]/; s/"0": 24576,\n\s*"1": 24576/"0": 24576/' "${threshold_bundle_dir}/plane.json"
-perl -0pi -e 's/"share_mode": "exclusive"/"share_mode": "shared"/; s/"gpu_fraction": 1.0/"gpu_fraction": 0.25/; s/"memory_cap_mb": 16384/"memory_cap_mb": 4096/' "${threshold_bundle_dir}/workers/worker-a.json"
-perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "movable",/' "${threshold_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" init-db --db "${threshold_db_path}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle --bundle "${threshold_bundle_dir}" --db "${threshold_db_path}" --artifacts-root "${threshold_artifacts_root}" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${threshold_db_path}" --node node-a --runtime-root "${threshold_runtime_root}" --state-root "${threshold_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${threshold_db_path}" --node node-b --runtime-root "${threshold_runtime_root}" --state-root "${threshold_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${threshold_db_path}" | grep -F "worker=worker-b placement_mode=movable current=node-b:0 class=stable decision=hold state=below-threshold target=node-a:0 action=move-with-current-fraction score=32 preemption_required=no gate_reason=score-below-threshold(32<100)" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${threshold_db_path}" | grep -F "state=complete reason=remaining-moves-below-threshold=1" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${threshold_db_path}" | grep -F "actionable=0 safe_direct=0 rollout_class=0 gated=0 blocked_active_rollouts=0 assignment_busy=0 observation_gated=0 stable_holds=1 below_threshold=1 deferred=0 no_candidate=0" >/dev/null
-"${build_dir}/comet-controller" reconcile-rebalance-proposals --db "${threshold_db_path}" --artifacts-root "${threshold_artifacts_root}" | grep -F "rebalance proposals: none actionable" >/dev/null
-drain_bundle_dir="$(mktemp -d "${PWD}/var/drain-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${drain_bundle_dir}"
-perl -0pi -e 's/"gpus": \["0"\]/"gpus": ["0", "1"]/; s/"0": 24576/"0": 24576,\n        "1": 24576/' "${drain_bundle_dir}/plane.json"
-perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "movable",/' "${drain_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" init-db --db "${drain_db_path}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle --bundle "${drain_bundle_dir}" --db "${drain_db_path}" --artifacts-root "${drain_artifacts_root}" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${drain_db_path}" --node node-a --runtime-root "${drain_runtime_root}" --state-root "${drain_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${drain_db_path}" --node node-b --runtime-root "${drain_runtime_root}" --state-root "${drain_state_root}" --compose-mode skip >/dev/null
-sqlite3 "${drain_db_path}" <<'SQL'
-INSERT INTO node_availability_overrides(node_name, availability, status_message, updated_at)
-VALUES('node-b', 'draining', 'test fixture', datetime('now'))
-ON CONFLICT(node_name) DO UPDATE SET
-  availability=excluded.availability,
-  status_message=excluded.status_message,
-  updated_at=excluded.updated_at;
-SQL
-"${build_dir}/comet-controller" show-rebalance-plan --db "${drain_db_path}" | grep -F "worker=worker-b placement_mode=movable current=node-b:0 class=safe-direct decision=propose state=ready-drain-move target=node-a:1 action=upgrade-to-exclusive" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${drain_db_path}" | grep -F "actionable=1 safe_direct=1 rollout_class=0 gated=0 blocked_active_rollouts=0 assignment_busy=0 observation_gated=0 stable_holds=0 below_threshold=0 deferred=0 no_candidate=0" >/dev/null
-compute_bundle_dir="$(mktemp -d "${PWD}/var/compute-bundle.XXXXXX")"
-cp -R "${PWD}/config/demo-plane/." "${compute_bundle_dir}"
-perl -0pi -e 's/"name": "worker-b",/"name": "worker-b",\n  "placement_mode": "movable",/' "${compute_bundle_dir}/workers/worker-b.json"
-"${build_dir}/comet-controller" init-db --db "${compute_db_path}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle --bundle "${compute_bundle_dir}" --db "${compute_db_path}" --artifacts-root "${compute_artifacts_root}" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${compute_db_path}" --node node-a --runtime-root "${compute_runtime_root}" --state-root "${compute_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${compute_db_path}" --node node-b --runtime-root "${compute_runtime_root}" --state-root "${compute_state_root}" --compose-mode skip >/dev/null
-compute_pressure_telemetry_json="$(
-  jq -cn '{
-    degraded: false,
-    source: "fixture",
-    devices: [
-      {
-        gpu_device: "1",
-        total_vram_mb: 24576,
-        used_vram_mb: 2048,
-        free_vram_mb: 22000,
-        gpu_utilization_pct: 97,
-        processes: [
-          {
-            pid: 4242,
-            used_vram_mb: 1024,
-            instance_name: "foreign-load"
-          }
-        ]
-      }
-    ]
-  }'
-)"
-sqlite3 "${compute_db_path}" \
-  "UPDATE host_observations SET status='idle', applied_generation=1, gpu_telemetry_json='${compute_pressure_telemetry_json}', heartbeat_at=datetime('now') WHERE node_name='node-a';"
-"${build_dir}/comet-controller" show-rebalance-plan --db "${compute_db_path}" | grep -F "worker=worker-b placement_mode=movable current=node-b:0 class=gated decision=hold state=gated-target target=node-a:1 action=upgrade-to-exclusive" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${compute_db_path}" | grep -F "gate_reason=compute-pressure" >/dev/null
-compute_vram_gate_telemetry_json="$(
-  jq -cn '{
-    degraded: false,
-    source: "fixture",
-    devices: [
-      {
-        gpu_device: "1",
-        total_vram_mb: 24576,
-        used_vram_mb: 22000,
-        free_vram_mb: 2048,
-        gpu_utilization_pct: 10,
-        processes: []
-      }
-    ]
-  }'
-)"
-sqlite3 "${compute_db_path}" \
-  "UPDATE host_observations SET status='idle', applied_generation=1, gpu_telemetry_json='${compute_vram_gate_telemetry_json}', heartbeat_at=datetime('now') WHERE node_name='node-a';"
-"${build_dir}/comet-controller" show-rebalance-plan --db "${compute_db_path}" | grep -F "gate_reason=observed-insufficient-vram" >/dev/null
-"${build_dir}/comet-controller" show-rebalance-plan --db "${compute_db_path}" | grep -F "observation_gated=1" >/dev/null
-"${build_dir}/comet-controller" preview-bundle --bundle "${PWD}/config/demo-plane" --node node-a >/dev/null
-"${build_dir}/comet-controller" init-db --db "${db_path}" >/dev/null
-"${build_dir}/comet-controller" plan-bundle --bundle "${PWD}/config/demo-plane" --db "${db_path}" >/dev/null
-"${build_dir}/comet-controller" plan-host-ops --bundle "${PWD}/config/demo-plane" --db "${db_path}" --artifacts-root "${artifacts_root}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle --bundle "${PWD}/config/demo-plane" --db "${db_path}" --artifacts-root "${artifacts_root}" >/dev/null
-"${build_dir}/comet-controller" show-node-availability --db "${db_path}" | grep -F "(empty)" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" >/dev/null
-"${build_dir}/comet-controller" show-host-health --db "${db_path}" | grep -F "health=unknown" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${db_path}" >/dev/null
-"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" >/tmp/comet-controller-serve.log 2>&1 &
-http_server_pid="$!"
-for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-assignments?node=node-a" >/tmp/comet-controller-api.json 2>/dev/null; then
-    break
-  fi
-  sleep 0.1
-done
-wait_for_http "http://127.0.0.1:${http_port}/api/v1/host-assignments?node=node-a" 100 "/tmp/comet-controller-serve.log"
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-assignments?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"observations":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health?node=node-a" | grep -F '"node_name":"node-a"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-health?node=node-a" | grep -F '"health":"unknown"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?node=node-a" | grep -F '"disk_name":"plane-alpha-shared"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?plane=alpha&node=node-a" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions?node=node-a" | grep -F '"actions":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/rollout-actions?plane=alpha&node=node-a" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan?node=node-a" | grep -F '"rebalance_plan":[]' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan?plane=alpha&node=node-a" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/rebalance-plan?node=node-a" | grep -F '"controller_gate"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"desired_generation":1' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"assignments"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"alerts"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/dashboard" | grep -F '"recent_events"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/events?plane=alpha&limit=5" | grep -F '"plane_name":"alpha"' >/dev/null
-curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/scheduler-tick?artifacts_root=${artifacts_root}" | grep -F '"action":"scheduler-tick"' >/dev/null
-curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/scheduler-tick?artifacts_root=${artifacts_root}" | grep -F 'step=rebalance-reconcile' >/dev/null
-curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rebalance-proposals?artifacts_root=${artifacts_root}" | grep -F '"action":"reconcile-rebalance-proposals"' >/dev/null
-curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rebalance-proposals?artifacts_root=${artifacts_root}" | grep -F 'blocked by controller gate' >/dev/null
-curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rollout-actions?artifacts_root=${artifacts_root}" | grep -F '"action":"reconcile-rollout-actions"' >/dev/null
-curl -fsS -X POST "http://127.0.0.1:${http_port}/api/v1/reconcile-rollout-actions?artifacts_root=${artifacts_root}" | grep -F 'no rollout actions for current generation' >/dev/null
-kill "${http_server_pid}" >/dev/null 2>&1 || true
-wait "${http_server_pid}" >/dev/null 2>&1 || true
-http_server_pid=""
-"${build_dir}/comet-controller" render-infer-runtime --db "${db_path}" | grep -F '"gpu_nodes"' >/dev/null
-"${build_dir}/comet-controller" render-infer-runtime --db "${db_path}" | grep -F '"serving_workers"' >/dev/null
-"${build_dir}/comet-controller" render-compose --db "${db_path}" --node node-a >/dev/null
-test -f "${artifacts_root}/alpha/node-a/docker-compose.yml"
-test -f "${artifacts_root}/alpha/infer-runtime.json"
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh validate-config --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "infer runtime config: OK" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh list-profiles | grep -F "generic" >/dev/null
-test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/http_probe.py
-test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/runtime_supervisor.py
-test ! -e /mnt/e/dev/Repos/comet-node/runtime/infer/runtime_launcher.py
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh bootstrap-runtime --config "${artifacts_root}/alpha/infer-runtime.json" --profile generic | grep -F "runtime_mode=llama-library" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh plan-launch --config "${artifacts_root}/alpha/infer-runtime.json" | grep -F "serving-worker=node:node-a worker:worker-a gpu:0 fraction:1 colocated_with_primary_infer:yes" >/dev/null
-mkdir -p "${infer_model_root}"
-"${script_dir}/comet-devtool.sh" rewrite-infer-runtime-config \
-  --input "${artifacts_root}/alpha/infer-runtime.json" \
-  --output "${infer_model_config}" \
-  --control-root "${infer_model_root}/control" \
-  --models-root "${infer_model_root}/models" \
-  --gguf-cache-dir "${infer_model_root}/models/gguf" \
-  --infer-log-dir "${infer_model_root}/logs/infer"
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh preload-model --config "${infer_model_config}" --alias qwen35 --source-model-id Qwen/Qwen3.5-7B-Instruct --local-model-path "${infer_model_root}/models/qwen35" --apply | grep -F "preload-model-plan:" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh cache-status --config "${infer_model_config}" --alias qwen35 --local-model-path "${infer_model_root}/models/qwen35" | grep -F "registry=present" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh switch-model --config "${infer_model_config}" --model-id Qwen/Qwen3.5-7B-Instruct --tp 1 --pp 1 --gpu-memory-utilization 0.85 --runtime-profile qwen3_5 --apply | grep -F 'runtime_profile="qwen3_5"' >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh gateway-plan --config "${infer_model_config}" --apply | grep -F "upstream_models_url=http://127.0.0.1:8000/v1/models" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh gateway-status --config "${infer_model_config}" | grep -F "active_model=Qwen/Qwen3.5-7B-Instruct served=Qwen3.5-7B-Instruct" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh status --config "${infer_model_config}" | grep -F "runtime_phase=planned" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh status --config "${infer_model_config}" | grep -F "launch_ready=no" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh show-active-model --config "${infer_model_config}" | grep -F '"model_id": "Qwen/Qwen3.5-7B-Instruct"' >/dev/null
-"${build_dir}/comet-hostd" show-demo-ops --node node-b >/dev/null
-"${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-b --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-b | grep -F "status=idle" >/dev/null
-"${build_dir}/comet-controller" show-host-health --db "${db_path}" --node node-b | grep -F "health=online status=idle" >/dev/null
-"${build_dir}/comet-hostd" show-state-ops --db "${db_path}" --node node-a --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" | grep -F "write-infer-runtime" >/dev/null
-"${build_dir}/comet-hostd" apply-state-ops --db "${db_path}" --node node-a --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "runtime_status: empty" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk-runtime-state:" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=plane-alpha-shared node=node-a state=directory-backed" >/dev/null
-runtime_shared_root="${runtime_root}/var/lib/comet/disks/planes/alpha/shared"
-"${script_dir}/comet-devtool.sh" rewrite-infer-runtime-config \
-  --input "${artifacts_root}/alpha/infer-runtime.json" \
-  --output "${runtime_infer_config}" \
-  --control-root "${runtime_shared_root}/control/alpha" \
-  --models-root "${runtime_shared_root}/models" \
-  --gguf-cache-dir "${runtime_shared_root}/models/gguf" \
-  --infer-log-dir "${runtime_shared_root}/logs/infer"
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh preload-model --config "${runtime_infer_config}" --alias qwen35 --source-model-id Qwen/Qwen3.5-7B-Instruct --local-model-path "${runtime_root}/var/lib/comet/disks/planes/alpha/shared/models/qwen35" --apply | grep -F "preload-model-plan:" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh switch-model --config "${runtime_infer_config}" --model-id Qwen/Qwen3.5-7B-Instruct --tp 1 --pp 1 --gpu-memory-utilization 0.85 --runtime-profile qwen3_5 --apply | grep -F 'runtime_profile="qwen3_5"' >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh gateway-plan --config "${runtime_infer_config}" --apply | grep -F "upstream_models_url=http://127.0.0.1:8000/v1/models" >/dev/null
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh status --config "${runtime_infer_config}" --apply | grep -F "launch_ready=no" >/dev/null
-"${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "launch_ready=no" >/dev/null
-"${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "runtime_launch_ready=no runtime_model=Qwen/Qwen3.5-7B-Instruct" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_telemetry_source=statvfs" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_read_bytes=" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "disk_faults=" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "network_telemetry_source=sysfs" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "cpu_telemetry_source=procfs" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "net iface=eth0" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "cpu loadavg=" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "read_bytes=" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "fault_count=" >/dev/null
-"${build_dir}/comet-controller" show-events --db "${db_path}" --node node-a | grep -F "category=host-observation type=reported" >/dev/null
-"${build_dir}/comet-controller" serve --db "${db_path}" --listen-host 127.0.0.1 --listen-port "${http_port}" >/tmp/comet-controller-serve.log 2>&1 &
-http_server_pid="$!"
-wait_for_http "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" 100 "/tmp/comet-controller-serve.log"
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"network_telemetry"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"cpu_telemetry"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"read_bytes"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"utilization_pct"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"fault_count"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/host-observations?node=node-a" | grep -F '"interface_name":"eth0"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?node=node-a" | grep -F '"io_bytes"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/disk-state?node=node-a" | grep -F '"perf_counters_available"' >/dev/null
-curl -fsS "http://127.0.0.1:${http_port}/api/v1/events?node=node-a" | grep -F '"category":"host-observation"' >/dev/null
-kill "${http_server_pid}" >/dev/null 2>&1 || true
-wait "${http_server_pid}" >/dev/null 2>&1 || true
-http_server_pid=""
-/mnt/e/dev/Repos/comet-node/runtime/infer/inferctl.sh stop --config "${runtime_infer_config}" --apply | grep -F "launch_ready=no" >/dev/null
-"${build_dir}/comet-hostd" show-runtime-status --node node-a --state-root "${state_root}" | grep -F "launch_ready=no" >/dev/null
-"${build_dir}/comet-hostd" report-observed-state --db "${db_path}" --node node-a --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-a | grep -F "runtime_launch_ready=no runtime_model=(empty)" >/dev/null
-"${build_dir}/comet-hostd" show-state-ops --db "${db_path}" --node node-b --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=0/3 type=apply-node-state status=pending" >/dev/null
-: > "${bad_state_root}"
-if "${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${bad_state_root}" --compose-mode skip >/dev/null 2>&1; then
-  echo "check: expected first blocked assignment attempt to fail" >&2
-  exit 1
-fi
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=1/3 type=apply-node-state status=pending" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-b | grep -F "status=failed" >/dev/null
-"${build_dir}/comet-controller" show-events --db "${db_path}" --node node-b | grep -F "category=host-assignment type=failed" >/dev/null
-"${build_dir}/comet-controller" plan-bundle --bundle "${PWD}/config/demo-plane" --db "${db_path}" | grep -F "skipped_nodes=node-b(failed)" >/dev/null
-if "${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${bad_state_root}" --compose-mode skip >/dev/null 2>&1; then
-  echo "check: expected second blocked assignment attempt to fail" >&2
-  exit 1
-fi
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=2/3 type=apply-node-state status=pending" >/dev/null
-if "${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${bad_state_root}" --compose-mode skip >/dev/null 2>&1; then
-  echo "check: expected third blocked assignment attempt to fail" >&2
-  exit 1
-fi
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=3/3 type=apply-node-state status=failed" >/dev/null
-"${build_dir}/comet-controller" retry-host-assignment --db "${db_path}" --id 2 >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=3/4 type=apply-node-state status=pending" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${db_path}" --node node-b --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-hostd" show-state-ops --db "${db_path}" --node node-b --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" >/dev/null
-"${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=worker-b-private node=node-b state=directory-backed" >/dev/null
-sqlite3 "${db_path}" \
-  "DELETE FROM disk_runtime_state WHERE disk_name='worker-b-private' AND node_name='node-b';"
-rm -rf "${runtime_root}/nodes/node-b/var/lib/comet/disks/instances/worker-b/private"
-"${build_dir}/comet-hostd" apply-state-ops --db "${db_path}" --node node-b --artifacts-root "${artifacts_root}" --runtime-root "${runtime_root}" --state-root "${state_root}" --compose-mode skip >/dev/null
-test -d "${runtime_root}/nodes/node-b/var/lib/comet/disks/instances/worker-b/private"
-"${build_dir}/comet-controller" show-state --db "${db_path}" | grep -F "disk=worker-b-private node=node-b state=directory-backed-fallback" >/dev/null
-"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "disk=worker-b-private kind=worker-private node=node-b" >/dev/null
-"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "realized_state=directory-backed-fallback" >/dev/null
-"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "worker-b-private" | grep -F "usage_bytes" >/dev/null
-"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "worker-b-private" | grep -F "read_bytes=" >/dev/null
-"${build_dir}/comet-controller" show-disk-state --db "${db_path}" --node node-b | grep -F "worker-b-private" | grep -F "perf_counters=no" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "attempts=4/4 type=apply-node-state status=applied" >/dev/null
-"${build_dir}/comet-controller" show-host-observations --db "${db_path}" --node node-b | grep -F "status=applied applied_generation=1" >/dev/null
-"${build_dir}/comet-controller" show-host-health --db "${db_path}" --node node-b | grep -F "health=online status=applied applied_generation=1" >/dev/null
-"${build_dir}/comet-controller" set-node-availability --db "${db_path}" --node node-b --availability unavailable --message "check maintenance" >/dev/null
-"${build_dir}/comet-controller" show-node-availability --db "${db_path}" --node node-b | grep -F "availability=unavailable" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "type=drain-node-state status=pending" >/dev/null
-"${build_dir}/comet-controller" plan-bundle --bundle "${PWD}/config/demo-plane" --db "${db_path}" | grep -F "skipped_nodes=node-b(unavailable)" >/dev/null
-"${build_dir}/comet-controller" set-node-availability --db "${db_path}" --node node-b --availability active --message "back online" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${db_path}" --node node-b | grep -F "generation=1 attempts=0/3 type=apply-node-state status=pending" >/dev/null
-
-"${build_dir}/comet-controller" init-db --db "${parallel_db_path}" >/dev/null
-"${build_dir}/comet-controller" apply-bundle --bundle "${PWD}/config/demo-plane" --db "${parallel_db_path}" --artifacts-root "${parallel_artifacts_root}" >/dev/null
-(
-  "${build_dir}/comet-hostd" apply-next-assignment --db "${parallel_db_path}" --node node-a --runtime-root "${parallel_runtime_root}" --state-root "${parallel_state_root}" --compose-mode skip >/dev/null
-) &
-parallel_pid_a=$!
-(
-  "${build_dir}/comet-hostd" apply-next-assignment --db "${parallel_db_path}" --node node-b --runtime-root "${parallel_runtime_root}" --state-root "${parallel_state_root}" --compose-mode skip >/dev/null
-) &
-parallel_pid_b=$!
-wait "${parallel_pid_a}"
-wait "${parallel_pid_b}"
-"${build_dir}/comet-controller" show-host-assignments --db "${parallel_db_path}" --node node-a | grep -F "status=applied" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${parallel_db_path}" --node node-b | grep -F "status=applied" >/dev/null
-
-"${build_dir}/comet-controller" init-db --db "${multiplane_db_path}" >/dev/null
-mkdir -p "${multiplane_beta_bundle}/workers"
-cat > "${multiplane_beta_bundle}/plane.json" <<'JSON'
-{
-  "name": "beta",
-  "control_root": "/comet/shared/control/beta",
-  "runtime": {
-    "primary_infer_node": "node-a",
-    "net_if": "eth0",
-    "models_root": "/comet/shared/models",
-    "gguf_cache_dir": "/comet/shared/models/gguf",
-    "infer_log_dir": "/comet/shared/logs/infer",
-    "llama_port": 8001,
-    "llama_ctx_size": 8192,
-    "llama_threads": 8,
-    "llama_gpu_layers": 99,
-    "inference_healthcheck_retries": 300,
-    "inference_healthcheck_interval_sec": 5
-  },
-  "gateway": {
-    "listen_host": "0.0.0.0",
-    "listen_port": 8081,
-    "server_name": "beta.local"
-  },
-  "shared_disk_gb": 200,
-  "nodes": [
-    {
-      "name": "node-a",
-      "platform": "linux",
-      "gpus": ["0", "1"],
-      "gpu_memory_mb": {
-        "0": 24576,
-        "1": 24576
-      }
-    },
-    {
-      "name": "node-b",
-      "platform": "linux",
-      "gpus": ["0"],
-      "gpu_memory_mb": {
-        "0": 24576
-      }
-    }
-  ]
-}
-JSON
-cat > "${multiplane_beta_bundle}/infer.json" <<'JSON'
-{
-  "name": "infer-beta",
-  "node": "node-a",
-  "private_disk_gb": 80,
-  "image": "comet/infer-runtime:dev"
-}
-JSON
-cat > "${multiplane_beta_bundle}/workers/worker-c.json" <<'JSON'
-{
-  "name": "worker-c",
-  "node": "node-b",
-  "gpu_device": "0",
-  "share_mode": "shared",
-  "gpu_fraction": 0.25,
-  "priority": 120,
-  "preemptible": true,
-  "memory_cap_mb": 4096,
-  "private_disk_gb": 40,
-  "image": "comet/worker-runtime:dev"
-}
-JSON
-"${build_dir}/comet-controller" import-bundle --db "${multiplane_db_path}" --bundle "${PWD}/config/demo-plane" >/dev/null
-"${build_dir}/comet-controller" import-bundle --db "${multiplane_db_path}" --bundle "${multiplane_beta_bundle}" >/dev/null
-"${build_dir}/comet-controller" list-planes --db "${multiplane_db_path}" | grep -F "name=alpha state=ready generation=1" >/dev/null
-"${build_dir}/comet-controller" list-planes --db "${multiplane_db_path}" | grep -F "name=beta state=ready generation=1" >/dev/null
-"${build_dir}/comet-controller" start-plane --db "${multiplane_db_path}" --plane alpha >/dev/null
-"${build_dir}/comet-controller" start-plane --db "${multiplane_db_path}" --plane beta >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${multiplane_db_path}" --node node-a | grep -F "plane=alpha" >/dev/null
-"${build_dir}/comet-controller" show-host-assignments --db "${multiplane_db_path}" --node node-a | grep -F "plane=beta" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-a --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-a --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-b --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-b --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
-test -f "${multiplane_state_root}/node-a/planes/alpha/applied-state.json"
-test -f "${multiplane_state_root}/node-a/planes/beta/applied-state.json"
-"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${multiplane_state_root}" | grep -F "instances=3" >/dev/null
-"${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${multiplane_state_root}" | grep -F "instances=2" >/dev/null
-"${build_dir}/comet-controller" stop-plane --db "${multiplane_db_path}" --plane alpha >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-a --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip | grep -F "assignment_type=stop-plane-state" >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-b --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip | grep -F "assignment_type=stop-plane-state" >/dev/null
-"${build_dir}/comet-controller" show-plane --db "${multiplane_db_path}" --plane alpha | grep -F "state=stopped" >/dev/null
-"${build_dir}/comet-controller" show-plane --db "${multiplane_db_path}" --plane beta | grep -F "state=running" >/dev/null
-"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${multiplane_state_root}" | grep -F "instances=1" >/dev/null
-"${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${multiplane_state_root}" | grep -F "instances=1" >/dev/null
-"${build_dir}/comet-controller" start-plane --db "${multiplane_db_path}" --plane alpha >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-a --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-hostd" apply-next-assignment --db "${multiplane_db_path}" --node node-b --runtime-root "${multiplane_runtime_root}" --state-root "${multiplane_state_root}" --compose-mode skip >/dev/null
-"${build_dir}/comet-controller" show-plane --db "${multiplane_db_path}" --plane alpha | grep -F "state=running" >/dev/null
-"${build_dir}/comet-hostd" show-local-state --node node-a --state-root "${multiplane_state_root}" | grep -F "instances=3" >/dev/null
-"${build_dir}/comet-hostd" show-local-state --node node-b --state-root "${multiplane_state_root}" | grep -F "instances=2" >/dev/null
-
-test -d "${runtime_root}/var/lib/comet/disks/planes/alpha/shared"
-test -f "${runtime_root}/var/lib/comet/disks/planes/alpha/shared/control/alpha/infer-runtime.json"
-test -f "${infer_model_root}/control/model-cache-registry.json"
-test -f "${infer_model_root}/control/active-model.json"
-test -f "${infer_model_root}/control/gateway-plan.json"
-test -f "${runtime_root}/var/lib/comet/disks/planes/alpha/shared/control/alpha/runtime-status.json"
-test -d "${runtime_root}/nodes/node-b/var/lib/comet/disks/instances/worker-b/private"
-test -f "${artifacts_root}/alpha/node-b/docker-compose.yml"
-test -f "${state_root}/node-b/applied-state.json"
-test -f "${state_root}/node-b/applied-generation.txt"
+grep -F 'image: naim/web-ui:dev' "${web_ui_runtime_root}/docker-compose.yml" >/dev/null
+"${build_dir}/naim-controller" stop-web-ui --db "${db_path}" --web-ui-root "${web_ui_runtime_root}" --compose-mode skip >/dev/null
 
 echo "check: OK"

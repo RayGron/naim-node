@@ -52,7 +52,7 @@ std::string ToString(SchedulerRolloutPhase phase) {
 nlohmann::json SchedulerViewService::BuildRolloutActionsPayload(
     const RolloutActionsViewData& view) const {
   json payload{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", view.db_path},
       {"plane_name",
        view.plane_name.has_value() ? json(*view.plane_name) : json(nullptr)},
@@ -75,7 +75,7 @@ nlohmann::json SchedulerViewService::BuildRolloutActionsPayload(
         {"target_gpu_device", action.target_gpu_device},
         {"victim_worker_names", action.victim_worker_names},
         {"reason", action.reason},
-        {"status", comet::ToString(action.status)},
+        {"status", naim::ToString(action.status)},
         {"status_message", action.status_message},
     });
   }
@@ -116,7 +116,7 @@ nlohmann::json SchedulerViewService::BuildRolloutActionsPayload(
 nlohmann::json SchedulerViewService::BuildRebalancePlanPayload(
     const RebalancePlanViewData& view) const {
   json payload{
-      {"service", "comet-controller"},
+      {"service", "naim-controller"},
       {"db_path", view.db_path},
       {"plane_name",
        view.plane_name.has_value() ? json(*view.plane_name) : json(nullptr)},
@@ -134,7 +134,7 @@ nlohmann::json SchedulerViewService::BuildRebalancePlanPayload(
   for (const auto& entry : view.rebalance_entries) {
     json item;
     item["worker_name"] = entry.worker_name;
-    item["placement_mode"] = comet::ToString(entry.placement_mode);
+    item["placement_mode"] = naim::ToString(entry.placement_mode);
     item["current_node_name"] = entry.current_node_name;
     item["current_gpu_device"] = entry.current_gpu_device;
     item["target_node_name"] =
@@ -448,7 +448,7 @@ void SchedulerViewService::PrintRebalancePlanEntries(
   }
   for (const auto& entry : entries) {
     out << "  - worker=" << entry.worker_name
-        << " placement_mode=" << comet::ToString(entry.placement_mode)
+        << " placement_mode=" << naim::ToString(entry.placement_mode)
         << " current=" << entry.current_node_name << ":" << entry.current_gpu_device
         << " class=" << (entry.rebalance_class.empty() ? "(empty)" : entry.rebalance_class)
         << " decision=" << entry.decision

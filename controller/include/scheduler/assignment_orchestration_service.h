@@ -9,10 +9,10 @@
 #include "infra/controller_event_service.h"
 #include "infra/controller_print_service.h"
 
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class AssignmentOrchestrationService : public IAssignmentOrchestrationService {
  public:
@@ -21,23 +21,23 @@ class AssignmentOrchestrationService : public IAssignmentOrchestrationService {
       const ControllerPrintService& controller_print_service,
       std::string default_artifacts_root);
 
-  std::optional<comet::HostAssignment> BuildResyncAssignmentForNode(
-      const comet::DesiredState& desired_state,
+  std::optional<naim::HostAssignment> BuildResyncAssignmentForNode(
+      const naim::DesiredState& desired_state,
       int desired_generation,
       const std::string& node_name,
-      const std::vector<comet::HostAssignment>& existing_assignments,
-      const std::optional<comet::HostObservation>& observation) const;
+      const std::vector<naim::HostAssignment>& existing_assignments,
+      const std::optional<naim::HostObservation>& observation) const;
 
-  std::optional<comet::HostAssignment> BuildDrainAssignmentForNode(
-      const comet::DesiredState& desired_state,
+  std::optional<naim::HostAssignment> BuildDrainAssignmentForNode(
+      const naim::DesiredState& desired_state,
       int desired_generation,
       const std::string& node_name,
-      const std::vector<comet::HostAssignment>& existing_assignments) const;
+      const std::vector<naim::HostAssignment>& existing_assignments) const;
 
   int SetNodeAvailability(
       const std::string& db_path,
       const std::string& node_name,
-      comet::NodeAvailability availability,
+      naim::NodeAvailability availability,
       const std::optional<std::string>& status_message) const override;
 
   int RetryHostAssignment(
@@ -47,7 +47,7 @@ class AssignmentOrchestrationService : public IAssignmentOrchestrationService {
   ControllerActionResult ExecuteSetNodeAvailabilityAction(
       const std::string& db_path,
       const std::string& node_name,
-      comet::NodeAvailability availability,
+      naim::NodeAvailability availability,
       const std::optional<std::string>& status_message) const;
 
   ControllerActionResult ExecuteRetryHostAssignmentAction(
@@ -60,4 +60,4 @@ class AssignmentOrchestrationService : public IAssignmentOrchestrationService {
   std::string default_artifacts_root_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

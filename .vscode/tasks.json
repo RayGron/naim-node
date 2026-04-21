@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Comet Host: Build Debug",
+      "label": "Naim Host: Build Debug",
       "type": "shell",
       "command": "bash",
       "args": [
@@ -36,7 +36,7 @@
       }
     },
     {
-      "label": "Comet Host: Build Release",
+      "label": "Naim Host: Build Release",
       "type": "shell",
       "command": "bash",
       "args": [
@@ -66,7 +66,7 @@
       }
     },
     {
-      "label": "Comet Linux x64: Build Debug",
+      "label": "Naim Linux x64: Build Debug",
       "type": "shell",
       "command": "./scripts/build-target.sh",
       "args": [
@@ -81,7 +81,7 @@
       }
     },
     {
-      "label": "Comet Linux x64: Build Release",
+      "label": "Naim Linux x64: Build Release",
       "type": "shell",
       "command": "./scripts/build-target.sh",
       "args": [
@@ -96,7 +96,7 @@
       }
     },
     {
-      "label": "Comet Linux arm64: Build Debug",
+      "label": "Naim Linux arm64: Build Debug",
       "type": "shell",
       "command": "./scripts/build-target.sh",
       "args": [
@@ -111,7 +111,7 @@
       }
     },
     {
-      "label": "Comet Linux arm64: Build Release",
+      "label": "Naim Linux arm64: Build Release",
       "type": "shell",
       "command": "./scripts/build-target.sh",
       "args": [
@@ -126,7 +126,7 @@
       }
     },
     {
-      "label": "Comet Windows x64: Build Debug",
+      "label": "Naim Windows x64: Build Debug",
       "type": "shell",
       "command": "powershell.exe",
       "args": [
@@ -151,7 +151,7 @@
       }
     },
     {
-      "label": "Comet Windows x64: Build Release",
+      "label": "Naim Windows x64: Build Release",
       "type": "shell",
       "command": "powershell.exe",
       "args": [
@@ -176,7 +176,7 @@
       }
     },
     {
-      "label": "Comet Windows arm64: Build Debug",
+      "label": "Naim Windows arm64: Build Debug",
       "type": "shell",
       "command": "powershell.exe",
       "args": [
@@ -201,7 +201,7 @@
       }
     },
     {
-      "label": "Comet Windows arm64: Build Release",
+      "label": "Naim Windows arm64: Build Release",
       "type": "shell",
       "command": "powershell.exe",
       "args": [
@@ -226,7 +226,7 @@
       }
     },
     {
-      "label": "Comet macOS x64: Build Debug",
+      "label": "Naim macOS x64: Build Debug",
       "type": "shell",
       "command": "./scripts/build-target.sh",
       "args": [
@@ -241,7 +241,7 @@
       }
     },
     {
-      "label": "Comet macOS x64: Build Release",
+      "label": "Naim macOS x64: Build Release",
       "type": "shell",
       "command": "./scripts/build-target.sh",
       "args": [
@@ -256,7 +256,7 @@
       }
     },
     {
-      "label": "Comet macOS arm64: Build Debug",
+      "label": "Naim macOS arm64: Build Debug",
       "type": "shell",
       "command": "./scripts/build-target.sh",
       "args": [
@@ -271,7 +271,7 @@
       }
     },
     {
-      "label": "Comet macOS arm64: Build Release",
+      "label": "Naim macOS arm64: Build Release",
       "type": "shell",
       "command": "./scripts/build-target.sh",
       "args": [
@@ -286,7 +286,7 @@
       }
     },
     {
-      "label": "Comet Linux x64: Package Release",
+      "label": "Naim Linux x64: Package Release",
       "type": "shell",
       "command": "./scripts/package-target.sh",
       "args": [
@@ -300,7 +300,7 @@
       }
     },
     {
-      "label": "Comet Linux arm64: Package Release",
+      "label": "Naim Linux arm64: Package Release",
       "type": "shell",
       "command": "./scripts/package-target.sh",
       "args": [
@@ -314,7 +314,7 @@
       }
     },
     {
-      "label": "Comet Windows x64: Package Release",
+      "label": "Naim Windows x64: Package Release",
       "type": "shell",
       "command": "powershell.exe",
       "args": [
@@ -338,7 +338,7 @@
       }
     },
     {
-      "label": "Comet Windows arm64: Package Release",
+      "label": "Naim Windows arm64: Package Release",
       "type": "shell",
       "command": "powershell.exe",
       "args": [
@@ -362,7 +362,7 @@
       }
     },
     {
-      "label": "Comet macOS x64: Package Release",
+      "label": "Naim macOS x64: Package Release",
       "type": "shell",
       "command": "./scripts/package-target.sh",
       "args": [
@@ -376,7 +376,7 @@
       }
     },
     {
-      "label": "Comet macOS arm64: Package Release",
+      "label": "Naim macOS arm64: Package Release",
       "type": "shell",
       "command": "./scripts/package-target.sh",
       "args": [
@@ -390,7 +390,7 @@
       }
     },
     {
-      "label": "Comet: Package Release",
+      "label": "Naim: Package Release",
       "type": "shell",
       "command": "./scripts/package-host-release.sh",
       "group": "build",
@@ -400,7 +400,7 @@
       }
     },
     {
-      "label": "Comet: Check",
+      "label": "Naim: Check",
       "type": "shell",
       "command": "./scripts/check.sh",
       "group": "test",
@@ -410,7 +410,7 @@
       }
     },
     {
-      "label": "Comet macOS: Check",
+      "label": "Naim macOS: Check",
       "type": "shell",
       "command": "./scripts/check-macos.sh",
       "group": "test",

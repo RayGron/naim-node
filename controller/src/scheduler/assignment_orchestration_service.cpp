@@ -2,17 +2,17 @@
 
 #include <iostream>
 
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
-std::optional<comet::HostAssignment> FindLatestHostAssignmentForNodePlane(
-    const std::vector<comet::HostAssignment>& assignments,
+std::optional<naim::HostAssignment> FindLatestHostAssignmentForNodePlane(
+    const std::vector<naim::HostAssignment>& assignments,
     const std::string& node_name,
     const std::string& plane_name) {
-  std::optional<comet::HostAssignment> result;
+  std::optional<naim::HostAssignment> result;
   for (const auto& assignment : assignments) {
     if (assignment.node_name != node_name || assignment.plane_name != plane_name) {
       continue;
@@ -22,10 +22,10 @@ std::optional<comet::HostAssignment> FindLatestHostAssignmentForNodePlane(
   return result;
 }
 
-std::optional<comet::HostAssignment> FindLatestHostAssignmentForPlane(
-    const std::vector<comet::HostAssignment>& assignments,
+std::optional<naim::HostAssignment> FindLatestHostAssignmentForPlane(
+    const std::vector<naim::HostAssignment>& assignments,
     const std::string& plane_name) {
-  std::optional<comet::HostAssignment> result;
+  std::optional<naim::HostAssignment> result;
   for (const auto& assignment : assignments) {
     if (assignment.plane_name != plane_name) {
       continue;
@@ -35,25 +35,25 @@ std::optional<comet::HostAssignment> FindLatestHostAssignmentForPlane(
   return result;
 }
 
-bool AssignmentRepresentsDrainedNode(const comet::HostAssignment& assignment) {
+bool AssignmentRepresentsDrainedNode(const naim::HostAssignment& assignment) {
   return assignment.assignment_type == "drain-node-state" &&
-         (assignment.status == comet::HostAssignmentStatus::Pending ||
-          assignment.status == comet::HostAssignmentStatus::Claimed ||
-          assignment.status == comet::HostAssignmentStatus::Applied);
+         (assignment.status == naim::HostAssignmentStatus::Pending ||
+          assignment.status == naim::HostAssignmentStatus::Claimed ||
+          assignment.status == naim::HostAssignmentStatus::Applied);
 }
 
 bool ObservedNodeStateNeedsResync(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::string& node_name,
-    const comet::HostObservation& observation) {
+    const naim::HostObservation& observation) {
   if (observation.observed_state_json.empty()) {
     return true;
   }
 
-  const comet::DesiredState observed_node_state =
-      comet::DeserializeDesiredStateJson(observation.observed_state_json);
-  const comet::DesiredState desired_node_state =
-      comet::SliceDesiredStateForNode(desired_state, node_name);
+  const naim::DesiredState observed_node_state =
+      naim::DeserializeDesiredStateJson(observation.observed_state_json);
+  const naim::DesiredState desired_node_state =
+      naim::SliceDesiredStateForNode(desired_state, node_name);
 
   if (desired_node_state.disks.empty() && desired_node_state.instances.empty()) {
     return false;
@@ -81,8 +81,8 @@ bool ObservedNodeStateNeedsResync(
   return false;
 }
 
-std::optional<comet::NodeInventory> FindNodeInventory(
-    const comet::DesiredState& desired_state,
+std::optional<naim::NodeInventory> FindNodeInventory(
+    const naim::DesiredState& desired_state,
     const std::string& node_name) {
   for (const auto& node : desired_state.nodes) {
     if (node.name == node_name) {
@@ -102,13 +102,13 @@ AssignmentOrchestrationService::AssignmentOrchestrationService(
       controller_print_service_(controller_print_service),
       default_artifacts_root_(std::move(default_artifacts_root)) {}
 
-std::optional<comet::HostAssignment>
+std::optional<naim::HostAssignment>
 AssignmentOrchestrationService::BuildResyncAssignmentForNode(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     int desired_generation,
     const std::string& node_name,
-    const std::vector<comet::HostAssignment>& existing_assignments,
-    const std::optional<comet::HostObservation>& observation) const {
+    const std::vector<naim::HostAssignment>& existing_assignments,
+    const std::optional<naim::HostObservation>& observation) const {
   bool node_exists = false;
   for (const auto& node : desired_state.nodes) {
     if (node.name == node_name) {
@@ -132,7 +132,7 @@ AssignmentOrchestrationService::BuildResyncAssignmentForNode(
   if (observation.has_value() &&
       observation->applied_generation.has_value() &&
       *observation->applied_generation == desired_generation &&
-      observation->status != comet::HostObservationStatus::Failed &&
+      observation->status != naim::HostObservationStatus::Failed &&
       !latest_assignment_is_drain &&
       !ObservedNodeStateNeedsResync(desired_state, node_name, *observation)) {
     return std::nullopt;
@@ -141,20 +141,20 @@ AssignmentOrchestrationService::BuildResyncAssignmentForNode(
   if (latest_assignment.has_value() &&
       latest_assignment->desired_generation == desired_generation &&
       latest_assignment->assignment_type == "apply-node-state" &&
-      (latest_assignment->status == comet::HostAssignmentStatus::Pending ||
-       latest_assignment->status == comet::HostAssignmentStatus::Claimed ||
-       latest_assignment->status == comet::HostAssignmentStatus::Applied)) {
+      (latest_assignment->status == naim::HostAssignmentStatus::Pending ||
+       latest_assignment->status == naim::HostAssignmentStatus::Claimed ||
+       latest_assignment->status == naim::HostAssignmentStatus::Applied)) {
     return std::nullopt;
   }
 
-  comet::HostAssignment assignment;
+  naim::HostAssignment assignment;
   assignment.node_name = node_name;
   assignment.plane_name = desired_state.plane_name;
   assignment.desired_generation = desired_generation;
   assignment.assignment_type = "apply-node-state";
   assignment.desired_state_json =
-      comet::SerializeDesiredStateJson(
-          comet::SliceDesiredStateForNode(desired_state, node_name));
+      naim::SerializeDesiredStateJson(
+          naim::SliceDesiredStateForNode(desired_state, node_name));
   const auto plane_assignment =
       FindLatestHostAssignmentForPlane(existing_assignments, desired_state.plane_name);
   assignment.artifacts_root = latest_assignment.has_value()
@@ -162,23 +162,23 @@ AssignmentOrchestrationService::BuildResyncAssignmentForNode(
                                   : (plane_assignment.has_value()
                                          ? plane_assignment->artifacts_root
                                          : default_artifacts_root_);
-  assignment.status = comet::HostAssignmentStatus::Pending;
+  assignment.status = naim::HostAssignmentStatus::Pending;
   assignment.status_message = "resync after node returned to active";
   return assignment;
 }
 
-std::optional<comet::HostAssignment>
+std::optional<naim::HostAssignment>
 AssignmentOrchestrationService::BuildDrainAssignmentForNode(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     int desired_generation,
     const std::string& node_name,
-    const std::vector<comet::HostAssignment>& existing_assignments) const {
+    const std::vector<naim::HostAssignment>& existing_assignments) const {
   const auto node = FindNodeInventory(desired_state, node_name);
   if (!node.has_value()) {
     return std::nullopt;
   }
 
-  comet::DesiredState drain_state;
+  naim::DesiredState drain_state;
   drain_state.plane_name = desired_state.plane_name;
   drain_state.plane_shared_disk_name = desired_state.plane_shared_disk_name;
   drain_state.control_root = desired_state.control_root;
@@ -194,18 +194,18 @@ AssignmentOrchestrationService::BuildDrainAssignmentForNode(
   const auto plane_assignment =
       FindLatestHostAssignmentForPlane(existing_assignments, desired_state.plane_name);
 
-  comet::HostAssignment assignment;
+  naim::HostAssignment assignment;
   assignment.node_name = node_name;
   assignment.plane_name = desired_state.plane_name;
   assignment.desired_generation = desired_generation;
   assignment.assignment_type = "drain-node-state";
-  assignment.desired_state_json = comet::SerializeDesiredStateJson(drain_state);
+  assignment.desired_state_json = naim::SerializeDesiredStateJson(drain_state);
   assignment.artifacts_root = latest_assignment.has_value()
                                   ? latest_assignment->artifacts_root
                                   : (plane_assignment.has_value()
                                          ? plane_assignment->artifacts_root
                                          : default_artifacts_root_);
-  assignment.status = comet::HostAssignmentStatus::Pending;
+  assignment.status = naim::HostAssignmentStatus::Pending;
   assignment.status_message = "drain after node availability changed";
   return assignment;
 }
@@ -213,16 +213,16 @@ AssignmentOrchestrationService::BuildDrainAssignmentForNode(
 int AssignmentOrchestrationService::SetNodeAvailability(
     const std::string& db_path,
     const std::string& node_name,
-    comet::NodeAvailability availability,
+    naim::NodeAvailability availability,
     const std::optional<std::string>& status_message) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto previous_override = store.LoadNodeAvailabilityOverride(node_name);
   const auto previous_availability =
       previous_override.has_value() ? previous_override->availability
-                                    : comet::NodeAvailability::Active;
+                                    : naim::NodeAvailability::Active;
 
-  comet::NodeAvailabilityOverride availability_override;
+  naim::NodeAvailabilityOverride availability_override;
   availability_override.node_name = node_name;
   availability_override.availability = availability;
   availability_override.status_message = status_message.value_or("");
@@ -233,8 +233,8 @@ int AssignmentOrchestrationService::SetNodeAvailability(
       "updated",
       "updated node availability override",
       nlohmann::json{
-          {"availability", comet::ToString(availability)},
-          {"previous_availability", comet::ToString(previous_availability)},
+          {"availability", naim::ToString(availability)},
+          {"previous_availability", naim::ToString(previous_availability)},
           {"status_message", status_message.value_or("")},
       },
       "",
@@ -250,9 +250,9 @@ int AssignmentOrchestrationService::SetNodeAvailability(
   if (!desired_states.empty()) {
     const auto existing_assignments = store.LoadHostAssignments();
     const auto node_observation = store.LoadHostObservation(node_name);
-    if (previous_availability == comet::NodeAvailability::Active &&
-        availability != comet::NodeAvailability::Active) {
-      std::vector<comet::HostAssignment> drain_assignments;
+    if (previous_availability == naim::NodeAvailability::Active &&
+        availability != naim::NodeAvailability::Active) {
+      std::vector<naim::HostAssignment> drain_assignments;
       for (const auto& desired_state : desired_states) {
         const auto plane = store.LoadPlane(desired_state.plane_name);
         if (!plane.has_value() || plane->state == "stopped") {
@@ -281,9 +281,9 @@ int AssignmentOrchestrationService::SetNodeAvailability(
       }
     }
 
-    if (previous_availability != comet::NodeAvailability::Active &&
-        availability == comet::NodeAvailability::Active) {
-      std::vector<comet::HostAssignment> resync_assignments;
+    if (previous_availability != naim::NodeAvailability::Active &&
+        availability == naim::NodeAvailability::Active) {
+      std::vector<naim::HostAssignment> resync_assignments;
       for (const auto& desired_state : desired_states) {
         const auto plane = store.LoadPlane(desired_state.plane_name);
         if (!plane.has_value() || plane->state == "stopped") {
@@ -321,7 +321,7 @@ int AssignmentOrchestrationService::SetNodeAvailability(
 int AssignmentOrchestrationService::RetryHostAssignment(
     const std::string& db_path,
     int assignment_id) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   const auto assignment = store.LoadHostAssignment(assignment_id);
@@ -329,10 +329,10 @@ int AssignmentOrchestrationService::RetryHostAssignment(
     throw std::runtime_error(
         "host assignment id=" + std::to_string(assignment_id) + " not found");
   }
-  if (assignment->status != comet::HostAssignmentStatus::Failed) {
+  if (assignment->status != naim::HostAssignmentStatus::Failed) {
     throw std::runtime_error(
         "host assignment id=" + std::to_string(assignment_id) +
-        " is not failed; current status=" + comet::ToString(assignment->status));
+        " is not failed; current status=" + naim::ToString(assignment->status));
   }
 
   const auto latest_generation = store.LoadDesiredGeneration();
@@ -378,7 +378,7 @@ int AssignmentOrchestrationService::RetryHostAssignment(
 ControllerActionResult AssignmentOrchestrationService::ExecuteSetNodeAvailabilityAction(
     const std::string& db_path,
     const std::string& node_name,
-    comet::NodeAvailability availability,
+    naim::NodeAvailability availability,
     const std::optional<std::string>& status_message) const {
   return RunControllerActionResult(
       "set-node-availability",
@@ -393,4 +393,4 @@ ControllerActionResult AssignmentOrchestrationService::ExecuteRetryHostAssignmen
       [&]() { return RetryHostAssignment(db_path, assignment_id); });
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

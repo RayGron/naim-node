@@ -2,23 +2,50 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "infra/controller_action.h"
 
-#include "comet/security/crypto_utils.h"
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "app/controller_time_support.h"
+
+#include "naim/security/crypto_utils.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
 using nlohmann::json;
 
 namespace {
 
+constexpr std::uintmax_t kMaxModelArtifactChunkBytes = 4ULL * 1024ULL * 1024ULL;
+constexpr std::uintmax_t kMaxPeerTransferChunkBytes = 64ULL * 1024ULL * 1024ULL;
+constexpr int kPeerLinkFreshSeconds = 120;
+constexpr int kTransferTicketTtlSeconds = 7200;
+
 bool StartsWithPathPrefix(const std::string& path, const std::string& prefix) {
   return path.rfind(prefix, 0) == 0;
 }
+
+bool IsSafeRelativePath(const std::string& value) {
+  const std::filesystem::path normalized = std::filesystem::path(value).lexically_normal();
+  const std::string text = normalized.generic_string();
+  return !text.empty() && text != "." && text.front() != '/' &&
+         text != ".." && text.rfind("../", 0) != 0;
+}
+
+struct HostInventorySummary {
+  std::string storage_root;
+  int gpu_count = 0;
+  std::uint64_t total_memory_bytes = 0;
+  std::uint64_t storage_total_bytes = 0;
+  std::uint64_t storage_free_bytes = 0;
+  bool has_storage_capacity = false;
+};
 
 std::optional<std::string> FindQueryStringValue(
     const HttpRequest& request,
@@ -37,6 +64,126 @@ json ParseJsonBody(const HttpRequest& request) {
   return json::parse(request.body);
 }
 
+bool SqlTimestampIsFresh(const HostdHttpSupport& support, const std::string& timestamp, int seconds) {
+  if (timestamp.empty()) {
+    return false;
+  }
+  const auto age = support.timestamp_age_seconds(timestamp);
+  return age.has_value() && *age >= 0 && *age <= seconds;
+}
+
+std::string PeerLinkState(
+    const HostdHttpSupport& support,
+    const naim::HostPeerLinkRecord& link,
+    const std::optional<naim::HostPeerLinkRecord>& reverse_link) {
+  const bool fresh = SqlTimestampIsFresh(support, link.last_probe_at, kPeerLinkFreshSeconds) ||
+                     SqlTimestampIsFresh(support, link.last_seen_at, kPeerLinkFreshSeconds);
+  const bool reverse_fresh =
+      reverse_link.has_value() &&
+      (SqlTimestampIsFresh(support, reverse_link->last_probe_at, kPeerLinkFreshSeconds) ||
+       SqlTimestampIsFresh(support, reverse_link->last_seen_at, kPeerLinkFreshSeconds));
+  if (fresh && reverse_fresh && link.tcp_reachable && reverse_link->tcp_reachable) {
+    return "direct";
+  }
+  if (fresh) {
+    return "partial";
+  }
+  return "stale";
+}
+
+json BuildPeerLinkPayload(
+    const HostdHttpSupport& support,
+    const naim::HostPeerLinkRecord& link,
+    const std::optional<naim::HostPeerLinkRecord>& reverse_link) {
+  const std::string state = PeerLinkState(support, link, reverse_link);
+  return json{
+      {"observer_node_name", link.observer_node_name},
+      {"peer_node_name", link.peer_node_name},
+      {"peer_endpoint", link.peer_endpoint.empty() ? json(nullptr) : json(link.peer_endpoint)},
+      {"local_interface", link.local_interface.empty() ? json(nullptr) : json(link.local_interface)},
+      {"remote_address", link.remote_address.empty() ? json(nullptr) : json(link.remote_address)},
+      {"seen_udp", link.seen_udp},
+      {"tcp_reachable", link.tcp_reachable},
+      {"same_lan", state == "direct"},
+      {"state", state},
+      {"rtt_ms", link.rtt_ms > 0 ? json(link.rtt_ms) : json(nullptr)},
+      {"last_seen_at", link.last_seen_at.empty() ? json(nullptr) : json(link.last_seen_at)},
+      {"last_probe_at", link.last_probe_at.empty() ? json(nullptr) : json(link.last_probe_at)},
+      {"updated_at", link.updated_at.empty() ? json(nullptr) : json(link.updated_at)},
+  };
+}
+
+void UpsertPeerLinksFromObservation(
+    naim::ControllerStore* store,
+    const naim::HostObservation& observation) {
+  if (store == nullptr || observation.network_telemetry_json.empty()) {
+    return;
+  }
+  const auto parsed =
+      json::parse(observation.network_telemetry_json, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    return;
+  }
+  const auto network = naim::DeserializeNetworkTelemetryJson(
+      observation.network_telemetry_json);
+  for (const auto& peer : network.peer_discovery) {
+    if (peer.peer_node_name.empty() || peer.peer_node_name == observation.node_name) {
+      continue;
+    }
+    naim::HostPeerLinkRecord link;
+    link.observer_node_name = observation.node_name;
+    link.peer_node_name = peer.peer_node_name;
+    link.peer_endpoint = peer.peer_endpoint;
+    link.local_interface = peer.local_interface;
+    link.remote_address = peer.remote_address;
+    link.seen_udp = peer.seen_udp;
+    link.tcp_reachable = peer.tcp_reachable;
+    link.rtt_ms = peer.rtt_ms;
+    link.last_seen_at = peer.last_seen_at.empty() ? observation.heartbeat_at : peer.last_seen_at;
+    link.last_probe_at = peer.last_probe_at.empty() ? observation.heartbeat_at : peer.last_probe_at;
+    store->UpsertHostPeerLink(link);
+  }
+}
+
+json BuildPeerLinksPayload(
+    const HostdHttpSupport& support,
+    const std::vector<naim::HostPeerLinkRecord>& links) {
+  std::map<std::pair<std::string, std::string>, naim::HostPeerLinkRecord> by_direction;
+  for (const auto& link : links) {
+    by_direction[{link.observer_node_name, link.peer_node_name}] = link;
+  }
+  json items = json::array();
+  int direct_count = 0;
+  int partial_count = 0;
+  int stale_count = 0;
+  for (const auto& link : links) {
+    const auto reverse_it =
+        by_direction.find({link.peer_node_name, link.observer_node_name});
+    const std::optional<naim::HostPeerLinkRecord> reverse =
+        reverse_it == by_direction.end()
+            ? std::nullopt
+            : std::optional<naim::HostPeerLinkRecord>(reverse_it->second);
+    json item = BuildPeerLinkPayload(support, link, reverse);
+    const std::string state = item.value("state", std::string{});
+    if (state == "direct") {
+      ++direct_count;
+    } else if (state == "partial") {
+      ++partial_count;
+    } else {
+      ++stale_count;
+    }
+    items.push_back(std::move(item));
+  }
+  return json{
+      {"items", std::move(items)},
+      {"summary",
+       json{{"total", links.size()},
+            {"direct", direct_count},
+            {"partial", partial_count},
+            {"stale", stale_count}}},
+  };
+}
+
 std::string BuildHostRequestAad(
     const std::string& message_type,
     const std::string& node_name,
@@ -53,7 +200,7 @@ std::string BuildHostResponseAad(
          std::to_string(sequence_number);
 }
 
-json BuildAssignmentPayloadItem(const comet::HostAssignment& assignment) {
+json BuildAssignmentPayloadItem(const naim::HostAssignment& assignment) {
   json progress = nullptr;
   if (!assignment.progress_json.empty() && assignment.progress_json != "{}") {
     progress = json::parse(assignment.progress_json);
@@ -68,14 +215,14 @@ json BuildAssignmentPayloadItem(const comet::HostAssignment& assignment) {
       {"assignment_type", assignment.assignment_type},
       {"desired_state_json", assignment.desired_state_json},
       {"artifacts_root", assignment.artifacts_root},
-      {"status", comet::ToString(assignment.status)},
+      {"status", naim::ToString(assignment.status)},
       {"status_message", assignment.status_message},
       {"progress", progress},
   };
 }
 
-comet::HostObservation ParseHostObservationPayload(const json& payload) {
-  comet::HostObservation observation;
+naim::HostObservation ParseHostObservationPayload(const json& payload) {
+  naim::HostObservation observation;
   observation.node_name = payload.value("node_name", std::string{});
   observation.plane_name = payload.value("plane_name", std::string{});
   if (payload.contains("applied_generation") &&
@@ -86,7 +233,7 @@ comet::HostObservation ParseHostObservationPayload(const json& payload) {
       !payload.at("last_assignment_id").is_null()) {
     observation.last_assignment_id = payload.at("last_assignment_id").get<int>();
   }
-  observation.status = comet::ParseHostObservationStatus(
+  observation.status = naim::ParseHostObservationStatus(
       payload.value("status", std::string("idle")));
   observation.status_message = payload.value("status_message", std::string{});
   observation.observed_state_json =
@@ -107,7 +254,206 @@ comet::HostObservation ParseHostObservationPayload(const json& payload) {
   return observation;
 }
 
-json BuildDiskRuntimeStatePayloadItem(const comet::DiskRuntimeState& state) {
+json ParseCapabilitiesJson(const std::string& capabilities_json) {
+  if (capabilities_json.empty()) {
+    return json::object();
+  }
+  const json parsed = json::parse(capabilities_json, nullptr, false);
+  return parsed.is_discarded() ? json::object() : parsed;
+}
+
+bool IsUsableAbsoluteHostPath(const std::string& value) {
+  return !value.empty() && value.front() == '/' &&
+         value.rfind("/naim/", 0) != 0;
+}
+
+std::string NormalizePathString(const std::filesystem::path& path) {
+  return path.lexically_normal().string();
+}
+
+bool PathBelongsToRoot(
+    const std::filesystem::path& path,
+    const std::filesystem::path& root) {
+  const auto normalized_path = path.lexically_normal();
+  const auto normalized_root = root.lexically_normal();
+  const auto relative = normalized_path.lexically_relative(normalized_root);
+  if (relative.empty()) {
+    return true;
+  }
+  const auto relative_text = relative.string();
+  return relative_text != ".." && relative_text.rfind("../", 0) != 0 &&
+         relative_text.rfind("..\\", 0) != 0;
+}
+
+bool HostAllowsModelArtifactSource(const naim::RegisteredHostRecord& host) {
+  return host.registration_state == "registered" &&
+         host.session_state == "connected" &&
+         (host.storage_role_enabled || host.derived_role == "storage" ||
+          host.derived_role == "worker");
+}
+
+std::string HostStorageRoot(const naim::RegisteredHostRecord& host) {
+  const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
+  if (capabilities.contains("storage_root") && capabilities["storage_root"].is_string()) {
+    return capabilities["storage_root"].get<std::string>();
+  }
+  return {};
+}
+
+bool HostCanServeModelArtifactPath(
+    const naim::RegisteredHostRecord& host,
+    const std::string& source_path) {
+  if (!HostAllowsModelArtifactSource(host) || !IsUsableAbsoluteHostPath(source_path)) {
+    return false;
+  }
+  const std::string storage_root = HostStorageRoot(host);
+  return IsUsableAbsoluteHostPath(storage_root) &&
+         PathBelongsToRoot(source_path, storage_root);
+}
+
+std::optional<std::string> ResolveModelArtifactSourceNode(
+    naim::ControllerStore& store,
+    const std::string& requested_source_node_name,
+    const std::string& source_path) {
+  if (!IsUsableAbsoluteHostPath(source_path)) {
+    return std::nullopt;
+  }
+  const std::string normalized_source =
+      NormalizePathString(std::filesystem::path(source_path));
+  if (!requested_source_node_name.empty()) {
+    const auto host = store.LoadRegisteredHost(requested_source_node_name);
+    if (host.has_value() && HostCanServeModelArtifactPath(*host, normalized_source)) {
+      return host->node_name;
+    }
+    return std::nullopt;
+  }
+
+  for (const auto& job : store.LoadModelLibraryDownloadJobs("completed")) {
+    if (job.node_name.empty()) {
+      continue;
+    }
+    std::vector<std::string> paths = job.retained_output_paths;
+    paths.insert(paths.end(), job.target_paths.begin(), job.target_paths.end());
+    for (const auto& path : paths) {
+      if (NormalizePathString(std::filesystem::path(path)) == normalized_source) {
+        const auto host = store.LoadRegisteredHost(job.node_name);
+        if (host.has_value() && HostCanServeModelArtifactPath(*host, normalized_source)) {
+          return host->node_name;
+        }
+      }
+    }
+  }
+
+  for (const auto& host : store.LoadRegisteredHosts()) {
+    if (HostCanServeModelArtifactPath(host, normalized_source)) {
+      return host.node_name;
+    }
+  }
+  return std::nullopt;
+}
+
+std::vector<std::string> ParseRequestedSourcePaths(const json& body) {
+  std::vector<std::string> source_paths;
+  if (body.contains("source_paths") && body.at("source_paths").is_array()) {
+    for (const auto& item : body.at("source_paths")) {
+      if (!item.is_string()) {
+        continue;
+      }
+      const std::string path = NormalizePathString(std::filesystem::path(item.get<std::string>()));
+      if (!path.empty()) {
+        source_paths.push_back(path);
+      }
+    }
+  }
+  if (source_paths.empty()) {
+    const std::string source_path =
+        NormalizePathString(std::filesystem::path(body.value("source_path", std::string{})));
+    if (!source_path.empty()) {
+      source_paths.push_back(source_path);
+    }
+  }
+  std::sort(source_paths.begin(), source_paths.end());
+  source_paths.erase(std::unique(source_paths.begin(), source_paths.end()), source_paths.end());
+  return source_paths;
+}
+
+HostInventorySummary BuildInventorySummary(
+    const naim::RegisteredHostRecord& host,
+    const naim::HostObservation& observation) {
+  HostInventorySummary summary;
+  const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
+  if (capabilities.contains("storage_root") && capabilities["storage_root"].is_string()) {
+    summary.storage_root = capabilities["storage_root"].get<std::string>();
+  }
+  if (!observation.gpu_telemetry_json.empty()) {
+    summary.gpu_count = static_cast<int>(
+        naim::DeserializeGpuTelemetryJson(observation.gpu_telemetry_json).devices.size());
+  }
+  if (!observation.cpu_telemetry_json.empty()) {
+    summary.total_memory_bytes =
+        naim::DeserializeCpuTelemetryJson(observation.cpu_telemetry_json).total_memory_bytes;
+  }
+  if (!observation.disk_telemetry_json.empty()) {
+    const auto disks = naim::DeserializeDiskTelemetryJson(observation.disk_telemetry_json);
+    for (const auto& item : disks.items) {
+      if (item.disk_name == "storage-root" ||
+          (!summary.storage_root.empty() && item.mount_point == summary.storage_root)) {
+        summary.storage_total_bytes = item.total_bytes;
+        summary.storage_free_bytes = item.free_bytes;
+        summary.has_storage_capacity = item.total_bytes > 0;
+        if (summary.storage_root.empty()) {
+          summary.storage_root = item.mount_point;
+        }
+        break;
+      }
+    }
+  }
+  return summary;
+}
+
+constexpr std::uint64_t kStorageRoleMinDiskBytes =
+    100ULL * 1024ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kWorkerMinRamBytes =
+    32ULL * 1024ULL * 1024ULL * 1024ULL;
+
+std::pair<std::string, std::string> DeriveRole(const HostInventorySummary& summary) {
+  if (summary.gpu_count == 0 &&
+      summary.storage_total_bytes > kStorageRoleMinDiskBytes) {
+    return {"storage", "eligible: no gpu, disk > 100 GB"};
+  }
+  if (summary.gpu_count >= 1 &&
+      summary.total_memory_bytes >= kWorkerMinRamBytes &&
+      summary.storage_total_bytes > kStorageRoleMinDiskBytes) {
+    return {"worker", "eligible: gpu >= 1, ram >= 32 GB, disk > 100 GB"};
+  }
+  if (summary.storage_total_bytes <= kStorageRoleMinDiskBytes) {
+    return {"ineligible", "disk <= 100 GB"};
+  }
+  if (summary.gpu_count >= 1 && summary.total_memory_bytes < kWorkerMinRamBytes) {
+    return {"ineligible", "gpu present but ram < 32 GB"};
+  }
+  return {"ineligible", "inventory does not match storage or worker role"};
+}
+
+json MergeCapabilities(
+    const std::string& capabilities_json,
+    const HostInventorySummary& summary) {
+  json capabilities = ParseCapabilitiesJson(capabilities_json);
+  if (!summary.storage_root.empty()) {
+    capabilities["storage_root"] = summary.storage_root;
+  }
+  if (summary.total_memory_bytes > 0) {
+    capabilities["total_memory_bytes"] = summary.total_memory_bytes;
+  }
+  capabilities["gpu_count"] = summary.gpu_count;
+  if (summary.has_storage_capacity) {
+    capabilities["storage_total_bytes"] = summary.storage_total_bytes;
+    capabilities["storage_free_bytes"] = summary.storage_free_bytes;
+  }
+  return capabilities;
+}
+
+json BuildDiskRuntimeStatePayloadItem(const naim::DiskRuntimeState& state) {
   return json{
       {"disk_name", state.disk_name},
       {"plane_name", state.plane_name},
@@ -125,8 +471,8 @@ json BuildDiskRuntimeStatePayloadItem(const comet::DiskRuntimeState& state) {
   };
 }
 
-comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
-  comet::DiskRuntimeState state;
+naim::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
+  naim::DiskRuntimeState state;
   state.disk_name = payload.value("disk_name", std::string{});
   state.plane_name = payload.value("plane_name", std::string{});
   state.node_name = payload.value("node_name", std::string{});
@@ -142,9 +488,9 @@ comet::DiskRuntimeState ParseDiskRuntimeStatePayload(const json& payload) {
   return state;
 }
 
-std::map<std::string, comet::HostAssignment> BuildLatestPlaneAssignmentsByNode(
-    const std::vector<comet::HostAssignment>& assignments) {
-  std::map<std::string, comet::HostAssignment> latest;
+std::map<std::string, naim::HostAssignment> BuildLatestPlaneAssignmentsByNode(
+    const std::vector<naim::HostAssignment>& assignments) {
+  std::map<std::string, naim::HostAssignment> latest;
   for (const auto& assignment : assignments) {
     auto it = latest.find(assignment.node_name);
     if (it == latest.end() || it->second.id < assignment.id) {
@@ -171,6 +517,21 @@ std::optional<HttpResponse> HostdHttpService::HandleRequest(
   if (request.path == "/api/v1/hostd/hosts") {
     return HandleHosts(db_path, request);
   }
+  if (request.path == "/api/v1/hostd/peer-links") {
+    return HandlePeerLinks(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/file-transfer-tickets") {
+    return HandleFileTransferTickets(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/file-transfer-tickets/validate") {
+    return HandleFileTransferTicketValidate(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/file-upload-tickets") {
+    return HandleFileUploadTickets(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/file-upload-tickets/validate") {
+    return HandleFileUploadTicketValidate(db_path, request);
+  }
   if (StartsWithPathPrefix(request.path, "/api/v1/hostd/hosts/")) {
     return HandleHostPath(db_path, request);
   }
@@ -185,6 +546,18 @@ std::optional<HttpResponse> HostdHttpService::HandleRequest(
   }
   if (StartsWithPathPrefix(request.path, "/api/v1/hostd/assignments/")) {
     return HandleAssignmentAction(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/model-artifacts/chunks/request") {
+    return HandleModelArtifactChunkRequest(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/model-artifacts/chunks/poll") {
+    return HandleModelArtifactChunkPoll(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/model-artifacts/manifest/request") {
+    return HandleModelArtifactManifestRequest(db_path, request);
+  }
+  if (request.path == "/api/v1/hostd/model-artifacts/manifest/poll") {
+    return HandleModelArtifactManifestPoll(db_path, request);
   }
   if (request.path == "/api/v1/hostd/observations") {
     return HandleObservations(db_path, request);
@@ -212,7 +585,7 @@ class HostdRequestContext {
     store_.Initialize();
   }
 
-  comet::ControllerStore& store() { return store_; }
+  naim::ControllerStore& store() { return store_; }
 
   HttpResponse Json(
       int status_code,
@@ -221,14 +594,14 @@ class HostdRequestContext {
     return support_.build_json_response(status_code, payload, headers);
   }
 
-  std::optional<comet::RegisteredHostRecord> Authenticate(
+  std::optional<naim::RegisteredHostRecord> Authenticate(
       const HttpRequest& request,
       const std::optional<std::string>& expected_node_name = std::nullopt) {
-    const auto token_it = request.headers.find("x-comet-host-session");
+    const auto token_it = request.headers.find("x-naim-host-session");
     if (token_it == request.headers.end() || token_it->second.empty()) {
       return std::nullopt;
     }
-    const auto node_name_it = request.headers.find("x-comet-host-node");
+    const auto node_name_it = request.headers.find("x-naim-host-node");
     if (node_name_it == request.headers.end() || node_name_it->second.empty()) {
       return std::nullopt;
     }
@@ -257,7 +630,7 @@ class HostdRequestContext {
 
   json ParseEncryptedBody(
       const HttpRequest& request,
-      comet::RegisteredHostRecord* host,
+      naim::RegisteredHostRecord* host,
       const std::string& message_type) {
     const json body = ParseJsonBody(request);
     if (!body.value("encrypted", false)) {
@@ -268,11 +641,11 @@ class HostdRequestContext {
     if (sequence_number <= host->session_host_sequence) {
       throw std::runtime_error("stale or replayed host session request");
     }
-    const comet::EncryptedEnvelope envelope{
+    const naim::EncryptedEnvelope envelope{
         body.value("nonce", std::string{}),
         body.value("ciphertext", std::string{}),
     };
-    const std::string decrypted = comet::DecryptEnvelopeBase64(
+    const std::string decrypted = naim::DecryptEnvelopeBase64(
         envelope,
         host->session_token,
         BuildHostRequestAad(message_type, host->node_name, sequence_number));
@@ -286,12 +659,16 @@ class HostdRequestContext {
   }
 
   HttpResponse EncryptedResponse(
-      comet::RegisteredHostRecord* host,
+      naim::RegisteredHostRecord* host,
       const std::string& message_type,
       const json& payload) {
+    if (const auto latest = store_.LoadRegisteredHost(host->node_name);
+        latest.has_value()) {
+      *host = *latest;
+    }
     host->session_controller_sequence += 1;
     store_.UpsertRegisteredHost(*host);
-    const comet::EncryptedEnvelope envelope = comet::EncryptEnvelopeBase64(
+    const naim::EncryptedEnvelope envelope = naim::EncryptEnvelopeBase64(
         payload.dump(),
         host->session_token,
         BuildHostResponseAad(
@@ -306,8 +683,8 @@ class HostdRequestContext {
         });
   }
 
-  comet::controller::HostRegistryService MakeHostRegistryService() const {
-    return comet::controller::HostRegistryService(
+  naim::controller::HostRegistryService MakeHostRegistryService() const {
+    return naim::controller::HostRegistryService(
         db_path_, support_.host_registry_event_sink());
   }
 
@@ -326,7 +703,7 @@ class HostdRequestContext {
  private:
   const HostdHttpSupport& support_;
   std::string db_path_;
-  comet::ControllerStore store_;
+  naim::ControllerStore store_;
 };
 
 }  // namespace
@@ -348,10 +725,27 @@ HttpResponse HostdHttpService::HandleRegister(
           {});
     }
     HostdRequestContext context(support_, db_path);
-    comet::RegisteredHostRecord host;
-    if (const auto current = context.store().LoadRegisteredHost(node_name);
-        current.has_value()) {
-      host = *current;
+    auto current = context.store().LoadRegisteredHost(node_name);
+    if (!current.has_value()) {
+      return context.Json(
+          404,
+          json{{"status", "not_found"},
+               {"message", "host node is not provisioned"}});
+    }
+    naim::RegisteredHostRecord host = *current;
+    const std::string onboarding_key = body.value("onboarding_key", std::string{});
+    if (host.onboarding_key_hash.empty()) {
+      return context.Json(
+          409,
+          json{{"status", "conflict"},
+               {"message", "host node does not accept onboarding registration"}});
+    }
+    if (onboarding_key.empty() ||
+        naim::ComputeSha256Hex(onboarding_key) != host.onboarding_key_hash) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid onboarding key"}});
     }
     host.node_name = node_name;
     host.advertised_address =
@@ -367,10 +761,12 @@ HttpResponse HostdHttpService::HandleRegister(
     host.execution_mode = body.value(
         "execution_mode",
         host.execution_mode.empty() ? std::string("mixed") : host.execution_mode);
-    comet::ParseHostExecutionMode(host.execution_mode);
+    naim::ParseHostExecutionMode(host.execution_mode);
     host.registration_state = body.value(
         "registration_state",
-        host.registration_state.empty() ? "registered" : host.registration_state);
+        std::string("registered"));
+    host.onboarding_key_hash.clear();
+    host.onboarding_state = "completed";
     host.session_state = body.value(
         "session_state",
         host.session_state.empty() ? "disconnected" : host.session_state);
@@ -389,9 +785,13 @@ HttpResponse HostdHttpService::HandleRegister(
         "info");
     return context.Json(
         200,
-        json{{"service", "comet-controller"},
+        json{{"service", "naim-controller"},
              {"node_name", node_name},
-             {"registration_state", host.registration_state}});
+             {"registration_state", host.registration_state},
+             {"controller_public_key_fingerprint",
+              host.controller_public_key_fingerprint.empty()
+                  ? json(nullptr)
+                  : json(host.controller_public_key_fingerprint)}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,
@@ -405,15 +805,400 @@ HttpResponse HostdHttpService::HandleRegister(
 HttpResponse HostdHttpService::HandleHosts(
     const std::string& db_path,
     const HttpRequest& request) const {
+  try {
+    HostdRequestContext context(support_, db_path);
+    if (request.method == "POST") {
+      const json body = ParseJsonBody(request);
+      const std::string node_name = body.value("node_name", std::string{});
+      if (node_name.empty()) {
+        return context.Json(
+            400,
+            json{{"status", "bad_request"},
+                 {"message", "missing required field 'node_name'"}});
+      }
+      if (context.store().LoadRegisteredHost(node_name).has_value()) {
+        return context.Json(
+            409,
+            json{{"status", "conflict"},
+                 {"message", "host node already exists"}});
+      }
+      const std::string onboarding_key = naim::RandomTokenBase64(24);
+      naim::RegisteredHostRecord host;
+      host.node_name = node_name;
+      host.transport_mode = "out";
+      host.execution_mode = "mixed";
+      host.registration_state = "provisioned";
+      host.onboarding_key_hash = naim::ComputeSha256Hex(onboarding_key);
+      host.onboarding_state = "pending";
+      host.derived_role = "ineligible";
+      host.role_reason = "awaiting first inventory scan";
+      host.session_state = "disconnected";
+      host.status_message = "node provisioned; awaiting naim-node onboarding";
+      context.store().UpsertRegisteredHost(host);
+      context.EmitHostRegistryEvent(
+          "provisioned",
+          "provisioned host node for onboarding",
+          json::object(),
+          node_name,
+          "info");
+      return context.Json(
+          200,
+          json{{"service", "naim-controller"},
+               {"node_name", node_name},
+               {"onboarding_key", onboarding_key},
+               {"onboarding_state", host.onboarding_state}});
+    }
+    if (request.method != "GET") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
+    return context.Json(
+        200,
+        context.MakeHostRegistryService().BuildPayload(
+            FindQueryStringValue(request, "node")));
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandlePeerLinks(
+    const std::string& db_path,
+    const HttpRequest& request) const {
   if (request.method != "GET") {
     return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
     HostdRequestContext context(support_, db_path);
-    return context.Json(
-        200,
-        context.MakeHostRegistryService().BuildPayload(
-            FindQueryStringValue(request, "node")));
+    const auto node_name = FindQueryStringValue(request, "node");
+    const auto links = context.store().LoadHostPeerLinks(node_name, std::nullopt);
+    json payload = BuildPeerLinksPayload(support_, links);
+    payload["service"] = "naim-controller";
+    payload["node_name"] = node_name.has_value() ? json(*node_name) : json(nullptr);
+    return context.Json(200, payload);
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleFileTransferTickets(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "file-transfer-tickets/create");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    const std::string source_node_name =
+        body.value("source_node_name", std::string{});
+    if (requester_node_name != host.node_name || source_node_name.empty()) {
+      return context.Json(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "invalid requester_node_name or source_node_name"}});
+    }
+    std::vector<std::string> source_paths;
+    for (const auto& value : body.value("source_paths", json::array())) {
+      if (value.is_string()) {
+        const std::string path = std::filesystem::path(value.get<std::string>())
+                                     .lexically_normal()
+                                     .string();
+        if (path.empty() || path.front() != '/') {
+          return context.Json(
+              400,
+              json{{"status", "bad_request"},
+                   {"message", "source_paths must be absolute"}});
+        }
+        source_paths.push_back(path);
+      }
+    }
+    if (source_paths.empty()) {
+      return context.Json(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "source_paths must not be empty"}});
+    }
+    const auto forward_links =
+        context.store().LoadHostPeerLinks(requester_node_name, source_node_name);
+    const auto reverse_links =
+        context.store().LoadHostPeerLinks(source_node_name, requester_node_name);
+    std::optional<naim::HostPeerLinkRecord> forward =
+        forward_links.empty() ? std::nullopt
+                              : std::optional<naim::HostPeerLinkRecord>(forward_links.front());
+    std::optional<naim::HostPeerLinkRecord> reverse =
+        reverse_links.empty() ? std::nullopt
+                              : std::optional<naim::HostPeerLinkRecord>(reverse_links.front());
+    if (!forward.has_value() ||
+        PeerLinkState(support_, *forward, reverse) != "direct") {
+      return context.EncryptedResponse(
+          &host,
+          "file-transfer-tickets/create",
+          json{{"service", "naim-controller"},
+               {"status", "not_available"},
+               {"message", "source node is not directly reachable over LAN"}});
+    }
+    naim::FileTransferTicketRecord ticket;
+    ticket.ticket_id = naim::RandomTokenBase64(32);
+    ticket.source_node_name = source_node_name;
+    ticket.requester_node_name = requester_node_name;
+    ticket.source_paths_json = json(source_paths).dump();
+    ticket.expires_at = support_.sql_timestamp_after_seconds(kTransferTicketTtlSeconds);
+    ticket.max_chunk_bytes = kMaxPeerTransferChunkBytes;
+    context.store().InsertFileTransferTicket(ticket);
+    return context.EncryptedResponse(
+        &host,
+        "file-transfer-tickets/create",
+        json{{"service", "naim-controller"},
+             {"status", "issued"},
+             {"ticket_id", ticket.ticket_id},
+             {"source_node_name", ticket.source_node_name},
+             {"requester_node_name", ticket.requester_node_name},
+             {"source_paths", source_paths},
+             {"source_endpoint", forward->peer_endpoint},
+             {"expires_at", ticket.expires_at},
+             {"max_chunk_bytes", ticket.max_chunk_bytes}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleFileTransferTicketValidate(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "file-transfer-tickets/validate");
+    const std::string ticket_id = body.value("ticket_id", std::string{});
+    const auto ticket = context.store().LoadFileTransferTicket(ticket_id);
+    if (!ticket.has_value() || ticket->source_node_name != host.node_name) {
+      return context.EncryptedResponse(
+          &host,
+          "file-transfer-tickets/validate",
+          json{{"service", "naim-controller"},
+               {"status", "denied"},
+               {"message", "ticket not found for this source node"}});
+    }
+    const auto expiry_age = support_.timestamp_age_seconds(ticket->expires_at);
+    if (!expiry_age.has_value() || *expiry_age >= 0) {
+      return context.EncryptedResponse(
+          &host,
+          "file-transfer-tickets/validate",
+          json{{"service", "naim-controller"},
+               {"status", "expired"},
+               {"message", "ticket expired"}});
+    }
+    context.store().MarkFileTransferTicketValidated(
+        ticket->ticket_id,
+        support_.utc_now_sql_timestamp());
+    json source_paths = json::parse(ticket->source_paths_json, nullptr, false);
+    if (!source_paths.is_array()) {
+      source_paths = json::array();
+    }
+    return context.EncryptedResponse(
+        &host,
+        "file-transfer-tickets/validate",
+        json{{"service", "naim-controller"},
+             {"status", "valid"},
+             {"ticket_id", ticket->ticket_id},
+             {"source_node_name", ticket->source_node_name},
+             {"requester_node_name", ticket->requester_node_name},
+             {"source_paths", source_paths},
+             {"expires_at", ticket->expires_at},
+             {"max_chunk_bytes", ticket->max_chunk_bytes}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleFileUploadTickets(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "file-upload-tickets/create");
+    const std::string uploader_node_name =
+        body.value("uploader_node_name", host.node_name);
+    const std::string target_node_name =
+        body.value("target_node_name", std::string{});
+    const std::string target_relative_path =
+        std::filesystem::path(body.value("target_relative_path", std::string{}))
+            .lexically_normal()
+            .generic_string();
+    const std::string sha256 = body.value("sha256", std::string{});
+    const std::uintmax_t size_bytes =
+        body.value("size_bytes", static_cast<std::uintmax_t>(0));
+    const bool if_missing = body.value("if_missing", true);
+    if (uploader_node_name != host.node_name || target_node_name.empty() ||
+        !IsSafeRelativePath(target_relative_path) || sha256.empty() || size_bytes == 0) {
+      return context.Json(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "invalid uploader, target, path, sha256, or size"}});
+    }
+    const auto forward_links =
+        context.store().LoadHostPeerLinks(uploader_node_name, target_node_name);
+    const auto reverse_links =
+        context.store().LoadHostPeerLinks(target_node_name, uploader_node_name);
+    std::optional<naim::HostPeerLinkRecord> forward =
+        forward_links.empty() ? std::nullopt
+                              : std::optional<naim::HostPeerLinkRecord>(forward_links.front());
+    std::optional<naim::HostPeerLinkRecord> reverse =
+        reverse_links.empty() ? std::nullopt
+                              : std::optional<naim::HostPeerLinkRecord>(reverse_links.front());
+    if (!forward.has_value() ||
+        PeerLinkState(support_, *forward, reverse) != "direct") {
+      return context.EncryptedResponse(
+          &host,
+          "file-upload-tickets/create",
+          json{{"service", "naim-controller"},
+               {"status", "not_available"},
+               {"message", "target node is not directly reachable over LAN"}});
+    }
+    naim::FileUploadTicketRecord ticket;
+    ticket.ticket_id = naim::RandomTokenBase64(32);
+    ticket.target_node_name = target_node_name;
+    ticket.uploader_node_name = uploader_node_name;
+    ticket.target_relative_path = target_relative_path;
+    ticket.sha256 = sha256;
+    ticket.size_bytes = size_bytes;
+    ticket.if_missing = if_missing;
+    ticket.expires_at = support_.sql_timestamp_after_seconds(kTransferTicketTtlSeconds);
+    ticket.max_chunk_bytes = kMaxPeerTransferChunkBytes;
+    context.store().InsertFileUploadTicket(ticket);
+    return context.EncryptedResponse(
+        &host,
+        "file-upload-tickets/create",
+        json{{"service", "naim-controller"},
+             {"status", "issued"},
+             {"ticket_id", ticket.ticket_id},
+             {"target_node_name", ticket.target_node_name},
+             {"uploader_node_name", ticket.uploader_node_name},
+             {"target_relative_path", ticket.target_relative_path},
+             {"target_endpoint", forward->peer_endpoint},
+             {"sha256", ticket.sha256},
+             {"size_bytes", ticket.size_bytes},
+             {"if_missing", ticket.if_missing},
+             {"expires_at", ticket.expires_at},
+             {"max_chunk_bytes", ticket.max_chunk_bytes}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleFileUploadTicketValidate(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "file-upload-tickets/validate");
+    const std::string ticket_id = body.value("ticket_id", std::string{});
+    const auto ticket = context.store().LoadFileUploadTicket(ticket_id);
+    if (!ticket.has_value() || ticket->target_node_name != host.node_name) {
+      return context.EncryptedResponse(
+          &host,
+          "file-upload-tickets/validate",
+          json{{"service", "naim-controller"},
+               {"status", "denied"},
+               {"message", "ticket not found for this target node"}});
+    }
+    const auto expiry_age = support_.timestamp_age_seconds(ticket->expires_at);
+    if (!expiry_age.has_value() || *expiry_age >= 0) {
+      return context.EncryptedResponse(
+          &host,
+          "file-upload-tickets/validate",
+          json{{"service", "naim-controller"},
+               {"status", "expired"},
+               {"message", "ticket expired"}});
+    }
+    context.store().MarkFileUploadTicketValidated(
+        ticket->ticket_id,
+        support_.utc_now_sql_timestamp());
+    return context.EncryptedResponse(
+        &host,
+        "file-upload-tickets/validate",
+        json{{"service", "naim-controller"},
+             {"status", "valid"},
+             {"ticket_id", ticket->ticket_id},
+             {"target_node_name", ticket->target_node_name},
+             {"uploader_node_name", ticket->uploader_node_name},
+             {"target_relative_path", ticket->target_relative_path},
+             {"sha256", ticket->sha256},
+             {"size_bytes", ticket->size_bytes},
+             {"if_missing", ticket->if_missing},
+             {"expires_at", ticket->expires_at},
+             {"max_chunk_bytes", ticket->max_chunk_bytes}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,
@@ -447,11 +1232,11 @@ HttpResponse HostdHttpService::HandleHostPath(
               ? std::make_optional(body["message"].get<std::string>())
               : std::nullopt;
       const auto service =
-          comet::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+          naim::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
       return support_.build_json_response(
           200,
-          comet::controller::BuildControllerActionPayload(
-              comet::controller::RunControllerActionResult(
+          naim::controller::BuildControllerActionPayload(
+              naim::controller::RunControllerActionResult(
                   "revoke-hostd",
                   [&]() { return service.RevokeHost(node_name, message); })),
           {});
@@ -488,11 +1273,11 @@ HttpResponse HostdHttpService::HandleHostPath(
               ? std::make_optional(body["message"].get<std::string>())
               : std::nullopt;
       const auto service =
-          comet::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+          naim::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
       return support_.build_json_response(
           200,
-          comet::controller::BuildControllerActionPayload(
-              comet::controller::RunControllerActionResult(
+          naim::controller::BuildControllerActionPayload(
+              naim::controller::RunControllerActionResult(
                   "rotate-hostd-key",
                   [&]() {
                     return service.RotateHostKey(
@@ -503,6 +1288,89 @@ HttpResponse HostdHttpService::HandleHostPath(
       return support_.build_json_response(
           500,
           json{{"status", "internal_error"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
+  }
+  const auto reset_onboarding_pos = remainder.find("/reset-onboarding");
+  if (reset_onboarding_pos != std::string::npos &&
+      reset_onboarding_pos + std::string("/reset-onboarding").size() == remainder.size()) {
+    if (request.method != "POST") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
+    const std::string node_name = remainder.substr(0, reset_onboarding_pos);
+    try {
+      const json body = ParseJsonBody(request);
+      const std::optional<std::string> message =
+          body.contains("message") && body["message"].is_string()
+              ? std::make_optional(body["message"].get<std::string>())
+              : std::nullopt;
+      const auto service =
+          naim::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+      return support_.build_json_response(
+          200,
+          service.ResetHostOnboardingPayload(node_name, message),
+          {});
+    } catch (const std::exception& error) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
+  }
+  const auto storage_role_pos = remainder.find("/storage-role");
+  if (storage_role_pos != std::string::npos &&
+      storage_role_pos + std::string("/storage-role").size() == remainder.size()) {
+    if (request.method != "POST") {
+      return support_.build_json_response(
+          405, json{{"status", "method_not_allowed"}}, {});
+    }
+    const std::string node_name = remainder.substr(0, storage_role_pos);
+    try {
+      const json body = ParseJsonBody(request);
+      std::optional<bool> enabled;
+      if (body.contains("enabled") && body["enabled"].is_boolean()) {
+        enabled = body["enabled"].get<bool>();
+      } else if (const auto query_enabled = FindQueryStringValue(request, "enabled");
+                 query_enabled.has_value()) {
+        if (*query_enabled == "true" || *query_enabled == "1" ||
+            *query_enabled == "enabled") {
+          enabled = true;
+        } else if (*query_enabled == "false" || *query_enabled == "0" ||
+                   *query_enabled == "disabled") {
+          enabled = false;
+        }
+      }
+      if (!enabled.has_value()) {
+        return support_.build_json_response(
+            400,
+            json{{"status", "bad_request"},
+                 {"message", "missing required boolean field or query parameter 'enabled'"}},
+            {});
+      }
+      std::optional<std::string> message;
+      if (body.contains("message") && body["message"].is_string()) {
+        message = body["message"].get<std::string>();
+      } else {
+        message = FindQueryStringValue(request, "message");
+      }
+      const auto service =
+          naim::controller::HostRegistryService(db_path, support_.host_registry_event_sink());
+      return support_.build_json_response(
+          200,
+          service.SetHostStorageRolePayload(
+              node_name,
+              *enabled,
+              message),
+          {});
+    } catch (const std::exception& error) {
+      return support_.build_json_response(
+          409,
+          json{{"status", "conflict"},
                {"message", error.what()},
                {"path", request.path}},
           {});
@@ -552,7 +1420,7 @@ HttpResponse HostdHttpService::HandleSessionOpen(
     }
     const std::string signed_message =
         "hostd-session-open\n" + node_name + "\n" + timestamp + "\n" + nonce;
-    if (!comet::VerifyDetachedBase64(
+    if (!naim::VerifyDetachedBase64(
             signed_message, signature, current->public_key_base64)) {
       return context.Json(
           403,
@@ -561,7 +1429,7 @@ HttpResponse HostdHttpService::HandleSessionOpen(
     }
     current->session_state = "connected";
     current->last_session_at = support_.utc_now_sql_timestamp();
-    current->session_token = comet::RandomTokenBase64(32);
+    current->session_token = naim::RandomTokenBase64(32);
     current->session_expires_at = support_.sql_timestamp_after_seconds(600);
     current->session_host_sequence = 0;
     current->session_controller_sequence = 0;
@@ -577,7 +1445,7 @@ HttpResponse HostdHttpService::HandleSessionOpen(
     return context.Json(
         200,
         json{
-            {"service", "comet-controller"},
+            {"service", "naim-controller"},
             {"node_name", node_name},
             {"session_state", current->session_state},
             {"last_session_at", current->last_session_at},
@@ -633,7 +1501,7 @@ HttpResponse HostdHttpService::HandleSessionHeartbeat(
         &current,
         "session/heartbeat",
         json{
-            {"service", "comet-controller"},
+            {"service", "naim-controller"},
             {"node_name", node_name},
             {"session_state", current.session_state},
             {"last_heartbeat_at", current.last_heartbeat_at},
@@ -657,7 +1525,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
   try {
     HostdRequestContext context(support_, db_path);
     std::optional<std::string> node_name = FindQueryStringValue(request, "node");
-    std::optional<comet::RegisteredHostRecord> authenticated;
+    std::optional<naim::RegisteredHostRecord> authenticated;
     bool encrypted_request = false;
     if (request.method == "POST") {
       authenticated = context.Authenticate(request);
@@ -694,7 +1562,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     }
     const auto assignment = context.store().ClaimNextHostAssignment(*node_name);
     const json payload{
-        {"service", "comet-controller"},
+        {"service", "naim-controller"},
         {"node_name", *node_name},
         {"assignment",
          assignment.has_value() ? BuildAssignmentPayloadItem(*assignment)
@@ -755,16 +1623,62 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
     if (action == "progress") {
       const bool updated =
           context.store().UpdateHostAssignmentProgress(assignment_id, body.dump());
+      if (assignment->assignment_type == "model-library-download") {
+        const json assignment_payload =
+            json::parse(assignment->desired_state_json, nullptr, false);
+        const std::string job_id =
+            assignment_payload.is_object()
+                ? assignment_payload.value("job_id", std::string{})
+                : std::string{};
+        if (!job_id.empty()) {
+          if (auto job = context.store().LoadModelLibraryDownloadJob(job_id);
+              job.has_value()) {
+            job->status = "running";
+            job->phase = body.value("phase", std::string("running"));
+            job->current_item = body.value("detail", std::string{});
+            if (body.contains("bytes_done") && body["bytes_done"].is_number_integer()) {
+              job->bytes_done = body["bytes_done"].get<std::int64_t>();
+            }
+            if (body.contains("bytes_total") && body["bytes_total"].is_number_integer()) {
+              job->bytes_total = body["bytes_total"].get<std::int64_t>();
+            }
+            job->updated_at = naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
+            context.store().UpsertModelLibraryDownloadJob(*job);
+          }
+        }
+      }
       return context.EncryptedResponse(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/progress",
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"updated", updated},
                {"assignment_id", assignment_id}});
     }
     if (action == "applied") {
       const bool updated = context.store().TransitionClaimedHostAssignment(
-          assignment_id, comet::HostAssignmentStatus::Applied, status_message);
+          assignment_id, naim::HostAssignmentStatus::Applied, status_message);
+      if (updated && assignment->assignment_type == "model-library-download") {
+        const json assignment_payload =
+            json::parse(assignment->desired_state_json, nullptr, false);
+        const std::string job_id =
+            assignment_payload.is_object()
+                ? assignment_payload.value("job_id", std::string{})
+                : std::string{};
+        if (!job_id.empty()) {
+          if (auto job = context.store().LoadModelLibraryDownloadJob(job_id);
+              job.has_value()) {
+            job->status = "completed";
+            job->phase = "completed";
+            job->current_item.clear();
+            job->error_message.clear();
+            if (job->bytes_total.has_value()) {
+              job->bytes_done = *job->bytes_total;
+            }
+            job->updated_at = naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
+            context.store().UpsertModelLibraryDownloadJob(*job);
+          }
+        }
+      }
       if (updated && assignment->assignment_type == "apply-node-state") {
         const auto plane_assignments = context.store().LoadHostAssignments(
             std::nullopt, std::nullopt, assignment->plane_name);
@@ -779,8 +1693,8 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
                   candidate.desired_generation != assignment->desired_generation) {
                 return true;
               }
-              return candidate.status == comet::HostAssignmentStatus::Applied ||
-                     candidate.status == comet::HostAssignmentStatus::Superseded;
+              return candidate.status == naim::HostAssignmentStatus::Applied ||
+                     candidate.status == naim::HostAssignmentStatus::Superseded;
             });
         if (converged_generation) {
           context.store().UpdatePlaneAppliedGeneration(
@@ -790,7 +1704,7 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
       return context.EncryptedResponse(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/applied",
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"updated", updated},
                {"assignment_id", assignment_id}});
     }
@@ -799,21 +1713,439 @@ HttpResponse HostdHttpService::HandleAssignmentAction(
       const bool updated = retry
                                ? context.store().TransitionClaimedHostAssignment(
                                      assignment_id,
-                                     comet::HostAssignmentStatus::Pending,
+                                     naim::HostAssignmentStatus::Pending,
                                      status_message)
                                : context.store().TransitionClaimedHostAssignment(
                                      assignment_id,
-                                     comet::HostAssignmentStatus::Failed,
+                                     naim::HostAssignmentStatus::Failed,
                                      status_message);
+      if (updated && assignment->assignment_type == "model-library-download" && !retry) {
+        const json assignment_payload =
+            json::parse(assignment->desired_state_json, nullptr, false);
+        const std::string job_id =
+            assignment_payload.is_object()
+                ? assignment_payload.value("job_id", std::string{})
+                : std::string{};
+        if (!job_id.empty()) {
+          if (auto job = context.store().LoadModelLibraryDownloadJob(job_id);
+              job.has_value()) {
+            job->status = "failed";
+            job->phase = "failed";
+            job->error_message = status_message;
+            job->updated_at = naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
+            context.store().UpsertModelLibraryDownloadJob(*job);
+          }
+        }
+      }
       return context.EncryptedResponse(
           &host,
           "assignments/" + std::to_string(assignment_id) + "/failed",
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"updated", updated},
                {"assignment_id", assignment_id},
                {"retry", retry}});
     }
     return context.Json(404, json{{"status", "not_found"}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+	        {});
+	  }
+	}
+
+HttpResponse HostdHttpService::HandleModelArtifactChunkRequest(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "model-artifacts/chunks/request");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    if (requester_node_name != host.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "requester_node_name does not match host session"}});
+    }
+    const std::string source_path = NormalizePathString(
+        std::filesystem::path(body.value("source_path", std::string{})));
+    const std::string requested_source_node_name =
+        body.value("source_node_name", std::string{});
+    const auto source_node_name = ResolveModelArtifactSourceNode(
+        context.store(),
+        requested_source_node_name,
+        source_path);
+    if (!source_node_name.has_value()) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/chunks/request",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "model artifact source node not found or not eligible"}});
+    }
+
+    const std::uintmax_t offset =
+        body.contains("offset") && body.at("offset").is_number_unsigned()
+            ? body.at("offset").get<std::uintmax_t>()
+            : std::uintmax_t{0};
+    std::uintmax_t max_bytes =
+        body.contains("max_bytes") && body.at("max_bytes").is_number_unsigned()
+            ? body.at("max_bytes").get<std::uintmax_t>()
+            : kMaxModelArtifactChunkBytes;
+    if (max_bytes == 0 || max_bytes > kMaxModelArtifactChunkBytes) {
+      max_bytes = kMaxModelArtifactChunkBytes;
+    }
+
+    const std::string transfer_id = naim::RandomTokenBase64(18);
+    const std::string plane_name = "model-transfer:" + transfer_id;
+    naim::HostAssignment assignment;
+    assignment.node_name = *source_node_name;
+    assignment.plane_name = plane_name;
+    assignment.desired_generation = 0;
+    assignment.max_attempts = 3;
+    assignment.assignment_type = "model-artifact-read-chunk";
+    assignment.desired_state_json =
+        json{{"transfer_id", transfer_id},
+             {"requester_node_name", requester_node_name},
+             {"source_node_name", *source_node_name},
+             {"source_path", source_path},
+             {"offset", offset},
+             {"max_bytes", max_bytes}}
+            .dump();
+    assignment.artifacts_root = source_path;
+    assignment.status_message = "queued model artifact chunk read";
+    assignment.progress_json =
+        json{{"phase", "queued"},
+             {"title", "Model artifact chunk queued"},
+             {"detail", "Waiting for storage node to read the model artifact chunk."},
+             {"percent", 0}}
+            .dump();
+    context.store().EnqueueHostAssignments({assignment}, "");
+
+    int assignment_id = 0;
+    for (const auto& candidate :
+         context.store().LoadHostAssignments(
+             std::make_optional<std::string>(*source_node_name),
+             std::nullopt,
+             std::make_optional<std::string>(plane_name))) {
+      const json desired =
+          json::parse(candidate.desired_state_json, nullptr, false);
+      if (desired.is_object() && desired.value("transfer_id", std::string{}) == transfer_id) {
+        assignment_id = candidate.id;
+        break;
+      }
+    }
+    if (assignment_id <= 0) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/chunks/request",
+          json{{"service", "naim-controller"},
+               {"status", "internal_error"},
+               {"message", "failed to resolve queued model artifact assignment"}});
+    }
+    return context.EncryptedResponse(
+        &host,
+        "model-artifacts/chunks/request",
+        json{{"service", "naim-controller"},
+             {"status", "queued"},
+             {"assignment_id", assignment_id},
+             {"transfer_id", transfer_id},
+             {"source_node_name", *source_node_name},
+             {"source_path", source_path},
+             {"offset", offset},
+             {"max_bytes", max_bytes}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleModelArtifactChunkPoll(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "model-artifacts/chunks/poll");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    if (requester_node_name != host.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "requester_node_name does not match host session"}});
+    }
+    const int assignment_id = body.value("assignment_id", 0);
+    const auto assignment = context.store().LoadHostAssignment(assignment_id);
+    if (!assignment.has_value() ||
+        assignment->assignment_type != "model-artifact-read-chunk") {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/chunks/poll",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "model artifact chunk assignment not found"}});
+    }
+    const json desired =
+        json::parse(assignment->desired_state_json, nullptr, false);
+    if (!desired.is_object() ||
+        desired.value("requester_node_name", std::string{}) != requester_node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "model artifact chunk assignment belongs to another requester"}});
+    }
+    json progress = json::object();
+    if (!assignment->progress_json.empty()) {
+      progress = json::parse(assignment->progress_json, nullptr, false);
+      if (!progress.is_object()) {
+        progress = json::object();
+      }
+    }
+    return context.EncryptedResponse(
+        &host,
+        "model-artifacts/chunks/poll",
+        json{{"service", "naim-controller"},
+             {"status", naim::ToString(assignment->status)},
+             {"assignment_id", assignment->id},
+             {"source_node_name", assignment->node_name},
+             {"status_message", assignment->status_message},
+             {"progress", progress}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleModelArtifactManifestRequest(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "model-artifacts/manifest/request");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    if (requester_node_name != host.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "requester_node_name does not match host session"}});
+    }
+
+    const std::vector<std::string> source_paths = ParseRequestedSourcePaths(body);
+    if (source_paths.empty()) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/request",
+          json{{"service", "naim-controller"},
+               {"status", "bad_request"},
+               {"message", "model artifact manifest request is missing source_paths"}});
+    }
+
+    const std::string requested_source_node_name =
+        body.value("source_node_name", std::string{});
+    const auto source_node_name = ResolveModelArtifactSourceNode(
+        context.store(),
+        requested_source_node_name,
+        source_paths.front());
+    if (!source_node_name.has_value()) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/request",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "model artifact source node not found or not eligible"}});
+    }
+    const auto source_host = context.store().LoadRegisteredHost(*source_node_name);
+    const bool all_paths_allowed =
+        source_host.has_value() &&
+        std::all_of(
+            source_paths.begin(),
+            source_paths.end(),
+            [&](const std::string& source_path) {
+              return HostCanServeModelArtifactPath(*source_host, source_path);
+            });
+    if (!all_paths_allowed) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/request",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "one or more model artifact source paths are not eligible"}});
+    }
+
+    const std::string transfer_id = naim::RandomTokenBase64(18);
+    const std::string plane_name = "model-manifest:" + transfer_id;
+    naim::HostAssignment assignment;
+    assignment.node_name = *source_node_name;
+    assignment.plane_name = plane_name;
+    assignment.desired_generation = 0;
+    assignment.max_attempts = 3;
+    assignment.assignment_type = "model-artifact-build-manifest";
+    assignment.desired_state_json =
+        json{{"transfer_id", transfer_id},
+             {"requester_node_name", requester_node_name},
+             {"source_node_name", *source_node_name},
+             {"source_paths", source_paths}}
+            .dump();
+    assignment.artifacts_root = source_paths.front();
+    assignment.status_message = "queued model artifact manifest build";
+    assignment.progress_json =
+        json{{"phase", "queued"},
+             {"title", "Model artifact manifest queued"},
+             {"detail", "Waiting for storage node to build the model artifact manifest."},
+             {"percent", 0}}
+            .dump();
+    context.store().EnqueueHostAssignments({assignment}, "");
+
+    int assignment_id = 0;
+    for (const auto& candidate :
+         context.store().LoadHostAssignments(
+             std::make_optional<std::string>(*source_node_name),
+             std::nullopt,
+             std::make_optional<std::string>(plane_name))) {
+      const json desired =
+          json::parse(candidate.desired_state_json, nullptr, false);
+      if (desired.is_object() && desired.value("transfer_id", std::string{}) == transfer_id) {
+        assignment_id = candidate.id;
+        break;
+      }
+    }
+    if (assignment_id <= 0) {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/request",
+          json{{"service", "naim-controller"},
+               {"status", "internal_error"},
+               {"message", "failed to resolve queued model artifact manifest assignment"}});
+    }
+    return context.EncryptedResponse(
+        &host,
+        "model-artifacts/manifest/request",
+        json{{"service", "naim-controller"},
+             {"status", "queued"},
+             {"assignment_id", assignment_id},
+             {"transfer_id", transfer_id},
+             {"source_node_name", *source_node_name},
+             {"source_paths", source_paths}});
+  } catch (const std::exception& error) {
+    return support_.build_json_response(
+        500,
+        json{{"status", "internal_error"},
+             {"message", error.what()},
+             {"path", request.path}},
+        {});
+  }
+}
+
+HttpResponse HostdHttpService::HandleModelArtifactManifestPoll(
+    const std::string& db_path,
+    const HttpRequest& request) const {
+  if (request.method != "POST") {
+    return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
+  }
+  try {
+    HostdRequestContext context(support_, db_path);
+    const auto authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
+    }
+    auto host = *authenticated;
+    const json body =
+        context.ParseEncryptedBody(request, &host, "model-artifacts/manifest/poll");
+    const std::string requester_node_name =
+        body.value("requester_node_name", host.node_name);
+    if (requester_node_name != host.node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "requester_node_name does not match host session"}});
+    }
+    const int assignment_id = body.value("assignment_id", 0);
+    const auto assignment = context.store().LoadHostAssignment(assignment_id);
+    if (!assignment.has_value() ||
+        assignment->assignment_type != "model-artifact-build-manifest") {
+      return context.EncryptedResponse(
+          &host,
+          "model-artifacts/manifest/poll",
+          json{{"service", "naim-controller"},
+               {"status", "not_found"},
+               {"message", "model artifact manifest assignment not found"}});
+    }
+    const json desired =
+        json::parse(assignment->desired_state_json, nullptr, false);
+    if (!desired.is_object() ||
+        desired.value("requester_node_name", std::string{}) != requester_node_name) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "model artifact manifest assignment belongs to another requester"}});
+    }
+    json progress = json::object();
+    if (!assignment->progress_json.empty()) {
+      progress = json::parse(assignment->progress_json, nullptr, false);
+      if (!progress.is_object()) {
+        progress = json::object();
+      }
+    }
+    return context.EncryptedResponse(
+        &host,
+        "model-artifacts/manifest/poll",
+        json{{"service", "naim-controller"},
+             {"status", naim::ToString(assignment->status)},
+             {"assignment_id", assignment->id},
+             {"source_node_name", assignment->node_name},
+             {"status_message", assignment->status_message},
+             {"progress", progress}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,
@@ -856,10 +2188,24 @@ HttpResponse HostdHttpService::HandleObservations(
                {"message", "node mismatch for host observation"}});
     }
     context.store().UpsertHostObservation(observation);
+    UpsertPeerLinksFromObservation(&context.store(), observation);
+    if (auto current = context.store().LoadRegisteredHost(observation.node_name);
+        current.has_value()) {
+      const auto inventory = BuildInventorySummary(*current, observation);
+      const auto [derived_role, role_reason] = DeriveRole(inventory);
+      current->derived_role = derived_role;
+      current->role_reason = role_reason;
+      current->last_inventory_scan_at = support_.utc_now_sql_timestamp();
+      current->capabilities_json = MergeCapabilities(
+          current->capabilities_json,
+          inventory)
+                                      .dump();
+      context.store().UpsertRegisteredHost(*current);
+    }
     return context.EncryptedResponse(
         &host,
         "observations/upsert",
-        json{{"service", "comet-controller"},
+        json{{"service", "naim-controller"},
              {"node_name", observation.node_name},
              {"updated", true}});
   } catch (const std::exception& error) {
@@ -896,7 +2242,7 @@ HttpResponse HostdHttpService::HandleEvents(
           json{{"status", "forbidden"},
                {"message", "node mismatch for event append"}});
     }
-    context.store().AppendEvent(comet::EventRecord{
+    context.store().AppendEvent(naim::EventRecord{
         0,
         body.value("plane_name", std::string{}),
         body.value("node_name", std::string{}),
@@ -918,7 +2264,7 @@ HttpResponse HostdHttpService::HandleEvents(
     return context.EncryptedResponse(
         &host,
         "events/append",
-        json{{"service", "comet-controller"}, {"appended", true}});
+        json{{"service", "naim-controller"}, {"appended", true}});
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,
@@ -955,7 +2301,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeState(
           context.store().LoadDiskRuntimeState(*disk_name, *node_name);
       return context.Json(
           200,
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"runtime_state",
                 runtime_state.has_value()
                     ? BuildDiskRuntimeStatePayloadItem(*runtime_state)
@@ -990,7 +2336,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeState(
       return context.EncryptedResponse(
           &host,
           "disk-runtime-state/upsert",
-          json{{"service", "comet-controller"},
+          json{{"service", "naim-controller"},
                {"updated", true},
                {"disk_name", runtime_state.disk_name}});
     }
@@ -1043,7 +2389,7 @@ HttpResponse HostdHttpService::HandleDiskRuntimeStateLoad(
         &host,
         "disk-runtime-state/load",
         json{
-            {"service", "comet-controller"},
+            {"service", "naim-controller"},
             {"runtime_state",
              runtime_state.has_value()
                  ? BuildDiskRuntimeStatePayloadItem(*runtime_state)

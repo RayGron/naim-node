@@ -4,7 +4,7 @@
 #include "runtime/infer_control_support.h"
 #include "runtime/infer_runtime_types.h"
 
-namespace comet::infer::model_cache_support {
+namespace naim::infer::model_cache_support {
 
 void PreloadModel(
     const RuntimeConfig& config,
@@ -21,4 +21,4 @@ void SwitchModel(
     const InferCommandLineOptions& args,
     bool apply);
 
-}  // namespace comet::infer::model_cache_support
+}  // namespace naim::infer::model_cache_support

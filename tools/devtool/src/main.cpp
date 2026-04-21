@@ -33,8 +33,8 @@
 
 namespace {
 
-using comet::devtool::HttpRequest;
-using comet::devtool::HttpResponse;
+using naim::devtool::HttpRequest;
+using naim::devtool::HttpResponse;
 using nlohmann::json;
 
 struct RunStats {
@@ -211,7 +211,7 @@ json PerformJsonRequest(
     request.body = payload.dump();
     request.headers["Content-Type"] = "application/json";
   }
-  HttpResponse response = comet::devtool::PerformHttpRequest(request);
+  HttpResponse response = naim::devtool::PerformHttpRequest(request);
   if (response_out != nullptr) {
     *response_out = response;
   }
@@ -379,7 +379,7 @@ void AssertErrorEnvelope(const json& payload, const std::optional<std::string>& 
 std::string WriteTempConfig(const json& payload) {
   const auto temp_dir = std::filesystem::temp_directory_path();
   const auto file_path =
-      temp_dir / ("comet-devtool-maglev-" + std::to_string(::getpid()) + ".json");
+      temp_dir / ("naim-devtool-maglev-" + std::to_string(::getpid()) + ".json");
   WriteJsonFile(file_path, payload);
   return file_path.string();
 }
@@ -395,7 +395,7 @@ std::string MaybeRunMaglev(
   }
   const json config = {
       {"defaultBackendMode", "openai_compat"},
-      {"defaultOpenAiCompatProfile", "comet-node-contract"},
+      {"defaultOpenAiCompatProfile", "naim-node-contract"},
       {"openaiCompat",
        {
            {"requestTimeoutMs", 120000},
@@ -420,7 +420,7 @@ std::string MaybeRunMaglev(
             }},
        }},
       {"openaiCompatProfiles",
-       {{"comet-node-contract",
+       {{"naim-node-contract",
          {{"apiBaseUrl", controller_url + "/api/v1/planes/" + plane_name + "/interaction"},
           {"model", plane_name},
           {"chatModel", plane_name}}}}},
@@ -429,7 +429,7 @@ std::string MaybeRunMaglev(
   const std::string command =
       "cd " + ShellEscape(maglev_repo) + " && " + ShellEscape(binary.string()) +
       " --config-file " + ShellEscape(config_path) +
-      " --endpoint-profile comet-node-contract --task " +
+      " --endpoint-profile naim-node-contract --task " +
       ShellEscape("Какая модель сейчас активна?");
   const CommandResult result = RunCommandCapture(command);
   std::filesystem::remove(config_path);
@@ -468,7 +468,7 @@ void CommandConfigSummary(const std::map<std::string, std::string>& options) {
   const auto payload = LoadJsonFile(RequireValue(options, "config"));
   const auto& paths = payload.value("paths", json::object());
   const std::filesystem::path storage_root =
-      paths.value("storage_root", std::string("/var/lib/comet"));
+      paths.value("storage_root", std::string("/var/lib/naim"));
   std::string model_cache_root = paths.value("model_cache_root", std::string{});
   if (model_cache_root.empty()) {
     model_cache_root = (storage_root.parent_path() / "models").string();
@@ -777,18 +777,18 @@ void CommandCheckExternalInferenceContract(const std::map<std::string, std::stri
                  !payload.at("reason").get<std::string>().empty(),
              "status missing reason");
   AssertTrue(payload.contains("request_id"), "status missing request_id");
-  AssertTrue(payload.contains("comet") && payload.at("comet").is_object(), "status missing comet metadata");
+  AssertTrue(payload.contains("naim") && payload.at("naim").is_object(), "status missing naim metadata");
   AssertTrue(
-      response.headers.find("x-comet-request-id") != response.headers.end(),
+      response.headers.find("x-naim-request-id") != response.headers.end(),
       "status header missing request id");
 
   payload = PerformJsonRequest("GET", models_url, nullptr, 60, &response);
   AssertTrue(response.status_code == 200, "models endpoint failed");
   AssertTrue(payload.contains("data") && payload.at("data").is_array(), "models payload missing data list");
   AssertTrue(payload.contains("request_id"), "models missing request_id");
-  AssertTrue(payload.contains("comet") && payload.at("comet").is_object(), "models missing comet metadata");
+  AssertTrue(payload.contains("naim") && payload.at("naim").is_object(), "models missing naim metadata");
   AssertTrue(
-      response.headers.find("x-comet-request-id") != response.headers.end(),
+      response.headers.find("x-naim-request-id") != response.headers.end(),
       "models header missing request id");
   const std::string active_model = payload.at("data").at(0).at("id").get<std::string>();
 
@@ -804,10 +804,10 @@ void CommandCheckExternalInferenceContract(const std::map<std::string, std::stri
   AssertTrue(response.status_code == 200, "chat completion failed");
   AssertTrue(payload.contains("request_id"), "chat missing request_id");
   AssertTrue(payload.contains("session") && payload.at("session").is_object(), "chat missing session metadata");
-  AssertTrue(payload.contains("comet") && payload.at("comet").is_object(), "chat missing comet metadata");
+  AssertTrue(payload.contains("naim") && payload.at("naim").is_object(), "chat missing naim metadata");
   AssertTrue(payload.contains("choices") && !payload.at("choices").empty(), "chat missing choices");
   AssertTrue(
-      response.headers.find("x-comet-request-id") != response.headers.end(),
+      response.headers.find("x-naim-request-id") != response.headers.end(),
       "chat header missing request id");
 
   payload = PerformJsonRequest(
@@ -829,7 +829,7 @@ void CommandCheckExternalInferenceContract(const std::map<std::string, std::stri
   stream_request.body = json{
       {"messages", json::array({{{"role", "user"}, {"content", "Кратко объясни, что ты умеешь."}}})}}
                             .dump();
-  response = comet::devtool::PerformHttpRequest(stream_request);
+  response = naim::devtool::PerformHttpRequest(stream_request);
   const auto events = ParseSseEvents(response.body);
   std::vector<std::string> event_names;
   for (const auto& event : events) {
@@ -896,7 +896,7 @@ void CommandCheckExternalInferenceContract(const std::map<std::string, std::stri
       &response);
   AssertTrue(response.status_code == 404, "unknown plane expected 404");
   AssertTrue(
-      response.headers.find("x-comet-request-id") != response.headers.end(),
+      response.headers.find("x-naim-request-id") != response.headers.end(),
       "unknown plane response missing request id header");
   AssertErrorEnvelope(payload, "plane_not_found");
 
@@ -998,7 +998,7 @@ int main(int argc, char** argv) {
     }
     throw std::runtime_error("unknown command: " + command);
   } catch (const std::exception& error) {
-    std::cerr << "comet-devtool: " << error.what() << '\n';
+    std::cerr << "naim-devtool: " << error.what() << '\n';
     return 1;
   }
 }

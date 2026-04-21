@@ -10,18 +10,18 @@
 #include "interaction/interaction_service.h"
 #include "skills/plane_skill_contextual_resolver_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneSkillsService final {
  public:
   static constexpr const char* kSystemInstructionPayloadKey =
-      "_comet_skills_system_instruction";
-  static constexpr const char* kAppliedSkillsPayloadKey = "_comet_applied_skills";
+      "_naim_skills_system_instruction";
+  static constexpr const char* kAppliedSkillsPayloadKey = "_naim_applied_skills";
   static constexpr const char* kAutoAppliedSkillsPayloadKey =
-      "_comet_auto_applied_skills";
-  static constexpr const char* kSkillsSessionIdPayloadKey = "_comet_skills_session_id";
+      "_naim_auto_applied_skills";
+  static constexpr const char* kSkillsSessionIdPayloadKey = "_naim_skills_session_id";
   static constexpr const char* kSkillResolutionModePayloadKey =
-      "_comet_skill_resolution_mode";
+      "_naim_skill_resolution_mode";
 
   bool IsEnabled(const DesiredState& desired_state) const;
 
@@ -78,4 +78,4 @@ class PlaneSkillsService final {
   static std::string BuildSystemInstruction(const nlohmann::json& skills);
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

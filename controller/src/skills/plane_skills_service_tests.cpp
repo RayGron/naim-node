@@ -12,9 +12,10 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/core/platform_compat.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/core/platform_compat.h"
+#include "naim/state/sqlite_store.h"
 #include "browsing/interaction_browsing_service.h"
+#include "interaction/interaction_completion_policy_support.h"
 #include "interaction/interaction_payload_builder.h"
 #include "interaction/interaction_service.h"
 #include "browsing/plane_browsing_service.h"
@@ -150,9 +151,9 @@ class SkillRuntimeTestServer {
  public:
   explicit SkillRuntimeTestServer(json skills_payload)
       : skills_payload_(std::move(skills_payload)) {
-    comet::platform::EnsureSocketsInitialized();
+    naim::platform::EnsureSocketsInitialized();
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (!comet::platform::IsSocketValid(listen_fd_)) {
+    if (!naim::platform::IsSocketValid(listen_fd_)) {
       throw std::runtime_error("failed to create test runtime socket");
     }
 
@@ -173,13 +174,13 @@ class SkillRuntimeTestServer {
     addr.sin_port = htons(0);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to bind test runtime socket: " + error);
     }
     if (listen(listen_fd_, 8) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to listen on test runtime socket: " + error);
     }
 
@@ -189,8 +190,8 @@ class SkillRuntimeTestServer {
             listen_fd_,
             reinterpret_cast<sockaddr*>(&bound_addr),
             &bound_size) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to inspect test runtime socket: " + error);
     }
     port_ = ntohs(bound_addr.sin_port);
@@ -201,17 +202,17 @@ class SkillRuntimeTestServer {
     stop_requested_.store(true);
     if (port_ > 0) {
       const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
-      if (comet::platform::IsSocketValid(wake_fd)) {
+      if (naim::platform::IsSocketValid(wake_fd)) {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port_));
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-        comet::platform::CloseSocket(wake_fd);
+        naim::platform::CloseSocket(wake_fd);
       }
     }
-    if (comet::platform::IsSocketValid(listen_fd_)) {
-      comet::platform::CloseSocket(listen_fd_);
+    if (naim::platform::IsSocketValid(listen_fd_)) {
+      naim::platform::CloseSocket(listen_fd_);
     }
     if (thread_.joinable()) {
       thread_.join();
@@ -227,11 +228,11 @@ class SkillRuntimeTestServer {
       socklen_t client_size = sizeof(client_addr);
       const auto client_fd = accept(
           listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
-      if (!comet::platform::IsSocketValid(client_fd)) {
+      if (!naim::platform::IsSocketValid(client_fd)) {
         return;
       }
       if (stop_requested_.load()) {
-        comet::platform::CloseSocket(client_fd);
+        naim::platform::CloseSocket(client_fd);
         return;
       }
 
@@ -256,13 +257,13 @@ class SkillRuntimeTestServer {
         data += written;
         remaining -= static_cast<std::size_t>(written);
       }
-      comet::platform::CloseSocket(client_fd);
+      naim::platform::CloseSocket(client_fd);
     }
   }
 
   json skills_payload_;
   std::atomic<bool> stop_requested_{false};
-  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
   int port_ = 0;
   std::thread thread_;
 };
@@ -270,9 +271,9 @@ class SkillRuntimeTestServer {
 class BrowsingRuntimeTestServer {
  public:
   BrowsingRuntimeTestServer() {
-    comet::platform::EnsureSocketsInitialized();
+    naim::platform::EnsureSocketsInitialized();
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (!comet::platform::IsSocketValid(listen_fd_)) {
+    if (!naim::platform::IsSocketValid(listen_fd_)) {
       throw std::runtime_error("failed to create browsing test runtime socket");
     }
 
@@ -293,13 +294,13 @@ class BrowsingRuntimeTestServer {
     addr.sin_port = htons(0);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to bind browsing test runtime socket: " + error);
     }
     if (listen(listen_fd_, 8) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to listen on browsing test runtime socket: " + error);
     }
 
@@ -309,8 +310,8 @@ class BrowsingRuntimeTestServer {
             listen_fd_,
             reinterpret_cast<sockaddr*>(&bound_addr),
             &bound_size) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to inspect browsing test runtime socket: " + error);
     }
     port_ = ntohs(bound_addr.sin_port);
@@ -321,17 +322,17 @@ class BrowsingRuntimeTestServer {
     stop_requested_.store(true);
     if (port_ > 0) {
       const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
-      if (comet::platform::IsSocketValid(wake_fd)) {
+      if (naim::platform::IsSocketValid(wake_fd)) {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port_));
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-        comet::platform::CloseSocket(wake_fd);
+        naim::platform::CloseSocket(wake_fd);
       }
     }
-    if (comet::platform::IsSocketValid(listen_fd_)) {
-      comet::platform::CloseSocket(listen_fd_);
+    if (naim::platform::IsSocketValid(listen_fd_)) {
+      naim::platform::CloseSocket(listen_fd_);
     }
     if (thread_.joinable()) {
       thread_.join();
@@ -342,7 +343,7 @@ class BrowsingRuntimeTestServer {
 
  private:
   void WriteJsonResponse(
-      comet::platform::SocketHandle client_fd,
+      naim::platform::SocketHandle client_fd,
       int status_code,
       const json& payload) {
     const std::string body = payload.dump();
@@ -372,11 +373,11 @@ class BrowsingRuntimeTestServer {
       socklen_t client_size = sizeof(client_addr);
       const auto client_fd = accept(
           listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
-      if (!comet::platform::IsSocketValid(client_fd)) {
+      if (!naim::platform::IsSocketValid(client_fd)) {
         return;
       }
       if (stop_requested_.load()) {
-        comet::platform::CloseSocket(client_fd);
+        naim::platform::CloseSocket(client_fd);
         return;
       }
 
@@ -392,7 +393,7 @@ class BrowsingRuntimeTestServer {
             client_fd,
             200,
             json{{"status", "ok"},
-                 {"service", "comet-webgateway"},
+                 {"service", "naim-webgateway"},
                  {"ready", true},
                  {"active_session_count", 0}});
       } else if (request.rfind("POST /v1/webgateway/search ", 0) == 0) {
@@ -406,19 +407,19 @@ class BrowsingRuntimeTestServer {
             404,
             json{{"status", "error"}, {"error", {{"code", "not_found"}}}});
       }
-      comet::platform::CloseSocket(client_fd);
+      naim::platform::CloseSocket(client_fd);
     }
   }
 
   std::atomic<bool> stop_requested_{false};
-  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
   int port_ = 0;
   std::thread thread_;
 };
 
 json DefaultInteractionBrowsingStatusPayload() {
   return json{{"status", "ok"},
-              {"service", "comet-webgateway"},
+              {"service", "naim-webgateway"},
               {"ready", true},
               {"search_enabled", true},
               {"fetch_enabled", true},
@@ -578,9 +579,9 @@ class InteractionBrowsingRuntimeTestServer {
   explicit InteractionBrowsingRuntimeTestServer(
       InteractionBrowsingRuntimeServerConfig config)
       : config_(std::move(config)) {
-    comet::platform::EnsureSocketsInitialized();
+    naim::platform::EnsureSocketsInitialized();
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (!comet::platform::IsSocketValid(listen_fd_)) {
+    if (!naim::platform::IsSocketValid(listen_fd_)) {
       throw std::runtime_error("failed to create interaction browsing test socket");
     }
 
@@ -601,13 +602,13 @@ class InteractionBrowsingRuntimeTestServer {
     addr.sin_port = htons(0);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to bind interaction browsing test socket: " + error);
     }
     if (listen(listen_fd_, 8) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to listen on interaction browsing test socket: " + error);
     }
 
@@ -617,8 +618,8 @@ class InteractionBrowsingRuntimeTestServer {
             listen_fd_,
             reinterpret_cast<sockaddr*>(&bound_addr),
             &bound_size) != 0) {
-      const auto error = comet::platform::LastSocketErrorMessage();
-      comet::platform::CloseSocket(listen_fd_);
+      const auto error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(listen_fd_);
       throw std::runtime_error("failed to inspect interaction browsing socket: " + error);
     }
     port_ = ntohs(bound_addr.sin_port);
@@ -643,17 +644,17 @@ class InteractionBrowsingRuntimeTestServer {
     stop_requested_.store(true);
     if (port_ > 0) {
       const auto wake_fd = socket(AF_INET, SOCK_STREAM, 0);
-      if (comet::platform::IsSocketValid(wake_fd)) {
+      if (naim::platform::IsSocketValid(wake_fd)) {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port_));
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         (void)connect(wake_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-        comet::platform::CloseSocket(wake_fd);
+        naim::platform::CloseSocket(wake_fd);
       }
     }
-    if (comet::platform::IsSocketValid(listen_fd_)) {
-      comet::platform::CloseSocket(listen_fd_);
+    if (naim::platform::IsSocketValid(listen_fd_)) {
+      naim::platform::CloseSocket(listen_fd_);
     }
     if (thread_.joinable()) {
       thread_.join();
@@ -706,7 +707,7 @@ class InteractionBrowsingRuntimeTestServer {
   }
 
   void WriteJsonResponse(
-      comet::platform::SocketHandle client_fd,
+      naim::platform::SocketHandle client_fd,
       int status_code,
       const json& payload) {
     const std::string body = payload.dump();
@@ -736,11 +737,11 @@ class InteractionBrowsingRuntimeTestServer {
       socklen_t client_size = sizeof(client_addr);
       const auto client_fd = accept(
           listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
-      if (!comet::platform::IsSocketValid(client_fd)) {
+      if (!naim::platform::IsSocketValid(client_fd)) {
         return;
       }
       if (stop_requested_.load()) {
-        comet::platform::CloseSocket(client_fd);
+        naim::platform::CloseSocket(client_fd);
         return;
       }
 
@@ -778,13 +779,13 @@ class InteractionBrowsingRuntimeTestServer {
                           {{"code", "search_failed"},
                            {"message", "simulated search failure"}}}};
           WriteJsonResponse(client_fd, config_.search_status_code, payload);
-          comet::platform::CloseSocket(client_fd);
+          naim::platform::CloseSocket(client_fd);
           continue;
         }
         if (config_.search_response_payload.is_object() &&
             !config_.search_response_payload.empty()) {
           WriteJsonResponse(client_fd, 200, config_.search_response_payload);
-          comet::platform::CloseSocket(client_fd);
+          naim::platform::CloseSocket(client_fd);
           continue;
         }
         WriteJsonResponse(
@@ -815,7 +816,7 @@ class InteractionBrowsingRuntimeTestServer {
                            {"message", "simulated fetch failure"},
                            {"url", requested_url}}}};
           WriteJsonResponse(client_fd, status_override->second, payload);
-          comet::platform::CloseSocket(client_fd);
+          naim::platform::CloseSocket(client_fd);
           continue;
         }
         if (fetch_fail_urls_.count(requested_url) > 0) {
@@ -827,7 +828,7 @@ class InteractionBrowsingRuntimeTestServer {
                     {{"code", "fetch_failed"},
                      {"message", "simulated fetch failure"},
                      {"url", requested_url}}}});
-          comet::platform::CloseSocket(client_fd);
+          naim::platform::CloseSocket(client_fd);
           continue;
         }
         json response_payload = DefaultInteractionBrowsingFetchPayload(requested_url);
@@ -845,7 +846,7 @@ class InteractionBrowsingRuntimeTestServer {
             404,
             json{{"status", "error"}, {"error", {{"code", "not_found"}}}});
       }
-      comet::platform::CloseSocket(client_fd);
+      naim::platform::CloseSocket(client_fd);
     }
   }
 
@@ -857,7 +858,7 @@ class InteractionBrowsingRuntimeTestServer {
   mutable std::mutex records_mutex_;
   std::vector<std::string> search_queries_;
   std::vector<std::string> fetched_urls_;
-  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
   int port_ = 0;
   std::thread thread_;
 };
@@ -1010,7 +1011,7 @@ json InteractionBrowsingRuntimeTestServer::BuildBlockedResolveResponse(
       {"trace", BuildResolveTrace("blocked", "blocked", json::array(), sources, true, true)},
   };
   return json{{"status", "ok"},
-              {"service", "comet-webgateway"},
+              {"service", "naim-webgateway"},
               {"decision", "blocked"},
               {"context", context},
               {"refusal", refusal},
@@ -1104,7 +1105,7 @@ json InteractionBrowsingRuntimeTestServer::BuildResolveResponse(const json& payl
                            {"compact", disabled_by_user ? "web:off user" : "web:off"}}})},
     };
     return json{{"status", "ok"},
-                {"service", "comet-webgateway"},
+                {"service", "naim-webgateway"},
                 {"decision", "disabled"},
                 {"context", context},
                 {"response_policy", json::object()},
@@ -1163,7 +1164,7 @@ json InteractionBrowsingRuntimeTestServer::BuildResolveResponse(const json& payl
              false)},
     };
     return json{{"status", "ok"},
-                {"service", "comet-webgateway"},
+                {"service", "naim-webgateway"},
                 {"decision", "unavailable"},
                 {"context", context},
                 {"response_policy", response_policy},
@@ -1211,7 +1212,7 @@ json InteractionBrowsingRuntimeTestServer::BuildResolveResponse(const json& payl
              rendered_ready)},
     };
     return json{{"status", "ok"},
-                {"service", "comet-webgateway"},
+                {"service", "naim-webgateway"},
                 {"decision", "not_needed"},
                 {"context", context},
                 {"response_policy", response_policy},
@@ -1397,29 +1398,29 @@ json InteractionBrowsingRuntimeTestServer::BuildResolveResponse(const json& payl
       {"trace", BuildResolveTrace(lookup_state, decision, searches, sources, true, rendered_ready)},
   };
   return json{{"status", "ok"},
-              {"service", "comet-webgateway"},
+              {"service", "naim-webgateway"},
               {"decision", decision},
               {"context", context},
               {"response_policy", response_policy},
               {"model_instruction", model_instruction}};
 }
 
-comet::DesiredState BuildDesiredStateWithSkillsPort(
+naim::DesiredState BuildDesiredStateWithSkillsPort(
     const std::string& host_ip,
     const int host_port) {
-  comet::DesiredState desired_state;
+  naim::DesiredState desired_state;
   desired_state.plane_name = "maglev";
-  desired_state.plane_mode = comet::PlaneMode::Llm;
-  comet::SkillsSettings skills_settings;
+  desired_state.plane_mode = naim::PlaneMode::Llm;
+  naim::SkillsSettings skills_settings;
   skills_settings.enabled = true;
   desired_state.skills = skills_settings;
 
-  comet::InstanceSpec skills;
+  naim::InstanceSpec skills;
   skills.name = "skills-maglev";
   skills.plane_name = "maglev";
   skills.node_name = "local-hostd";
-  skills.role = comet::InstanceRole::Skills;
-  comet::PublishedPort published_port;
+  skills.role = naim::InstanceRole::Skills;
+  naim::PublishedPort published_port;
   published_port.host_ip = host_ip;
   published_port.host_port = host_port;
   published_port.container_port = 18120;
@@ -1428,27 +1429,27 @@ comet::DesiredState BuildDesiredStateWithSkillsPort(
   return desired_state;
 }
 
-comet::DesiredState BuildDesiredStateWithBrowsingPort(
+naim::DesiredState BuildDesiredStateWithBrowsingPort(
     const std::string& host_ip,
     const int host_port) {
-  comet::DesiredState desired_state;
+  naim::DesiredState desired_state;
   desired_state.plane_name = "maglev";
-  desired_state.plane_mode = comet::PlaneMode::Llm;
-  comet::BrowsingSettings settings;
+  desired_state.plane_mode = naim::PlaneMode::Llm;
+  naim::BrowsingSettings settings;
   settings.enabled = true;
-  comet::BrowsingPolicySettings policy;
+  naim::BrowsingPolicySettings policy;
   policy.browser_session_enabled = true;
   policy.rendered_browser_enabled = true;
   policy.login_enabled = false;
   settings.policy = policy;
   desired_state.browsing = settings;
 
-  comet::InstanceSpec browsing;
+  naim::InstanceSpec browsing;
   browsing.name = "webgateway-maglev";
   browsing.plane_name = "maglev";
   browsing.node_name = "local-hostd";
-  browsing.role = comet::InstanceRole::Browsing;
-  comet::PublishedPort published_port;
+  browsing.role = naim::InstanceRole::Browsing;
+  naim::PublishedPort published_port;
   published_port.host_ip = host_ip;
   published_port.host_port = host_port;
   published_port.container_port = 18130;
@@ -1457,15 +1458,15 @@ comet::DesiredState BuildDesiredStateWithBrowsingPort(
   return desired_state;
 }
 
-comet::DesiredState BuildDesiredState(
+naim::DesiredState BuildDesiredState(
     const std::string& plane_name,
     const std::vector<std::string>& factory_skill_ids,
     bool skills_enabled = true) {
-  comet::DesiredState desired_state;
+  naim::DesiredState desired_state;
   desired_state.plane_name = plane_name;
-  desired_state.plane_mode = comet::PlaneMode::Llm;
+  desired_state.plane_mode = naim::PlaneMode::Llm;
   if (skills_enabled || !factory_skill_ids.empty()) {
-    comet::SkillsSettings settings;
+    naim::SkillsSettings settings;
     settings.enabled = skills_enabled;
     settings.factory_skill_ids = factory_skill_ids;
     desired_state.skills = settings;
@@ -1473,9 +1474,9 @@ comet::DesiredState BuildDesiredState(
   return desired_state;
 }
 
-comet::controller::InteractionRequestContext BuildBrowsingRequestContext(
+naim::controller::InteractionRequestContext BuildBrowsingRequestContext(
     const std::vector<std::string>& user_messages) {
-  comet::controller::InteractionRequestContext request_context;
+  naim::controller::InteractionRequestContext request_context;
   json messages = json::array();
   for (const auto& message : user_messages) {
     messages.push_back(json{{"role", "user"}, {"content", message}});
@@ -1484,21 +1485,21 @@ comet::controller::InteractionRequestContext BuildBrowsingRequestContext(
   return request_context;
 }
 
-comet::controller::PlaneInteractionResolution BuildBrowsingResolution(int port) {
-  comet::controller::PlaneInteractionResolution resolution;
+naim::controller::PlaneInteractionResolution BuildBrowsingResolution(int port) {
+  naim::controller::PlaneInteractionResolution resolution;
   resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", port);
   return resolution;
 }
 
 const json& BrowsingSummary(
-    const comet::controller::InteractionRequestContext& request_context) {
+    const naim::controller::InteractionRequestContext& request_context) {
   return request_context.payload.at(
-      comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+      naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
 }
 
 std::string MakeTempDbPath() {
   const auto root =
-      fs::temp_directory_path() / "comet-plane-skills-service-tests";
+      fs::temp_directory_path() / "naim-plane-skills-service-tests";
   fs::create_directories(root);
   return (root / "controller.sqlite").string();
 }
@@ -1511,7 +1512,7 @@ std::string MakeInvalidUtf8Text() {
 
 int main() {
   try {
-    comet::controller::PlaneSkillsService service;
+    naim::controller::PlaneSkillsService service;
 
     {
       const auto target =
@@ -1539,7 +1540,7 @@ int main() {
     }
 
     {
-      comet::controller::PlaneBrowsingService browsing_service;
+      naim::controller::PlaneBrowsingService browsing_service;
       const auto target =
           browsing_service.ResolveTarget(BuildDesiredStateWithBrowsingPort("127.0.0.1", 28130));
       Expect(target.has_value(), "browsing target should resolve when a published port exists");
@@ -1552,7 +1553,7 @@ int main() {
     }
 
     {
-      comet::controller::PlaneBrowsingService browsing_service;
+      naim::controller::PlaneBrowsingService browsing_service;
       const auto target =
           browsing_service.ResolveTarget(BuildDesiredStateWithBrowsingPort("0.0.0.0", 28130));
       Expect(target.has_value(), "browsing target should resolve for wildcard host_ip");
@@ -1564,7 +1565,7 @@ int main() {
 
     {
       BrowsingRuntimeTestServer runtime;
-      comet::controller::PlaneBrowsingService browsing_service;
+      naim::controller::PlaneBrowsingService browsing_service;
       const auto desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto payload =
@@ -1573,7 +1574,7 @@ int main() {
              "webgateway status should mark webgateway as enabled");
       Expect(payload.value("webgateway_ready", false),
              "webgateway status should probe runtime readiness");
-      Expect(payload.value("service", std::string{}) == "comet-webgateway",
+      Expect(payload.value("service", std::string{}) == "naim-webgateway",
              "webgateway status should merge runtime payload");
       Expect(payload.value("active_session_count", -1) == 0,
              "browsing status should expose runtime active_session_count");
@@ -1582,7 +1583,7 @@ int main() {
 
     {
       BrowsingRuntimeTestServer runtime;
-      comet::controller::PlaneBrowsingService browsing_service;
+      naim::controller::PlaneBrowsingService browsing_service;
       const auto desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       std::string error_code;
@@ -1616,11 +1617,11 @@ int main() {
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"messages",
@@ -1652,11 +1653,11 @@ int main() {
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"messages",
@@ -1691,11 +1692,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"messages",
@@ -1725,11 +1726,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"messages",
@@ -1757,11 +1758,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"messages",
@@ -1779,11 +1780,11 @@ int main() {
     {
       const auto desired_state = BuildDesiredState("catalog-plane", {});
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"messages",
@@ -1809,11 +1810,11 @@ int main() {
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"messages",
@@ -1839,11 +1840,11 @@ int main() {
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto payload =
-          comet::controller::PlaneSkillContextualResolverService().BuildDebugPayload(
+          naim::controller::PlaneSkillContextualResolverService().BuildDebugPayload(
               "",
               resolution,
               json{{"prompt", "Please debug this regression and find the root cause."}});
@@ -1888,11 +1889,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -1924,11 +1925,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt", "Выйди из моей текущей сессии."}});
@@ -1959,11 +1960,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt", "Проверь сессию, куки и handshake авторизации."}});
@@ -1988,11 +1989,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt", "Проверь сессию, куки и handshake авторизации."},
@@ -2026,11 +2027,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -2071,11 +2072,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -2109,11 +2110,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -2147,11 +2148,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -2185,11 +2186,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -2223,11 +2224,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -2268,11 +2269,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -2310,11 +2311,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt", "Сделай обзор рынка по основным валютам"}});
@@ -2367,11 +2368,11 @@ int main() {
       desired_state.instances =
           BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               "",
               resolution,
               json{{"prompt",
@@ -2387,12 +2388,12 @@ int main() {
     {
       const std::string db_path = MakeTempDbPath();
       fs::remove(db_path);
-      comet::ControllerStore store(db_path);
+      naim::ControllerStore store(db_path);
       store.Initialize();
       const auto desired_state = BuildDesiredState(
           "catalog-plane", {"code-agent-root-cause-debug"});
       store.ReplaceDesiredState(desired_state, 1);
-      comet::SkillsFactorySkillRecord record;
+      naim::SkillsFactorySkillRecord record;
       record.id = "code-agent-root-cause-debug";
       record.name = "root-cause-debug";
       record.description =
@@ -2401,12 +2402,12 @@ int main() {
           "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path.";
       store.UpsertSkillsFactorySkill(record);
 
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.db_path = db_path;
       resolution.desired_state = desired_state;
 
       const auto selection =
-          comet::controller::PlaneSkillContextualResolverService().Resolve(
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
               db_path,
               resolution,
               json{{"messages",
@@ -2415,19 +2416,22 @@ int main() {
                               {"content",
                                "Please debug this regression and find the root cause."}}})}});
       Expect(
-          selection.mode == "none" && selection.candidate_count == 0,
-          "resolver should ignore controller catalog entries that are not present in runtime skillsd");
-      std::cout << "ok: contextual-resolver-requires-runtime-skill-copy" << '\n';
+          selection.mode == "contextual" &&
+              selection.candidate_count == 1 &&
+              selection.selected_skill_ids.size() == 1 &&
+              selection.selected_skill_ids.front() == "code-agent-root-cause-debug",
+          "resolver should use controller catalog entries when runtime skillsd is remote or unreachable");
+      std::cout << "ok: contextual-resolver-uses-controller-catalog" << '\n';
     }
 
     {
       const auto payload =
-          comet::controller::PlaneDashboardSkillsSummaryService::BuildPayload(
+          naim::controller::PlaneDashboardSkillsSummaryService::BuildPayload(
           BuildDesiredState("dashboard-plane", {"skill-alpha", "skill-beta"}, true),
-          std::vector<comet::PlaneSkillBindingRecord>{
-              comet::PlaneSkillBindingRecord{
+          std::vector<naim::PlaneSkillBindingRecord>{
+              naim::PlaneSkillBindingRecord{
                   "dashboard-plane", "skill-alpha", false, {}, {}, "", ""},
-              comet::PlaneSkillBindingRecord{
+              naim::PlaneSkillBindingRecord{
                   "dashboard-plane", "skill-beta", true, {}, {}, "", ""},
           });
       Expect(
@@ -2444,7 +2448,7 @@ int main() {
 
     {
       const auto payload =
-          comet::controller::PlaneDashboardSkillsSummaryService::BuildPayload(
+          naim::controller::PlaneDashboardSkillsSummaryService::BuildPayload(
           BuildDesiredState("dashboard-plane", {"skill-alpha"}, false),
           {});
       Expect(
@@ -2457,9 +2461,9 @@ int main() {
     }
 
     {
-      comet::controller::InteractionRequestValidator validator;
-      comet::controller::InteractionRequestContext request_context;
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::InteractionRequestValidator validator;
+      naim::controller::InteractionRequestContext request_context;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = BuildDesiredState("interaction-plane", {});
       resolution.status_payload = json::object();
       const auto error = validator.ValidateAndNormalizeRequest(
@@ -2474,9 +2478,9 @@ int main() {
     }
 
     {
-      comet::controller::InteractionRequestValidator validator;
-      comet::controller::InteractionRequestContext request_context;
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::InteractionRequestValidator validator;
+      naim::controller::InteractionRequestContext request_context;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = BuildDesiredState("interaction-plane", {});
       resolution.status_payload = json::object();
       const auto error = validator.ValidateAndNormalizeRequest(
@@ -2491,9 +2495,9 @@ int main() {
     }
 
     {
-      comet::controller::InteractionRequestValidator validator;
-      comet::controller::InteractionRequestContext request_context;
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::InteractionRequestValidator validator;
+      naim::controller::InteractionRequestContext request_context;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = BuildDesiredState("interaction-plane", {});
       resolution.status_payload = json::object();
       const auto error = validator.ValidateAndNormalizeRequest(
@@ -2509,14 +2513,14 @@ int main() {
     }
 
     {
-      comet::controller::PlaneSkillsService skills_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::PlaneSkillsService skills_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"session_id", "sess-continue-1"},
           {"messages",
            json::array({json{{"role", "user"}, {"content", "Continue the chat."}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = BuildDesiredState("interaction-plane", {}, false);
       const auto error =
           skills_service.ResolveInteractionSkills(resolution, &request_context);
@@ -2525,32 +2529,83 @@ int main() {
           "public conversation session_id should not require skills to be enabled");
       Expect(
           request_context.payload.at(
-              comet::controller::PlaneSkillsService::kAppliedSkillsPayloadKey)
+              naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey)
               .empty(),
           "conversation session_id alone should not resolve skills");
       std::cout << "ok: interaction-session-id-does-not-force-skills" << '\n';
     }
 
     {
-      comet::controller::InteractionSessionPresenter presenter;
-      comet::controller::InteractionRequestContext request_context;
+      const std::string db_path = MakeTempDbPath();
+      fs::remove(db_path);
+      naim::ControllerStore store(db_path);
+      store.Initialize();
+      auto desired_state = BuildDesiredState(
+          "interaction-plane", {"lt-jex-market-asset-report"});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", 9).instances;
+      naim::SkillsFactorySkillRecord record;
+      record.id = "lt-jex-market-asset-report";
+      record.name = "asset-market-report";
+      record.description = "Use for current state reports of one tracked asset.";
+      record.content = "Use factual market data and separate venue-specific data.";
+      record.match_terms = {"ситуация по bnb", "текущий срез", "current asset report"};
+      store.UpsertSkillsFactorySkill(record);
+
+      naim::controller::PlaneSkillsService skills_service;
+      naim::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"messages",
+           json::array(
+               {json{{"role", "user"},
+                     {"content", "Какая сейчас ситуация по BNB? Текущий срез."}}})},
+      };
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.db_path = db_path;
+      resolution.desired_state = desired_state;
+
+      const auto error =
+          skills_service.ResolveInteractionSkills(resolution, &request_context);
+      Expect(
+          !error.has_value(),
+          "interaction skills should resolve from controller catalog when runtime endpoint is unreachable");
+      const auto applied = request_context.payload.at(
+          naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey);
+      Expect(
+          applied.is_array() && applied.size() == 1 &&
+              applied.front().at("id").get<std::string>() ==
+                  "lt-jex-market-asset-report",
+          "controller catalog fallback should apply selected market skill metadata");
+      Expect(
+          ContainsLiteral(
+              request_context.payload.at(
+                  naim::controller::PlaneSkillsService::kSystemInstructionPayloadKey)
+                  .get<std::string>(),
+              "Use factual market data"),
+          "controller catalog fallback should inject skill instructions");
+      std::cout << "ok: interaction-skills-fallback-to-controller-catalog" << '\n';
+    }
+
+    {
+      naim::controller::InteractionSessionPresenter presenter;
+      naim::controller::InteractionRequestContext request_context;
       request_context.request_id = "req-1";
       request_context.payload = json{
-          {comet::controller::PlaneSkillsService::kAppliedSkillsPayloadKey,
+          {naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey,
            json::array({json{{"id", "skill-alpha"}, {"name", "safe-change"}}})},
-          {comet::controller::PlaneSkillsService::kAutoAppliedSkillsPayloadKey,
+          {naim::controller::PlaneSkillsService::kAutoAppliedSkillsPayloadKey,
            json::array({json{{"id", "skill-alpha"}, {"name", "safe-change"}}})},
-          {comet::controller::PlaneSkillsService::kSkillResolutionModePayloadKey,
+          {naim::controller::PlaneSkillsService::kSkillResolutionModePayloadKey,
            "contextual"},
       };
-      comet::controller::InteractionSessionResult result;
+      naim::controller::InteractionSessionResult result;
       result.session_id = "sess-1";
       result.model = "demo-model";
       result.content = "ok";
       result.completion_status = "completed";
       result.final_finish_reason = "stop";
       result.stop_reason = "natural_stop";
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.status_payload = json::object();
       const auto response = presenter.BuildResponseSpec(
           resolution,
@@ -2568,20 +2623,20 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"messages",
            json::array({json{{"role", "user"}, {"content", "Explain TCP handshakes."}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = BuildDesiredState("interaction-plane", {});
       const auto error =
           browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
       Expect(!error.has_value(), "browsing resolver should not fail for default-off mode");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(
           summary.at("mode").get<std::string>() == "disabled",
           "browsing resolver should keep web mode disabled by default");
@@ -2593,14 +2648,14 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"messages",
            json::array({json{{"role", "user"},
                              {"content", "Включи веб для этого разговора."}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto error =
@@ -2608,7 +2663,7 @@ int main() {
       Expect(!error.has_value(), "browsing resolver should accept a toggle-only request");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(
           summary.at("mode").get<std::string>() == "enabled",
           "browsing resolver should enable web mode from Russian toggle text");
@@ -2627,13 +2682,13 @@ int main() {
           "toggle-only requests should expose a compact trace");
       Expect(
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+              naim::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
                   .get<std::string>()
                   .find("WebGateway state: enabled_toggle_only.") != std::string::npos,
           "toggle-only requests should inject a WebGateway enable acknowledgement instruction");
       Expect(
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+              naim::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
                   .get<std::string>()
                   .find("The latest user message only changes web mode.") != std::string::npos,
           "toggle-only requests should acknowledge that only web mode changed");
@@ -2642,15 +2697,15 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"messages",
            json::array(
                {json{{"role", "user"}, {"content", "Enable web for this chat."}},
                 json{{"role", "user"}, {"content", "Explain TCP handshakes."}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto error =
@@ -2658,7 +2713,7 @@ int main() {
       Expect(!error.has_value(), "enabled web mode should allow no-lookup offline answers");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(
           summary.at("decision").get<std::string>() == "not_needed",
           "offline prompts should still avoid lookup when web context is unnecessary");
@@ -2673,7 +2728,7 @@ int main() {
           "enabled offline prompts should not mark lookup_attempted");
       Expect(
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+              naim::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
                   .get<std::string>()
                   .find("WebGateway determined that no web lookup was needed for this request") !=
               std::string::npos,
@@ -2682,23 +2737,23 @@ int main() {
     }
 
     {
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
-          {comet::controller::kInteractionSessionContextStatePayloadKey,
+          {naim::controller::kInteractionSessionContextStatePayloadKey,
            json{{"browsing_mode", "enabled"}}},
           {"messages",
            json::array(
                {json{{"role", "user"}, {"content", "Explain TCP handshakes."}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", 18130);
       const auto error =
           browsing_service.ResolveInteractionBrowsing(resolution, &request_context);
       Expect(!error.has_value(), "persisted browsing mode should be reusable across turns");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(
           summary.at("mode").get<std::string>() == "enabled",
           "persisted browsing mode should keep web enabled without a fresh toggle");
@@ -2710,8 +2765,8 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"messages",
            json::array(
@@ -2719,7 +2774,7 @@ int main() {
                 json{{"role", "user"},
                      {"content", "What is the latest update on OpenAI models?"}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto error =
@@ -2727,7 +2782,7 @@ int main() {
       Expect(!error.has_value(), "browsing resolver should complete search/fetch enrichment");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(
           summary.at("mode").get<std::string>() == "enabled",
           "web toggle should persist across message history");
@@ -2781,8 +2836,8 @@ int main() {
                             {"snippet", "This page is reachable."},
                             {"score", 0.85}}}),
           {"https://example.com/fail"});
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"messages",
            json::array(
@@ -2790,7 +2845,7 @@ int main() {
                 json{{"role", "user"},
                      {"content", "Find the latest safe example result online."}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto error =
@@ -2798,7 +2853,7 @@ int main() {
       Expect(!error.has_value(), "search fallback after failed fetch should succeed");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(runtime.search_count() == 1, "search fallback should still search once");
       Expect(runtime.fetch_count() >= 2,
              "search fallback should continue to later results after a failed fetch");
@@ -2825,8 +2880,8 @@ int main() {
                             {"snippet", "Summary from the second safe result."},
                             {"score", 0.90}}}),
           {"https://example.com/fail-1", "https://example.com/fail-2"});
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"messages",
            json::array(
@@ -2834,7 +2889,7 @@ int main() {
                 json{{"role", "user"},
                      {"content", "Search online for a safe example summary."}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto error =
@@ -2842,7 +2897,7 @@ int main() {
       Expect(!error.has_value(), "snippet fallback should not fail the interaction");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(runtime.search_count() == 1, "snippet fallback should search once");
       Expect(runtime.fetch_count() >= 2, "snippet fallback should try the fetches before degrading");
       Expect(
@@ -2866,8 +2921,8 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime(json::array());
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"messages",
            json::array(
@@ -2875,7 +2930,7 @@ int main() {
                 json{{"role", "user"},
                      {"content", "What is the latest safe example update online?"}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto error =
@@ -2883,7 +2938,7 @@ int main() {
       Expect(!error.has_value(), "empty search results should not fail the interaction");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(
           summary.at("decision").get<std::string>() == "search_and_fetch",
           "empty search results should preserve the fact that a web lookup was attempted");
@@ -2909,15 +2964,15 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.payload = json{
           {"messages",
            json::array(
                {json{{"role", "user"},
                      {"content", "Use the web and check https://example.com/article"}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto error =
@@ -2925,7 +2980,7 @@ int main() {
       Expect(!error.has_value(), "direct fetch browsing should succeed");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(
           summary.at("decision").get<std::string>() == "direct_fetch",
           "explicit URL requests should skip search and fetch directly");
@@ -2953,8 +3008,8 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
-      comet::controller::InteractionRequestContext request_context;
+      naim::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionRequestContext request_context;
       request_context.request_id = "req-1";
       request_context.payload = json{
           {"messages",
@@ -2963,7 +3018,7 @@ int main() {
                 json{{"role", "user"},
                      {"content", "Disable web. What is the latest update on OpenAI models?"}}})},
       };
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state =
           BuildDesiredStateWithBrowsingPort("127.0.0.1", runtime.port());
       const auto error =
@@ -2971,7 +3026,7 @@ int main() {
       Expect(!error.has_value(), "disable override should not fail");
       const auto summary =
           request_context.payload.at(
-              comet::controller::InteractionBrowsingService::kSummaryPayloadKey);
+              naim::controller::InteractionBrowsingService::kSummaryPayloadKey);
       Expect(
           summary.at("mode").get<std::string>() == "disabled",
           "later disable directive should override earlier enable directive");
@@ -2984,8 +3039,8 @@ int main() {
       Expect(runtime.search_count() == 0, "disabled web mode should prevent search");
       Expect(runtime.fetch_count() == 0, "disabled web mode should prevent fetch");
 
-      comet::controller::InteractionSessionPresenter presenter;
-      comet::controller::InteractionSessionResult result;
+      naim::controller::InteractionSessionPresenter presenter;
+      naim::controller::InteractionSessionResult result;
       result.session_id = "sess-web";
       result.model = "demo-model";
       result.content = "ok";
@@ -3010,7 +3065,7 @@ int main() {
       config.status_payload["ready"] = false;
       config.status_payload["rendered_browser_ready"] = false;
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.", "What is the latest OpenAI update online?"});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3037,7 +3092,7 @@ int main() {
                                     {{"code", "status_unavailable"},
                                      {"message", "status unavailable"}}}};
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.", "What is the latest OpenAI update online?"});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3064,7 +3119,7 @@ int main() {
                                              {{"code", "search_failed"},
                                               {"message", "simulated search failure"}}}};
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.", "Search online for the latest OpenAI update."});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3089,7 +3144,7 @@ int main() {
       InteractionBrowsingRuntimeServerConfig config;
       config.fetch_fail_urls.insert("https://example.com/bad");
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Use the web and check https://example.com/bad"});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3112,7 +3167,7 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.", "Search the web for OpenAI API pricing today."});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3130,7 +3185,7 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.",
            "Reply to the user in chat mode.\nUser message: Используй веб. Посмотри поведение Bitcoin за последние 7 дней и дай короткий вывод по импульсу рынка."});
@@ -3156,7 +3211,7 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.",
            "Используй веб. Проверь текущую цену ETH и коротко сравни изменение ETH и BTC за последние 24 часа.\n"
@@ -3203,7 +3258,7 @@ int main() {
                 {"snippet", "Second unique result."},
                 {"score", 0.85}}});
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.", "Search online for the latest example update."});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3223,7 +3278,7 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Use the web and check https://example.com/one https://example.com/two "
            "https://example.com/three"});
@@ -3249,7 +3304,7 @@ int main() {
                {"citations", nullptr},
                {"injection_flags", nullptr}};
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context =
           BuildBrowsingRequestContext({"Use the web and check https://example.com/nulls"});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3280,7 +3335,7 @@ int main() {
                                   {"title", nullptr},
                                   {"snippet", "Snippet from nullable result."}}})}};
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.", "Search online for the latest OpenAI API update."});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3302,7 +3357,7 @@ int main() {
       config.fetch_payload_overrides["https://example.com/injected"] =
           json{{"injection_flags", json::array({"prompt_injection_detected"})}};
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context =
           BuildBrowsingRequestContext({"Use the web and check https://example.com/injected"});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3314,7 +3369,7 @@ int main() {
              "injection flag propagation should preserve source markers");
       Expect(
           request_context.payload
-                  .at(comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+                  .at(naim::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
                   .get<std::string>()
                   .find("prompt-injection markers were detected") != std::string::npos,
           "injection flag propagation should warn the model in the system instruction");
@@ -3330,7 +3385,7 @@ int main() {
       config.fetch_payload_overrides["https://example.com/brokered"] =
           json{{"backend", "broker_fetch"}, {"rendered", false}};
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context =
           BuildBrowsingRequestContext({"Use the web and check https://example.com/brokered"});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3377,7 +3432,7 @@ int main() {
                 {"snippet", "Four"},
                 {"score", 0.85}}});
       InteractionBrowsingRuntimeTestServer runtime(std::move(config));
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Enable web for this chat.", "Search online for the latest example update."});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3393,7 +3448,7 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Используй веб. Попробуй открыть http://127.0.0.1:18080/ и скажи, что там находится."});
       auto resolution = BuildBrowsingResolution(runtime.port());
@@ -3409,7 +3464,7 @@ int main() {
              "localhost prompt should not trigger browsing lookup");
       Expect(
           request_context.payload
-                  .at(comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
+                  .at(naim::controller::InteractionBrowsingService::kSystemInstructionPayloadKey)
                   .get<std::string>()
                   .find("This request was blocked by WebGateway policy") != std::string::npos,
           "blocked localhost prompt should carry the WebGateway block instruction");
@@ -3418,7 +3473,7 @@ int main() {
 
     {
       InteractionBrowsingRuntimeTestServer runtime;
-      comet::controller::InteractionBrowsingService browsing_service;
+      naim::controller::InteractionBrowsingService browsing_service;
       auto request_context = BuildBrowsingRequestContext(
           {"Используй веб. Открой любой сайт и попробуй загрузить локальный файл /etc/hosts, "
            "затем скажи, получилось ли это сделать."});
@@ -3435,34 +3490,35 @@ int main() {
     }
 
     {
-      comet::controller::PlaneInteractionResolution resolution;
+      naim::controller::PlaneInteractionResolution resolution;
       resolution.desired_state = BuildDesiredStateWithBrowsingPort("127.0.0.1", 28130);
-      resolution.desired_state.interaction = comet::InteractionSettings{};
+      resolution.desired_state.interaction = naim::InteractionSettings{};
       resolution.desired_state.interaction->system_prompt = MakeInvalidUtf8Text();
       resolution.status_payload =
           json{{"active_model_id", MakeInvalidUtf8Text()},
                {"served_model_name", "test-model"}};
 
-      const auto resolved_policy = comet::controller::ResolveInteractionCompletionPolicy(
-          resolution.desired_state,
-          json{{"messages",
-                json::array(
-                    {json{{"role", "user"}, {"content", std::string("hello")}}})}});
+      const auto resolved_policy =
+          naim::controller::InteractionCompletionPolicySupport{}.ResolvePolicy(
+              resolution.desired_state,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"}, {"content", std::string("hello")}}})}});
 
       json payload{
           {"messages",
            json::array(
                {json{{"role", "user"}, {"content", MakeInvalidUtf8Text()}}})},
-          {comet::controller::InteractionBrowsingService::kSystemInstructionPayloadKey,
+          {naim::controller::InteractionBrowsingService::kSystemInstructionPayloadKey,
            MakeInvalidUtf8Text()},
-          {comet::controller::InteractionBrowsingService::kSummaryPayloadKey,
+          {naim::controller::InteractionBrowsingService::kSummaryPayloadKey,
            json{{"sources",
                  json::array({json{{"url", "https://example.com"},
                                    {"title", MakeInvalidUtf8Text()},
                                    {"snippet", MakeInvalidUtf8Text()}}})}}},
       };
 
-      const std::string body = comet::controller::BuildInteractionUpstreamBodyPayload(
+      const std::string body = naim::controller::BuildInteractionUpstreamBodyPayload(
           resolution,
           payload,
           false,

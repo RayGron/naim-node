@@ -12,7 +12,7 @@
 #include "platform/infer_signal_service.h"
 #include "runtime/infer_runtime_types.h"
 
-namespace comet::infer {
+namespace naim::infer {
 
 class LlamaRpcRuntime final {
  public:
@@ -48,4 +48,4 @@ class LlamaRpcRuntime final {
   std::unordered_set<std::string> kv_cache_log_lines_;
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

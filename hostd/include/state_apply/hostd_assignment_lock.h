@@ -3,7 +3,7 @@
 #include <optional>
 #include <string>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class HostdAssignmentLock {
  public:
@@ -26,4 +26,4 @@ class HostdAssignmentLock {
   int fd_ = -1;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

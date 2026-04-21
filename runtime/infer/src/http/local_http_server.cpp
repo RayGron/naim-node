@@ -12,7 +12,7 @@
 
 #include "runtime/infer_runtime_support.h"
 
-namespace comet::infer {
+namespace naim::infer {
 
 namespace {
 
@@ -146,7 +146,7 @@ void LocalHttpServer::HandleClient(int client_fd) {
       if (!fallback_upstream.has_value() ||
           !runtime_support::ProxyHttpRequest(
               config_, client_fd, request_data, *fallback_upstream)) {
-        std::cerr << "[comet-infer] dynamic proxy failed path=" << request.path;
+        std::cerr << "[naim-infer] dynamic proxy failed path=" << request.path;
         if (fallback_upstream.has_value()) {
           std::cerr << " upstream=" << fallback_upstream->host << ":" << fallback_upstream->port;
         } else {
@@ -174,4 +174,4 @@ void LocalHttpServer::HandleClient(int client_fd) {
   close(client_fd);
 }
 
-}  // namespace comet::infer
+}  // namespace naim::infer

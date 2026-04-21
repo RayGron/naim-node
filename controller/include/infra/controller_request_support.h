@@ -7,7 +7,7 @@
 
 #include "http/controller_http_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerRequestSupport {
  public:
@@ -18,4 +18,4 @@ class ControllerRequestSupport {
       const std::string& fallback_artifacts_root) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

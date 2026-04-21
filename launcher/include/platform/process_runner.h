@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class ProcessRunner {
  public:
@@ -14,4 +14,4 @@ class ProcessRunner {
   int SpawnCommand(const std::vector<std::string>& args) const;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

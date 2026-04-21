@@ -5,7 +5,7 @@
 #include <iomanip>
 #include <sstream>
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string ControllerHttpServerSupport::TrimCopy(const std::string& value) {
   std::size_t start = 0;
@@ -194,4 +194,4 @@ bool ControllerHttpServerSupport::StartsWithPath(
          value.compare(0, prefix.size(), prefix) == 0;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

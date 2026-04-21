@@ -3,7 +3,7 @@
 #include <memory>
 #include <string>
 
-namespace comet::worker {
+namespace naim::worker {
 
 class LlamaLibraryEngine final {
  public:
@@ -24,4 +24,4 @@ class LlamaLibraryEngine final {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace comet::worker
+}  // namespace naim::worker

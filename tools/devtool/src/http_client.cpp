@@ -15,7 +15,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-namespace comet::devtool {
+namespace naim::devtool {
 namespace {
 
 struct ParsedUrl {
@@ -286,4 +286,4 @@ HttpResponse PerformHttpRequest(const HttpRequest& request) {
   return response;
 }
 
-}  // namespace comet::devtool
+}  // namespace naim::devtool

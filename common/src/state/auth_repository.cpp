@@ -1,10 +1,10 @@
-#include "comet/state/auth_repository.h"
+#include "naim/state/auth_repository.h"
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
 #include <stdexcept>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -514,4 +514,4 @@ AuthSessionRecord AuthRepository::ReadAuthSession(sqlite3_stmt* statement) {
   };
 }
 
-}  // namespace comet
+}  // namespace naim

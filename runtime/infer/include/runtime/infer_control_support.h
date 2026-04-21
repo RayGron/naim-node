@@ -9,7 +9,7 @@
 
 #include "runtime/infer_runtime_types.h"
 
-namespace comet::infer::control_support {
+namespace naim::infer::control_support {
 
 namespace fs = std::filesystem;
 using nlohmann::json;
@@ -44,4 +44,4 @@ json LoadRegistry(const RuntimeConfig& config);
 json LoadRuntimeAssetsStatus(const RuntimeConfig& config);
 int EnabledGpuNodeCount(const RuntimeConfig& config);
 
-}  // namespace comet::infer::control_support
+}  // namespace naim::infer::control_support

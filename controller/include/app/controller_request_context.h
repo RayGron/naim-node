@@ -2,7 +2,7 @@
 
 #include "http/controller_http_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerRequestContext {
  public:
@@ -24,4 +24,4 @@ class ControllerRequestContext {
   static const HttpRequest*& CurrentSlot();
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

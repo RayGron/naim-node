@@ -6,7 +6,7 @@ usage() {
 Usage:
   install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--skip-prereqs] [--skip-image-build]
 
-Builds comet-node on the current Linux host, installs controller+local-hostd as systemd services,
+Builds naim-node on the current Linux host, installs controller+local-hostd as systemd services,
 and starts them.
 EOF
 }
@@ -102,14 +102,14 @@ wait_for_http() {
   return 1
 }
 
-stop_existing_comet_processes() {
-  echo "[install-single-node] stopping existing comet services and stray processes"
-  run_as_root systemctl stop comet-node-controller.service comet-node-hostd.service >/dev/null 2>&1 || true
+stop_existing_naim_processes() {
+  echo "[install-single-node] stopping existing naim services and stray processes"
+  run_as_root systemctl stop naim-node-controller.service naim-node-hostd.service >/dev/null 2>&1 || true
 
   local patterns=(
-    "/comet-node run controller"
-    "/comet-controller serve"
-    "/comet-node run hostd"
+    "/naim-node run controller"
+    "/naim-controller serve"
+    "/naim-node run hostd"
   )
   local pattern
   for pattern in "${patterns[@]}"; do
@@ -118,11 +118,11 @@ stop_existing_comet_processes() {
 }
 
 prepare_runtime_storage_root() {
-  local runtime_link="/var/lib/comet-node/runtime"
+  local runtime_link="/var/lib/naim-node/runtime"
   local runtime_target="${storage_root%/}/runtime"
 
   echo "[install-single-node] preparing runtime storage at ${runtime_target}"
-  run_as_root mkdir -p "/var/lib/comet-node"
+  run_as_root mkdir -p "/var/lib/naim-node"
   run_as_root mkdir -p "${storage_root}"
   run_as_root mkdir -p "${runtime_target}"
 
@@ -267,7 +267,7 @@ ensure_operator_ui_deps_if_needed() {
   run_as_invoking_user bash -lc "cd '${ui_root}' && npm ci"
 }
 
-config_summary="$("${repo_root}/scripts/comet-devtool.sh" config-summary --config "${repo_root}/config/comet-node-config.json")"
+config_summary="$("${repo_root}/scripts/naim-devtool.sh" config-summary --config "${repo_root}/config/naim-node-config.json")"
 storage_root="$(printf '%s\n' "${config_summary}" | sed -n '1p')"
 model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
@@ -288,14 +288,14 @@ if [[ "${skip_image_build}" != "yes" ]]; then
 fi
 
 build_dir="$("${script_dir}/print-build-dir.sh")"
-launcher_binary="${build_dir}/comet-node"
+launcher_binary="${build_dir}/naim-node"
 
 if [[ ! -x "${launcher_binary}" ]]; then
   echo "error: launcher binary not found: ${launcher_binary}" >&2
   exit 1
 fi
 
-stop_existing_comet_processes
+stop_existing_naim_processes
 prepare_runtime_storage_root
 
 install_args=(
@@ -313,8 +313,8 @@ echo "[install-single-node] installing controller and local hostd services"
 run_as_root "${launcher_binary}" "${install_args[@]}"
 
 echo "[install-single-node] verifying services"
-run_as_root systemctl is-active --quiet comet-node-controller.service
-run_as_root systemctl is-active --quiet comet-node-hostd.service
+run_as_root systemctl is-active --quiet naim-node-controller.service
+run_as_root systemctl is-active --quiet naim-node-hostd.service
 if ! wait_for_http "http://127.0.0.1:${listen_port}/health" 30; then
   echo "error: controller health endpoint did not become ready on port ${listen_port}" >&2
   exit 1

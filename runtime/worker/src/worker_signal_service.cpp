@@ -2,7 +2,7 @@
 
 #include <csignal>
 
-namespace comet::worker {
+namespace naim::worker {
 
 WorkerSignalService* WorkerSignalService::instance_ = nullptr;
 
@@ -28,4 +28,4 @@ void WorkerSignalService::HandleSignal(int) {
   }
 }
 
-}  // namespace comet::worker
+}  // namespace naim::worker

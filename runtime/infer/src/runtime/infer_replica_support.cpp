@@ -8,7 +8,7 @@
 
 #include "runtime/infer_control_support.h"
 
-namespace comet::infer::replica_support {
+namespace naim::infer::replica_support {
 
 namespace {
 
@@ -281,4 +281,4 @@ ReplicaTopology InspectReplicaTopology(const RuntimeConfig& config) {
   return topology;
 }
 
-}  // namespace comet::infer::replica_support
+}  // namespace naim::infer::replica_support

@@ -5,13 +5,13 @@
 #include <string>
 #include <thread>
 
-#include "comet/core/platform_compat.h"
-#include "comet/runtime/runtime_status.h"
+#include "naim/core/platform_compat.h"
+#include "naim/runtime/runtime_status.h"
 #include "http/controller_http_types.h"
 #include "http/controller_http_transport.h"
 #include "skills/skills_store.h"
 
-namespace comet::skills {
+namespace naim::skills {
 
 struct SkillsRuntimeConfig {
   std::string plane_name = "unknown";
@@ -20,9 +20,9 @@ struct SkillsRuntimeConfig {
   std::string node_name = "unknown";
   std::string control_root;
   std::string controller_url = "http://controller.internal:18080";
-  std::filesystem::path db_path = "/comet/private/skills.sqlite";
-  std::filesystem::path status_path = "/comet/private/skills-runtime-status.json";
-  std::filesystem::path ready_path = "/tmp/comet-ready";
+  std::filesystem::path db_path = "/naim/private/skills.sqlite";
+  std::filesystem::path status_path = "/naim/private/skills-runtime-status.json";
+  std::filesystem::path ready_path = "/tmp/naim-ready";
   std::string listen_host = "0.0.0.0";
   int port = 18120;
 };
@@ -40,7 +40,7 @@ class SkillsServer final {
 
  private:
   void AcceptLoop();
-  void HandleClient(comet::platform::SocketHandle client_fd);
+  void HandleClient(naim::platform::SocketHandle client_fd);
   HttpResponse HandleRequest(const HttpRequest& request);
   HttpResponse HandleGet(const HttpRequest& request);
   HttpResponse HandlePost(const HttpRequest& request);
@@ -50,13 +50,14 @@ class SkillsServer final {
   std::vector<std::string> SplitPath(const std::string& path) const;
   static nlohmann::json ParseJsonBody(const HttpRequest& request);
   HttpResponse BuildJsonResponse(int status_code, const nlohmann::json& payload) const;
+  void SyncFromController();
   void WriteRuntimeStatus(const std::string& phase, bool ready) const;
   void SetReadyFile(bool ready) const;
 
   SkillsRuntimeConfig config_;
   SkillsStore store_;
   std::atomic<bool> stop_requested_{false};
-  comet::platform::SocketHandle listen_fd_ = comet::platform::kInvalidSocket;
+  naim::platform::SocketHandle listen_fd_ = naim::platform::kInvalidSocket;
 };
 
-}  // namespace comet::skills
+}  // namespace naim::skills

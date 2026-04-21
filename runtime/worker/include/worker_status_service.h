@@ -3,11 +3,11 @@
 #include <optional>
 #include <string>
 
-#include "comet/runtime/runtime_status.h"
+#include "naim/runtime/runtime_status.h"
 
 #include "worker_config.h"
 
-namespace comet::worker {
+namespace naim::worker {
 
 class WorkerStatusService final {
  public:
@@ -38,14 +38,14 @@ class WorkerStatusService final {
 
  private:
   static void TouchReadyFile(bool ready);
-  static comet::RuntimeStatus BuildStatus(
+  static naim::RuntimeStatus BuildStatus(
       const WorkerConfig& config,
       const std::string& phase,
       bool ready,
       const std::string& started_at,
       const std::string& last_activity_at,
       const std::string& model_path);
-  static void WriteStatus(const comet::RuntimeStatus& status, const std::string& path);
+  static void WriteStatus(const naim::RuntimeStatus& status, const std::string& path);
 };
 
-}  // namespace comet::worker
+}  // namespace naim::worker

@@ -1,22 +1,22 @@
 #include <iostream>
 #include <stdexcept>
 
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/worker_group_topology.h"
 
 namespace {
 
 void ExpectThrowsDuplicateHybridGpu() {
-  comet::InferenceRuntimeSettings inference;
+  naim::InferenceRuntimeSettings inference;
   inference.runtime_engine = "llama.cpp";
   inference.data_parallel_mode = "replicas";
-  inference.data_parallel_lb_mode = comet::kDataParallelLbModeHybrid;
+  inference.data_parallel_lb_mode = naim::kDataParallelLbModeHybrid;
 
-  comet::WorkerGroupSpec worker_group;
+  naim::WorkerGroupSpec worker_group;
   worker_group.group_id = "hybrid-workers";
   worker_group.expected_workers = 1;
 
   for (int rank = 0; rank < 4; ++rank) {
-    comet::WorkerGroupMemberSpec member;
+    naim::WorkerGroupMemberSpec member;
     member.enabled = true;
     member.name = "worker-" + std::to_string(rank);
     member.node_name = "local-hostd";
@@ -25,7 +25,7 @@ void ExpectThrowsDuplicateHybridGpu() {
   }
 
   try {
-    comet::ValidateReplicaPacking(inference, worker_group);
+    naim::ValidateReplicaPacking(inference, worker_group);
   } catch (const std::exception&) {
     std::cout << "ok: hybrid-duplicate-gpu-rejected\n";
     return;

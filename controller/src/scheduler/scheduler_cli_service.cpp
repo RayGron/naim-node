@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace comet::controller {
+namespace naim::controller {
 
 SchedulerCliService::SchedulerCliService(
     const StateAggregateLoader& state_aggregate_loader,
@@ -88,4 +88,4 @@ int SchedulerCliService::ShowRebalancePlan(
   return 0;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

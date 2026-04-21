@@ -5,12 +5,13 @@
 #include <vector>
 
 #include "http/controller_http_transport.h"
+#include "interaction/interaction_replica_group_summary_builder.h"
 
-#include "comet/state/models.h"
-#include "comet/runtime/runtime_status.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/runtime/runtime_status.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class InteractionRuntimeSupportService {
  public:
@@ -19,30 +20,35 @@ class InteractionRuntimeSupportService {
       int fallback_port) const;
 
   std::optional<std::string> FindInferInstanceName(
-      const comet::DesiredState& desired_state) const;
+      const naim::DesiredState& desired_state) const;
 
   std::vector<std::string> FindWorkerInstanceNames(
-      const comet::DesiredState& desired_state) const;
+      const naim::DesiredState& desired_state) const;
 
-  std::optional<comet::RuntimeProcessStatus> FindInstanceRuntimeStatus(
-      const std::vector<comet::RuntimeProcessStatus>& statuses,
+  std::optional<naim::RuntimeProcessStatus> FindInstanceRuntimeStatus(
+      const std::vector<naim::RuntimeProcessStatus>& statuses,
       const std::string& instance_name) const;
 
   bool ProbeControllerTargetOk(
       const std::optional<ControllerEndpointTarget>& target,
       const std::string& path) const;
 
-  std::optional<comet::RuntimeStatus> BuildPlaneScopedRuntimeStatus(
-      const comet::DesiredState& desired_state,
-      const comet::HostObservation& observation,
-      const std::function<std::vector<comet::RuntimeProcessStatus>(
-          const comet::HostObservation&)>& parse_instance_runtime_statuses) const;
+  std::optional<naim::RuntimeStatus> BuildPlaneScopedRuntimeStatus(
+      const naim::DesiredState& desired_state,
+      const naim::HostObservation& observation,
+      const std::function<std::vector<naim::RuntimeProcessStatus>(
+          const naim::HostObservation&)>& parse_instance_runtime_statuses) const;
 
   int CountReadyWorkerMembers(
-      comet::ControllerStore& store,
-      const comet::DesiredState& desired_state,
-      const std::function<std::vector<comet::RuntimeProcessStatus>(
-          const comet::HostObservation&)>& parse_instance_runtime_statuses) const;
+      naim::ControllerStore& store,
+      const naim::DesiredState& desired_state,
+      const std::function<std::vector<naim::RuntimeProcessStatus>(
+          const naim::HostObservation&)>& parse_instance_runtime_statuses) const;
+
+ private:
+  std::string NormalizeInteractionHost(const std::string& host) const;
+
+  InteractionReplicaGroupSummaryBuilder interaction_replica_group_summary_builder_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

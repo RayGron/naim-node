@@ -7,11 +7,11 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 #include "plane/plane_mutation_service.h"
 #include "skills/plane_skill_runtime_sync_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class SkillsFactoryService final {
  public:
@@ -77,9 +77,9 @@ class SkillsFactoryService final {
 
   nlohmann::json BuildSkillPayload(
       const std::string& db_path,
-      const comet::SkillsFactorySkillRecord& skill) const;
+      const naim::SkillsFactorySkillRecord& skill) const;
   std::vector<std::string> LoadPlanesUsingSkill(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const std::string& skill_id) const;
   void SyncAffectedPlanes(
       const std::string& db_path,
@@ -90,4 +90,4 @@ class SkillsFactoryService final {
   ResolveArtifactsRootFn resolve_artifacts_root_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

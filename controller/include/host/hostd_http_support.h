@@ -12,7 +12,7 @@
 
 class HostdHttpSupport final {
  public:
-  explicit HostdHttpSupport(comet::controller::HostRegistryEventSink host_registry_event_sink);
+  explicit HostdHttpSupport(naim::controller::HostRegistryEventSink host_registry_event_sink);
 
   HttpResponse build_json_response(
       int status_code,
@@ -21,8 +21,8 @@ class HostdHttpSupport final {
   std::string utc_now_sql_timestamp() const;
   std::string sql_timestamp_after_seconds(int seconds) const;
   std::optional<long long> timestamp_age_seconds(const std::string& value) const;
-  const comet::controller::HostRegistryEventSink& host_registry_event_sink() const;
+  const naim::controller::HostRegistryEventSink& host_registry_event_sink() const;
 
  private:
-  comet::controller::HostRegistryEventSink host_registry_event_sink_;
+  naim::controller::HostRegistryEventSink host_registry_event_sink_;
 };

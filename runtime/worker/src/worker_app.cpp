@@ -6,7 +6,7 @@
 #include <exception>
 #include <iostream>
 
-namespace comet::worker {
+namespace naim::worker {
 
 WorkerApp::WorkerApp() = default;
 
@@ -16,9 +16,9 @@ int WorkerApp::Run() {
     WorkerEngineHost engine_host(config_loader.Load());
     return engine_host.Run();
   } catch (const std::exception& error) {
-    std::cerr << "comet-workerd: " << error.what() << "\n";
+    std::cerr << "naim-workerd: " << error.what() << "\n";
     return 1;
   }
 }
 
-}  // namespace comet::worker
+}  // namespace naim::worker

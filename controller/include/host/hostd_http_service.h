@@ -25,6 +25,21 @@ class HostdHttpService {
   HttpResponse HandleHosts(
       const std::string& db_path,
       const HttpRequest& request) const;
+  HttpResponse HandlePeerLinks(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleFileTransferTickets(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleFileTransferTicketValidate(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleFileUploadTickets(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleFileUploadTicketValidate(
+      const std::string& db_path,
+      const HttpRequest& request) const;
   HttpResponse HandleHostPath(
       const std::string& db_path,
       const HttpRequest& request) const;
@@ -38,6 +53,18 @@ class HostdHttpService {
       const std::string& db_path,
       const HttpRequest& request) const;
   HttpResponse HandleAssignmentAction(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleModelArtifactChunkRequest(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleModelArtifactChunkPoll(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleModelArtifactManifestRequest(
+      const std::string& db_path,
+      const HttpRequest& request) const;
+  HttpResponse HandleModelArtifactManifestPoll(
       const std::string& db_path,
       const HttpRequest& request) const;
   HttpResponse HandleObservations(

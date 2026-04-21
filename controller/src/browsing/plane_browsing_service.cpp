@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -180,4 +180,4 @@ std::optional<HttpResponse> PlaneBrowsingService::ProxyPlaneBrowsingRequest(
   }
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

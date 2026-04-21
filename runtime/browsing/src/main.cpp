@@ -45,59 +45,59 @@ int GetEnvIntAnyOr(std::initializer_list<const char*> names, int fallback) {
 
 int main(int argc, char** argv) {
   try {
-    const int cef_subprocess_code = comet::browsing::MaybeRunCefSubprocess(argc, argv);
+    const int cef_subprocess_code = naim::browsing::MaybeRunCefSubprocess(argc, argv);
     if (cef_subprocess_code >= 0) {
       return cef_subprocess_code;
     }
 
-    comet::browsing::BrowsingRuntimeConfig config;
-    config.plane_name = GetEnvOr("COMET_PLANE_NAME", "unknown");
-    config.instance_name = GetEnvOr("COMET_INSTANCE_NAME", "webgateway-unknown");
-    config.instance_role = GetEnvOr("COMET_INSTANCE_ROLE", "webgateway");
-    config.node_name = GetEnvOr("COMET_NODE_NAME", "unknown");
-    config.control_root = GetEnvOr("COMET_CONTROL_ROOT", "");
-    config.controller_url = GetEnvOr("COMET_CONTROLLER_URL", "http://controller.internal:18080");
+    naim::browsing::BrowsingRuntimeConfig config;
+    config.plane_name = GetEnvOr("NAIM_PLANE_NAME", "unknown");
+    config.instance_name = GetEnvOr("NAIM_INSTANCE_NAME", "webgateway-unknown");
+    config.instance_role = GetEnvOr("NAIM_INSTANCE_ROLE", "webgateway");
+    config.node_name = GetEnvOr("NAIM_NODE_NAME", "unknown");
+    config.control_root = GetEnvOr("NAIM_CONTROL_ROOT", "");
+    config.controller_url = GetEnvOr("NAIM_CONTROLLER_URL", "http://controller.internal:18080");
     config.status_path = GetEnvAnyOr(
-        {"COMET_WEBGATEWAY_RUNTIME_STATUS_PATH", "COMET_BROWSING_RUNTIME_STATUS_PATH"},
-        "/comet/private/webgateway-runtime-status.json");
+        {"NAIM_WEBGATEWAY_RUNTIME_STATUS_PATH", "NAIM_BROWSING_RUNTIME_STATUS_PATH"},
+        "/naim/private/webgateway-runtime-status.json");
     config.state_root = GetEnvAnyOr(
-        {"COMET_WEBGATEWAY_STATE_ROOT", "COMET_BROWSING_STATE_ROOT"},
-        "/comet/private/sessions");
+        {"NAIM_WEBGATEWAY_STATE_ROOT", "NAIM_BROWSING_STATE_ROOT"},
+        "/naim/private/sessions");
     const auto cef_cache_root = GetEnvAnyOr(
-        {"COMET_WEBGATEWAY_CEF_CACHE_ROOT", "COMET_BROWSING_CEF_CACHE_ROOT"},
+        {"NAIM_WEBGATEWAY_CEF_CACHE_ROOT", "NAIM_BROWSING_CEF_CACHE_ROOT"},
         DefaultCefCacheRoot(config.state_root).string().c_str());
     config.port =
-        GetEnvIntAnyOr({"COMET_WEBGATEWAY_PORT", "COMET_BROWSING_PORT"}, 18130);
-    config.policy = comet::browsing::BrowsingServer::ParsePolicyJson(
-        GetEnvAnyOr({"COMET_WEBGATEWAY_POLICY_JSON", "COMET_BROWSING_POLICY_JSON"}, "{}"));
+        GetEnvIntAnyOr({"NAIM_WEBGATEWAY_PORT", "NAIM_BROWSING_PORT"}, 18130);
+    config.policy = naim::browsing::BrowsingServer::ParsePolicyJson(
+        GetEnvAnyOr({"NAIM_WEBGATEWAY_POLICY_JSON", "NAIM_BROWSING_POLICY_JSON"}, "{}"));
 
-    std::cout << "[comet-webgateway] booting plane=" << config.plane_name
+    std::cout << "[naim-webgateway] booting plane=" << config.plane_name
               << " instance=" << config.instance_name << "\n";
-    std::cout << "[comet-webgateway] state_root=" << config.state_root.string() << "\n";
-    std::cout << "[comet-webgateway] cef_cache_root=" << cef_cache_root << "\n";
-    std::cout << "[comet-webgateway] status_path=" << config.status_path.string() << "\n";
-    std::cout << "[comet-webgateway] port=" << config.port << "\n";
-    std::cout << "[comet-webgateway] cef_build=" << comet::browsing::CefBuildSummary() << "\n";
+    std::cout << "[naim-webgateway] state_root=" << config.state_root.string() << "\n";
+    std::cout << "[naim-webgateway] cef_cache_root=" << cef_cache_root << "\n";
+    std::cout << "[naim-webgateway] status_path=" << config.status_path.string() << "\n";
+    std::cout << "[naim-webgateway] port=" << config.port << "\n";
+    std::cout << "[naim-webgateway] cef_build=" << naim::browsing::CefBuildSummary() << "\n";
     std::cout.flush();
 
-    if (comet::browsing::CefBuildEnabled()) {
-      comet::browsing::InitializeCefOrThrow(
+    if (naim::browsing::CefBuildEnabled()) {
+      naim::browsing::InitializeCefOrThrow(
           argc,
           argv,
           cef_cache_root,
-          comet::browsing::CurrentExecutablePath());
+          naim::browsing::CurrentExecutablePath());
     }
 
-    comet::browsing::BrowsingServer server(std::move(config));
+    naim::browsing::BrowsingServer server(std::move(config));
     const int exit_code = server.Run();
-    if (comet::browsing::CefBuildEnabled()) {
-      comet::browsing::ShutdownCef();
+    if (naim::browsing::CefBuildEnabled()) {
+      naim::browsing::ShutdownCef();
     }
     return exit_code;
   } catch (const std::exception& error) {
-    std::cerr << "comet-webgatewayd: " << error.what() << "\n";
-    if (comet::browsing::CefBuildEnabled() && comet::browsing::CefRuntimeEnabled()) {
-      comet::browsing::ShutdownCef();
+    std::cerr << "naim-webgatewayd: " << error.what() << "\n";
+    if (naim::browsing::CefBuildEnabled() && naim::browsing::CefRuntimeEnabled()) {
+      naim::browsing::ShutdownCef();
     }
     return 1;
   }

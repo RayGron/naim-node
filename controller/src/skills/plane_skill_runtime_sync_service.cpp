@@ -5,11 +5,11 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 #include "http/controller_http_transport.h"
 #include "skills/plane_skills_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -19,7 +19,7 @@ std::vector<std::pair<std::string, std::string>> DefaultJsonHeaders() {
   return {{"Content-Type", "application/json"}};
 }
 
-std::vector<std::string> SelectedSkillIds(const comet::DesiredState& desired_state) {
+std::vector<std::string> SelectedSkillIds(const naim::DesiredState& desired_state) {
   if (!desired_state.skills.has_value()) {
     return {};
   }
@@ -27,8 +27,8 @@ std::vector<std::string> SelectedSkillIds(const comet::DesiredState& desired_sta
 }
 
 json BuildSyncedSkillPayload(
-    const comet::SkillsFactorySkillRecord& canonical,
-    const std::optional<comet::PlaneSkillBindingRecord>& binding) {
+    const naim::SkillsFactorySkillRecord& canonical,
+    const std::optional<naim::PlaneSkillBindingRecord>& binding) {
   json payload = json::object();
   payload["id"] = canonical.id;
   payload["name"] = canonical.name;
@@ -38,7 +38,7 @@ json BuildSyncedSkillPayload(
   payload["internal"] = canonical.internal;
   payload["enabled"] = !binding.has_value() || binding->enabled;
   payload["session_ids"] = binding.has_value() ? json(binding->session_ids) : json::array();
-  payload["comet_links"] = binding.has_value() ? json(binding->comet_links) : json::array();
+  payload["naim_links"] = binding.has_value() ? json(binding->naim_links) : json::array();
   return payload;
 }
 
@@ -46,14 +46,14 @@ json BuildSyncedSkillPayload(
 
 bool PlaneSkillRuntimeSyncService::IsReadyForSync(
     const std::string& db_path,
-    const comet::DesiredState& desired_state) {
-  if (desired_state.plane_mode != comet::PlaneMode::Llm) {
+    const naim::DesiredState& desired_state) {
+  if (desired_state.plane_mode != naim::PlaneMode::Llm) {
     return false;
   }
   if (!desired_state.skills.has_value() || !desired_state.skills->enabled) {
     return false;
   }
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto plane = store.LoadPlane(desired_state.plane_name);
   if (!plane.has_value() || plane->state != "running") {
@@ -75,7 +75,7 @@ bool PlaneSkillRuntimeSyncService::IsReadyForSync(
 
 bool PlaneSkillRuntimeSyncService::SyncPlane(
     const std::string& db_path,
-    const comet::DesiredState& desired_state) const {
+    const naim::DesiredState& desired_state) const {
   if (!IsReadyForSync(db_path, desired_state)) {
     return false;
   }
@@ -86,7 +86,7 @@ bool PlaneSkillRuntimeSyncService::SyncPlane(
     return false;
   }
 
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto selected_ids = SelectedSkillIds(desired_state);
   std::set<std::string> selected(selected_ids.begin(), selected_ids.end());
@@ -150,4 +150,4 @@ bool PlaneSkillRuntimeSyncService::SyncPlane(
   return true;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

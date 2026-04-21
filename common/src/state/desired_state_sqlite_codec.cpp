@@ -1,11 +1,11 @@
-#include "comet/state/desired_state_sqlite_codec.h"
+#include "naim/state/desired_state_sqlite_codec.h"
 
 #include <stdexcept>
 #include <utility>
 
 #include <nlohmann/json.hpp>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -63,6 +63,12 @@ std::string DesiredStateSqliteCodec::SerializeBootstrapModelSpec(
   if (bootstrap_model->local_path.has_value()) {
     value["local_path"] = *bootstrap_model->local_path;
   }
+  if (bootstrap_model->source_node_name.has_value()) {
+    value["source_node_name"] = *bootstrap_model->source_node_name;
+  }
+  if (!bootstrap_model->source_paths.empty()) {
+    value["source_paths"] = bootstrap_model->source_paths;
+  }
   if (bootstrap_model->source_url.has_value()) {
     value["source_url"] = *bootstrap_model->source_url;
   }
@@ -96,6 +102,12 @@ std::optional<BootstrapModelSpec> DesiredStateSqliteCodec::DeserializeBootstrapM
   }
   if (value.contains("local_path") && !value.at("local_path").is_null()) {
     bootstrap_model.local_path = value.at("local_path").get<std::string>();
+  }
+  if (value.contains("source_node_name") && !value.at("source_node_name").is_null()) {
+    bootstrap_model.source_node_name = value.at("source_node_name").get<std::string>();
+  }
+  if (value.contains("source_paths") && value.at("source_paths").is_array()) {
+    bootstrap_model.source_paths = value.at("source_paths").get<std::vector<std::string>>();
   }
   if (value.contains("source_url") && !value.at("source_url").is_null()) {
     bootstrap_model.source_url = value.at("source_url").get<std::string>();
@@ -450,4 +462,4 @@ InstanceRole DesiredStateSqliteCodec::ParseInstanceRole(const std::string& value
   throw std::runtime_error("unknown instance role '" + value + "'");
 }
 
-}  // namespace comet
+}  // namespace naim

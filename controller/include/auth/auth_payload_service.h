@@ -2,19 +2,19 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class AuthPayloadService {
  public:
-  nlohmann::json BuildUserPayload(const comet::UserRecord& user) const;
+  nlohmann::json BuildUserPayload(const naim::UserRecord& user) const;
   nlohmann::json BuildInvitePayload(
-      const comet::RegistrationInviteRecord& invite) const;
+      const naim::RegistrationInviteRecord& invite) const;
   nlohmann::json BuildSshKeyPayload(
-      const comet::UserSshKeyRecord& ssh_key) const;
+      const naim::UserSshKeyRecord& ssh_key) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

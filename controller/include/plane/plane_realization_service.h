@@ -6,12 +6,12 @@
 
 #include "infra/controller_runtime_support_service.h"
 
-#include "comet/planning/execution_plan.h"
-#include "comet/state/models.h"
-#include "comet/planning/scheduling_policy.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/planning/execution_plan.h"
+#include "naim/state/models.h"
+#include "naim/planning/scheduling_policy.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class PlaneRealizationService {
  public:
@@ -20,50 +20,50 @@ class PlaneRealizationService {
       int default_stale_after_seconds);
 
   void MaterializeComposeArtifacts(
-      const comet::DesiredState& desired_state,
-      const std::vector<comet::NodeExecutionPlan>& host_plans) const;
+      const naim::DesiredState& desired_state,
+      const std::vector<naim::NodeExecutionPlan>& host_plans) const;
 
   void MaterializeInferRuntimeArtifact(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::string& artifacts_root) const;
 
-  std::vector<comet::HostAssignment> BuildHostAssignments(
-      const comet::DesiredState& desired_state,
+  std::vector<naim::HostAssignment> BuildHostAssignments(
+      const naim::DesiredState& desired_state,
       const std::string& artifacts_root,
       int desired_generation,
-      const std::vector<comet::NodeAvailabilityOverride>& availability_overrides,
-      const std::vector<comet::HostObservation>& observations,
-      const std::optional<comet::SchedulingPolicyReport>& scheduling_report) const;
+      const std::vector<naim::NodeAvailabilityOverride>& availability_overrides,
+      const std::vector<naim::HostObservation>& observations,
+      const std::optional<naim::SchedulingPolicyReport>& scheduling_report) const;
 
-  std::vector<comet::HostAssignment> BuildStopPlaneAssignments(
-      const comet::DesiredState& desired_state,
+  std::vector<naim::HostAssignment> BuildStopPlaneAssignments(
+      const naim::DesiredState& desired_state,
       int desired_generation,
       const std::string& artifacts_root,
-      const std::vector<comet::NodeAvailabilityOverride>& availability_overrides) const;
+      const std::vector<naim::NodeAvailabilityOverride>& availability_overrides) const;
 
-  std::vector<comet::HostAssignment> BuildDeletePlaneAssignments(
-      const comet::DesiredState& desired_state,
+  std::vector<naim::HostAssignment> BuildDeletePlaneAssignments(
+      const naim::DesiredState& desired_state,
       int desired_generation,
       const std::string& artifacts_root) const;
 
-  std::optional<comet::HostAssignment> FindLatestHostAssignmentForNode(
-      const std::vector<comet::HostAssignment>& assignments,
+  std::optional<naim::HostAssignment> FindLatestHostAssignmentForNode(
+      const std::vector<naim::HostAssignment>& assignments,
       const std::string& node_name) const;
 
-  std::optional<comet::HostAssignment> FindLatestHostAssignmentForPlane(
-      const std::vector<comet::HostAssignment>& assignments,
+  std::optional<naim::HostAssignment> FindLatestHostAssignmentForPlane(
+      const std::vector<naim::HostAssignment>& assignments,
       const std::string& plane_name) const;
 
   std::optional<std::string> ObservedSchedulingGateReason(
-      const std::vector<comet::HostObservation>& observations,
+      const std::vector<naim::HostObservation>& observations,
       const std::string& node_name,
       int stale_after_seconds) const;
 
  private:
-  bool IsNodeSchedulable(comet::NodeAvailability availability) const;
+  bool IsNodeSchedulable(naim::NodeAvailability availability) const;
 
   const ControllerRuntimeSupportService* runtime_support_service_;
   int default_stale_after_seconds_ = 0;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

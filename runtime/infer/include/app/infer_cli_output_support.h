@@ -5,7 +5,7 @@
 #include "runtime/infer_control_support.h"
 #include "runtime/infer_runtime_types.h"
 
-namespace comet::infer::cli_output_support {
+namespace naim::infer::cli_output_support {
 
 void PrintConfigSummary(const RuntimeConfig& config);
 void PrintPrepareRuntime(const RuntimeConfig& config, bool apply);
@@ -17,4 +17,4 @@ void BootstrapRuntime(
 int PrintRuntimeAssetsStatus(const RuntimeConfig& config);
 void PrintLaunchPlan(const RuntimeConfig& config);
 
-}  // namespace comet::infer::cli_output_support
+}  // namespace naim::infer::cli_output_support

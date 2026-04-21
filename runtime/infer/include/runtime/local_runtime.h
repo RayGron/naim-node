@@ -12,7 +12,7 @@
 #include "runtime/infer_runtime_types.h"
 #include "runtime/llama_library_engine.h"
 
-namespace comet::infer {
+namespace naim::infer {
 
 class LocalRuntime final {
  public:
@@ -50,4 +50,4 @@ class LocalRuntime final {
   LocalHttpServer gateway_server_;
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

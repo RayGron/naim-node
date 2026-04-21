@@ -6,7 +6,7 @@
 #include <set>
 #include <stdexcept>
 
-namespace comet::infer::control_support {
+namespace naim::infer::control_support {
 
 namespace {
 
@@ -167,4 +167,4 @@ int EnabledGpuNodeCount(const RuntimeConfig& config) {
   return enabled;
 }
 
-}  // namespace comet::infer::control_support
+}  // namespace naim::infer::control_support

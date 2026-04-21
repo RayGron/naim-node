@@ -5,9 +5,9 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -39,7 +39,7 @@ std::optional<std::tm> ParseDisplayTimestamp(const std::string& value) {
 std::string ControllerTimeSupport::SqlTimestampAfterSeconds(int seconds) {
   const std::time_t future = std::time(nullptr) + seconds;
   std::tm tm{};
-  if (!comet::platform::GmTime(&future, &tm)) {
+  if (!naim::platform::GmTime(&future, &tm)) {
     throw std::runtime_error("failed to format future UTC timestamp");
   }
   std::ostringstream out;
@@ -77,7 +77,7 @@ std::optional<long long> ControllerTimeSupport::TimestampAgeSeconds(
 std::string ControllerTimeSupport::UtcNowSqlTimestamp() {
   const std::time_t now = std::time(nullptr);
   std::tm tm{};
-  if (!comet::platform::GmTime(&now, &tm)) {
+  if (!naim::platform::GmTime(&now, &tm)) {
     throw std::runtime_error("failed to format current UTC timestamp");
   }
   std::ostringstream out;
@@ -95,4 +95,4 @@ std::string ControllerTimeSupport::FormatDisplayTimestamp(const std::string& val
   return output.str();
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

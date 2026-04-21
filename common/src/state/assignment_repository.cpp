@@ -1,10 +1,10 @@
-#include "comet/state/assignment_repository.h"
+#include "naim/state/assignment_repository.h"
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
 #include <stdexcept>
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -339,4 +339,4 @@ HostAssignment AssignmentRepository::ReadHostAssignment(sqlite3_stmt* statement)
   return assignment;
 }
 
-}  // namespace comet
+}  // namespace naim

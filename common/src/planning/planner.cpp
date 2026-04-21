@@ -1,4 +1,4 @@
-#include "comet/planning/planner.h"
+#include "naim/planning/planner.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -6,9 +6,9 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -34,7 +34,7 @@ std::optional<ComposeVolume> BuildDirectModelCacheVolume(
 }
 
 std::vector<std::string> DefaultComposeExtraHosts() {
-  const char* internal_host = std::getenv("COMET_CONTROLLER_INTERNAL_HOST");
+  const char* internal_host = std::getenv("NAIM_CONTROLLER_INTERNAL_HOST");
   const std::string controller_alias =
       internal_host != nullptr && *internal_host != '\0'
           ? "controller.internal:" + std::string(internal_host)
@@ -56,11 +56,11 @@ std::optional<int> IntEnvValue(
 }
 
 int InferApiPort(const DesiredState& state, const InstanceSpec& instance) {
-  return IntEnvValue(instance.environment, "COMET_INFERENCE_PORT").value_or(state.inference.api_port);
+  return IntEnvValue(instance.environment, "NAIM_INFERENCE_PORT").value_or(state.inference.api_port);
 }
 
 int InferGatewayPort(const DesiredState& state, const InstanceSpec& instance) {
-  return IntEnvValue(instance.environment, "COMET_GATEWAY_PORT").value_or(state.gateway.listen_port);
+  return IntEnvValue(instance.environment, "NAIM_GATEWAY_PORT").value_or(state.gateway.listen_port);
 }
 
 int WorkerRpcPort(const WorkerGroupMemberSpec* worker_group_member) {
@@ -205,14 +205,14 @@ ComposeService BuildComposeService(
     }
   }
   service.environment = instance.environment;
-  service.environment["COMET_PLANE_NAME"] = state.plane_name;
-  service.environment["COMET_PLANE_PROTECTED"] = state.protected_plane ? "1" : "0";
+  service.environment["NAIM_PLANE_NAME"] = state.plane_name;
+  service.environment["NAIM_PLANE_PROTECTED"] = state.protected_plane ? "1" : "0";
   if (use_llama_rpc && instance.role == InstanceRole::Worker) {
     const auto* worker_group_member = FindWorkerGroupMember(state, instance.name);
     const int rpc_port = ManagedLlamaRpcWorkerPort(state, instance, worker_group_member);
-    service.environment["COMET_WORKER_RPC_PORT"] = std::to_string(rpc_port);
-    service.environment["COMET_WORKER_RPC_HOST"] = "0.0.0.0";
-    service.environment["COMET_WORKER_RPC_ENDPOINT"] =
+    service.environment["NAIM_WORKER_RPC_PORT"] = std::to_string(rpc_port);
+    service.environment["NAIM_WORKER_RPC_HOST"] = "0.0.0.0";
+    service.environment["NAIM_WORKER_RPC_ENDPOINT"] =
         instance.name + ":" + std::to_string(rpc_port);
     AppendUniquePublishedPort(
         &service.published_ports,
@@ -269,14 +269,14 @@ ComposeService BuildComposeService(
   }
   service.healthcheck = instance.role == InstanceRole::Infer
                             ? "CMD-SHELL /runtime/infer/inferctl.sh probe-url "
-                              "http://127.0.0.1:$${COMET_GATEWAY_PORT:-80}/health || "
+                              "http://127.0.0.1:$${NAIM_GATEWAY_PORT:-80}/health || "
                               "/runtime/infer/inferctl.sh probe-url "
-                              "http://127.0.0.1:$${COMET_INFERENCE_PORT:-8000}/health"
+                              "http://127.0.0.1:$${NAIM_INFERENCE_PORT:-8000}/health"
                             : (instance.role == InstanceRole::App
                                    ? "CMD-SHELL curl -fsS http://127.0.0.1:$${PORT:-8080}/health >/dev/null"
                                    : (instance.role == InstanceRole::Skills
-                                          ? "CMD-SHELL test -f /tmp/comet-ready"
-                                          : "CMD-SHELL test -f /tmp/comet-ready"));
+                                          ? "CMD-SHELL test -f /tmp/naim-ready"
+                                          : "CMD-SHELL test -f /tmp/naim-ready"));
   if (instance.role == InstanceRole::Infer) {
     const int infer_api_port = InferApiPort(state, instance);
     const int infer_gateway_port = InferGatewayPort(state, instance);
@@ -485,4 +485,4 @@ HostExecutionMode ParseHostExecutionMode(const std::string& value) {
   throw std::runtime_error("unknown host execution mode '" + value + "'");
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -1,16 +1,17 @@
-#include "comet/state/desired_state_v2_renderer.h"
+#include "naim/state/desired_state_v2_renderer.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
-#include "comet/runtime/infer_runtime_config.h"
-#include "comet/state/desired_state_v2_validator.h"
-#include "comet/state/worker_group_topology.h"
+#include "naim/runtime/infer_runtime_config.h"
+#include "naim/state/desired_state_v2_validator.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -36,6 +37,14 @@ bool HasExplicitPrivateStorage(
   return (service_json.contains("storage") && service_json.at("storage").is_object()) ||
          (service_json.contains(legacy_volume_key) && service_json.at(legacy_volume_key).is_array() &&
           !service_json.at(legacy_volume_key).empty());
+}
+
+std::string PlacementExecutionNodeName(const nlohmann::json& placement) {
+  const std::string execution_node = placement.value("execution_node", std::string{});
+  if (!execution_node.empty()) {
+    return execution_node;
+  }
+  return placement.value("primary_node", std::string{});
 }
 
 }  // namespace
@@ -78,6 +87,7 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
 
 DesiredState DesiredStateV2Renderer::RenderState() {
   RenderIdentity();
+  RenderPlacement();
   RenderFeatures();
   RenderHooks();
   RenderModel();
@@ -97,7 +107,7 @@ DesiredState DesiredStateV2Renderer::RenderState() {
 void DesiredStateV2Renderer::RenderIdentity() {
   state_.plane_name = value_.at("plane_name").get<std::string>();
   state_.plane_shared_disk_name = BuildPlaneSharedDiskName();
-  state_.control_root = "/comet/shared/control/" + state_.plane_name;
+  state_.control_root = "/naim/shared/control/" + state_.plane_name;
   state_.plane_mode = ParsePlaneMode(value_.value("plane_mode", std::string("llm")));
   state_.protected_plane = value_.value("protected", false);
   if (skills_json_.value("enabled", false)) {
@@ -162,6 +172,32 @@ void DesiredStateV2Renderer::RenderIdentity() {
   }
 }
 
+void DesiredStateV2Renderer::RenderPlacement() {
+  if (!value_.contains("placement") || !value_.at("placement").is_object()) {
+    return;
+  }
+  const auto& placement = value_.at("placement");
+  const std::string execution_node = PlacementExecutionNodeName(placement);
+  if (!execution_node.empty()) {
+    state_.placement_target = "node:" + execution_node;
+  }
+  if (placement.contains("app_host") && placement.at("app_host").is_object()) {
+    ExternalAppHostConfig app_host;
+    const auto& app_host_json = placement.at("app_host");
+    app_host.address = app_host_json.value("address", std::string{});
+    if (app_host_json.contains("ssh_key_path") && app_host_json.at("ssh_key_path").is_string()) {
+      app_host.ssh_key_path = app_host_json.at("ssh_key_path").get<std::string>();
+    }
+    if (app_host_json.contains("username") && app_host_json.at("username").is_string()) {
+      app_host.username = app_host_json.at("username").get<std::string>();
+    }
+    if (app_host_json.contains("password") && app_host_json.at("password").is_string()) {
+      app_host.password = app_host_json.at("password").get<std::string>();
+    }
+    state_.app_host = std::move(app_host);
+  }
+}
+
 void DesiredStateV2Renderer::RenderFeatures() {
   if (!features_json_.contains("turboquant") ||
       !features_json_.at("turboquant").is_object()) {
@@ -203,7 +239,8 @@ void DesiredStateV2Renderer::RenderModel() {
   if (model_json.contains("source") && model_json.at("source").is_object()) {
     const auto& source = model_json.at("source");
     const std::string source_type = source.value("type", "");
-    if (source_type == "catalog" || source_type == "huggingface") {
+    if (source_type == "catalog" || source_type == "huggingface" ||
+        source_type == "library") {
       model.model_id = source.value("ref", "");
     } else if (source_type == "local") {
       model.model_id = source.value("ref", source.value("path", ""));
@@ -228,6 +265,44 @@ void DesiredStateV2Renderer::RenderModel() {
         model.local_path.has_value() ? std::string("reference") : std::string("copy"));
     if (materialization.contains("local_path") && materialization.at("local_path").is_string()) {
       model.local_path = materialization.at("local_path").get<std::string>();
+    }
+    if (materialization.contains("source_node_name") &&
+        materialization.at("source_node_name").is_string()) {
+      model.source_node_name = materialization.at("source_node_name").get<std::string>();
+    }
+    if (materialization.contains("source_paths") &&
+        materialization.at("source_paths").is_array()) {
+      model.source_paths = materialization.at("source_paths").get<std::vector<std::string>>();
+    }
+    if (materialization.contains("source_format") &&
+        materialization.at("source_format").is_string()) {
+      model.source_format = materialization.at("source_format").get<std::string>();
+    }
+    if (materialization.contains("source_quantization") &&
+        materialization.at("source_quantization").is_string()) {
+      model.source_quantization =
+          materialization.at("source_quantization").get<std::string>();
+    }
+    if (materialization.contains("desired_output_format") &&
+        materialization.at("desired_output_format").is_string()) {
+      model.desired_output_format =
+          materialization.at("desired_output_format").get<std::string>();
+    }
+    if (materialization.contains("quantization") &&
+        materialization.at("quantization").is_string()) {
+      model.quantization = materialization.at("quantization").get<std::string>();
+    }
+    model.keep_source = materialization.value("keep_source", model.keep_source);
+    if (materialization.contains("writeback") &&
+        materialization.at("writeback").is_object()) {
+      const auto& writeback = materialization.at("writeback");
+      model.writeback_enabled = writeback.value("enabled", model.writeback_enabled);
+      model.writeback_if_missing = writeback.value("if_missing", model.writeback_if_missing);
+      if (writeback.contains("target_node_name") &&
+          writeback.at("target_node_name").is_string()) {
+        model.writeback_target_node_name =
+            writeback.at("target_node_name").get<std::string>();
+      }
     }
   }
 
@@ -292,9 +367,9 @@ void DesiredStateV2Renderer::RenderRuntime() {
                                                      : std::string("local"));
   state_.inference.worker_selection_policy = "prefer-free-then-share";
   state_.inference.net_if = "eth0";
-  state_.inference.models_root = "/comet/shared/models";
-  state_.inference.model_cache_dir = "/comet/shared/models/cache";
-  state_.inference.runtime_log_dir = "/comet/shared/logs/infer";
+  state_.inference.models_root = "/naim/shared/models";
+  state_.inference.model_cache_dir = "/naim/shared/models/cache";
+  state_.inference.runtime_log_dir = "/naim/shared/logs/infer";
   state_.inference.max_model_len =
       runtime_json.value("max_model_len", state_.inference.max_model_len);
   state_.inference.llama_ctx_size =
@@ -340,6 +415,16 @@ void DesiredStateV2Renderer::RenderNodeTopology() {
       }
     }
   }
+  if (state_.nodes.empty() && state_.placement_target.has_value()) {
+    constexpr std::string_view kNodePrefix = "node:";
+    if (state_.placement_target->rfind(kNodePrefix, 0) == 0) {
+      NodeInventory node;
+      node.name = state_.placement_target->substr(kNodePrefix.size());
+      node.platform = "linux";
+      node.execution_mode = HostExecutionMode::Mixed;
+      state_.nodes.push_back(std::move(node));
+    }
+  }
   if (!state_.nodes.empty()) {
     return;
   }
@@ -363,16 +448,24 @@ void DesiredStateV2Renderer::RenderWorkerGroup() {
 }
 
 void DesiredStateV2Renderer::RenderSharedDisk() {
-  DiskSpec plane_shared_disk;
-  plane_shared_disk.name = state_.plane_shared_disk_name;
-  plane_shared_disk.kind = DiskKind::PlaneShared;
-  plane_shared_disk.plane_name = state_.plane_name;
-  plane_shared_disk.owner_name = state_.plane_name;
-  plane_shared_disk.node_name = SharedDiskNodeName();
-  plane_shared_disk.host_path = BuildPlaneSharedHostPath();
-  plane_shared_disk.container_path = "/comet/shared";
-  plane_shared_disk.size_gb = resources_json_.value("shared_disk_gb", kDefaultSharedDiskSizeGb);
-  state_.disks.push_back(std::move(plane_shared_disk));
+  std::set<std::string> shared_disk_nodes;
+  shared_disk_nodes.insert(SharedDiskNodeName());
+  for (const auto& node : state_.nodes) {
+    shared_disk_nodes.insert(node.name);
+  }
+
+  for (const auto& node_name : shared_disk_nodes) {
+    DiskSpec plane_shared_disk;
+    plane_shared_disk.name = state_.plane_shared_disk_name;
+    plane_shared_disk.kind = DiskKind::PlaneShared;
+    plane_shared_disk.plane_name = state_.plane_name;
+    plane_shared_disk.owner_name = state_.plane_name;
+    plane_shared_disk.node_name = node_name;
+    plane_shared_disk.host_path = BuildPlaneSharedHostPath();
+    plane_shared_disk.container_path = "/naim/shared";
+    plane_shared_disk.size_gb = resources_json_.value("shared_disk_gb", kDefaultSharedDiskSizeGb);
+    state_.disks.push_back(std::move(plane_shared_disk));
+  }
 }
 
 void DesiredStateV2Renderer::RenderInferInstance() {
@@ -395,10 +488,10 @@ void DesiredStateV2Renderer::RenderInferInstance() {
     infer.role = InstanceRole::Infer;
     infer.plane_name = state_.plane_name;
     infer.node_name = ResolveInferNodeName(infer_index);
-    infer.image = infer_json_.value("image", std::string("comet/infer-runtime:dev"));
+    infer.image = infer_json_.value("image", std::string("naim/infer-runtime:dev"));
     infer.command =
         BuildCommandFromStartSpec(infer_json_.value("start", nlohmann::json::object()),
-                                  "/runtime/bin/comet-inferctl container-boot");
+                                  "/runtime/bin/naim-inferctl container-boot");
     infer.private_disk_name =
         has_private_storage && InstanceNeedsPrivateDisk(infer.role) ? infer.name + "-private" : "";
     infer.shared_disk_name =
@@ -410,24 +503,24 @@ void DesiredStateV2Renderer::RenderInferInstance() {
                                            "volumes")
                                      : 0;
     infer.environment = {
-        {"COMET_PLANE_NAME", state_.plane_name},
-        {"COMET_INSTANCE_NAME", infer.name},
-        {"COMET_INSTANCE_ROLE", "infer"},
-        {"COMET_INSTANCE_SUBROLE",
+        {"NAIM_PLANE_NAME", state_.plane_name},
+        {"NAIM_INSTANCE_NAME", infer.name},
+        {"NAIM_INSTANCE_ROLE", "infer"},
+        {"NAIM_INSTANCE_SUBROLE",
          infer_index == 0 && infer_count > 1 ? "aggregator" : "infer"},
-        {"COMET_NODE_NAME", infer.node_name},
-        {"COMET_INFER_RUNTIME_BACKEND", DefaultInferRuntimeBackend()},
-        {"COMET_CONTROLLER_URL", "http://controller.internal:18080"},
-        {"COMET_CONTROL_ROOT", state_.control_root},
-        {"COMET_INFER_RUNTIME_CONFIG",
+        {"NAIM_NODE_NAME", infer.node_name},
+        {"NAIM_INFER_RUNTIME_BACKEND", DefaultInferRuntimeBackend()},
+        {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
+        {"NAIM_CONTROL_ROOT", state_.control_root},
+        {"NAIM_INFER_RUNTIME_CONFIG",
          InferRuntimeConfigControlPath(state_.control_root, infer.name)},
-        {"COMET_INFERENCE_PORT", std::to_string(BuildInferApiPort(infer_index))},
-        {"COMET_GATEWAY_PORT", std::to_string(BuildInferGatewayPort(infer_index))},
-        {"COMET_LLAMA_PORT", std::to_string(BuildInferLlamaPort(infer_index))},
-        {"COMET_SHARED_DISK_PATH", "/comet/shared"},
+        {"NAIM_INFERENCE_PORT", std::to_string(BuildInferApiPort(infer_index))},
+        {"NAIM_GATEWAY_PORT", std::to_string(BuildInferGatewayPort(infer_index))},
+        {"NAIM_LLAMA_PORT", std::to_string(BuildInferLlamaPort(infer_index))},
+        {"NAIM_SHARED_DISK_PATH", "/naim/shared"},
     };
     if (!infer.private_disk_name.empty()) {
-      infer.environment["COMET_PRIVATE_DISK_PATH"] = "/comet/private";
+      infer.environment["NAIM_PRIVATE_DISK_PATH"] = "/naim/private";
     }
     if (infer_json_.contains("env") && infer_json_.at("env").is_object()) {
       const auto custom_env = infer_json_.at("env").get<std::map<std::string, std::string>>();
@@ -436,10 +529,10 @@ void DesiredStateV2Renderer::RenderInferInstance() {
       }
     }
     infer.labels = {
-        {"comet.plane", state_.plane_name},
-        {"comet.role", "infer"},
-        {"comet.subrole", infer_index == 0 && infer_count > 1 ? "aggregator" : "infer"},
-        {"comet.node", infer.node_name},
+        {"naim.plane", state_.plane_name},
+        {"naim.role", "infer"},
+        {"naim.subrole", infer_index == 0 && infer_count > 1 ? "aggregator" : "infer"},
+        {"naim.node", infer.node_name},
     };
     if (infer_json_.contains("publish") && infer_json_.at("publish").is_array()) {
       for (const auto& port_json : infer_json_.at("publish")) {
@@ -455,8 +548,8 @@ void DesiredStateV2Renderer::RenderInferInstance() {
   }
 
   if (rendered_infers.size() > 1 &&
-      rendered_infers.front().environment.count("COMET_REPLICA_UPSTREAMS") == 0) {
-    rendered_infers.front().environment["COMET_REPLICA_UPSTREAMS"] =
+      rendered_infers.front().environment.count("NAIM_REPLICA_UPSTREAMS") == 0) {
+    rendered_infers.front().environment["NAIM_REPLICA_UPSTREAMS"] =
         BuildReplicaUpstreams(rendered_infers);
   }
 
@@ -472,7 +565,7 @@ void DesiredStateV2Renderer::RenderInferInstance() {
       infer_private_disk.node_name = infer.node_name;
       infer_private_disk.host_path = BuildInstancePrivateHostPath(infer.name);
       infer_private_disk.container_path =
-          ExtractPrivateMountPath(infer_json_, "/comet/private", "volumes");
+          ExtractPrivateMountPath(infer_json_, "/naim/private", "volumes");
       infer_private_disk.size_gb = infer.private_disk_size_gb;
       state_.disks.push_back(std::move(infer_private_disk));
     }
@@ -489,10 +582,10 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
     worker.plane_name = state_.plane_name;
     worker.node_name = ResolveWorkerNodeName(worker_index);
     worker.gpu_device = ResolveWorkerGpuDevice(worker_index);
-    worker.image = worker_json_.value("image", std::string("comet/worker-runtime:dev"));
+    worker.image = worker_json_.value("image", std::string("naim/worker-runtime:dev"));
     worker.command =
         BuildCommandFromStartSpec(worker_json_.value("start", nlohmann::json::object()),
-                                  "/runtime/bin/comet-workerd");
+                                  "/runtime/bin/naim-workerd");
     worker.private_disk_name = worker.name + "-private";
     worker.shared_disk_name = state_.plane_shared_disk_name;
     worker.placement_mode =
@@ -506,23 +599,23 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
     worker.private_disk_size_gb =
         ExtractPrivateDiskSizeGb(worker_json_, kDefaultWorkerPrivateDiskSizeGb, "volumes");
     worker.environment = {
-        {"COMET_PLANE_NAME", state_.plane_name},
-        {"COMET_INSTANCE_NAME", worker.name},
-        {"COMET_INSTANCE_ROLE", "worker"},
-        {"COMET_NODE_NAME", worker.node_name},
-        {"COMET_WORKER_BOOT_MODE", DefaultWorkerBootMode()},
-        {"COMET_INFER_INSTANCE_NAME", InferInstanceNameForWorker(worker_index)},
-        {"COMET_CONTROL_ROOT", state_.control_root},
-        {"COMET_DISTRIBUTED_BACKEND", state_.inference.distributed_backend},
-        {"COMET_SHARED_DISK_PATH", "/comet/shared"},
-        {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
-        {"COMET_WORKER_RUNTIME_STATUS_PATH", "/comet/private/worker-runtime-status.json"},
+        {"NAIM_PLANE_NAME", state_.plane_name},
+        {"NAIM_INSTANCE_NAME", worker.name},
+        {"NAIM_INSTANCE_ROLE", "worker"},
+        {"NAIM_NODE_NAME", worker.node_name},
+        {"NAIM_WORKER_BOOT_MODE", DefaultWorkerBootMode()},
+        {"NAIM_INFER_INSTANCE_NAME", InferInstanceNameForWorker(worker_index)},
+        {"NAIM_CONTROL_ROOT", state_.control_root},
+        {"NAIM_DISTRIBUTED_BACKEND", state_.inference.distributed_backend},
+        {"NAIM_SHARED_DISK_PATH", "/naim/shared"},
+        {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
+        {"NAIM_WORKER_RUNTIME_STATUS_PATH", "/naim/private/worker-runtime-status.json"},
     };
     if (state_.inference.distributed_backend == "llama_rpc") {
       const int rpc_port = StableLlamaRpcWorkerPort(state_.plane_name, worker.name);
-      worker.environment["COMET_WORKER_RPC_PORT"] = std::to_string(rpc_port);
-      worker.environment["COMET_WORKER_RPC_HOST"] = "0.0.0.0";
-      worker.environment["COMET_WORKER_RPC_ENDPOINT"] =
+      worker.environment["NAIM_WORKER_RPC_PORT"] = std::to_string(rpc_port);
+      worker.environment["NAIM_WORKER_RPC_HOST"] = "0.0.0.0";
+      worker.environment["NAIM_WORKER_RPC_ENDPOINT"] =
           worker.name + ":" + std::to_string(rpc_port);
     }
     if (worker_json_.contains("env") && worker_json_.at("env").is_object()) {
@@ -532,9 +625,9 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
       }
     }
     worker.labels = {
-        {"comet.plane", state_.plane_name},
-        {"comet.role", "worker"},
-        {"comet.node", worker.node_name},
+        {"naim.plane", state_.plane_name},
+        {"naim.role", "worker"},
+        {"naim.node", worker.node_name},
     };
     if (worker_json_.contains("publish") && worker_json_.at("publish").is_array()) {
       for (const auto& port_json : worker_json_.at("publish")) {
@@ -553,7 +646,7 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
       member.infer_instance_name = InferInstanceNameForWorker(worker_index);
       member.node_name = worker.node_name;
       member.gpu_device = worker.gpu_device.value_or("");
-      member.rpc_port = std::stoi(worker.environment.at("COMET_WORKER_RPC_PORT"));
+      member.rpc_port = std::stoi(worker.environment.at("NAIM_WORKER_RPC_PORT"));
       member.rank = worker_index;
       member.replica_group_id = member.infer_instance_name.empty() ? worker.name : member.infer_instance_name;
       const int replica_groups = std::max(1, InferReplicaCount());
@@ -584,7 +677,7 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
     worker_private_disk.node_name = worker.node_name;
     worker_private_disk.host_path = BuildInstancePrivateHostPath(worker.name);
     worker_private_disk.container_path =
-        ExtractPrivateMountPath(worker_json_, "/comet/private", "volumes");
+        ExtractPrivateMountPath(worker_json_, "/naim/private", "volumes");
     worker_private_disk.size_gb = worker.private_disk_size_gb;
     state_.disks.push_back(std::move(worker_private_disk));
   }
@@ -620,9 +713,9 @@ void DesiredStateV2Renderer::RenderAppInstance() {
     app.environment = app_json_.at("env").get<std::map<std::string, std::string>>();
   }
   app.labels = {
-      {"comet.plane", state_.plane_name},
-      {"comet.role", "app"},
-      {"comet.node", app.node_name},
+      {"naim.plane", state_.plane_name},
+      {"naim.role", "app"},
+      {"naim.node", app.node_name},
   };
   if (app_json_.contains("publish") && app_json_.at("publish").is_array()) {
     for (const auto& port_json : app_json_.at("publish")) {
@@ -633,11 +726,12 @@ void DesiredStateV2Renderer::RenderAppInstance() {
       });
     }
   }
+  ApplyExternalAppHostMetadata(&app, "app");
 
   const int app_private_disk_size_gb =
       ExtractPrivateDiskSizeGb(app_json_, kDefaultAppPrivateDiskSizeGb, "volumes");
   const std::string app_private_mount_path =
-      ExtractPrivateMountPath(app_json_, "/comet/private", "volumes");
+      ExtractPrivateMountPath(app_json_, "/naim/private", "volumes");
   if (app_json_.contains("volumes") && app_json_.at("volumes").is_array() &&
       app_json_.at("volumes").size() > 1) {
     throw std::runtime_error("desired-state v2 currently supports at most one app volume");
@@ -666,31 +760,32 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
   skills.name = BuildSkillsInstanceName();
   skills.role = InstanceRole::Skills;
   skills.plane_name = state_.plane_name;
-  if (skills_json_.contains("node") && skills_json_.at("node").is_string()) {
-    skills.node_name = RequireNode(skills_json_.at("node").get<std::string>(), "skills").name;
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(skills_json_, "skills");
+      legacy_node_name.has_value()) {
+    skills.node_name = *legacy_node_name;
   } else {
     skills.node_name = ResolveAppNodeName();
   }
-  skills.image = skills_json_.value("image", std::string("comet/skills-runtime:dev"));
+  skills.image = skills_json_.value("image", std::string("naim/skills-runtime:dev"));
   skills.command =
       BuildCommandFromStartSpec(skills_json_.value("start", nlohmann::json::object()),
-                                "/runtime/bin/comet-skillsd");
+                                "/runtime/bin/naim-skillsd");
   skills.private_disk_name = skills.name + "-private";
   skills.shared_disk_name =
       InstanceNeedsSharedDiskMount(skills.role) ? state_.plane_shared_disk_name : "";
   skills.private_disk_size_gb =
       ExtractPrivateDiskSizeGb(skills_json_, kDefaultSkillsPrivateDiskSizeGb, "volumes");
   skills.environment = {
-      {"COMET_PLANE_NAME", state_.plane_name},
-      {"COMET_INSTANCE_NAME", skills.name},
-      {"COMET_INSTANCE_ROLE", "skills"},
-      {"COMET_NODE_NAME", skills.node_name},
-      {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
-      {"COMET_SKILLS_PORT", std::to_string(kSkillsContainerPort)},
-      {"COMET_SKILLS_DB_PATH", "/comet/private/skills.sqlite"},
-      {"COMET_SKILLS_RUNTIME_STATUS_PATH", "/comet/private/skills-runtime-status.json"},
-      {"COMET_CONTROLLER_URL", "http://controller.internal:18080"},
-      {"COMET_CONTROL_ROOT", state_.control_root},
+      {"NAIM_PLANE_NAME", state_.plane_name},
+      {"NAIM_INSTANCE_NAME", skills.name},
+      {"NAIM_INSTANCE_ROLE", "skills"},
+      {"NAIM_NODE_NAME", skills.node_name},
+      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
+      {"NAIM_SKILLS_PORT", std::to_string(kSkillsContainerPort)},
+      {"NAIM_SKILLS_DB_PATH", "/naim/private/skills.sqlite"},
+      {"NAIM_SKILLS_RUNTIME_STATUS_PATH", "/naim/private/skills-runtime-status.json"},
+      {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
+      {"NAIM_CONTROL_ROOT", state_.control_root},
   };
   if (skills_json_.contains("env") && skills_json_.at("env").is_object()) {
     const auto custom_env = skills_json_.at("env").get<std::map<std::string, std::string>>();
@@ -699,9 +794,9 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
     }
   }
   skills.labels = {
-      {"comet.plane", state_.plane_name},
-      {"comet.role", "skills"},
-      {"comet.node", skills.node_name},
+      {"naim.plane", state_.plane_name},
+      {"naim.role", "skills"},
+      {"naim.node", skills.node_name},
   };
   if (skills_json_.contains("publish") && skills_json_.at("publish").is_array()) {
     for (const auto& port_json : skills_json_.at("publish")) {
@@ -719,6 +814,7 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
         kSkillsContainerPort,
     });
   }
+  ApplyExternalAppHostMetadata(&skills, "skills-follow-app");
   state_.instances.push_back(skills);
 
   DiskSpec skills_private_disk;
@@ -729,7 +825,7 @@ void DesiredStateV2Renderer::RenderSkillsInstance() {
   skills_private_disk.node_name = skills.node_name;
   skills_private_disk.host_path = BuildInstancePrivateHostPath(skills.name);
   skills_private_disk.container_path =
-      ExtractPrivateMountPath(skills_json_, "/comet/private", "volumes");
+      ExtractPrivateMountPath(skills_json_, "/naim/private", "volumes");
   skills_private_disk.size_gb = skills.private_disk_size_gb;
   state_.disks.push_back(std::move(skills_private_disk));
 }
@@ -743,37 +839,37 @@ void DesiredStateV2Renderer::RenderWebGatewayInstance() {
   browsing.name = BuildWebGatewayInstanceName();
   browsing.role = InstanceRole::Browsing;
   browsing.plane_name = state_.plane_name;
-  if (browsing_json_.contains("node") && browsing_json_.at("node").is_string()) {
-    browsing.node_name =
-        RequireNode(browsing_json_.at("node").get<std::string>(), "webgateway").name;
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(browsing_json_, "webgateway");
+      legacy_node_name.has_value()) {
+    browsing.node_name = *legacy_node_name;
   } else {
     browsing.node_name = ResolveAppNodeName();
   }
   browsing.image =
-      browsing_json_.value("image", std::string("comet/webgateway-runtime:dev"));
+      browsing_json_.value("image", std::string("naim/webgateway-runtime:dev"));
   browsing.command =
       BuildCommandFromStartSpec(browsing_json_.value("start", nlohmann::json::object()),
-                                "/runtime/bin/comet-webgatewayd");
+                                "/runtime/bin/naim-webgatewayd");
   browsing.private_disk_name = browsing.name + "-private";
   browsing.shared_disk_name =
       InstanceNeedsSharedDiskMount(browsing.role) ? state_.plane_shared_disk_name : "";
   browsing.private_disk_size_gb =
       ExtractPrivateDiskSizeGb(browsing_json_, kDefaultWebGatewayPrivateDiskSizeGb, "storage");
   browsing.environment = {
-      {"COMET_PLANE_NAME", state_.plane_name},
-      {"COMET_INSTANCE_NAME", browsing.name},
-      {"COMET_INSTANCE_ROLE", "webgateway"},
-      {"COMET_NODE_NAME", browsing.node_name},
-      {"COMET_PRIVATE_DISK_PATH", "/comet/private"},
-      {"COMET_WEBGATEWAY_PORT", std::to_string(kWebGatewayContainerPort)},
-      {"COMET_WEBGATEWAY_RUNTIME_STATUS_PATH", "/comet/private/webgateway-runtime-status.json"},
-      {"COMET_WEBGATEWAY_STATE_ROOT", "/comet/private/sessions"},
-      {"COMET_WEBGATEWAY_POLICY_JSON",
+      {"NAIM_PLANE_NAME", state_.plane_name},
+      {"NAIM_INSTANCE_NAME", browsing.name},
+      {"NAIM_INSTANCE_ROLE", "webgateway"},
+      {"NAIM_NODE_NAME", browsing.node_name},
+      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
+      {"NAIM_WEBGATEWAY_PORT", std::to_string(kWebGatewayContainerPort)},
+      {"NAIM_WEBGATEWAY_RUNTIME_STATUS_PATH", "/naim/private/webgateway-runtime-status.json"},
+      {"NAIM_WEBGATEWAY_STATE_ROOT", "/naim/private/sessions"},
+      {"NAIM_WEBGATEWAY_POLICY_JSON",
        browsing_json_.contains("policy") && browsing_json_.at("policy").is_object()
            ? browsing_json_.at("policy").dump()
            : nlohmann::json::object().dump()},
-      {"COMET_CONTROLLER_URL", "http://controller.internal:18080"},
-      {"COMET_CONTROL_ROOT", state_.control_root},
+      {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
+      {"NAIM_CONTROL_ROOT", state_.control_root},
   };
   if (browsing_json_.contains("env") && browsing_json_.at("env").is_object()) {
     const auto custom_env = browsing_json_.at("env").get<std::map<std::string, std::string>>();
@@ -782,9 +878,9 @@ void DesiredStateV2Renderer::RenderWebGatewayInstance() {
     }
   }
   browsing.labels = {
-      {"comet.plane", state_.plane_name},
-      {"comet.role", "webgateway"},
-      {"comet.node", browsing.node_name},
+      {"naim.plane", state_.plane_name},
+      {"naim.role", "webgateway"},
+      {"naim.node", browsing.node_name},
   };
   if (browsing_json_.contains("publish") && browsing_json_.at("publish").is_array()) {
     for (const auto& port_json : browsing_json_.at("publish")) {
@@ -812,7 +908,7 @@ void DesiredStateV2Renderer::RenderWebGatewayInstance() {
   browsing_private_disk.node_name = browsing.node_name;
   browsing_private_disk.host_path = BuildInstancePrivateHostPath(browsing.name);
   browsing_private_disk.container_path =
-      ExtractPrivateMountPath(browsing_json_, "/comet/private", "storage");
+      ExtractPrivateMountPath(browsing_json_, "/naim/private", "storage");
   browsing_private_disk.size_gb = browsing.private_disk_size_gb;
   state_.disks.push_back(std::move(browsing_private_disk));
 }
@@ -839,13 +935,38 @@ int DesiredStateV2Renderer::ExpectedWorkers() const {
   return std::max(1, WorkerCount());
 }
 
+bool DesiredStateV2Renderer::HasExternalAppHost() const {
+  return state_.app_host.has_value() && !state_.app_host->address.empty();
+}
+
+std::string DesiredStateV2Renderer::ExternalAppHostAuthMode() const {
+  if (!HasExternalAppHost()) {
+    return "none";
+  }
+  if (state_.app_host->ssh_key_path.has_value() && !state_.app_host->ssh_key_path->empty()) {
+    return "ssh-key";
+  }
+  if (state_.app_host->username.has_value() && state_.app_host->password.has_value() &&
+      !state_.app_host->username->empty() && !state_.app_host->password->empty()) {
+    return "password";
+  }
+  return "unknown";
+}
+
+bool DesiredStateV2Renderer::LegacyTopologyPlacementEnabled() const {
+  return value_.contains("topology") && value_.at("topology").is_object();
+}
+
 std::string DesiredStateV2Renderer::ResolveInferNodeName() const {
   return ResolveInferNodeName(0);
 }
 
 std::string DesiredStateV2Renderer::ResolveInferNodeName(int infer_index) const {
-  if (infer_index == 0 && infer_json_.contains("node") && infer_json_.at("node").is_string()) {
-    return RequireNode(infer_json_.at("node").get<std::string>(), "infer").name;
+  if (infer_index == 0) {
+    if (const auto legacy_node_name = ResolveLegacyServiceNodeName(infer_json_, "infer");
+        legacy_node_name.has_value()) {
+      return *legacy_node_name;
+    }
   }
   if (InferReplicaCount() > 1 && infer_index > 0) {
     const int replica_index = infer_index - 1;
@@ -862,28 +983,28 @@ std::string DesiredStateV2Renderer::ResolveInferNodeName(int infer_index) const 
 }
 
 std::string DesiredStateV2Renderer::ResolveAppNodeName() const {
-  if (app_json_.contains("node") && app_json_.at("node").is_string()) {
-    return RequireNode(app_json_.at("node").get<std::string>(), "app").name;
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(app_json_, "app");
+      legacy_node_name.has_value()) {
+    return *legacy_node_name;
   }
   return ResolveInferNodeName();
 }
 
 std::string DesiredStateV2Renderer::ResolveWorkerNodeName(int worker_index) const {
-  if (worker_json_.contains("assignments") && worker_json_.at("assignments").is_array() &&
-      worker_index < static_cast<int>(worker_json_.at("assignments").size())) {
-    const auto& assignment = worker_json_.at("assignments").at(worker_index);
-    if (assignment.contains("node") && assignment.at("node").is_string()) {
-      return RequireNode(assignment.at("node").get<std::string>(), "worker assignment").name;
-    }
+  if (const auto assignment_node_name = ResolveLegacyWorkerAssignmentNodeName(worker_index);
+      assignment_node_name.has_value()) {
+    return *assignment_node_name;
   }
-  if (worker_json_.contains("node") && worker_json_.at("node").is_string()) {
-    return RequireNode(worker_json_.at("node").get<std::string>(), "worker").name;
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(worker_json_, "worker");
+      legacy_node_name.has_value()) {
+    return *legacy_node_name;
   }
   return DefaultNodeName();
 }
 
 std::optional<std::string> DesiredStateV2Renderer::ResolveWorkerGpuDevice(int worker_index) const {
-  if (worker_json_.contains("assignments") && worker_json_.at("assignments").is_array() &&
+  if (LegacyTopologyPlacementEnabled() && worker_json_.contains("assignments") &&
+      worker_json_.at("assignments").is_array() &&
       worker_index < static_cast<int>(worker_json_.at("assignments").size())) {
     const auto& assignment = worker_json_.at("assignments").at(worker_index);
     if (assignment.contains("gpu_device") && assignment.at("gpu_device").is_string()) {
@@ -894,6 +1015,30 @@ std::optional<std::string> DesiredStateV2Renderer::ResolveWorkerGpuDevice(int wo
     return worker_json_.at("gpu_device").get<std::string>();
   }
   return std::nullopt;
+}
+
+std::optional<std::string> DesiredStateV2Renderer::ResolveLegacyServiceNodeName(
+    const nlohmann::json& service_json,
+    const char* service_name) const {
+  if (!LegacyTopologyPlacementEnabled() || !service_json.contains("node") ||
+      !service_json.at("node").is_string()) {
+    return std::nullopt;
+  }
+  return RequireNode(service_json.at("node").get<std::string>(), service_name).name;
+}
+
+std::optional<std::string> DesiredStateV2Renderer::ResolveLegacyWorkerAssignmentNodeName(
+    int worker_index) const {
+  if (!LegacyTopologyPlacementEnabled() || !worker_json_.contains("assignments") ||
+      !worker_json_.at("assignments").is_array() ||
+      worker_index >= static_cast<int>(worker_json_.at("assignments").size())) {
+    return std::nullopt;
+  }
+  const auto& assignment = worker_json_.at("assignments").at(worker_index);
+  if (!assignment.contains("node") || !assignment.at("node").is_string()) {
+    return std::nullopt;
+  }
+  return RequireNode(assignment.at("node").get<std::string>(), "worker assignment").name;
 }
 
 std::string DesiredStateV2Renderer::DefaultNodeName() const {
@@ -970,7 +1115,7 @@ std::string DesiredStateV2Renderer::BuildReplicaUpstreams(
   upstreams.reserve(infer_instances.size() - 1);
   for (std::size_t index = 1; index < infer_instances.size(); ++index) {
     const auto& infer = infer_instances[index];
-    const auto port_it = infer.environment.find("COMET_GATEWAY_PORT");
+    const auto port_it = infer.environment.find("NAIM_GATEWAY_PORT");
     const int port = port_it == infer.environment.end() ? state_.gateway.listen_port
                                                         : std::stoi(port_it->second);
     const std::string host =
@@ -1010,12 +1155,12 @@ std::string DesiredStateV2Renderer::BuildWebGatewayInstanceName() const {
 }
 
 std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
-  return "/var/lib/comet/disks/planes/" + state_.plane_name + "/shared";
+  return "/var/lib/naim/disks/planes/" + state_.plane_name + "/shared";
 }
 
 std::string DesiredStateV2Renderer::BuildInstancePrivateHostPath(
     const std::string& instance_name) const {
-  return "/var/lib/comet/disks/instances/" + instance_name + "/private";
+  return "/var/lib/naim/disks/instances/" + instance_name + "/private";
 }
 
 std::string DesiredStateV2Renderer::BuildAppCommandFromScriptRef(
@@ -1045,6 +1190,22 @@ std::string DesiredStateV2Renderer::BuildCommandFromStartSpec(
   }
   const auto command = start.value("command", std::string{});
   return command.empty() ? default_command : command;
+}
+
+void DesiredStateV2Renderer::ApplyExternalAppHostMetadata(
+    InstanceSpec* instance,
+    const std::string& binding) const {
+  if (instance == nullptr || !HasExternalAppHost()) {
+    return;
+  }
+  instance->environment["NAIM_DEPLOYMENT_TARGET"] = "external-app-host";
+  instance->environment["NAIM_EXTERNAL_APP_HOST_ADDRESS"] = state_.app_host->address;
+  instance->environment["NAIM_EXTERNAL_APP_HOST_AUTH_MODE"] = ExternalAppHostAuthMode();
+  instance->environment["NAIM_EXTERNAL_APP_HOST_BINDING"] = binding;
+  instance->labels["naim.deployment.target"] = "external-app-host";
+  instance->labels["naim.external_app_host.address"] = state_.app_host->address;
+  instance->labels["naim.external_app_host.auth_mode"] = ExternalAppHostAuthMode();
+  instance->labels["naim.external_app_host.binding"] = binding;
 }
 
 int DesiredStateV2Renderer::BuildSkillsHostPort() const {
@@ -1170,4 +1331,4 @@ InteractionSettings::CompletionPolicy DesiredStateV2Renderer::DefaultLongComplet
   return policy;
 }
 
-}  // namespace comet
+}  // namespace naim

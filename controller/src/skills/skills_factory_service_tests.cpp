@@ -6,9 +6,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/desired_state_v2_renderer.h"
-#include "comet/state/desired_state_v2_validator.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/desired_state_v2_validator.h"
+#include "naim/state/sqlite_store.h"
 #include "plane/plane_mutation_service.h"
 #include "skills/plane_skill_catalog_service.h"
 #include "skills/skills_factory_service.h"
@@ -25,7 +25,7 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-comet::DesiredState BuildDesiredState(
+naim::DesiredState BuildDesiredState(
     const std::string& plane_name,
     const std::vector<std::string>& factory_skill_ids = {}) {
   json value{
@@ -48,32 +48,32 @@ comet::DesiredState BuildDesiredState(
        }},
       {"app", {{"enabled", false}}},
   };
-  comet::DesiredStateV2Validator::ValidateOrThrow(value);
-  return comet::DesiredStateV2Renderer::Render(value);
+  naim::DesiredStateV2Validator::ValidateOrThrow(value);
+  return naim::DesiredStateV2Renderer::Render(value);
 }
 
-comet::controller::PlaneMutationService MakeMutationService() {
-  comet::controller::PlaneMutationService::Deps deps;
+naim::controller::PlaneMutationService MakeMutationService() {
+  naim::controller::PlaneMutationService::Deps deps;
   deps.apply_desired_state =
       [](const std::string& db_path,
-         const comet::DesiredState& desired_state,
+         const naim::DesiredState& desired_state,
          const std::string&,
          const std::string&) {
-        comet::ControllerStore store(db_path);
+        naim::ControllerStore store(db_path);
         store.Initialize();
         store.ReplaceDesiredState(desired_state);
         return 0;
       };
   deps.make_plane_service =
-      [](const std::string&) -> comet::controller::PlaneService {
+      [](const std::string&) -> naim::controller::PlaneService {
         throw std::runtime_error("plane service should not be used in skills tests");
       };
-  return comet::controller::PlaneMutationService(std::move(deps));
+  return naim::controller::PlaneMutationService(std::move(deps));
 }
 
 void SeedDesiredState(
-    comet::ControllerStore& store,
-    const comet::DesiredState& desired_state,
+    naim::ControllerStore& store,
+    const naim::DesiredState& desired_state,
     int generation = 1) {
   store.ReplaceDesiredState(desired_state, generation);
   const auto plane = store.LoadPlane(desired_state.plane_name);
@@ -85,17 +85,17 @@ void SeedDesiredState(
 int main() {
   try {
     const fs::path temp_root =
-        fs::temp_directory_path() / "comet-skills-factory-service-tests";
+        fs::temp_directory_path() / "naim-skills-factory-service-tests";
     std::error_code error;
     fs::remove_all(temp_root, error);
     fs::create_directories(temp_root);
     const fs::path db_path = temp_root / "controller.sqlite";
 
     {
-      comet::ControllerStore store(db_path.string());
+      naim::ControllerStore store(db_path.string());
       store.Initialize();
       SeedDesiredState(store, BuildDesiredState("factory-plane", {"skill-alpha"}), 3);
-      store.UpsertSkillsFactorySkill(comet::SkillsFactorySkillRecord{
+      store.UpsertSkillsFactorySkill(naim::SkillsFactorySkillRecord{
           "skill-alpha",
           "Alpha skill",
           "alpha/core",
@@ -106,19 +106,19 @@ int main() {
           "",
           "",
       });
-      store.UpsertPlaneSkillBinding(comet::PlaneSkillBindingRecord{
+      store.UpsertPlaneSkillBinding(naim::PlaneSkillBindingRecord{
           "factory-plane",
           "skill-alpha",
           false,
           {"session-a"},
-          {"comet://alpha"},
+          {"naim://alpha"},
           "",
           "",
       });
 
-      comet::controller::SkillsFactoryService factory_service(
+      naim::controller::SkillsFactoryService factory_service(
           MakeMutationService(),
-          comet::controller::PlaneSkillRuntimeSyncService(),
+          naim::controller::PlaneSkillRuntimeSyncService(),
           [](const std::string&, const std::string&, const std::string& fallback) {
             return fallback;
           });
@@ -161,9 +161,9 @@ int main() {
     }
 
     {
-      comet::ControllerStore store(db_path.string());
+      naim::ControllerStore store(db_path.string());
       store.Initialize();
-      store.UpsertSkillsFactorySkill(comet::SkillsFactorySkillRecord{
+      store.UpsertSkillsFactorySkill(naim::SkillsFactorySkillRecord{
           "skill-grouped",
           "Grouped skill",
           "lt-cypher/market/forecast",
@@ -174,9 +174,9 @@ int main() {
           "",
           "",
       });
-      comet::controller::SkillsFactoryService factory_service(
+      naim::controller::SkillsFactoryService factory_service(
           MakeMutationService(),
-          comet::controller::PlaneSkillRuntimeSyncService(),
+          naim::controller::PlaneSkillRuntimeSyncService(),
           [](const std::string&, const std::string&, const std::string& fallback) {
             return fallback;
           });
@@ -225,13 +225,13 @@ int main() {
     }
 
     {
-      comet::ControllerStore store(db_path.string());
+      naim::ControllerStore store(db_path.string());
       store.Initialize();
       SeedDesiredState(store, BuildDesiredState("catalog-plane"), 5);
 
-      comet::controller::PlaneSkillCatalogService catalog_service(
+      naim::controller::PlaneSkillCatalogService catalog_service(
           MakeMutationService(),
-          comet::controller::PlaneSkillRuntimeSyncService(),
+          naim::controller::PlaneSkillRuntimeSyncService(),
           [](const std::string&, const std::string&, const std::string& fallback) {
             return fallback;
           });
@@ -246,7 +246,7 @@ int main() {
               {"internal", true},
               {"enabled", false},
               {"session_ids", json::array({"session-1", "session-2"})},
-              {"comet_links", json::array({"comet://one"})},
+              {"naim_links", json::array({"naim://one"})},
           },
           temp_root.string());
       const auto skill_id = created.at("id").get<std::string>();

@@ -1,4 +1,4 @@
-#include "comet/runtime/infer_runtime_config.h"
+#include "naim/runtime/infer_runtime_config.h"
 
 #include <filesystem>
 #include <stdexcept>
@@ -7,9 +7,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -318,17 +318,17 @@ std::string RenderInferRuntimeConfigJsonForInstance(
     const DesiredState& state,
     const std::string& infer_instance_name) {
   const auto& infer = RequireInferInstanceByName(state, infer_instance_name);
-  const int api_port = ResolveInferPort(infer, "COMET_INFERENCE_PORT", state.inference.api_port);
+  const int api_port = ResolveInferPort(infer, "NAIM_INFERENCE_PORT", state.inference.api_port);
   const int gateway_listen_port =
-      ResolveInferPort(infer, "COMET_GATEWAY_PORT", state.gateway.listen_port);
-  const int llama_port = ResolveInferPort(infer, "COMET_LLAMA_PORT", state.inference.llama_port);
+      ResolveInferPort(infer, "NAIM_GATEWAY_PORT", state.gateway.listen_port);
+  const int llama_port = ResolveInferPort(infer, "NAIM_LLAMA_PORT", state.inference.llama_port);
   const std::vector<std::string> replica_upstreams =
-      infer.environment.count("COMET_REPLICA_UPSTREAMS") == 0
+      infer.environment.count("NAIM_REPLICA_UPSTREAMS") == 0
           ? std::vector<std::string>{}
-          : SplitCommaSeparated(infer.environment.at("COMET_REPLICA_UPSTREAMS"));
+          : SplitCommaSeparated(infer.environment.at("NAIM_REPLICA_UPSTREAMS"));
 
   const json value = {
-      {"comet_version", "0.1.0"},
+      {"naim_version", "0.1.0"},
       {"instance",
        {
            {"name", infer.name},
@@ -341,9 +341,9 @@ std::string RenderInferRuntimeConfigJsonForInstance(
       {"control",
        {
            {"root", state.control_root},
-           {"controller_url", infer.environment.count("COMET_CONTROLLER_URL") == 0
+           {"controller_url", infer.environment.count("NAIM_CONTROLLER_URL") == 0
                                   ? "http://controller.internal:8080"
-                                  : infer.environment.at("COMET_CONTROLLER_URL")},
+                                  : infer.environment.at("NAIM_CONTROLLER_URL")},
        }},
       {"gpu_nodes", BuildGpuNodesJson(state, infer.name)},
       {"serving_workers", BuildServingWorkersJson(state, infer.name)},
@@ -392,4 +392,4 @@ std::string RenderInferRuntimeConfigJsonForInstance(
   return value.dump(2);
 }
 
-}  // namespace comet
+}  // namespace naim

@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/security/crypto_utils.h"
+#include "naim/security/crypto_utils.h"
 
 using nlohmann::json;
 
@@ -113,14 +113,14 @@ HttpResponse AuthHttpService::HandleState(
     return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto session =
         support_.authenticate_controller_user_session(store, request);
     return support_.build_json_response(
         200,
         json{
-            {"service", "comet-controller"},
+            {"service", "naim-controller"},
             {"setup_required", store.LoadUserCount() == 0},
             {"authenticated", session.has_value()},
             {"user",
@@ -143,7 +143,7 @@ HttpResponse AuthHttpService::HandleMe(
     return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto session =
         support_.authenticate_controller_user_session(store, request);
@@ -189,7 +189,7 @@ HttpResponse AuthHttpService::HandleBootstrapBegin(
                {"message", "username and password are required"}},
           {});
     }
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     if (store.LoadUserCount() != 0) {
       return support_.build_json_response(
@@ -198,13 +198,13 @@ HttpResponse AuthHttpService::HandleBootstrapBegin(
                {"message", "bootstrap is only available before the first user is created"}},
           {});
     }
-    const std::string flow_id = comet::RandomTokenBase64(24);
-    const std::string challenge = comet::RandomTokenBase64(32);
+    const std::string flow_id = naim::RandomTokenBase64(24);
+    const std::string challenge = naim::RandomTokenBase64(32);
     const PendingWebAuthnFlow flow{
         flow_id,
         "bootstrap",
         username,
-        comet::HashPassword(password),
+        naim::HashPassword(password),
         "",
         0,
         challenge,
@@ -273,12 +273,12 @@ HttpResponse AuthHttpService::HandleBootstrapFinish(
                {"message", "WebAuthn registration verification failed"}},
           {});
     }
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto user =
         store.CreateBootstrapAdmin(flow->username, flow->password_hash);
     const json credential = verification.at("registrationInfo");
-    store.InsertWebAuthnCredential(comet::WebAuthnCredentialRecord{
+    store.InsertWebAuthnCredential(naim::WebAuthnCredentialRecord{
         0,
         user.id,
         credential.value("credentialID", std::string{}),
@@ -321,7 +321,7 @@ HttpResponse AuthHttpService::HandleLoginBegin(
           json{{"status", "bad_request"}, {"message", "username is required"}},
           {});
     }
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto user = store.LoadUserByUsername(username);
     if (!user.has_value()) {
@@ -349,8 +349,8 @@ HttpResponse AuthHttpService::HandleLoginBegin(
       allow_credentials.push_back(
           json{{"id", credential.credential_id}, {"transports", transports}});
     }
-    const std::string flow_id = comet::RandomTokenBase64(24);
-    const std::string challenge = comet::RandomTokenBase64(32);
+    const std::string flow_id = naim::RandomTokenBase64(24);
+    const std::string challenge = naim::RandomTokenBase64(32);
     const PendingWebAuthnFlow flow{
         flow_id,
         "login",
@@ -406,7 +406,7 @@ HttpResponse AuthHttpService::HandleLoginFinish(
                {"message", "login flow is missing or expired"}},
           {});
     }
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const std::string credential_id =
         body.at("response").value("id", std::string{});
@@ -480,7 +480,7 @@ HttpResponse AuthHttpService::HandleInviteLookup(
   try {
     const std::string token =
         request.path.substr(std::string("/api/v1/auth/invite/").size());
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto invite = store.LoadRegistrationInviteByToken(token);
     const bool valid = invite.has_value() && invite->revoked_at.empty() &&
@@ -517,7 +517,7 @@ HttpResponse AuthHttpService::HandleRegisterBegin(
                 "invite_token, username, and password are required"}},
           {});
     }
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto invite = store.LoadRegistrationInviteByToken(invite_token);
     if (!invite.has_value() || !invite->revoked_at.empty() ||
@@ -537,13 +537,13 @@ HttpResponse AuthHttpService::HandleRegisterBegin(
                {"message", "username is already taken"}},
           {});
     }
-    const std::string flow_id = comet::RandomTokenBase64(24);
-    const std::string challenge = comet::RandomTokenBase64(32);
+    const std::string flow_id = naim::RandomTokenBase64(24);
+    const std::string challenge = naim::RandomTokenBase64(32);
     const PendingWebAuthnFlow flow{
         flow_id,
         "register",
         username,
-        comet::HashPassword(password),
+        naim::HashPassword(password),
         invite_token,
         0,
         challenge,
@@ -608,12 +608,12 @@ HttpResponse AuthHttpService::HandleRegisterFinish(
                {"message", "WebAuthn registration verification failed"}},
           {});
     }
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto user = store.CreateInvitedUser(
         flow->invite_token, flow->username, flow->password_hash);
     const json credential = verification.at("registrationInfo");
-    store.InsertWebAuthnCredential(comet::WebAuthnCredentialRecord{
+    store.InsertWebAuthnCredential(naim::WebAuthnCredentialRecord{
         0,
         user.id,
         credential.value("credentialID", std::string{}),
@@ -645,7 +645,7 @@ HttpResponse AuthHttpService::HandleInvites(
     const std::string& db_path,
     const HttpRequest& request) const {
   try {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto admin = support_.require_controller_admin_user(store, request);
     if (!admin.has_value()) {
@@ -667,7 +667,7 @@ HttpResponse AuthHttpService::HandleInvites(
     }
     if (request.method == "POST") {
       const std::string token =
-          support_.sanitize_token_for_path(comet::RandomTokenBase64(18));
+          support_.sanitize_token_for_path(naim::RandomTokenBase64(18));
       const auto invite = store.CreateRegistrationInvite(
           admin->id,
           token,
@@ -695,7 +695,7 @@ HttpResponse AuthHttpService::HandleInviteDelete(
     return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto admin = support_.require_controller_admin_user(store, request);
     if (!admin.has_value()) {
@@ -725,7 +725,7 @@ HttpResponse AuthHttpService::HandleSshKeys(
     const std::string& db_path,
     const HttpRequest& request) const {
   try {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto session =
         support_.authenticate_controller_user_session(store, request);
@@ -754,7 +754,7 @@ HttpResponse AuthHttpService::HandleSshKeys(
                  {"message", "public_key is required"}},
             {});
       }
-      const comet::UserSshKeyRecord ssh_key{
+      const naim::UserSshKeyRecord ssh_key{
           0,
           session->first.id,
           support_.trim(body.value("label", std::string{})),
@@ -793,7 +793,7 @@ HttpResponse AuthHttpService::HandleSshKeyDelete(
     return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto session =
         support_.authenticate_controller_user_session(store, request);
@@ -846,7 +846,7 @@ HttpResponse AuthHttpService::HandleSshChallenge(
                 "username, plane_name, and fingerprint are required"}},
           {});
     }
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto desired_state = store.LoadDesiredState(plane_name);
     if (!desired_state.has_value() || !desired_state->protected_plane) {
@@ -871,13 +871,13 @@ HttpResponse AuthHttpService::HandleSshChallenge(
           {});
     }
     PendingSshChallenge challenge;
-    challenge.challenge_id = comet::RandomTokenBase64(24);
+    challenge.challenge_id = naim::RandomTokenBase64(24);
     challenge.user_id = user->id;
     challenge.ssh_key_id = ssh_key->id;
     challenge.username = user->username;
     challenge.plane_name = plane_name;
     challenge.fingerprint = fingerprint;
-    challenge.challenge_token = comet::RandomTokenBase64(24);
+    challenge.challenge_token = naim::RandomTokenBase64(24);
     challenge.expires_at =
         support_.sql_timestamp_after_seconds(SshChallengeLifetimeSeconds());
     challenge.message = support_.build_ssh_challenge_message(
@@ -933,7 +933,7 @@ HttpResponse AuthHttpService::HandleSshVerify(
                {"message", "SSH challenge is missing or expired"}},
           {});
     }
-    comet::ControllerStore store(db_path);
+    naim::ControllerStore store(db_path);
     store.Initialize();
     const auto ssh_key = store.LoadActiveUserSshKeyById(challenge->ssh_key_id);
     if (!ssh_key.has_value()) {

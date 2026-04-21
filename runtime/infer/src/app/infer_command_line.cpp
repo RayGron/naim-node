@@ -9,26 +9,26 @@
 
 namespace fs = std::filesystem;
 
-namespace comet::infer {
+namespace naim::infer {
 
 std::string InferCommandLine::DefaultConfigPath() const {
-  if (const char* path = std::getenv("COMET_INFER_RUNTIME_CONFIG")) {
+  if (const char* path = std::getenv("NAIM_INFER_RUNTIME_CONFIG")) {
     if (std::strlen(path) > 0) {
       return path;
     }
   }
-  const char* control_root = std::getenv("COMET_CONTROL_ROOT");
-  const char* plane_name = std::getenv("COMET_PLANE_NAME");
+  const char* control_root = std::getenv("NAIM_CONTROL_ROOT");
+  const char* plane_name = std::getenv("NAIM_PLANE_NAME");
   const std::string root =
       control_root != nullptr && std::strlen(control_root) > 0
           ? control_root
-          : std::string("/comet/shared/control/") +
+          : std::string("/naim/shared/control/") +
                 ((plane_name != nullptr && std::strlen(plane_name) > 0) ? plane_name : "unknown");
   return root + "/infer-runtime.json";
 }
 
 std::string InferCommandLine::DefaultProfilesPath() const {
-  if (const char* path = std::getenv("COMET_INFER_PROFILES_PATH")) {
+  if (const char* path = std::getenv("NAIM_INFER_PROFILES_PATH")) {
     if (std::strlen(path) > 0) {
       return path;
     }
@@ -42,27 +42,27 @@ std::string InferCommandLine::DefaultProfilesPath() const {
 void InferCommandLine::PrintUsage() const {
   std::cout
       << "Usage:\n"
-      << "  comet-inferctl list-profiles [--profiles <path>]\n"
-      << "  comet-inferctl show-config [--config <path>]\n"
-      << "  comet-inferctl show-active-model [--config <path>]\n"
-      << "  comet-inferctl validate-config [--config <path>]\n"
-      << "  comet-inferctl prepare-runtime [--config <path>] [--apply]\n"
-      << "  comet-inferctl bootstrap-runtime [--config <path>] [--profile <name>] [--profiles <path>] [--apply]\n"
-      << "  comet-inferctl runtime-assets-status [--config <path>]\n"
-      << "  comet-inferctl preload-model [--config <path>] --alias <name> --source-model-id <id> --local-model-path <path> [--runtime-model-path <path>] [--apply]\n"
-      << "  comet-inferctl cache-status [--config <path>] --alias <name> --local-model-path <path>\n"
-      << "  comet-inferctl switch-model [--config <path>] --model-id <id> [--served-model-name <name>] [--tp <n>] [--pp <n>] [--gpu-memory-utilization <0-1>] [--runtime-profile <name>] [--apply]\n"
-      << "  comet-inferctl gateway-plan [--config <path>] [--apply]\n"
-      << "  comet-inferctl gateway-status [--config <path>]\n"
-      << "  comet-inferctl status [--config <path>] [--apply]\n"
-      << "  comet-inferctl stop [--config <path>] [--apply]\n"
-      << "  comet-inferctl plan-launch [--config <path>]\n"
-      << "  comet-inferctl doctor [--config <path>] [--checks <csv>]\n"
-      << "  comet-inferctl bootstrap-dry-run [--config <path>] [--profile <name>] [--profiles <path>] [--apply]\n"
-      << "  comet-inferctl container-boot [--config <path>] [--backend <auto|embedded|llama|llama-rpc-head>]\n"
-      << "  comet-inferctl launch-embedded-runtime [--config <path>]\n"
-      << "  comet-inferctl launch-runtime [--config <path>] [--backend <auto|embedded|llama|llama-rpc-head>]\n"
-      << "  comet-inferctl probe-url <url>\n";
+      << "  naim-inferctl list-profiles [--profiles <path>]\n"
+      << "  naim-inferctl show-config [--config <path>]\n"
+      << "  naim-inferctl show-active-model [--config <path>]\n"
+      << "  naim-inferctl validate-config [--config <path>]\n"
+      << "  naim-inferctl prepare-runtime [--config <path>] [--apply]\n"
+      << "  naim-inferctl bootstrap-runtime [--config <path>] [--profile <name>] [--profiles <path>] [--apply]\n"
+      << "  naim-inferctl runtime-assets-status [--config <path>]\n"
+      << "  naim-inferctl preload-model [--config <path>] --alias <name> --source-model-id <id> --local-model-path <path> [--runtime-model-path <path>] [--apply]\n"
+      << "  naim-inferctl cache-status [--config <path>] --alias <name> --local-model-path <path>\n"
+      << "  naim-inferctl switch-model [--config <path>] --model-id <id> [--served-model-name <name>] [--tp <n>] [--pp <n>] [--gpu-memory-utilization <0-1>] [--runtime-profile <name>] [--apply]\n"
+      << "  naim-inferctl gateway-plan [--config <path>] [--apply]\n"
+      << "  naim-inferctl gateway-status [--config <path>]\n"
+      << "  naim-inferctl status [--config <path>] [--apply]\n"
+      << "  naim-inferctl stop [--config <path>] [--apply]\n"
+      << "  naim-inferctl plan-launch [--config <path>]\n"
+      << "  naim-inferctl doctor [--config <path>] [--checks <csv>]\n"
+      << "  naim-inferctl bootstrap-dry-run [--config <path>] [--profile <name>] [--profiles <path>] [--apply]\n"
+      << "  naim-inferctl container-boot [--config <path>] [--backend <auto|embedded|llama|llama-rpc-head>]\n"
+      << "  naim-inferctl launch-embedded-runtime [--config <path>]\n"
+      << "  naim-inferctl launch-runtime [--config <path>] [--backend <auto|embedded|llama|llama-rpc-head>]\n"
+      << "  naim-inferctl probe-url <url>\n";
 }
 
 InferCommandLineOptions InferCommandLine::Parse(int argc, char** argv) const {
@@ -75,7 +75,7 @@ InferCommandLineOptions InferCommandLine::Parse(int argc, char** argv) const {
   options.command = argv[1];
   options.config_path = DefaultConfigPath();
   options.profiles_path = DefaultProfilesPath();
-  if (const char* backend = std::getenv("COMET_INFER_RUNTIME_BACKEND")) {
+  if (const char* backend = std::getenv("NAIM_INFER_RUNTIME_BACKEND")) {
     if (std::strlen(backend) > 0) {
       options.backend = backend;
     }
@@ -142,4 +142,4 @@ InferCommandLineOptions InferCommandLine::Parse(int argc, char** argv) const {
   return options;
 }
 
-}  // namespace comet::infer
+}  // namespace naim::infer

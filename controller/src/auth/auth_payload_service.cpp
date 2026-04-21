@@ -1,9 +1,9 @@
 #include "auth/auth_payload_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 nlohmann::json AuthPayloadService::BuildUserPayload(
-    const comet::UserRecord& user) const {
+    const naim::UserRecord& user) const {
   return nlohmann::json{
       {"id", user.id},
       {"username", user.username},
@@ -16,7 +16,7 @@ nlohmann::json AuthPayloadService::BuildUserPayload(
 }
 
 nlohmann::json AuthPayloadService::BuildInvitePayload(
-    const comet::RegistrationInviteRecord& invite) const {
+    const naim::RegistrationInviteRecord& invite) const {
   return nlohmann::json{
       {"id", invite.id},
       {"token", invite.token},
@@ -37,7 +37,7 @@ nlohmann::json AuthPayloadService::BuildInvitePayload(
 }
 
 nlohmann::json AuthPayloadService::BuildSshKeyPayload(
-    const comet::UserSshKeyRecord& ssh_key) const {
+    const naim::UserSshKeyRecord& ssh_key) const {
   return nlohmann::json{
       {"id", ssh_key.id},
       {"user_id", ssh_key.user_id},
@@ -54,4 +54,4 @@ nlohmann::json AuthPayloadService::BuildSshKeyPayload(
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -13,12 +13,12 @@
 #include "scheduler/assignment_orchestration_service.h"
 #include "scheduler/scheduler_service.h"
 
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
 class ISchedulerServiceFactory {
  public:
   virtual ~ISchedulerServiceFactory() = default;
-  virtual comet::controller::SchedulerService CreateSchedulerService(
+  virtual naim::controller::SchedulerService CreateSchedulerService(
       const std::string& db_path,
       const std::string& artifacts_root) const = 0;
 };
@@ -26,9 +26,9 @@ class ISchedulerServiceFactory {
 class SchedulerHttpService {
  public:
   SchedulerHttpService(
-      const comet::controller::ControllerRequestSupport& controller_request_support,
-      const comet::controller::ReadModelService& read_model_service,
-      const comet::controller::AssignmentOrchestrationService& assignment_orchestration_service,
+      const naim::controller::ControllerRequestSupport& controller_request_support,
+      const naim::controller::ReadModelService& read_model_service,
+      const naim::controller::AssignmentOrchestrationService& assignment_orchestration_service,
       const ISchedulerServiceFactory& scheduler_service_factory);
 
   std::optional<HttpResponse> HandleRequest(
@@ -50,8 +50,8 @@ class SchedulerHttpService {
       const HttpRequest& request,
       const std::string& key) const;
 
-  const comet::controller::ControllerRequestSupport& controller_request_support_;
-  const comet::controller::ReadModelService& read_model_service_;
-  const comet::controller::AssignmentOrchestrationService& assignment_orchestration_service_;
+  const naim::controller::ControllerRequestSupport& controller_request_support_;
+  const naim::controller::ReadModelService& read_model_service_;
+  const naim::controller::AssignmentOrchestrationService& assignment_orchestration_service_;
   const ISchedulerServiceFactory& scheduler_service_factory_;
 };

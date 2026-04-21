@@ -6,9 +6,9 @@
 using nlohmann::json;
 
 SchedulerHttpService::SchedulerHttpService(
-    const comet::controller::ControllerRequestSupport& controller_request_support,
-    const comet::controller::ReadModelService& read_model_service,
-    const comet::controller::AssignmentOrchestrationService& assignment_orchestration_service,
+    const naim::controller::ControllerRequestSupport& controller_request_support,
+    const naim::controller::ReadModelService& read_model_service,
+    const naim::controller::AssignmentOrchestrationService& assignment_orchestration_service,
     const ISchedulerServiceFactory& scheduler_service_factory)
     : controller_request_support_(controller_request_support),
       read_model_service_(read_model_service),
@@ -92,11 +92,11 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
     try {
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               assignment_orchestration_service_.ExecuteSetNodeAvailabilityAction(
                   db_path,
                   *node_name,
-                  comet::ParseNodeAvailability(*availability),
+                  naim::ParseNodeAvailability(*availability),
                   FindQueryString(request, "message"))),
           {});
       } catch (const std::exception& error) {
@@ -122,7 +122,7 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
               default_artifacts_root));
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteSchedulerTick()),
           {});
     } catch (const std::exception& error) {
@@ -148,7 +148,7 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
               default_artifacts_root));
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteReconcileRebalanceProposals()),
           {});
     } catch (const std::exception& error) {
@@ -174,7 +174,7 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
               default_artifacts_root));
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteReconcileRolloutActions()),
           {});
     } catch (const std::exception& error) {
@@ -208,7 +208,7 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
               default_artifacts_root));
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteApplyRebalanceProposal(*worker_name)),
           {});
     } catch (const std::exception& error) {
@@ -250,7 +250,7 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
               default_artifacts_root));
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteSetRolloutActionStatus(
                   *action_id,
                   *status,
@@ -287,7 +287,7 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
               default_artifacts_root));
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteEnqueueRolloutEviction(*action_id)),
           {});
     } catch (const std::exception& error) {
@@ -321,7 +321,7 @@ std::optional<HttpResponse> SchedulerHttpService::HandleRequest(
               default_artifacts_root));
       return BuildJsonResponse(
           200,
-          comet::controller::BuildControllerActionPayload(
+          naim::controller::BuildControllerActionPayload(
               scheduler_service.ExecuteApplyReadyRolloutAction(*action_id)),
           {});
     } catch (const std::exception& error) {

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace comet::browsing {
+namespace naim::browsing {
 
 struct CommandRequest {
   std::vector<std::string> args;
@@ -23,4 +23,4 @@ struct CommandResult {
 
 CommandResult RunCommandCapture(const CommandRequest& request);
 
-}  // namespace comet::browsing
+}  // namespace naim::browsing

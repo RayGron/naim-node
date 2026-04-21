@@ -14,8 +14,8 @@
 class BundleHttpService {
  public:
   BundleHttpService(
-      const comet::controller::IBundleCliService& bundle_cli_service,
-      comet::controller::ControllerRequestSupport request_support = {});
+      const naim::controller::IBundleCliService& bundle_cli_service,
+      naim::controller::ControllerRequestSupport request_support = {});
 
   std::optional<HttpResponse> HandleRequest(
       const std::string& db_path,
@@ -32,6 +32,6 @@ class BundleHttpService {
       const HttpRequest& request,
       const std::string& key) const;
 
-  const comet::controller::IBundleCliService& bundle_cli_service_;
-  comet::controller::ControllerRequestSupport request_support_;
+  const naim::controller::IBundleCliService& bundle_cli_service_;
+  naim::controller::ControllerRequestSupport request_support_;
 };

@@ -1,6 +1,8 @@
 #include "run/launcher_run_service.h"
 
 #include <chrono>
+#include <cerrno>
+#include <csignal>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -10,17 +12,21 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #if !defined(_WIN32)
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
-#include "comet/core/platform_compat.h"
-#include "comet/security/crypto_utils.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/core/platform_compat.h"
+#include "naim/security/crypto_utils.h"
+#include "naim/state/sqlite_store.h"
+#include "run/hostd_peer_service.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 namespace {
 
@@ -46,6 +52,53 @@ bool IsIpv4Address(const std::string& candidate) {
   return octet_count == 4;
 }
 
+#if !defined(_WIN32)
+int ProcessExitCodeFromStatus(int status) {
+  if (WIFEXITED(status)) {
+    return WEXITSTATUS(status);
+  }
+  if (WIFSIGNALED(status)) {
+    return 128 + WTERMSIG(status);
+  }
+  return 1;
+}
+
+std::optional<int> PollChildExitCode(pid_t pid) {
+  int status = 0;
+  const pid_t result = waitpid(pid, &status, WNOHANG);
+  if (result == 0) {
+    return std::nullopt;
+  }
+  if (result == pid) {
+    return ProcessExitCodeFromStatus(status);
+  }
+  if (result < 0 && errno == ECHILD) {
+    return 0;
+  }
+  return 1;
+}
+
+void StopChildProcess(pid_t pid) {
+  if (pid <= 0) {
+    return;
+  }
+  if (PollChildExitCode(pid).has_value()) {
+    return;
+  }
+  kill(pid, SIGTERM);
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    if (PollChildExitCode(pid).has_value()) {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  kill(pid, SIGKILL);
+  while (!PollChildExitCode(pid).has_value()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+}
+#endif
+
 bool IsPrivateIpv4Address(const std::string& candidate) {
   if (!IsIpv4Address(candidate)) {
     return false;
@@ -70,6 +123,33 @@ bool SetEnvVar(const std::string& key, const std::string& value) {
 #else
   return ::setenv(key.c_str(), value.c_str(), 1) == 0;
 #endif
+}
+
+std::string LoadStorageRootFromNodeConfig(const std::optional<std::string>& config_path) {
+  std::optional<std::filesystem::path> resolved = config_path;
+  if (!resolved.has_value()) {
+    if (const char* env_path = std::getenv("NAIM_NODE_CONFIG_PATH");
+        env_path != nullptr && *env_path != '\0') {
+      resolved = env_path;
+    }
+  }
+  if (!resolved.has_value() || !std::filesystem::exists(*resolved)) {
+    return "/var/lib/naim";
+  }
+  std::ifstream input(*resolved);
+  const auto parsed = nlohmann::json::parse(input, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    return "/var/lib/naim";
+  }
+  if (parsed.contains("paths") && parsed.at("paths").is_object() &&
+      parsed.at("paths").contains("storage_root") &&
+      parsed.at("paths").at("storage_root").is_string()) {
+    return parsed.at("paths").at("storage_root").get<std::string>();
+  }
+  if (parsed.contains("storage_root") && parsed.at("storage_root").is_string()) {
+    return parsed.at("storage_root").get<std::string>();
+  }
+  return "/var/lib/naim";
 }
 
 }  // namespace
@@ -126,6 +206,9 @@ int LauncherRunService::RunController(
                         : DefaultInternalListenHost());
   options.controller_upstream =
       command_line.FindFlagValue("--controller-upstream").value_or("");
+  options.skills_factory_listen_port = LauncherCommandLine::ParseIntValue(
+      command_line.FindFlagValue("--skills-factory-listen-port"),
+      options.skills_factory_listen_port);
   options.compose_mode =
       command_line.FindFlagValue("--compose-mode")
           .value_or(loaded_config && loaded_config->hostd.compose_mode.has_value()
@@ -155,10 +238,10 @@ int LauncherRunService::RunController(
   const bool config_local_hostd_enabled =
       loaded_config && loaded_config->controller.local_hostd_enabled.value_or(false);
   const bool managed_hostd_service_present =
-      std::getenv("COMET_SERVICE_MODE") != nullptr &&
-      std::string(std::getenv("COMET_SERVICE_MODE")) == "1" &&
+      std::getenv("NAIM_SERVICE_MODE") != nullptr &&
+      std::string(std::getenv("NAIM_SERVICE_MODE")) == "1" &&
       std::filesystem::exists(
-          install_service_.ParseLayout(command_line).systemd_dir / "comet-node-hostd.service");
+          install_service_.ParseLayout(command_line).systemd_dir / "naim-node-hostd.service");
   options.with_hostd =
       (command_line.HasFlag("--with-hostd") ||
        (!command_line.HasFlag("--without-hostd") && config_local_hostd_enabled)) &&
@@ -171,8 +254,8 @@ int LauncherRunService::RunController(
       command_line.FindFlagValue("--poll-interval-sec"),
       options.hostd_poll_interval_sec);
 
-  if (!(std::getenv("COMET_SERVICE_MODE") != nullptr &&
-        std::string(std::getenv("COMET_SERVICE_MODE")) == "1") &&
+  if (!(std::getenv("NAIM_SERVICE_MODE") != nullptr &&
+        std::string(std::getenv("NAIM_SERVICE_MODE")) == "1") &&
       !command_line.HasFlag("--foreground") &&
       !command_line.HasFlag("--skip-systemctl")) {
     const auto layout = install_service_.ParseLayout(command_line);
@@ -207,9 +290,9 @@ int LauncherRunService::RunController(
       }
       install_service_.InstallController(self_path, LauncherCommandLine(std::move(install_args)));
       std::cout << "service_mode=systemd\n";
-      std::cout << "controller_service=comet-node-controller.service\n";
+      std::cout << "controller_service=naim-node-controller.service\n";
       if (options.with_hostd) {
-        std::cout << "hostd_service=comet-node-hostd.service\n";
+        std::cout << "hostd_service=naim-node-hostd.service\n";
       }
       return 0;
     }
@@ -243,6 +326,11 @@ int LauncherRunService::RunHostd(
                             loaded_config->hostd.trusted_controller_fingerprint.has_value()
                         ? *loaded_config->hostd.trusted_controller_fingerprint
                         : "");
+  options.onboarding_key =
+      command_line.FindFlagValue("--onboarding-key")
+          .value_or(loaded_config && loaded_config->hostd.onboarding_key.has_value()
+                        ? *loaded_config->hostd.onboarding_key
+                        : "");
   options.node_name =
       command_line.FindFlagValue("--node")
           .value_or(loaded_config && loaded_config->hostd.node_name.has_value()
@@ -258,6 +346,8 @@ int LauncherRunService::RunHostd(
           .value_or(loaded_config && loaded_config->hostd.state_root.has_value()
                         ? loaded_config->hostd.state_root->string()
                         : install_layout_resolver_.DefaultHostdStateRoot().string());
+  options.storage_root =
+      LoadStorageRootFromNodeConfig(command_line.FindFlagValue("--config"));
   options.host_private_key_path =
       command_line.FindFlagValue("--host-private-key")
           .value_or(loaded_config && loaded_config->hostd.host_private_key.has_value()
@@ -267,9 +357,14 @@ int LauncherRunService::RunHostd(
       command_line.FindFlagValue("--compose-mode").value_or(options.compose_mode);
   options.poll_interval_sec = LauncherCommandLine::ParseIntValue(
       command_line.FindFlagValue("--poll-interval-sec"), options.poll_interval_sec);
+  options.inventory_scan_interval_sec = LauncherCommandLine::ParseIntValue(
+      command_line.FindFlagValue("--inventory-scan-interval-sec"),
+      loaded_config && loaded_config->hostd.inventory_scan_interval_sec.has_value()
+          ? *loaded_config->hostd.inventory_scan_interval_sec
+          : options.inventory_scan_interval_sec);
 
-  if (!(std::getenv("COMET_SERVICE_MODE") != nullptr &&
-        std::string(std::getenv("COMET_SERVICE_MODE")) == "1") &&
+  if (!(std::getenv("NAIM_SERVICE_MODE") != nullptr &&
+        std::string(std::getenv("NAIM_SERVICE_MODE")) == "1") &&
       !command_line.HasFlag("--foreground") &&
       !command_line.HasFlag("--skip-systemctl") &&
       process_runner_.CommandExists("systemctl")) {
@@ -299,7 +394,7 @@ int LauncherRunService::RunHostd(
     install_args.insert(install_args.end(), {"--compose-mode", options.compose_mode});
     install_service_.InstallHostd(self_path, LauncherCommandLine(std::move(install_args)));
     std::cout << "service_mode=systemd\n";
-    std::cout << "hostd_service=comet-node-hostd.service\n";
+    std::cout << "hostd_service=naim-node-hostd.service\n";
     return 0;
   }
 
@@ -324,9 +419,15 @@ int LauncherRunService::RunHostdLoop(
   }
   std::cout
       << "next_step=leave hostd running so it can receive assignments and upload telemetry\n";
+  auto next_inventory_report_at = std::chrono::steady_clock::now();
+  HostdPeerService peer_service(options);
+  peer_service.Start();
+  if (peer_service.enabled()) {
+    std::cout << "peer_discovery=enabled\n";
+  }
 
-  while (!signal_manager.stop_requested()) {
-    std::vector<std::string> apply_args = {
+  const auto build_apply_args = [&]() {
+    std::vector<std::string> args = {
         hostd_binary.string(),
         "apply-next-assignment",
         "--node",
@@ -339,24 +440,24 @@ int LauncherRunService::RunHostdLoop(
         options.compose_mode,
     };
     if (!options.controller_url.empty()) {
-      apply_args.insert(apply_args.end(), {"--controller", options.controller_url});
+      args.insert(args.end(), {"--controller", options.controller_url});
       if (!options.controller_fingerprint.empty()) {
-        apply_args.insert(
-            apply_args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+        args.insert(args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+      }
+      if (!options.onboarding_key.empty()) {
+        args.insert(args.end(), {"--onboarding-key", options.onboarding_key});
       }
       if (!options.host_private_key_path.empty()) {
-        apply_args.insert(
-            apply_args.end(), {"--host-private-key", options.host_private_key_path.string()});
+        args.insert(args.end(), {"--host-private-key", options.host_private_key_path.string()});
       }
     } else {
-      apply_args.insert(apply_args.end(), {"--db", options.db_path.string()});
+      args.insert(args.end(), {"--db", options.db_path.string()});
     }
-    const int apply_code = process_runner_.RunCommand(apply_args);
-    if (apply_code != 0) {
-      std::cerr << "comet-node: hostd apply-next-assignment exit=" << apply_code << "\n";
-    }
+    return args;
+  };
 
-    std::vector<std::string> report_args = {
+  const auto build_report_args = [&]() {
+    std::vector<std::string> args = {
         hostd_binary.string(),
         "report-observed-state",
         "--node",
@@ -365,29 +466,83 @@ int LauncherRunService::RunHostdLoop(
         options.state_root.string(),
     };
     if (!options.controller_url.empty()) {
-      report_args.insert(report_args.end(), {"--controller", options.controller_url});
+      args.insert(args.end(), {"--controller", options.controller_url});
       if (!options.controller_fingerprint.empty()) {
-        report_args.insert(
-            report_args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+        args.insert(args.end(), {"--controller-fingerprint", options.controller_fingerprint});
+      }
+      if (!options.onboarding_key.empty()) {
+        args.insert(args.end(), {"--onboarding-key", options.onboarding_key});
       }
       if (!options.host_private_key_path.empty()) {
-        report_args.insert(
-            report_args.end(), {"--host-private-key", options.host_private_key_path.string()});
+        args.insert(args.end(), {"--host-private-key", options.host_private_key_path.string()});
       }
     } else {
-      report_args.insert(report_args.end(), {"--db", options.db_path.string()});
+      args.insert(args.end(), {"--db", options.db_path.string()});
     }
-    const int report_code = process_runner_.RunCommand(report_args);
+    return args;
+  };
+
+  const auto run_report_if_due = [&]() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_inventory_report_at) {
+      return;
+    }
+    const int report_code = process_runner_.RunCommand(build_report_args());
     if (report_code != 0) {
-      std::cerr << "comet-node: hostd report-observed-state exit=" << report_code << "\n";
+      std::cerr << "naim-node: hostd report-observed-state exit=" << report_code << "\n";
     }
+    next_inventory_report_at =
+        now + std::chrono::seconds(std::max(1, options.inventory_scan_interval_sec));
+  };
+
+#if !defined(_WIN32)
+  pid_t apply_pid = -1;
+  const auto reap_apply_if_finished = [&]() {
+    if (apply_pid <= 0) {
+      return;
+    }
+    const std::optional<int> apply_code = PollChildExitCode(apply_pid);
+    if (!apply_code.has_value()) {
+      return;
+    }
+    if (*apply_code != 0) {
+      std::cerr << "naim-node: hostd apply-next-assignment exit=" << *apply_code << "\n";
+    }
+    apply_pid = -1;
+  };
+#endif
+
+  while (!signal_manager.stop_requested()) {
+#if defined(_WIN32)
+    const int apply_code = process_runner_.RunCommand(build_apply_args());
+    if (apply_code != 0) {
+      std::cerr << "naim-node: hostd apply-next-assignment exit=" << apply_code << "\n";
+    }
+#else
+    reap_apply_if_finished();
+    if (apply_pid <= 0) {
+      apply_pid = static_cast<pid_t>(process_runner_.SpawnCommand(build_apply_args()));
+    }
+#endif
+
+    run_report_if_due();
 
     for (int second = 0;
          second < options.poll_interval_sec && !signal_manager.stop_requested();
          ++second) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
+#if !defined(_WIN32)
+      reap_apply_if_finished();
+#endif
+      run_report_if_due();
     }
   }
+#if !defined(_WIN32)
+  if (apply_pid > 0) {
+    StopChildProcess(apply_pid);
+  }
+#endif
+  peer_service.Stop();
   return 0;
 }
 
@@ -410,7 +565,7 @@ void LauncherRunService::PrepareControllerRuntime(
       return;
     }
     std::filesystem::create_directories(private_key_path.parent_path());
-    const auto keypair = comet::GenerateSigningKeypair();
+    const auto keypair = naim::GenerateSigningKeypair();
     std::ofstream priv(private_key_path);
     std::ofstream pub(public_key_path);
     priv << keypair.private_key_base64 << "\n";
@@ -423,7 +578,7 @@ void LauncherRunService::PrepareControllerRuntime(
 
   PrepareSharedStateAccess(owner_probe_path, options.db_path);
 
-  comet::ControllerStore store(options.db_path.string());
+  naim::ControllerStore store(options.db_path.string());
   store.Initialize();
   PrepareSharedStateAccess(owner_probe_path, options.db_path);
 }
@@ -456,12 +611,12 @@ int LauncherRunService::RunControllerSupervisor(
           ? ComputePublicKeyFingerprint(controller_public_key_path)
           : "";
 
-  if (!SetEnvVar("COMET_CONTROLLER_ADMIN_UPSTREAM", local_controller_url) ||
-      !SetEnvVar("COMET_CONTROLLER_INTERNAL_HOST", options.internal_listen_host) ||
-      !SetEnvVar("COMET_CONTROLLER_INTERNAL_UPSTREAM", internal_controller_url) ||
-      !SetEnvVar("COMET_SKILLS_FACTORY_UPSTREAM", local_skills_factory_url) ||
-      !SetEnvVar("COMET_WEB_UI_ROOT", options.web_ui_root.string()) ||
-      !SetEnvVar("COMET_HOSTD_NODE_NAME", options.node_name)) {
+  if (!SetEnvVar("NAIM_CONTROLLER_ADMIN_UPSTREAM", local_controller_url) ||
+      !SetEnvVar("NAIM_CONTROLLER_INTERNAL_HOST", options.internal_listen_host) ||
+      !SetEnvVar("NAIM_CONTROLLER_INTERNAL_UPSTREAM", internal_controller_url) ||
+      !SetEnvVar("NAIM_SKILLS_FACTORY_UPSTREAM", local_skills_factory_url) ||
+      !SetEnvVar("NAIM_WEB_UI_ROOT", options.web_ui_root.string()) ||
+      !SetEnvVar("NAIM_HOSTD_NODE_NAME", options.node_name)) {
     throw std::runtime_error("failed to export controller internal routing environment");
   }
 
@@ -474,7 +629,7 @@ int LauncherRunService::RunControllerSupervisor(
         "--compose-mode",          options.compose_mode,
     };
     if (process_runner_.RunCommand(ensure_args) != 0) {
-      throw std::runtime_error("failed to ensure comet-web-ui");
+      throw std::runtime_error("failed to ensure naim-web-ui");
     }
   }
 
@@ -507,9 +662,9 @@ int LauncherRunService::RunControllerSupervisor(
 
   pid_t hostd_pid = -1;
   if (options.with_hostd) {
-    comet::ControllerStore store(options.db_path.string());
+    naim::ControllerStore store(options.db_path.string());
     store.Initialize();
-    comet::RegisteredHostRecord host;
+    naim::RegisteredHostRecord host;
     if (const auto current = store.LoadRegisteredHost(options.node_name);
         current.has_value()) {
       host = *current;
@@ -523,7 +678,7 @@ int LauncherRunService::RunControllerSupervisor(
     host.execution_mode = "mixed";
     host.registration_state = "registered";
     host.session_state = "disconnected";
-    host.status_message = "auto-registered local hostd by comet-node run controller";
+    host.status_message = "auto-registered local hostd by naim-node run controller";
     store.UpsertRegisteredHost(host);
 
     hostd_pid = static_cast<pid_t>(process_runner_.SpawnCommand({
@@ -588,7 +743,7 @@ void LauncherRunService::PrepareSharedStateAccess(
   (void)owner_probe_path;
   (void)db_path;
 #else
-  if (!comet::platform::HasElevatedPrivileges()) {
+  if (!naim::platform::HasElevatedPrivileges()) {
     return;
   }
 
@@ -604,7 +759,7 @@ void LauncherRunService::PrepareSharedStateAccess(
     EnsureSharedFileAccess(db_path.string() + "-shm", *group_id);
     ::umask(0002);
   } catch (const std::exception& error) {
-    std::cerr << "comet-node: warning: failed to prepare shared controller DB access: "
+    std::cerr << "naim-node: warning: failed to prepare shared controller DB access: "
               << error.what() << "\n";
   }
 #endif
@@ -745,7 +900,7 @@ std::string LauncherRunService::ReadTextFile(
 
 std::string LauncherRunService::ComputePublicKeyFingerprint(
     const std::filesystem::path& public_key_path) const {
-  return comet::ComputeKeyFingerprintHex(Trim(ReadTextFile(public_key_path)));
+  return naim::ComputeKeyFingerprintHex(Trim(ReadTextFile(public_key_path)));
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

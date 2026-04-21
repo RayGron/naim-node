@@ -7,7 +7,7 @@
 
 #include "interaction/interaction_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 struct InteractionConversationPrincipal {
   std::string owner_kind = "anonymous";
@@ -48,4 +48,4 @@ class InteractionConversationService final {
       const std::string& session_id) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

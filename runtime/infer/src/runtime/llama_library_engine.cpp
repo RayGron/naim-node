@@ -5,7 +5,7 @@
 #include <mutex>
 #include <stdexcept>
 
-namespace comet::infer {
+namespace naim::infer {
 
 namespace {
 
@@ -188,4 +188,4 @@ std::string LlamaLibraryEngine::TokenToPiece(llama_token token) const {
   return std::string(buffer.data(), static_cast<std::size_t>(n));
 }
 
-}  // namespace comet::infer
+}  // namespace naim::infer

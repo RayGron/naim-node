@@ -5,7 +5,7 @@
 #include <optional>
 #include <string>
 
-namespace comet::browsing {
+namespace naim::browsing {
 
 struct CefRenderedDocument {
   std::string final_url;
@@ -55,4 +55,4 @@ class CefBrowserBackend final {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace comet::browsing
+}  // namespace naim::browsing

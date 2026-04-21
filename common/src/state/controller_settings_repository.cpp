@@ -1,8 +1,8 @@
-#include "comet/state/controller_settings_repository.h"
+#include "naim/state/controller_settings_repository.h"
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
@@ -56,4 +56,4 @@ bool ControllerSettingsRepository::DeleteSetting(const std::string& setting_key)
   return sqlite3_changes(db_) == 1;
 }
 
-}  // namespace comet
+}  // namespace naim

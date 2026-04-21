@@ -10,7 +10,7 @@
 #include "runtime/infer_runtime_types.h"
 #include "runtime/llama_library_engine.h"
 
-namespace comet::infer {
+namespace naim::infer {
 
 class LocalHttpServer final {
  public:
@@ -48,4 +48,4 @@ class LocalHttpServer final {
   int listen_fd_ = -1;
 };
 
-}  // namespace comet::infer
+}  // namespace naim::infer

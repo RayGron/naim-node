@@ -5,12 +5,14 @@
 #include "infra/controller_action.h"
 #include "http/controller_http_server_support.h"
 #include "interaction/interaction_conversation_service.h"
+#include "interaction/interaction_request_contract_support.h"
+#include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_service.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
 using nlohmann::json;
 
-namespace comet::controller {
+namespace naim::controller {
 namespace {
 
 std::string LowercaseCopy(const std::string& value) {
@@ -70,6 +72,17 @@ bool IsPlaneBrowsingRequest(const std::string& path) {
   return ExtractPlaneFeatureRequestName(path, "/webgateway").has_value();
 }
 
+bool IsHostdStorageRoleRequest(const std::string& path) {
+  if (!ControllerHttpServerSupport::StartsWithPath(
+          path,
+          "/api/v1/hostd/hosts/")) {
+    return false;
+  }
+  const auto suffix_pos = path.rfind("/storage-role");
+  return suffix_pos != std::string::npos &&
+         suffix_pos + std::string("/storage-role").size() == path.size();
+}
+
 int InteractionErrorStatusCode(const InteractionValidationError& error) {
   if (error.code == "model_mismatch" ||
       error.code == "skills_disabled" ||
@@ -117,6 +130,8 @@ ControllerHttpRouter::ControllerHttpRouter(
 HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
     const HttpRequest& request) const {
   const InteractionContractResponder interaction_responder;
+  const InteractionRequestContractSupport request_contract_support;
+  const InteractionRequestIdentitySupport request_identity_support;
   const std::string remainder =
       request.path.substr(std::string("/api/v1/planes/").size());
   if (remainder.empty()) {
@@ -128,7 +143,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       interaction_status_pos +
               std::string("/interaction/status").size() ==
           remainder.size()) {
-    const std::string request_id = GenerateInteractionRequestId();
+    const std::string request_id = request_identity_support.GenerateRequestId();
     const std::string plane_name = remainder.substr(0, interaction_status_pos);
     const auto build_standalone_error =
         [&](int status_code,
@@ -153,7 +168,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                   served_model_name,
                   active_model_id,
                   details),
-              BuildInteractionResponseHeaders(request_id));
+              request_contract_support.BuildInteractionResponseHeaders(request_id));
         };
     if (request.method != "GET") {
       return build_standalone_error(
@@ -166,7 +181,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
       if (resolution.desired_state.protected_plane) {
-        comet::ControllerStore store(db_path_);
+        naim::ControllerStore store(db_path_);
         store.Initialize();
         if (!auth_support_
                  .AuthenticateProtectedPlaneRequest(store, request, plane_name)
@@ -180,12 +195,13 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       }
       json payload = resolution.status_payload;
       payload["request_id"] = request_id;
-      payload["comet"] =
-          BuildInteractionContractMetadata(resolution, request_id);
+      payload["naim"] =
+          request_contract_support.BuildInteractionContractMetadata(
+              resolution, request_id);
       return deps_.build_json_response(
           200,
           payload,
-          BuildInteractionResponseHeaders(request_id));
+          request_contract_support.BuildInteractionResponseHeaders(request_id));
     } catch (const std::exception& error) {
       return build_standalone_error(
           404,
@@ -200,7 +216,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       interaction_models_pos +
               std::string("/interaction/models").size() ==
           remainder.size()) {
-    const std::string request_id = GenerateInteractionRequestId();
+    const std::string request_id = request_identity_support.GenerateRequestId();
     const std::string plane_name = remainder.substr(0, interaction_models_pos);
     const auto build_standalone_error =
         [&](int status_code,
@@ -225,7 +241,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                   served_model_name,
                   active_model_id,
                   details),
-              BuildInteractionResponseHeaders(request_id));
+              request_contract_support.BuildInteractionResponseHeaders(request_id));
         };
     if (request.method != "GET") {
       return build_standalone_error(
@@ -238,7 +254,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
       if (resolution.desired_state.protected_plane) {
-        comet::ControllerStore store(db_path_);
+        naim::ControllerStore store(db_path_);
         store.Initialize();
         if (!auth_support_
                  .AuthenticateProtectedPlaneRequest(store, request, plane_name)
@@ -271,7 +287,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       interaction_sessions_pos +
               std::string("/interaction/sessions").size() ==
           remainder.size()) {
-    const std::string request_id = GenerateInteractionRequestId();
+    const std::string request_id = request_identity_support.GenerateRequestId();
     const std::string plane_name = remainder.substr(0, interaction_sessions_pos);
     const auto build_standalone_error =
         [&](int status_code,
@@ -286,7 +302,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                   message,
                   retryable,
                   plane_name),
-              BuildInteractionResponseHeaders(request_id));
+              request_contract_support.BuildInteractionResponseHeaders(request_id));
         };
     if (request.method != "GET") {
       return build_standalone_error(
@@ -298,7 +314,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
     try {
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
-      comet::ControllerStore store(db_path_);
+      naim::ControllerStore store(db_path_);
       store.Initialize();
       const auto authenticated =
           resolution.desired_state.protected_plane
@@ -317,11 +333,13 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
           db_path_, plane_name, authenticated->first.id);
       json response = payload;
       response["request_id"] = request_id;
-      response["comet"] = BuildInteractionContractMetadata(resolution, request_id);
+      response["naim"] =
+          request_contract_support.BuildInteractionContractMetadata(
+              resolution, request_id);
       return deps_.build_json_response(
           200,
           response,
-          BuildInteractionResponseHeaders(request_id));
+          request_contract_support.BuildInteractionResponseHeaders(request_id));
     } catch (const std::exception& error) {
       return build_standalone_error(
           404,
@@ -337,7 +355,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
           remainder.size() &&
       remainder.rfind("/interaction/sessions/", interaction_sessions_pos) ==
           interaction_sessions_pos) {
-    const std::string request_id = GenerateInteractionRequestId();
+    const std::string request_id = request_identity_support.GenerateRequestId();
     const std::string plane_name = remainder.substr(0, interaction_sessions_pos);
     const std::string session_id = remainder.substr(
         interaction_sessions_pos + std::string("/interaction/sessions/").size());
@@ -354,7 +372,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                   message,
                   retryable,
                   plane_name),
-              BuildInteractionResponseHeaders(request_id));
+              request_contract_support.BuildInteractionResponseHeaders(request_id));
         };
     if (request.method != "GET" && request.method != "DELETE") {
       return build_standalone_error(
@@ -366,7 +384,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
     try {
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
-      comet::ControllerStore store(db_path_);
+      naim::ControllerStore store(db_path_);
       store.Initialize();
       const auto authenticated =
           resolution.desired_state.protected_plane
@@ -398,9 +416,11 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                 {"plane_name", plane_name},
                 {"session_id", session_id},
                 {"status", "deleted"},
-                {"comet", BuildInteractionContractMetadata(resolution, request_id)},
+                {"naim",
+                 request_contract_support.BuildInteractionContractMetadata(
+                     resolution, request_id)},
             },
-            BuildInteractionResponseHeaders(request_id));
+            request_contract_support.BuildInteractionResponseHeaders(request_id));
       }
       const auto payload = conversation_service.BuildSessionDetailPayload(
           db_path_, plane_name, authenticated->first.id, session_id);
@@ -413,12 +433,12 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       }
       json response = *payload;
       response["request_id"] = request_id;
-      response["comet"] = BuildInteractionContractMetadata(
+      response["naim"] = request_contract_support.BuildInteractionContractMetadata(
           resolution, request_id, session_id);
       return deps_.build_json_response(
           200,
           response,
-          BuildInteractionResponseHeaders(request_id));
+          request_contract_support.BuildInteractionResponseHeaders(request_id));
     } catch (const std::exception& error) {
       return build_standalone_error(
           404,
@@ -432,7 +452,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
       interaction_chat_pos +
               std::string("/interaction/chat/completions").size() ==
           remainder.size()) {
-    const std::string request_id = GenerateInteractionRequestId();
+    const std::string request_id = request_identity_support.GenerateRequestId();
     const std::string plane_name = remainder.substr(0, interaction_chat_pos);
     const auto build_standalone_error =
         [&](int status_code,
@@ -457,7 +477,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                   served_model_name,
                   active_model_id,
                   details),
-              BuildInteractionResponseHeaders(request_id));
+              request_contract_support.BuildInteractionResponseHeaders(request_id));
         };
     if (request.method != "POST") {
       return build_standalone_error(
@@ -469,7 +489,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
     try {
       const PlaneInteractionResolution resolution =
           interaction_service_.ResolvePlane(db_path_, plane_name);
-      comet::ControllerStore store(db_path_);
+      naim::ControllerStore store(db_path_);
       store.Initialize();
       const auto build_plane_error =
           [&](int status_code,
@@ -486,7 +506,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
                     message,
                     retryable,
                     details),
-                BuildInteractionResponseHeaders(request_id));
+                request_contract_support.BuildInteractionResponseHeaders(request_id));
           };
       const auto authenticated =
           resolution.desired_state.protected_plane
@@ -620,6 +640,27 @@ HttpResponse ControllerHttpRouter::HandleRequest(
         health_service_.BuildPayload(db_path_),
           {});
   }
+  if (IsHostdStorageRoleRequest(request.path)) {
+    try {
+      naim::ControllerStore store(db_path_);
+      store.Initialize();
+      if (!auth_support_.RequireControllerAdminUser(store, request).has_value()) {
+        return deps_.build_json_response(
+            401,
+            json{{"status", "unauthorized"},
+                 {"message", "admin authentication required"}},
+            {{"Set-Cookie",
+              auth_support_.ClearSessionCookieHeader(request)}});
+      }
+    } catch (const std::exception& error) {
+      return deps_.build_json_response(
+          500,
+          json{{"status", "internal_error"},
+               {"message", error.what()},
+               {"path", request.path}},
+          {});
+    }
+  }
   for (const auto& handler : pre_auth_handlers_) {
     if (const auto response =
             handler->TryHandle(db_path_, default_artifacts_root_, request);
@@ -664,7 +705,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
     }
     if (!interaction_request && !skills_request && !browsing_request) {
       try {
-        comet::ControllerStore store(db_path_);
+        naim::ControllerStore store(db_path_);
         store.Initialize();
         if (!auth_support_
                  .AuthenticateControllerUserSession(store, request)
@@ -686,7 +727,7 @@ HttpResponse ControllerHttpRouter::HandleRequest(
       }
     } else if (skills_request || browsing_request) {
       try {
-        comet::ControllerStore store(db_path_);
+        naim::ControllerStore store(db_path_);
         store.Initialize();
         const auto plane_name = skills_request
                                     ? ExtractPlaneFeatureRequestName(request.path, "/skills")
@@ -777,4 +818,4 @@ HttpResponse ControllerHttpRouter::HandleRequest(
       {});
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

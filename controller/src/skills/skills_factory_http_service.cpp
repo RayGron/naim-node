@@ -4,7 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -251,4 +251,4 @@ std::optional<HttpResponse> SkillsFactoryHttpService::HandleRequestLocal(
   }
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

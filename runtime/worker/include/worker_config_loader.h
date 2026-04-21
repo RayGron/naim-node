@@ -2,7 +2,7 @@
 
 #include "worker_config.h"
 
-namespace comet::worker {
+namespace naim::worker {
 
 class WorkerConfigLoader final {
  public:
@@ -15,4 +15,4 @@ class WorkerConfigLoader final {
   static int GetEnvIntOr(const char* name, int fallback);
 };
 
-}  // namespace comet::worker
+}  // namespace naim::worker

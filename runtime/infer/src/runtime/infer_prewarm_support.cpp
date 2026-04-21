@@ -24,7 +24,7 @@
 #include "runtime/infer_control_support.h"
 #include "runtime/infer_replica_support.h"
 
-namespace comet::infer::prewarm_support {
+namespace naim::infer::prewarm_support {
 
 namespace fs = std::filesystem;
 using control_support::BuildControlPaths;
@@ -345,4 +345,4 @@ PrewarmState PrewarmReadyReplicaLeaders(const RuntimeConfig& config) {
   return state;
 }
 
-}  // namespace comet::infer::prewarm_support
+}  // namespace naim::infer::prewarm_support

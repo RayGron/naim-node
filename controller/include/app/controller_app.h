@@ -5,7 +5,7 @@
 
 #include "app/controller_command_line.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerApp final {
  public:
@@ -22,4 +22,4 @@ class ControllerApp final {
   ControllerCommandLine cli_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

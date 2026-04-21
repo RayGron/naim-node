@@ -6,7 +6,7 @@
 
 #include "http/controller_http_transport.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string ControllerNetworkManager::LowercaseCopy(const std::string& value) {
   std::string lowered;
@@ -18,19 +18,19 @@ std::string ControllerNetworkManager::LowercaseCopy(const std::string& value) {
 }
 
 std::string ControllerNetworkManager::SocketErrorMessage() {
-  return comet::platform::LastSocketErrorMessage();
+  return naim::platform::LastSocketErrorMessage();
 }
 
 void ControllerNetworkManager::CloseSocket(const SocketHandle fd) {
-  if (comet::platform::IsSocketValid(fd)) {
-    comet::platform::CloseSocket(fd);
+  if (naim::platform::IsSocketValid(fd)) {
+    naim::platform::CloseSocket(fd);
   }
 }
 
 void ControllerNetworkManager::ShutdownAndCloseSocket(const SocketHandle fd) {
-  if (comet::platform::IsSocketValid(fd)) {
-    comet::platform::ShutdownSocket(fd);
-    comet::platform::CloseSocket(fd);
+  if (naim::platform::IsSocketValid(fd)) {
+    naim::platform::ShutdownSocket(fd);
+    naim::platform::CloseSocket(fd);
   }
 }
 
@@ -146,10 +146,10 @@ ControllerNetworkManager::SocketHandle
 ControllerNetworkManager::CreateListenSocket(
     const std::string& host,
     const int port) {
-  comet::platform::EnsureSocketsInitialized();
+  naim::platform::EnsureSocketsInitialized();
 
   const SocketHandle fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (!comet::platform::IsSocketValid(fd)) {
+  if (!naim::platform::IsSocketValid(fd)) {
     throw std::runtime_error("failed to create server socket");
   }
 
@@ -190,4 +190,4 @@ ControllerNetworkManager::CreateListenSocket(
   return fd;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

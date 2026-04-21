@@ -8,16 +8,16 @@
 #include "backend/hostd_backend_factory.h"
 #include "cli/hostd_command_line.h"
 #include "observation/hostd_observation_service.h"
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 class IHostdAssignmentSupport {
  public:
   virtual ~IHostdAssignmentSupport() = default;
 
-  virtual comet::DesiredState RebaseStateForRuntimeRoot(
-      comet::DesiredState state,
+  virtual naim::DesiredState RebaseStateForRuntimeRoot(
+      naim::DesiredState state,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root) const = 0;
   virtual nlohmann::json BuildAssignmentProgressPayload(
@@ -34,22 +34,23 @@ class IHostdAssignmentSupport {
   virtual std::vector<std::string> ParseTaggedCsv(
       const std::string& tagged_message,
       const std::string& tag) const = 0;
-  virtual comet::HostObservation BuildObservedStateSnapshot(
+  virtual naim::HostObservation BuildObservedStateSnapshot(
       const std::string& node_name,
+      const std::string& storage_root,
       const std::string& state_root,
-      comet::HostObservationStatus status,
+      naim::HostObservationStatus status,
       const std::string& status_message,
       const std::optional<int>& assignment_id = std::nullopt) const = 0;
   virtual std::map<std::string, int> CaptureServiceHostPids(
       const std::vector<std::string>& service_names) const = 0;
   virtual bool VerifyEvictionAssignment(
-      const comet::DesiredState& desired_state,
+      const naim::DesiredState& desired_state,
       const std::string& node_name,
       const std::string& state_root,
       const std::string& tagged_message,
       const std::map<std::string, int>& expected_victim_host_pids) const = 0;
   virtual void ApplyDesiredNodeState(
-      const comet::DesiredState& desired_node_state,
+      const naim::DesiredState& desired_node_state,
       const std::string& artifacts_root,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root,
@@ -59,6 +60,21 @@ class IHostdAssignmentSupport {
       const std::optional<int>& desired_generation,
       const std::optional<int>& assignment_id,
       HostdBackend* backend) const = 0;
+  virtual void DownloadModelLibraryArtifacts(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const = 0;
+  virtual void ReadModelArtifactChunk(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const = 0;
+  virtual void BuildModelArtifactManifest(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const = 0;
   virtual void ShowDemoOps(
       const std::string& node_name,
       const std::string& storage_root,
@@ -115,6 +131,7 @@ class HostdAssignmentService {
       const std::optional<std::string>& controller_url,
       const std::optional<std::string>& host_private_key_path,
       const std::optional<std::string>& controller_fingerprint,
+      const std::optional<std::string>& onboarding_key,
       const std::string& node_name,
       const std::string& storage_root,
       const std::optional<std::string>& runtime_root,
@@ -127,4 +144,4 @@ class HostdAssignmentService {
   const HostdObservationService& observation_service_;
 };
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

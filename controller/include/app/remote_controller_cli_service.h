@@ -6,7 +6,7 @@
 #include "http/controller_http_transport.h"
 #include "app/controller_service_interfaces.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class RemoteControllerCliService : public IRemoteControllerCliService {
  public:
@@ -20,4 +20,4 @@ class RemoteControllerCliService : public IRemoteControllerCliService {
   int EmitRemoteControllerActionPayload(const nlohmann::json& payload) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

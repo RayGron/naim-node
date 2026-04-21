@@ -33,7 +33,7 @@ class TempDir final {
  public:
   TempDir() {
     path_ = std::filesystem::temp_directory_path() /
-            ("comet-webgateway-tests-" + std::to_string(getpid()) + "-" +
+            ("naim-webgateway-tests-" + std::to_string(getpid()) + "-" +
              std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(path_);
   }
@@ -65,7 +65,7 @@ std::vector<nlohmann::json> ReadAuditLog(const std::filesystem::path& audit_path
 }
 
 void TestPolicyParsing() {
-  const auto policy = comet::browsing::BrowsingServer::ParsePolicyJson(
+  const auto policy = naim::browsing::BrowsingServer::ParsePolicyJson(
       R"({"browser_session_enabled":true,"allowed_domains":["example.com"],"blocked_domains":["evil.com"],"max_search_results":5,"max_fetch_bytes":4096})");
   Expect(policy.browser_session_enabled, "policy should parse browser_session_enabled");
   Expect(policy.allowed_domains.size() == 1, "policy should parse allowed domains");
@@ -75,32 +75,32 @@ void TestPolicyParsing() {
 }
 
 void TestSafeUrlValidation() {
-  comet::browsing::BrowsingPolicy policy;
+  naim::browsing::BrowsingPolicy policy;
   policy.allowed_domains = {"example.com"};
   std::string reason;
   Expect(
-      comet::browsing::BrowsingServer::IsSafeBrowsingUrl(
+      naim::browsing::BrowsingServer::IsSafeBrowsingUrl(
           "https://docs.example.com/path", policy, &reason, nullptr),
       "public allowed URL should pass");
   Expect(
-      !comet::browsing::BrowsingServer::IsSafeBrowsingUrl(
+      !naim::browsing::BrowsingServer::IsSafeBrowsingUrl(
           "http://127.0.0.1:8080/", policy, &reason, nullptr),
       "private IP URL should be rejected");
   Expect(
-      !comet::browsing::BrowsingServer::IsSafeBrowsingUrl(
+      !naim::browsing::BrowsingServer::IsSafeBrowsingUrl(
           "https://evil.com", policy, &reason, nullptr),
       "non-allowlisted domain should be rejected");
 }
 
 void TestSearchParsing() {
-  comet::browsing::BrowsingPolicy policy;
+  naim::browsing::BrowsingPolicy policy;
   const std::string rss_xml =
       R"(<?xml version="1.0" encoding="utf-8" ?><rss version="2.0"><channel>
       <item><title>OpenAI API Platform</title><link>https://openai.com/api/</link><description>Official API platform.</description><pubDate>Sun, 05 Apr 2026 10:00:00 GMT</pubDate></item>
       <item><title>Blocked Result</title><link>https://evil.com/post</link><description>Should be filtered.</description></item>
       <item><title>Second OpenAI Result</title><link>https://developers.openai.com/api/</link><description>Developer docs.</description></item>
       </channel></rss>)";
-  const auto results = comet::browsing::BrowsingServer::ParseBingRssResults(
+  const auto results = naim::browsing::BrowsingServer::ParseBingRssResults(
       rss_xml,
       "openai api platform docs",
       policy,
@@ -111,7 +111,7 @@ void TestSearchParsing() {
       std::all_of(
           results.begin(),
           results.end(),
-          [](const comet::browsing::SearchResult& result) {
+          [](const naim::browsing::SearchResult& result) {
             const bool openai_domain =
                 result.domain == "openai.com" ||
                 (result.domain.size() > std::string("openai.com").size() &&
@@ -123,7 +123,7 @@ void TestSearchParsing() {
       std::any_of(
           results.begin(),
           results.end(),
-          [](const comet::browsing::SearchResult& result) {
+          [](const naim::browsing::SearchResult& result) {
             return result.published_at.has_value();
           }),
       "search parser should preserve pubDate");
@@ -131,14 +131,14 @@ void TestSearchParsing() {
       std::any_of(
           results.begin(),
           results.end(),
-          [](const comet::browsing::SearchResult& result) {
+          [](const naim::browsing::SearchResult& result) {
             return result.url == "https://developers.openai.com/api/";
           }),
       "search parser should keep the developer docs result");
 }
 
 void TestRenderedSearchParsing() {
-  comet::browsing::BrowsingPolicy policy;
+  naim::browsing::BrowsingPolicy policy;
   const std::string html =
       R"(<html><body><ol id="b_results">
       <li class="b_algo">
@@ -150,7 +150,7 @@ void TestRenderedSearchParsing() {
         <div class="b_caption"><p>Should be filtered by requested domain.</p></div>
       </li>
       </ol></body></html>)";
-  const auto results = comet::browsing::BrowsingServer::ParseBingHtmlResults(
+  const auto results = naim::browsing::BrowsingServer::ParseBingHtmlResults(
       html,
       "reddit example discussion",
       policy,
@@ -166,14 +166,14 @@ void TestRenderedSearchParsing() {
 }
 
 void TestSearchRelevanceFiltering() {
-  comet::browsing::BrowsingPolicy policy;
+  naim::browsing::BrowsingPolicy policy;
   const std::string rss_xml =
       R"(<?xml version="1.0" encoding="utf-8" ?><rss version="2.0"><channel>
       <item><title>ChatGPT Israel Packages</title><link>https://chatgpt.co.il/packages</link><description>Hebrew ChatGPT packages and plans.</description></item>
       <item><title>Bitcoin Price Trend This Week</title><link>https://www.coindesk.com/markets/bitcoin-price-weekly-trend</link><description>Bitcoin market trend and seven day price move.</description></item>
       <item><title>AI Pedia Chat Tools</title><link>https://aipedia.co.il/chat-tools</link><description>Chat assistant catalog.</description></item>
       </channel></rss>)";
-  const auto results = comet::browsing::BrowsingServer::ParseBingRssResults(
+  const auto results = naim::browsing::BrowsingServer::ParseBingRssResults(
       rss_xml,
       "bitcoin price trend last 7 days",
       policy,
@@ -187,7 +187,7 @@ void TestSearchRelevanceFiltering() {
 }
 
 void TestRenderedSearchRelevanceFiltering() {
-  comet::browsing::BrowsingPolicy policy;
+  naim::browsing::BrowsingPolicy policy;
   const std::string html =
       R"(<html><body><ol id="b_results">
       <li class="b_algo">
@@ -199,7 +199,7 @@ void TestRenderedSearchRelevanceFiltering() {
         <div class="b_caption"><p>Bitcoin price, market cap, and 7 day performance.</p></div>
       </li>
       </ol></body></html>)";
-  const auto results = comet::browsing::BrowsingServer::ParseBingHtmlResults(
+  const auto results = naim::browsing::BrowsingServer::ParseBingHtmlResults(
       html,
       "bitcoin price trend 7 day",
       policy,
@@ -212,7 +212,7 @@ void TestRenderedSearchRelevanceFiltering() {
 }
 
 void TestCanonicalCryptoMarketDiscoveryResults() {
-  const auto results = comet::browsing::BrowsingServer::BuildCanonicalSearchResults(
+  const auto results = naim::browsing::BrowsingServer::BuildCanonicalSearchResults(
       "bitcoin price last 7 days momentum",
       {"coingecko.com", "coinmarketcap.com", "tradingview.com", "finance.yahoo.com"},
       4);
@@ -233,14 +233,14 @@ void TestCanonicalCryptoMarketDiscoveryResults() {
       std::all_of(
           results.begin(),
           results.end(),
-          [](const comet::browsing::SearchResult& result) {
+          [](const naim::browsing::SearchResult& result) {
             return result.backend == "broker_search" && !result.rendered && result.score >= 0.8;
           }),
       "canonical crypto discovery should return broker search metadata");
 }
 
 void TestCanonicalCryptoComparisonQueryPrefersLeadAsset() {
-  const auto results = comet::browsing::BrowsingServer::BuildCanonicalSearchResults(
+  const auto results = naim::browsing::BrowsingServer::BuildCanonicalSearchResults(
       "проверь текущую цену eth и коротко сравни изменение eth и btc за последние 24 часа",
       {"coingecko.com", "coinmarketcap.com", "tradingview.com", "finance.yahoo.com"},
       4);
@@ -260,7 +260,7 @@ void TestCanonicalCryptoComparisonQueryPrefersLeadAsset() {
 }
 
 void TestCanonicalFearGreedDiscoveryResult() {
-  const auto results = comet::browsing::BrowsingServer::BuildCanonicalSearchResults(
+  const auto results = naim::browsing::BrowsingServer::BuildCanonicalSearchResults(
       "fear and greed index crypto today",
       {"alternative.me", "coingecko.com"},
       3);
@@ -271,13 +271,13 @@ void TestCanonicalFearGreedDiscoveryResult() {
 }
 
 void TestTickerNormalizationAvoidsAmbiguousResults() {
-  comet::browsing::BrowsingPolicy policy;
+  naim::browsing::BrowsingPolicy policy;
   const std::string rss_xml =
       R"(<?xml version="1.0" encoding="utf-8" ?><rss version="2.0"><channel>
       <item><title>BTC Trauma Centre</title><link>https://example.com/btc-trauma</link><description>Brain trauma rehabilitation clinic.</description></item>
       <item><title>Bitcoin Price Trend</title><link>https://www.coingecko.com/en/coins/bitcoin</link><description>Bitcoin market price and trend.</description></item>
       </channel></rss>)";
-  const auto results = comet::browsing::BrowsingServer::ParseBingRssResults(
+  const auto results = naim::browsing::BrowsingServer::ParseBingRssResults(
       rss_xml,
       "btc price today",
       policy,
@@ -290,8 +290,8 @@ void TestTickerNormalizationAvoidsAmbiguousResults() {
 }
 
 void TestFetchSanitization() {
-  comet::browsing::BrowsingPolicy policy;
-  const auto fetched = comet::browsing::BrowsingServer::SanitizeFetchedDocument(
+  naim::browsing::BrowsingPolicy policy;
+  const auto fetched = naim::browsing::BrowsingServer::SanitizeFetchedDocument(
       "https://example.com",
       "https://example.com",
       "text/html; charset=utf-8",
@@ -312,14 +312,14 @@ void TestFetchSanitization() {
 void TestSessionCleanupAndAuditLog() {
   TempDir temp_dir;
 
-  comet::browsing::BrowsingRuntimeConfig config;
+  naim::browsing::BrowsingRuntimeConfig config;
   config.state_root = temp_dir.path();
   config.status_path = temp_dir.path() / "status.json";
   config.ready_path = temp_dir.path() / "ready";
   config.policy.browser_session_enabled = true;
   config.policy.rendered_browser_enabled = false;
 
-  comet::browsing::BrowsingServer server(std::move(config));
+  naim::browsing::BrowsingServer server(std::move(config));
 
   const auto created = server.CreateSession(nlohmann::json{{"confirmed", true}});
   const std::string session_id = created.at("session_id").get<std::string>();
@@ -355,14 +355,14 @@ void TestSessionCleanupAndAuditLog() {
 void TestUnsupportedBrowserActionFailsSafely() {
   TempDir temp_dir;
 
-  comet::browsing::BrowsingRuntimeConfig config;
+  naim::browsing::BrowsingRuntimeConfig config;
   config.state_root = temp_dir.path();
   config.status_path = temp_dir.path() / "status.json";
   config.ready_path = temp_dir.path() / "ready";
   config.policy.browser_session_enabled = true;
   config.policy.rendered_browser_enabled = false;
 
-  comet::browsing::BrowsingServer server(std::move(config));
+  naim::browsing::BrowsingServer server(std::move(config));
   const auto created = server.CreateSession(nlohmann::json{{"confirmed", true}});
   const std::string session_id = created.at("session_id").get<std::string>();
 
@@ -382,7 +382,7 @@ void TestUnsupportedBrowserActionFailsSafely() {
 }
 
 void TestWebGatewayDisabledContextDefaults() {
-  const auto context = comet::browsing::BrowsingServer::BuildWebGatewayDisabledContext();
+  const auto context = naim::browsing::BrowsingServer::BuildWebGatewayDisabledContext();
   Expect(context.at("mode").get<std::string>() == "disabled",
          "disabled WebGateway context should expose disabled mode");
   Expect(context.at("decision").get<std::string>() == "disabled",
@@ -394,14 +394,14 @@ void TestWebGatewayDisabledContextDefaults() {
 void TestWebGatewayResolveBlocksRestrictedTargets() {
   TempDir temp_dir;
 
-  comet::browsing::BrowsingRuntimeConfig config;
+  naim::browsing::BrowsingRuntimeConfig config;
   config.state_root = temp_dir.path();
   config.status_path = temp_dir.path() / "status.json";
   config.ready_path = temp_dir.path() / "ready";
   config.policy.browser_session_enabled = true;
   config.policy.rendered_browser_enabled = false;
 
-  comet::browsing::BrowsingServer server(std::move(config));
+  naim::browsing::BrowsingServer server(std::move(config));
   const auto response = server.HandleWebGatewayResolvePayload(
       nlohmann::json{
           {"conversation_slice",
@@ -424,14 +424,14 @@ void TestWebGatewayResolveBlocksRestrictedTargets() {
 void TestWebGatewayReviewBlocksLocalAccessSuggestions() {
   TempDir temp_dir;
 
-  comet::browsing::BrowsingRuntimeConfig config;
+  naim::browsing::BrowsingRuntimeConfig config;
   config.state_root = temp_dir.path();
   config.status_path = temp_dir.path() / "status.json";
   config.ready_path = temp_dir.path() / "ready";
   config.policy.browser_session_enabled = true;
   config.policy.rendered_browser_enabled = false;
 
-  comet::browsing::BrowsingServer server(std::move(config));
+  naim::browsing::BrowsingServer server(std::move(config));
   const auto response = server.HandleWebGatewayReviewPayload(
       nlohmann::json{
           {"decision", "blocked"},

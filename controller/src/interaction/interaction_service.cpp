@@ -1,993 +1,25 @@
 #include "interaction/interaction_service.h"
 
-#include "browsing/interaction_browsing_service.h"
 #include "browsing/plane_browsing_service.h"
+#include "interaction/interaction_completion_policy_support.h"
+#include "interaction/interaction_model_identity_builder.h"
+#include "interaction/interaction_request_contract_support.h"
+#include "interaction/interaction_request_identity_support.h"
+#include "interaction/interaction_replica_group_summary_builder.h"
+#include "interaction/interaction_runtime_text_support.h"
+#include "interaction/interaction_text_post_processor.h"
+#include "interaction/interaction_upstream_event_parser.h"
 #include <algorithm>
-#include <atomic>
 #include <array>
-#include <cctype>
 #include <chrono>
 #include <set>
-#include <sstream>
-#include <string_view>
 #include <thread>
 
 #include "skills/plane_skills_service.h"
-#include "comet/runtime/model_adapter.h"
-#include "comet/state/worker_group_topology.h"
+#include "naim/runtime/model_adapter.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet::controller {
-
-namespace {
-
-constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
-constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
-
-std::string ReadJsonStringOrEmpty(
-    const nlohmann::json& payload,
-    std::string_view key) {
-  const auto found = payload.find(std::string(key));
-  if (found == payload.end() || found->is_null() || !found->is_string()) {
-    return {};
-  }
-  return found->get<std::string>();
-}
-
-std::string TrimCopy(const std::string& value) {
-  std::size_t start = 0;
-  while (start < value.size() &&
-         std::isspace(static_cast<unsigned char>(value[start])) != 0) {
-    ++start;
-  }
-  std::size_t end = value.size();
-  while (end > start &&
-         std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
-    --end;
-  }
-  return value.substr(start, end - start);
-}
-
-std::string NormalizeInteractionText(const std::string& value) {
-  std::string normalized;
-  normalized.reserve(value.size());
-  for (unsigned char ch : value) {
-    if (ch == '-') {
-      normalized.push_back('_');
-    } else {
-      normalized.push_back(static_cast<char>(std::tolower(ch)));
-    }
-  }
-  return normalized;
-}
-
-std::string LowercaseCopy(const std::string& value) {
-  std::string lowered;
-  lowered.reserve(value.size());
-  for (unsigned char ch : value) {
-    lowered.push_back(static_cast<char>(std::tolower(ch)));
-  }
-  return lowered;
-}
-
-bool DecodeAvailableChunkedHttpBody(
-    std::string& encoded,
-    std::string* decoded,
-    bool* stream_finished) {
-  bool progressed = false;
-  while (true) {
-    const std::size_t line_end = encoded.find("\r\n");
-    if (line_end == std::string::npos) {
-      return progressed;
-    }
-    std::string chunk_size_text = encoded.substr(0, line_end);
-    const std::size_t extensions = chunk_size_text.find(';');
-    if (extensions != std::string::npos) {
-      chunk_size_text = chunk_size_text.substr(0, extensions);
-    }
-    chunk_size_text = TrimCopy(chunk_size_text);
-    std::size_t chunk_size = 0;
-    try {
-      chunk_size =
-          static_cast<std::size_t>(std::stoull(chunk_size_text, nullptr, 16));
-    } catch (const std::exception&) {
-      throw std::runtime_error(
-          "invalid HTTP chunk size '" + chunk_size_text + "'");
-    }
-
-    const std::size_t chunk_data_begin = line_end + 2;
-    if (chunk_size == 0) {
-      if (encoded.size() < chunk_data_begin + 2) {
-        return progressed;
-      }
-      encoded.erase(0, chunk_data_begin + 2);
-      *stream_finished = true;
-      return true;
-    }
-
-    if (encoded.size() < chunk_data_begin + chunk_size + 2) {
-      return progressed;
-    }
-    decoded->append(encoded, chunk_data_begin, chunk_size);
-    encoded.erase(0, chunk_data_begin + chunk_size + 2);
-    progressed = true;
-  }
-}
-
-comet::runtime::ModelIdentity BuildResolutionModelIdentity(
-    const PlaneInteractionResolution& resolution) {
-  comet::runtime::ModelIdentity identity;
-  identity.model_id = ReadJsonStringOrEmpty(resolution.status_payload, "active_model_id");
-  identity.served_model_name =
-      ReadJsonStringOrEmpty(resolution.status_payload, "served_model_name");
-  if (resolution.runtime_status.has_value()) {
-    if (identity.model_id.empty()) {
-      identity.model_id = resolution.runtime_status->active_model_id;
-    }
-    if (identity.served_model_name.empty()) {
-      identity.served_model_name = resolution.runtime_status->active_served_model_name;
-    }
-    identity.cached_local_model_path = resolution.runtime_status->cached_local_model_path;
-    identity.cached_runtime_model_path = resolution.runtime_status->model_path;
-    identity.runtime_profile = resolution.runtime_status->active_runtime_profile;
-  }
-  return identity;
-}
-
-int ClampInteractionPolicyValue(int value, int minimum, int maximum) {
-  return std::max(minimum, std::min(value, maximum));
-}
-
-std::string LastUserMessageContent(const nlohmann::json& payload) {
-  if (!payload.contains("messages") || !payload.at("messages").is_array()) {
-    return "";
-  }
-  const auto& messages = payload.at("messages");
-  for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-    if ((*it).is_object() &&
-        (*it).value("role", std::string{}) == "user" &&
-        (*it).contains("content") &&
-        (*it).at("content").is_string()) {
-      return (*it).at("content").get<std::string>();
-    }
-  }
-  return "";
-}
-
-bool ContainsAnySubstring(
-    const std::string& haystack,
-    const std::vector<std::string>& needles) {
-  for (const auto& needle : needles) {
-    if (!needle.empty() && haystack.find(needle) != std::string::npos) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool LooksLikeLongFormTaskRequest(const std::string& text) {
-  const std::string normalized = NormalizeInteractionText(text);
-  if (normalized.size() >= 280) {
-    return true;
-  }
-  static const std::vector<std::string> explicit_long_markers = {
-      "несколько сообщений", "разбивай на несколько сообщений",
-      "разбей на несколько сообщений", "продолжай в нескольких сообщениях",
-      "in several messages", "multiple messages",
-      "split across multiple messages", "continue in multiple messages",
-      "2048 слов", "1024 слов", "1536 слов", "2048 words", "1024 words",
-      "1536 words", "2048 токен", "1024 токен", "2048 token", "1024 token",
-  };
-  if (ContainsAnySubstring(normalized, explicit_long_markers)) {
-    return true;
-  }
-  static const std::vector<std::string> long_form_keywords = {
-      "напиши историю", "напиши рассказ", "напиши эссе", "напиши статью",
-      "подробный план", "подробно опиши", "развернуто опиши", "детально опиши",
-      "историю", "рассказ", "эссе", "статью", "гайд", "руководство",
-      "write a story", "write an essay", "write an article", "write a guide",
-      "detailed plan", "detailed analysis", "long-form", "long form",
-      "структуру проекта", "архитектуру проекта", "изучи весь проект",
-      "объясни проект", "проследи путь", "по всему репозиторию",
-      "repository-wide", "repo-wide", "entire repository", "whole repository",
-      "cross-file", "cross file", "project structure", "project architecture",
-      "trace the path", "explain the repository", "analyze the whole project",
-  };
-  return ContainsAnySubstring(normalized, long_form_keywords);
-}
-
-bool LooksLikeRepositoryAnalysisRequest(const std::string& text) {
-  const std::string normalized = NormalizeInteractionText(text);
-  static const std::vector<std::string> analysis_markers = {
-      "репозитор", "структур", "архитектур", "по проекту", "по репозиторию",
-      "изучи проект", "изучи репозиторий", "кодовая база", "проследи путь",
-      "cross-file", "cross file", "repo-wide", "repository-wide", "repository",
-      "repo ", "project structure", "project architecture", "trace the path",
-      "analyze the project", "analyze the repository", "codebase", "code base",
-      "grounded in files", "with file references",
-  };
-  return ContainsAnySubstring(normalized, analysis_markers);
-}
-
-bool PayloadContainsUnsupportedInteractionField(
-    const nlohmann::json& payload,
-    std::string* field_name) {
-  static const std::vector<std::string> unsupported_fields = {
-      "tools",
-      "tool_choice",
-      "functions",
-      "function_call",
-  };
-  for (const auto& field : unsupported_fields) {
-    if (payload.contains(field)) {
-      if (field_name != nullptr) {
-        *field_name = field;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-std::optional<std::string> ParsePublicSessionId(const nlohmann::json& payload) {
-  if (!payload.contains("session_id") || payload.at("session_id").is_null()) {
-    return std::nullopt;
-  }
-  if (!payload.at("session_id").is_string()) {
-    throw std::runtime_error("session_id must be a string");
-  }
-  const std::string session_id = TrimCopy(payload.at("session_id").get<std::string>());
-  if (session_id.empty()) {
-    throw std::runtime_error("session_id must not be empty");
-  }
-  return session_id;
-}
-
-nlohmann::json RequestAppliedSkills(const InteractionRequestContext& request_context) {
-  if (request_context.payload.contains(PlaneSkillsService::kAppliedSkillsPayloadKey) &&
-      request_context.payload.at(PlaneSkillsService::kAppliedSkillsPayloadKey).is_array()) {
-    return request_context.payload.at(PlaneSkillsService::kAppliedSkillsPayloadKey);
-  }
-  return nlohmann::json::array();
-}
-
-nlohmann::json RequestAutoAppliedSkills(
-    const InteractionRequestContext& request_context) {
-  if (request_context.payload.contains(
-          PlaneSkillsService::kAutoAppliedSkillsPayloadKey) &&
-      request_context.payload.at(
-          PlaneSkillsService::kAutoAppliedSkillsPayloadKey).is_array()) {
-    return request_context.payload.at(
-        PlaneSkillsService::kAutoAppliedSkillsPayloadKey);
-  }
-  return nlohmann::json::array();
-}
-
-std::optional<std::string> RequestSkillsSessionId(
-    const InteractionRequestContext& request_context) {
-  if (request_context.payload.contains(PlaneSkillsService::kSkillsSessionIdPayloadKey) &&
-      request_context.payload.at(PlaneSkillsService::kSkillsSessionIdPayloadKey).is_string()) {
-    return request_context.payload.at(PlaneSkillsService::kSkillsSessionIdPayloadKey)
-        .get<std::string>();
-  }
-  return std::nullopt;
-}
-
-std::string RequestSkillResolutionMode(
-    const InteractionRequestContext& request_context) {
-  if (request_context.payload.contains(
-          PlaneSkillsService::kSkillResolutionModePayloadKey) &&
-      request_context.payload.at(
-          PlaneSkillsService::kSkillResolutionModePayloadKey).is_string()) {
-    return request_context.payload.at(
-        PlaneSkillsService::kSkillResolutionModePayloadKey)
-        .get<std::string>();
-  }
-  return "none";
-}
-
-nlohmann::json RequestBrowsingSummary(
-    const InteractionRequestContext& request_context) {
-  if (request_context.payload.contains(
-          InteractionBrowsingService::kWebGatewayContextPayloadKey) &&
-      request_context.payload.at(
-          InteractionBrowsingService::kWebGatewayContextPayloadKey).is_object()) {
-    return request_context.payload.at(
-        InteractionBrowsingService::kWebGatewayContextPayloadKey);
-  }
-  if (request_context.payload.contains(
-          InteractionBrowsingService::kSummaryPayloadKey) &&
-      request_context.payload.at(
-          InteractionBrowsingService::kSummaryPayloadKey).is_object()) {
-    return request_context.payload.at(
-        InteractionBrowsingService::kSummaryPayloadKey);
-  }
-  return nlohmann::json{
-      {"mode", "disabled"},
-      {"mode_source", "default_off"},
-      {"plane_enabled", false},
-      {"ready", false},
-      {"session_backend", "broker_fallback"},
-      {"rendered_browser_enabled", true},
-      {"rendered_browser_ready", false},
-      {"login_enabled", false},
-      {"toggle_only", false},
-      {"decision", "disabled"},
-      {"reason", "web_mode_disabled"},
-      {"lookup_state", "disabled"},
-      {"lookup_attempted", false},
-      {"lookup_required", false},
-      {"evidence_attached", false},
-      {"searches", nlohmann::json::array()},
-      {"sources", nlohmann::json::array()},
-      {"errors", nlohmann::json::array()},
-      {"indicator",
-       nlohmann::json{
-           {"compact", "web:off"},
-           {"label", "Web disabled"},
-           {"active", false},
-           {"ready", false},
-           {"lookup_state", "disabled"},
-           {"lookup_attempted", false},
-           {"session_backend", "broker_fallback"},
-           {"rendered_browser_ready", false},
-           {"search_count", 0},
-           {"source_count", 0},
-           {"error_count", 0},
-       }},
-      {"trace",
-       nlohmann::json::array(
-           {nlohmann::json{{"stage", "mode"}, {"status", "off"}, {"compact", "web:off"}},
-            nlohmann::json{{"stage", "decision"},
-                           {"status", "disabled"},
-                           {"compact", "decide:disabled"}}})},
-  };
-}
-
-bool IsUtf8ContinuationByte(unsigned char value) {
-  return (value & 0xC0) == 0x80;
-}
-
-std::size_t Utf8SequenceLength(unsigned char lead) {
-  if ((lead & 0x80) == 0) {
-    return 1;
-  }
-  if ((lead & 0xE0) == 0xC0) {
-    return 2;
-  }
-  if ((lead & 0xF0) == 0xE0) {
-    return 3;
-  }
-  if ((lead & 0xF8) == 0xF0) {
-    return 4;
-  }
-  return 0;
-}
-
-std::size_t ValidUtf8PrefixLength(const std::string& value) {
-  std::size_t index = 0;
-  while (index < value.size()) {
-    const unsigned char lead = static_cast<unsigned char>(value[index]);
-    const std::size_t sequence_length = Utf8SequenceLength(lead);
-    if (sequence_length == 0) {
-      break;
-    }
-    if (index + sequence_length > value.size()) {
-      break;
-    }
-    bool valid = true;
-    for (std::size_t offset = 1; offset < sequence_length; ++offset) {
-      if (!IsUtf8ContinuationByte(
-              static_cast<unsigned char>(value[index + offset]))) {
-        valid = false;
-        break;
-      }
-    }
-    if (!valid) {
-      break;
-    }
-    index += sequence_length;
-  }
-  return index;
-}
-
-std::string HybridReplicaGroupKey(const comet::WorkerGroupMemberSpec& member) {
-  const std::string node_name = member.node_name.empty() ? std::string("unknown-node")
-                                                         : member.node_name;
-  return "hybrid-node-" + node_name + "-start-" +
-         std::to_string(std::max(0, member.data_parallel_start_rank));
-}
-
-int ExpectedHybridApiEndpoints(const comet::DesiredState& desired_state) {
-  std::set<std::string> keys;
-  for (const auto& member : desired_state.worker_group.members) {
-    if (!member.enabled || !member.data_parallel_api_endpoint) {
-      continue;
-    }
-    keys.insert(HybridReplicaGroupKey(member));
-  }
-  return static_cast<int>(keys.size());
-}
-
-}  // namespace
-
-InteractionCompletionPolicy NormalizeConfiguredInteractionCompletionPolicy(
-    const comet::InteractionSettings::CompletionPolicy& configured_policy) {
-  InteractionCompletionPolicy policy;
-  const std::string normalized_mode =
-      NormalizeInteractionText(configured_policy.response_mode);
-  if (!normalized_mode.empty()) {
-    policy.response_mode = normalized_mode;
-  }
-  policy.max_tokens =
-      ClampInteractionPolicyValue(configured_policy.max_tokens, 1, 2048);
-  if (configured_policy.target_completion_tokens.has_value()) {
-    policy.target_completion_tokens = ClampInteractionPolicyValue(
-        *configured_policy.target_completion_tokens, 1, 16384);
-  }
-  policy.max_continuations =
-      ClampInteractionPolicyValue(configured_policy.max_continuations, 0, 8);
-  policy.max_total_completion_tokens = ClampInteractionPolicyValue(
-      configured_policy.max_total_completion_tokens,
-      policy.max_tokens,
-      16384);
-  policy.max_elapsed_time_ms = ClampInteractionPolicyValue(
-      configured_policy.max_elapsed_time_ms, 1000, 600000);
-  if (configured_policy.semantic_goal.has_value()) {
-    policy.semantic_goal = TrimCopy(*configured_policy.semantic_goal);
-  }
-  if (policy.target_completion_tokens.has_value()) {
-    policy.max_total_completion_tokens = std::max(
-        policy.max_total_completion_tokens,
-        *policy.target_completion_tokens);
-  }
-  policy.require_completion_marker =
-      !policy.semantic_goal.empty() ||
-      policy.target_completion_tokens.has_value() ||
-      policy.response_mode == "long" ||
-      policy.response_mode == "very_long";
-  return policy;
-}
-
-InteractionCompletionPolicy DefaultChatInteractionCompletionPolicy() {
-  comet::InteractionSettings::CompletionPolicy configured_policy;
-  configured_policy.response_mode = "normal";
-  configured_policy.max_tokens = 512;
-  configured_policy.max_continuations = 0;
-  configured_policy.max_total_completion_tokens = 512;
-  configured_policy.max_elapsed_time_ms = 30000;
-  return NormalizeConfiguredInteractionCompletionPolicy(configured_policy);
-}
-
-ResolvedInteractionPolicy ResolveInteractionCompletionPolicy(
-    const comet::DesiredState& desired_state,
-    const nlohmann::json& payload) {
-  ResolvedInteractionPolicy resolved;
-  const std::string last_user_message = LastUserMessageContent(payload);
-  const bool long_form_task = LooksLikeLongFormTaskRequest(last_user_message);
-  const bool repository_analysis =
-      LooksLikeRepositoryAnalysisRequest(last_user_message);
-  resolved.repository_analysis = repository_analysis;
-  resolved.long_form = long_form_task;
-  const auto finalize_resolved = [&](ResolvedInteractionPolicy current) {
-    if (desired_state.interaction.has_value()) {
-      current.policy.thinking_enabled =
-          desired_state.interaction->thinking_enabled;
-    }
-    if (current.policy.thinking_enabled) {
-      current.policy.max_continuations =
-          std::max(current.policy.max_continuations, 6);
-      current.policy.max_total_completion_tokens =
-          std::max(current.policy.max_total_completion_tokens,
-                   std::max(current.policy.max_tokens * 12, 8192));
-      current.policy.max_elapsed_time_ms =
-          std::max(current.policy.max_elapsed_time_ms, 300000);
-    }
-    return current;
-  };
-  if (desired_state.interaction.has_value()) {
-    const auto& interaction = *desired_state.interaction;
-    if (repository_analysis && long_form_task &&
-        interaction.analysis_long_completion_policy.has_value()) {
-      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
-          *interaction.analysis_long_completion_policy);
-      resolved.mode = "analysis-long";
-      return finalize_resolved(std::move(resolved));
-    }
-    if (repository_analysis && !long_form_task &&
-        interaction.analysis_completion_policy.has_value()) {
-      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
-          *interaction.analysis_completion_policy);
-      resolved.mode = "analysis-default";
-      return finalize_resolved(std::move(resolved));
-    }
-    if (long_form_task && interaction.long_completion_policy.has_value()) {
-      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
-          *interaction.long_completion_policy);
-      resolved.mode = "long";
-      return finalize_resolved(std::move(resolved));
-    }
-    if (!long_form_task &&
-        interaction.completion_policy.has_value() &&
-        NormalizeInteractionText(interaction.completion_policy->response_mode) !=
-            "long" &&
-        NormalizeInteractionText(interaction.completion_policy->response_mode) !=
-            "very_long") {
-      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
-          *interaction.completion_policy);
-      resolved.mode = "default";
-      return finalize_resolved(std::move(resolved));
-    }
-    if (long_form_task &&
-        interaction.completion_policy.has_value() &&
-        (NormalizeInteractionText(interaction.completion_policy->response_mode) ==
-             "long" ||
-         NormalizeInteractionText(interaction.completion_policy->response_mode) ==
-             "very_long")) {
-      resolved.policy = NormalizeConfiguredInteractionCompletionPolicy(
-          *interaction.completion_policy);
-      resolved.mode = "long";
-      return finalize_resolved(std::move(resolved));
-    }
-  }
-  resolved.policy = DefaultChatInteractionCompletionPolicy();
-  resolved.mode = repository_analysis
-                      ? (long_form_task ? "analysis-long-fallback"
-                                        : "analysis-default-fallback")
-                      : (long_form_task ? "long-fallback"
-                                        : "default-fallback");
-  return finalize_resolved(std::move(resolved));
-}
-
-std::string GenerateInteractionRequestId() {
-  static std::atomic<unsigned long long> counter{0};
-  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::system_clock::now().time_since_epoch())
-                       .count();
-  return "req-" + std::to_string(now) + "-" + std::to_string(++counter);
-}
-
-std::string GenerateInteractionSessionId() {
-  static std::atomic<unsigned long long> counter{0};
-  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::system_clock::now().time_since_epoch())
-                       .count();
-  return "sess-" + std::to_string(now) + "-" + std::to_string(++counter);
-}
-
-std::string BuildRepositoryAnalysisInstruction() {
-  return "Repository analysis requirement: answer only from the repository or "
-         "codebase evidence provided in the request. "
-         "Cite concrete file paths for repo-specific claims. If evidence is "
-         "insufficient, say exactly what is unknown. "
-         "Do not claim lack of filesystem access when repository context is "
-         "already present.";
-}
-
-std::string BuildSemanticCompletionInstruction(
-    const InteractionCompletionPolicy& policy) {
-  std::ostringstream instruction;
-  instruction << "Semantic completion protocol:\n"
-              << "- You may need multiple assistant segments to finish this task.\n"
-              << "- End the final segment with the exact marker "
-              << policy.completion_marker
-              << " on its own line only when the task is fully complete.\n"
-              << "- If the task is not complete in this segment, do not output the marker.\n"
-              << "- For continuation segments, continue exactly where you stopped without repeating prior text unless recap is explicitly requested.\n"
-              << "- Respect the user's requested length and scope. Once the requested artifact is complete, stop instead of adding optional extra sections.\n"
-              << "- When you have satisfied the user's requested structure and length, emit the marker immediately on its own line and end the response.\n"
-              << "- Do not emit tool calls, tool requests, or waiting states in this phase.\n";
-  if (!policy.semantic_goal.empty()) {
-    instruction << "- Task completion goal: " << policy.semantic_goal << "\n";
-  }
-  if (policy.target_completion_tokens.has_value()) {
-    instruction << "- Aim for at least " << *policy.target_completion_tokens
-                << " completion tokens before marking the task complete.\n";
-  }
-  return instruction.str();
-}
-
-std::string BuildContinuationPrompt(
-    const InteractionCompletionPolicy& policy,
-    bool natural_stop_without_marker,
-    const std::string& trailing_excerpt,
-    int remaining_completion_tokens,
-    bool hidden_thinking_mode,
-    bool visible_output_started) {
-  std::ostringstream prompt;
-  if (hidden_thinking_mode && !visible_output_started) {
-    prompt << "Your hidden reasoning is not shown to the user. Stop reasoning now and "
-           << "reply with only the final user-visible answer.";
-  } else if (natural_stop_without_marker) {
-    prompt << "Your previous segment stopped before you proved the task was complete. "
-           << "If the task is already complete, reply with only "
-           << policy.completion_marker
-           << ". Otherwise continue exactly where you stopped.";
-  } else {
-    prompt << "Continue exactly where you stopped.";
-  }
-  if (!trailing_excerpt.empty()) {
-    prompt << " The last visible excerpt from your previous segment was:\n"
-           << trailing_excerpt
-           << "\nContinue immediately after that excerpt.";
-  }
-  if (hidden_thinking_mode) {
-    prompt << " Do not output hidden reasoning, <think> blocks, or reasoning preambles."
-           << " The next segment must contain only the final answer that the user should read.";
-  }
-  if (remaining_completion_tokens > 0) {
-    prompt << " You have approximately " << remaining_completion_tokens
-           << " completion tokens remaining across all future segments.";
-    if (remaining_completion_tokens <= policy.max_tokens) {
-      prompt << " Finish the remaining required content and conclude in this segment if possible.";
-    } else {
-      prompt << " Prioritize the remaining required sections and avoid optional expansion.";
-    }
-  }
-  prompt << " Do not repeat prior text. Emit " << policy.completion_marker
-         << " on its own line only in the final segment when the task is fully complete."
-         << " Do not restart the outline, recap earlier sections, or add extra filler once the requested artifact is complete.";
-  return prompt.str();
-}
-
-namespace {
-
-std::string RemoveThinkBlocks(std::string value) {
-  while (true) {
-    const std::size_t begin = value.find("<think>");
-    if (begin == std::string::npos) {
-      return value;
-    }
-    const std::size_t end = value.find("</think>", begin);
-    if (end == std::string::npos) {
-      return value.substr(0, begin);
-    }
-    value.erase(begin, end + std::string("</think>").size() - begin);
-  }
-}
-
-std::vector<std::string> SplitParagraphs(const std::string& value) {
-  std::vector<std::string> paragraphs;
-  std::string current;
-  bool last_blank = false;
-  std::istringstream input(value);
-  std::string line;
-  while (std::getline(input, line)) {
-    const bool blank = TrimCopy(line).empty();
-    if (blank) {
-      if (!current.empty()) {
-        paragraphs.push_back(TrimCopy(current));
-        current.clear();
-      }
-      last_blank = true;
-      continue;
-    }
-    if (!current.empty()) {
-      current += last_blank ? "\n" : "\n";
-    }
-    current += line;
-    last_blank = false;
-  }
-  if (!current.empty()) {
-    paragraphs.push_back(TrimCopy(current));
-  }
-  return paragraphs;
-}
-
-}  // namespace
-
-bool StartsWithReasoningPreamble(const std::string& text) {
-  const std::string lowered = LowercaseCopy(TrimCopy(text));
-  return lowered.rfind("thinking process:", 0) == 0 ||
-         lowered.rfind("reasoning:", 0) == 0 ||
-         lowered.rfind("analysis:", 0) == 0 ||
-         lowered.rfind("chain of thought:", 0) == 0;
-}
-
-std::string SanitizeInteractionText(std::string text) {
-  text = RemoveThinkBlocks(std::move(text));
-  text = TrimCopy(text);
-  if (StartsWithReasoningPreamble(text)) {
-    const auto paragraphs = SplitParagraphs(text);
-    for (auto it = paragraphs.rbegin(); it != paragraphs.rend(); ++it) {
-      const std::string candidate = TrimCopy(*it);
-      if (candidate.empty()) {
-        continue;
-      }
-      const std::string lowered = LowercaseCopy(candidate);
-      if (StartsWithReasoningPreamble(candidate) ||
-          lowered.rfind("1.", 0) == 0 ||
-          lowered.rfind("2.", 0) == 0 ||
-          lowered.rfind("3.", 0) == 0 ||
-          lowered.rfind("* ", 0) == 0) {
-        continue;
-      }
-      return candidate;
-    }
-  }
-  return text;
-}
-
-std::string Utf8SafeSuffix(const std::string& value, std::size_t max_bytes) {
-  if (value.size() <= max_bytes) {
-    return value;
-  }
-  std::size_t start = value.size() - max_bytes;
-  while (start < value.size() &&
-         IsUtf8ContinuationByte(static_cast<unsigned char>(value[start]))) {
-    ++start;
-  }
-  return value.substr(start);
-}
-
-bool SessionReachedTargetLength(
-    const InteractionCompletionPolicy& policy,
-    int total_completion_tokens) {
-  return !policy.target_completion_tokens.has_value() ||
-         total_completion_tokens >= *policy.target_completion_tokens;
-}
-
-bool CanCompleteOnNaturalStop(
-    const InteractionCompletionPolicy& policy,
-    const InteractionSegmentSummary& summary) {
-  if (policy.require_completion_marker) {
-    return false;
-  }
-  return summary.finish_reason != "length" && !TrimCopy(summary.text).empty();
-}
-
-std::string RemoveCompletionMarkers(
-    const std::string& input,
-    const std::string& marker,
-    bool* marker_seen) {
-  std::string output = input;
-  std::size_t position = std::string::npos;
-  while ((position = output.find(marker)) != std::string::npos) {
-    if (marker_seen != nullptr) {
-      *marker_seen = true;
-    }
-    output.erase(position, marker.size());
-  }
-  return output;
-}
-
-std::string ConsumeCompletionMarkerFilteredChunk(
-    CompletionMarkerFilterState& state,
-    const std::string& chunk,
-    const std::string& marker,
-    bool final_flush) {
-  state.pending += chunk;
-  std::string emitted;
-  while (true) {
-    const std::size_t marker_pos = state.pending.find(marker);
-    if (marker_pos != std::string::npos) {
-      emitted += state.pending.substr(0, marker_pos);
-      state.pending.erase(0, marker_pos + marker.size());
-      state.marker_seen = true;
-      continue;
-    }
-    if (final_flush) {
-      emitted += state.pending;
-      state.pending.clear();
-      break;
-    }
-    if (state.pending.size() > marker.size()) {
-      const std::size_t safe_prefix = state.pending.size() - marker.size() + 1;
-      const std::string candidate = state.pending.substr(0, safe_prefix);
-      const std::size_t valid_prefix = ValidUtf8PrefixLength(candidate);
-      if (valid_prefix == 0) {
-        break;
-      }
-      emitted += state.pending.substr(0, valid_prefix);
-      state.pending.erase(0, valid_prefix);
-    }
-    break;
-  }
-  return emitted;
-}
-
-std::string ExtractInteractionText(const nlohmann::json& payload) {
-  if (!payload.contains("choices") || !payload.at("choices").is_array() ||
-      payload.at("choices").empty()) {
-    throw std::runtime_error(
-        "upstream interaction response did not include choices");
-  }
-  const auto& choice = payload.at("choices").at(0);
-  if (choice.contains("message") && choice.at("message").is_object()) {
-    return SanitizeInteractionText(
-        choice.at("message").value("content", std::string{}));
-  }
-  return SanitizeInteractionText(choice.value("text", std::string{}));
-}
-
-std::string ExtractInteractionFinishReason(const nlohmann::json& payload) {
-  if (!payload.contains("choices") || !payload.at("choices").is_array() ||
-      payload.at("choices").empty()) {
-    return "stop";
-  }
-  const auto& choice = payload.at("choices").at(0);
-  return choice.value("finish_reason", std::string{"stop"});
-}
-
-nlohmann::json ExtractInteractionUsage(const nlohmann::json& payload) {
-  if (!payload.contains("usage") || !payload.at("usage").is_object()) {
-    return nlohmann::json{
-        {"prompt_tokens", 0},
-        {"completion_tokens", 0},
-        {"total_tokens", 0},
-    };
-  }
-  const auto& usage = payload.at("usage");
-  return nlohmann::json{
-      {"prompt_tokens", usage.value("prompt_tokens", 0)},
-      {"completion_tokens", usage.value("completion_tokens", 0)},
-      {"total_tokens", usage.value("total_tokens", 0)},
-  };
-}
-
-bool TryConsumeSseFrame(std::string& buffer, InteractionSseFrame* frame) {
-  const std::size_t separator = buffer.find("\n\n");
-  if (separator == std::string::npos) {
-    return false;
-  }
-  const std::string raw_frame = buffer.substr(0, separator);
-  buffer.erase(0, separator + 2);
-  frame->event_name = "message";
-  frame->data.clear();
-  std::stringstream stream(raw_frame);
-  std::string line;
-  std::vector<std::string> data_lines;
-  while (std::getline(stream, line)) {
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
-    const std::string trimmed_line = TrimCopy(line);
-    if (line.empty() || line[0] == ':') {
-      continue;
-    }
-    if (!trimmed_line.empty()) {
-      const std::size_t extensions = trimmed_line.find(';');
-      const std::string chunk_size_candidate =
-          TrimCopy(trimmed_line.substr(
-              0, extensions == std::string::npos ? trimmed_line.size()
-                                                 : extensions));
-      const bool looks_like_chunk_size =
-          !chunk_size_candidate.empty() &&
-          std::all_of(
-              chunk_size_candidate.begin(),
-              chunk_size_candidate.end(),
-              [](unsigned char ch) { return std::isxdigit(ch) != 0; });
-      if (looks_like_chunk_size) {
-        continue;
-      }
-    }
-    if (line.rfind("event:", 0) == 0) {
-      frame->event_name = TrimCopy(line.substr(6));
-      continue;
-    }
-    if (line.rfind("data:", 0) == 0) {
-      const std::size_t offset = line.size() > 5 && line[5] == ' ' ? 6 : 5;
-      data_lines.push_back(line.substr(offset));
-    }
-  }
-  for (std::size_t index = 0; index < data_lines.size(); ++index) {
-    if (index > 0) {
-      frame->data.push_back('\n');
-    }
-    frame->data += data_lines[index];
-  }
-  return true;
-}
-
-std::optional<std::string> ParseInteractionStreamPlaneName(
-    const std::string& request_method,
-    const std::string& request_path) {
-  if (request_method != "POST") {
-    return std::nullopt;
-  }
-  constexpr std::string_view kPrefix = "/api/v1/planes/";
-  constexpr std::string_view kSuffix = "/interaction/chat/completions/stream";
-  if (request_path.rfind(std::string(kPrefix), 0) != 0) {
-    return std::nullopt;
-  }
-  if (request_path.size() <= kPrefix.size() + kSuffix.size()) {
-    return std::nullopt;
-  }
-  if (!request_path.ends_with(kSuffix)) {
-    return std::nullopt;
-  }
-  return request_path.substr(
-      kPrefix.size(),
-      request_path.size() - kPrefix.size() - kSuffix.size());
-}
-
-std::map<std::string, std::string> BuildInteractionResponseHeaders(
-    const std::string& request_id) {
-  return {
-      {"X-Comet-Request-Id", request_id},
-  };
-}
-
-std::string ResolveInteractionServedModelName(
-    const PlaneInteractionResolution& resolution) {
-  if (resolution.runtime_status.has_value() &&
-      !resolution.runtime_status->active_served_model_name.empty()) {
-    return resolution.runtime_status->active_served_model_name;
-  }
-  return ReadJsonStringOrEmpty(resolution.status_payload, "served_model_name");
-}
-
-std::string ResolveInteractionActiveModelId(
-    const PlaneInteractionResolution& resolution) {
-  if (resolution.runtime_status.has_value() &&
-      !resolution.runtime_status->active_model_id.empty()) {
-    return resolution.runtime_status->active_model_id;
-  }
-  return ReadJsonStringOrEmpty(resolution.status_payload, "active_model_id");
-}
-
-nlohmann::json BuildInteractionContractMetadata(
-    const PlaneInteractionResolution& resolution,
-    const std::string& request_id,
-    const std::optional<std::string>& session_id,
-    const std::optional<int>& segment_count,
-    const std::optional<int>& continuation_count) {
-  nlohmann::json metadata{
-      {"request_id", request_id},
-      {"plane_name", resolution.status_payload.value("plane_name", std::string{})},
-      {"served_model_name", ResolveInteractionServedModelName(resolution)},
-      {"active_model_id", ResolveInteractionActiveModelId(resolution)},
-      {"reason", resolution.status_payload.value("reason", std::string{})},
-  };
-  if (session_id.has_value()) {
-    metadata["session_id"] = *session_id;
-  }
-  if (segment_count.has_value()) {
-    metadata["segment_count"] = *segment_count;
-  }
-  if (continuation_count.has_value()) {
-    metadata["continuation_count"] = *continuation_count;
-  }
-  if (resolution.desired_state.interaction.has_value()) {
-    if (resolution.desired_state.interaction->completion_policy.has_value()) {
-      metadata["completion_policy"] = nlohmann::json{
-          {"response_mode",
-           resolution.desired_state.interaction->completion_policy->response_mode},
-          {"max_tokens",
-           resolution.desired_state.interaction->completion_policy->max_tokens},
-          {"thinking_enabled",
-           resolution.desired_state.interaction->thinking_enabled},
-      };
-    }
-    if (resolution.desired_state.interaction->long_completion_policy.has_value()) {
-      metadata["long_completion_policy"] = nlohmann::json{
-          {"response_mode",
-           resolution.desired_state.interaction->long_completion_policy->response_mode},
-          {"max_tokens",
-           resolution.desired_state.interaction->long_completion_policy->max_tokens},
-      };
-    }
-    if (resolution.desired_state.interaction->analysis_completion_policy.has_value()) {
-      metadata["analysis_completion_policy"] = nlohmann::json{
-          {"response_mode",
-           resolution.desired_state.interaction->analysis_completion_policy->response_mode},
-          {"max_tokens",
-           resolution.desired_state.interaction->analysis_completion_policy->max_tokens},
-      };
-    }
-    if (resolution.desired_state.interaction->analysis_long_completion_policy
-            .has_value()) {
-      metadata["analysis_long_completion_policy"] = nlohmann::json{
-          {"response_mode",
-           resolution.desired_state.interaction->analysis_long_completion_policy
-               ->response_mode},
-          {"max_tokens",
-           resolution.desired_state.interaction->analysis_long_completion_policy
-               ->max_tokens},
-      };
-    }
-  }
-  return metadata;
-}
+namespace naim::controller {
 
 nlohmann::json InteractionRequestValidator::ParsePayload(
     const std::string& body) const {
@@ -999,6 +31,7 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
     const PlaneInteractionResolution& resolution,
     const nlohmann::json& original_payload,
     InteractionRequestContext* context) const {
+  const InteractionRequestContractSupport request_contract_support;
   if (context == nullptr) {
     throw std::invalid_argument("interaction request context is required");
   }
@@ -1014,11 +47,12 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
   nlohmann::json payload = original_payload;
   context->original_payload = original_payload;
   std::string unsupported_field;
-  if (PayloadContainsUnsupportedInteractionField(payload, &unsupported_field)) {
+  if (request_contract_support.PayloadContainsUnsupportedInteractionField(
+          payload, &unsupported_field)) {
     return InteractionValidationError{
         "unsupported_field",
         "interaction request field '" + unsupported_field +
-            "' is not supported by comet-node",
+            "' is not supported by naim-node",
         false,
         nlohmann::json{{"field", unsupported_field}},
     };
@@ -1060,7 +94,8 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
   }
 
   try {
-    context->requested_session_id = ParsePublicSessionId(payload);
+    context->requested_session_id =
+        request_contract_support.ParsePublicSessionId(payload);
   } catch (const std::exception& error) {
     return InteractionValidationError{
         "malformed_request",
@@ -1071,8 +106,10 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
   }
   context->client_messages = payload.at("messages");
 
-  const std::string served_model_name = ResolveInteractionServedModelName(resolution);
-  const std::string active_model_id = ResolveInteractionActiveModelId(resolution);
+  const std::string served_model_name =
+      request_contract_support.ResolveInteractionServedModelName(resolution);
+  const std::string active_model_id =
+      request_contract_support.ResolveInteractionActiveModelId(resolution);
   if (payload.contains("model") && !payload.at("model").is_null()) {
     if (!payload.at("model").is_string()) {
       return InteractionValidationError{
@@ -1120,74 +157,6 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
 
   context->payload = std::move(payload);
   return std::nullopt;
-}
-
-nlohmann::json InteractionContractResponder::BuildStandaloneErrorPayload(
-    const std::string& request_id,
-    const std::string& code,
-    const std::string& message,
-    bool retryable,
-    const std::optional<std::string>& plane_name,
-    const std::optional<std::string>& reason,
-    const std::optional<std::string>& served_model_name,
-    const std::optional<std::string>& active_model_id,
-    const nlohmann::json& details) const {
-  nlohmann::json payload{
-      {"request_id", request_id},
-      {"plane_name", plane_name.has_value() ? nlohmann::json(*plane_name)
-                                            : nlohmann::json(nullptr)},
-      {"reason", reason.has_value() ? nlohmann::json(*reason)
-                                    : nlohmann::json(nullptr)},
-      {"served_model_name",
-       served_model_name.has_value() ? nlohmann::json(*served_model_name)
-                                     : nlohmann::json(nullptr)},
-      {"active_model_id",
-       active_model_id.has_value() ? nlohmann::json(*active_model_id)
-                                   : nlohmann::json(nullptr)},
-      {"error",
-       nlohmann::json{
-           {"code", code},
-           {"message", message},
-           {"retryable", retryable},
-       }},
-      {"comet",
-       nlohmann::json{
-           {"request_id", request_id},
-           {"plane_name", plane_name.has_value() ? nlohmann::json(*plane_name)
-                                                 : nlohmann::json(nullptr)},
-           {"served_model_name",
-            served_model_name.has_value() ? nlohmann::json(*served_model_name)
-                                          : nlohmann::json(nullptr)},
-           {"active_model_id",
-            active_model_id.has_value() ? nlohmann::json(*active_model_id)
-                                        : nlohmann::json(nullptr)},
-       }},
-  };
-  if (!details.empty()) {
-    payload["error"]["details"] = details;
-  }
-  return payload;
-}
-
-nlohmann::json InteractionContractResponder::BuildPlaneErrorPayload(
-    const PlaneInteractionResolution& resolution,
-    const std::string& request_id,
-    const std::string& code,
-    const std::string& message,
-    bool retryable,
-    const nlohmann::json& details) const {
-  nlohmann::json payload = resolution.status_payload;
-  payload["request_id"] = request_id;
-  payload["error"] = nlohmann::json{
-      {"code", code},
-      {"message", message},
-      {"retryable", retryable},
-  };
-  payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
-  if (!details.empty()) {
-    payload["error"]["details"] = details;
-  }
-  return payload;
 }
 
 nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
@@ -1242,15 +211,25 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
     const InteractionRequestContext& request_context,
     const InteractionSessionResult& result) const {
   const InteractionContractResponder responder;
+  const InteractionRequestContractSupport request_contract_support;
+  const auto applied_skills =
+      request_contract_support.RequestAppliedSkills(request_context);
+  const auto auto_applied_skills =
+      request_contract_support.RequestAutoAppliedSkills(request_context);
+  const auto skill_resolution_mode =
+      request_contract_support.RequestSkillResolutionMode(request_context);
+  const auto browsing_summary =
+      request_contract_support.RequestBrowsingSummary(request_context);
+  const auto skills_session_id =
+      request_contract_support.RequestSkillsSessionId(request_context);
   nlohmann::json session_payload = BuildSessionPayload(result);
-  session_payload["applied_skills"] = RequestAppliedSkills(request_context);
-  session_payload["auto_applied_skills"] = RequestAutoAppliedSkills(request_context);
-  session_payload["skill_resolution_mode"] =
-      RequestSkillResolutionMode(request_context);
-  session_payload["webgateway"] = RequestBrowsingSummary(request_context);
+  session_payload["applied_skills"] = applied_skills;
+  session_payload["auto_applied_skills"] = auto_applied_skills;
+  session_payload["skill_resolution_mode"] = skill_resolution_mode;
+  session_payload["webgateway"] = browsing_summary;
   session_payload["skills_session_id"] =
-      RequestSkillsSessionId(request_context).has_value()
-          ? nlohmann::json(*RequestSkillsSessionId(request_context))
+      skills_session_id.has_value()
+          ? nlohmann::json(*skills_session_id)
           : nlohmann::json(nullptr);
   if (request_context.structured_output_json) {
     if (result.completion_status != "completed") {
@@ -1293,7 +272,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
     return {
         200,
         nlohmann::json{
-            {"id", "chatcmpl-comet-session"},
+            {"id", "chatcmpl-naim-session"},
             {"object", "chat.completion"},
             {"request_id", request_context.request_id},
             {"model", result.model},
@@ -1309,17 +288,16 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
              }})},
             {"usage", session_payload.at("usage")},
             {"session", session_payload},
-            {"applied_skills", RequestAppliedSkills(request_context)},
-            {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
-            {"skill_resolution_mode",
-             RequestSkillResolutionMode(request_context)},
-            {"webgateway", RequestBrowsingSummary(request_context)},
+            {"applied_skills", applied_skills},
+            {"auto_applied_skills", auto_applied_skills},
+            {"skill_resolution_mode", skill_resolution_mode},
+            {"webgateway", browsing_summary},
             {"skills_session_id",
-             RequestSkillsSessionId(request_context).has_value()
-                 ? nlohmann::json(*RequestSkillsSessionId(request_context))
+             skills_session_id.has_value()
+                 ? nlohmann::json(*skills_session_id)
                  : nlohmann::json(nullptr)},
-            {"comet",
-             BuildInteractionContractMetadata(
+            {"naim",
+             request_contract_support.BuildInteractionContractMetadata(
                  resolution,
                  request_context.request_id,
                  result.session_id,
@@ -1337,7 +315,7 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
   return {
       200,
       nlohmann::json{
-          {"id", "chatcmpl-comet-session"},
+          {"id", "chatcmpl-naim-session"},
           {"object", "chat.completion"},
           {"request_id", request_context.request_id},
           {"model", result.model},
@@ -1354,17 +332,16 @@ InteractionJsonResponseSpec InteractionSessionPresenter::BuildResponseSpec(
            }})},
           {"usage", session_payload.at("usage")},
           {"session", session_payload},
-          {"applied_skills", RequestAppliedSkills(request_context)},
-          {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
-          {"skill_resolution_mode",
-           RequestSkillResolutionMode(request_context)},
-          {"webgateway", RequestBrowsingSummary(request_context)},
+          {"applied_skills", applied_skills},
+          {"auto_applied_skills", auto_applied_skills},
+          {"skill_resolution_mode", skill_resolution_mode},
+          {"webgateway", browsing_summary},
           {"skills_session_id",
-           RequestSkillsSessionId(request_context).has_value()
-               ? nlohmann::json(*RequestSkillsSessionId(request_context))
+           skills_session_id.has_value()
+               ? nlohmann::json(*skills_session_id)
                : nlohmann::json(nullptr)},
-          {"comet",
-           BuildInteractionContractMetadata(
+          {"naim",
+           request_contract_support.BuildInteractionContractMetadata(
                resolution,
                request_context.request_id,
                result.session_id,
@@ -1380,19 +357,28 @@ nlohmann::json InteractionStreamPresenter::BuildSessionStartedEvent(
     const std::string& plane_name,
     const PlaneInteractionResolution& resolution,
     const InteractionRequestContext& request_context) const {
+  const InteractionRequestContractSupport request_contract_support;
+  const auto skills_session_id =
+      request_contract_support.RequestSkillsSessionId(request_context);
   return nlohmann::json{
       {"request_id", request_id},
       {"session_id", session_id},
       {"plane_name", plane_name},
-      {"served_model_name", ResolveInteractionServedModelName(resolution)},
-      {"active_model_id", ResolveInteractionActiveModelId(resolution)},
-      {"applied_skills", RequestAppliedSkills(request_context)},
-      {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
-      {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
-      {"webgateway", RequestBrowsingSummary(request_context)},
+      {"served_model_name",
+       request_contract_support.ResolveInteractionServedModelName(resolution)},
+      {"active_model_id",
+       request_contract_support.ResolveInteractionActiveModelId(resolution)},
+      {"applied_skills",
+       request_contract_support.RequestAppliedSkills(request_context)},
+      {"auto_applied_skills",
+       request_contract_support.RequestAutoAppliedSkills(request_context)},
+      {"skill_resolution_mode",
+       request_contract_support.RequestSkillResolutionMode(request_context)},
+      {"webgateway",
+       request_contract_support.RequestBrowsingSummary(request_context)},
       {"skills_session_id",
-       RequestSkillsSessionId(request_context).has_value()
-           ? nlohmann::json(*RequestSkillsSessionId(request_context))
+       skills_session_id.has_value()
+           ? nlohmann::json(*skills_session_id)
            : nlohmann::json(nullptr)},
   };
 }
@@ -1499,19 +485,26 @@ nlohmann::json InteractionStreamPresenter::BuildSessionCompleteEvent(
     const InteractionSessionResult& session,
     const nlohmann::json& session_payload,
     const InteractionRequestContext& request_context) const {
+  const InteractionRequestContractSupport request_contract_support;
+  const auto skills_session_id =
+      request_contract_support.RequestSkillsSessionId(request_context);
   return nlohmann::json{
       {"request_id", request_id},
       {"session", session_payload},
-      {"applied_skills", RequestAppliedSkills(request_context)},
-      {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
-      {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
-      {"webgateway", RequestBrowsingSummary(request_context)},
+      {"applied_skills",
+       request_contract_support.RequestAppliedSkills(request_context)},
+      {"auto_applied_skills",
+       request_contract_support.RequestAutoAppliedSkills(request_context)},
+      {"skill_resolution_mode",
+       request_contract_support.RequestSkillResolutionMode(request_context)},
+      {"webgateway",
+       request_contract_support.RequestBrowsingSummary(request_context)},
       {"skills_session_id",
-       RequestSkillsSessionId(request_context).has_value()
-           ? nlohmann::json(*RequestSkillsSessionId(request_context))
+       skills_session_id.has_value()
+           ? nlohmann::json(*skills_session_id)
            : nlohmann::json(nullptr)},
-      {"comet",
-       BuildInteractionContractMetadata(
+      {"naim",
+       request_contract_support.BuildInteractionContractMetadata(
            resolution,
            request_id,
            session.session_id,
@@ -1527,6 +520,9 @@ nlohmann::json InteractionStreamPresenter::BuildCompleteEvent(
     const InteractionSessionResult& session,
     const nlohmann::json& session_payload,
     const std::optional<nlohmann::json>& parsed_structured_output) const {
+  const InteractionRequestContractSupport request_contract_support;
+  const auto skills_session_id =
+      request_contract_support.RequestSkillsSessionId(request_context);
   return nlohmann::json{
       {"request_id", request_id},
       {"model", session.model},
@@ -1534,16 +530,20 @@ nlohmann::json InteractionStreamPresenter::BuildCompleteEvent(
       {"latency_ms", session.total_latency_ms},
       {"usage", session_payload.at("usage")},
       {"session", session_payload},
-      {"applied_skills", RequestAppliedSkills(request_context)},
-      {"auto_applied_skills", RequestAutoAppliedSkills(request_context)},
-      {"skill_resolution_mode", RequestSkillResolutionMode(request_context)},
-      {"webgateway", RequestBrowsingSummary(request_context)},
+      {"applied_skills",
+       request_contract_support.RequestAppliedSkills(request_context)},
+      {"auto_applied_skills",
+       request_contract_support.RequestAutoAppliedSkills(request_context)},
+      {"skill_resolution_mode",
+       request_contract_support.RequestSkillResolutionMode(request_context)},
+      {"webgateway",
+       request_contract_support.RequestBrowsingSummary(request_context)},
       {"skills_session_id",
-       RequestSkillsSessionId(request_context).has_value()
-           ? nlohmann::json(*RequestSkillsSessionId(request_context))
+       skills_session_id.has_value()
+           ? nlohmann::json(*skills_session_id)
            : nlohmann::json(nullptr)},
-      {"comet",
-       BuildInteractionContractMetadata(
+      {"naim",
+       request_contract_support.BuildInteractionContractMetadata(
            resolution,
            request_id,
            session.session_id,
@@ -1589,14 +589,19 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
     const PlaneInteractionResolution& resolution,
     const InteractionRequestContext& request_context) const {
   const nlohmann::json& original_payload = request_context.payload;
+  const InteractionCompletionPolicySupport completion_policy_support;
+  const InteractionRequestIdentitySupport request_identity_support;
   const ResolvedInteractionPolicy resolved_policy =
-      ResolveInteractionCompletionPolicy(resolution.desired_state, original_payload);
+      completion_policy_support.ResolvePolicy(
+          resolution.desired_state,
+          original_payload);
   const InteractionCompletionPolicy& policy = resolved_policy.policy;
-  const comet::runtime::ModelIdentity model_identity =
-      BuildResolutionModelIdentity(resolution);
+  const InteractionModelIdentityBuilder model_identity_builder;
+  const naim::runtime::ModelIdentity model_identity =
+      model_identity_builder.BuildRuntimePreferred(resolution);
   InteractionSessionResult result;
   result.session_id = request_context.conversation_session_id.empty()
-                          ? GenerateInteractionSessionId()
+                          ? request_identity_support.GenerateSessionId()
                           : request_context.conversation_session_id;
   const auto session_started_at = std::chrono::steady_clock::now();
 
@@ -1644,7 +649,7 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
     const nlohmann::json usage = extract_interaction_usage_(upstream_payload);
     bool marker_seen_in_segment = false;
     const std::string clean_text = remove_completion_markers_(
-        comet::runtime::ModelAdapter::SanitizeVisibleText(
+        naim::runtime::ModelAdapter::SanitizeVisibleText(
             extract_interaction_text_(upstream_payload),
             model_identity),
         policy.completion_marker,
@@ -1801,7 +806,7 @@ InteractionProxyResult InteractionProxyExecutor::Execute(
       }
       structured_output_json = request_context.structured_output_json;
       const ResolvedInteractionPolicy resolved_policy =
-          ResolveInteractionCompletionPolicy(
+          InteractionCompletionPolicySupport{}.ResolvePolicy(
               resolution.desired_state,
               request_context.payload);
       upstream_body = build_interaction_upstream_body_(
@@ -1842,11 +847,13 @@ InteractionProxyResult InteractionProxyExecutor::Execute(
           upstream.status_code >= 500);
     }
 
-    upstream.headers["x-comet-request-id"] = request_id;
+    upstream.headers["x-naim-request-id"] = request_id;
     if (path == "/v1/models" && !upstream.body.empty()) {
       nlohmann::json payload = nlohmann::json::parse(upstream.body);
       payload["request_id"] = request_id;
-      payload["comet"] = BuildInteractionContractMetadata(resolution, request_id);
+      payload["naim"] =
+          InteractionRequestContractSupport{}.BuildInteractionContractMetadata(
+              resolution, request_id);
       return InteractionProxyResult{
           false,
           InteractionJsonResponseSpec{200, std::move(payload)},
@@ -1860,10 +867,9 @@ InteractionProxyResult InteractionProxyExecutor::Execute(
         std::move(upstream),
     };
   } catch (const std::exception& error) {
-    const std::string lowered = LowercaseCopy(error.what());
+    const InteractionRuntimeTextSupport runtime_text_support;
     const bool timeout_like =
-        lowered.find("timed out") != std::string::npos ||
-        lowered.find("timeout") != std::string::npos;
+        runtime_text_support.IsTimeoutLikeError(error.what());
     return build_plane_error(
         timeout_like ? 504 : 502,
         timeout_like ? "upstream_timeout" : "upstream_invalid_response",
@@ -1885,6 +891,7 @@ InteractionStreamResolutionResult InteractionStreamRequestResolver::Resolve(
     const std::string& request_body,
     const std::string& request_id) const {
   const InteractionContractResponder responder;
+  const InteractionRequestContractSupport request_contract_support;
   const auto build_standalone_error =
       [&](int status_code,
           const std::string& code,
@@ -1920,7 +927,8 @@ InteractionStreamResolutionResult InteractionStreamRequestResolver::Resolve(
         false);
   }
   const auto plane_name =
-      ParseInteractionStreamPlaneName(request_method, request_path);
+      request_contract_support.ParseInteractionStreamPlaneName(
+          request_method, request_path);
   if (!plane_name.has_value()) {
     return build_standalone_error(
         404,
@@ -2003,7 +1011,7 @@ InteractionStreamResolutionResult InteractionStreamRequestResolver::Resolve(
           *plane_name,
           std::move(resolution),
           std::move(request_context),
-          ResolveInteractionCompletionPolicy(
+          InteractionCompletionPolicySupport{}.ResolvePolicy(
               resolution.desired_state,
               request_context.payload),
       },
@@ -2134,14 +1142,20 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
     }
 
     nlohmann::json session_payload = session_presenter.BuildSessionPayload(session);
-    session_payload["applied_skills"] = RequestAppliedSkills(request_context);
-    session_payload["auto_applied_skills"] = RequestAutoAppliedSkills(request_context);
+    const InteractionRequestContractSupport request_contract_support;
+    const auto skills_session_id =
+        request_contract_support.RequestSkillsSessionId(request_context);
+    session_payload["applied_skills"] =
+        request_contract_support.RequestAppliedSkills(request_context);
+    session_payload["auto_applied_skills"] =
+        request_contract_support.RequestAutoAppliedSkills(request_context);
     session_payload["skill_resolution_mode"] =
-        RequestSkillResolutionMode(request_context);
-    session_payload["webgateway"] = RequestBrowsingSummary(request_context);
+        request_contract_support.RequestSkillResolutionMode(request_context);
+    session_payload["webgateway"] =
+        request_contract_support.RequestBrowsingSummary(request_context);
     session_payload["skills_session_id"] =
-        RequestSkillsSessionId(request_context).has_value()
-            ? nlohmann::json(*RequestSkillsSessionId(request_context))
+        skills_session_id.has_value()
+            ? nlohmann::json(*skills_session_id)
             : nlohmann::json(nullptr);
     std::optional<nlohmann::json> parsed_structured_output = std::nullopt;
     if (request_context.structured_output_json) {
@@ -2209,10 +1223,9 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
     send_done();
     return session;
   } catch (const std::exception& error) {
-    const std::string lowered = LowercaseCopy(error.what());
+    const InteractionRuntimeTextSupport runtime_text_support;
     const bool timeout_like =
-        lowered.find("timed out") != std::string::npos ||
-        lowered.find("timeout") != std::string::npos;
+        runtime_text_support.IsTimeoutLikeError(error.what());
     send_event(
         "session_failed",
         stream_presenter.BuildSessionFailedEvent(
@@ -2265,8 +1278,11 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
     int segment_index,
     SendDeltaFn send_delta) const {
   const InteractionCompletionPolicy& policy = resolved_policy.policy;
-  const comet::runtime::ModelIdentity model_identity =
-      BuildResolutionModelIdentity(resolution);
+  const InteractionModelIdentityBuilder model_identity_builder;
+  const InteractionTextPostProcessor text_post_processor;
+  const naim::runtime::ModelIdentity model_identity =
+      model_identity_builder.BuildRuntimePreferred(resolution);
+  const InteractionRuntimeTextSupport runtime_text_support;
   StreamedInteractionSegmentResult result;
   result.summary.index = segment_index;
   result.summary.continuation_index = segment_index;
@@ -2276,8 +1292,8 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
       [&](const nlohmann::json& fallback_payload,
           bool assign_only = false) -> std::optional<StreamedInteractionSegmentResult> {
         bool marker_seen_in_fallback = false;
-        const std::string fallback_text = RemoveCompletionMarkers(
-            comet::runtime::ModelAdapter::SanitizeVisibleText(
+        const std::string fallback_text = text_post_processor.RemoveCompletionMarkers(
+            naim::runtime::ModelAdapter::SanitizeVisibleText(
                 extract_interaction_text_(fallback_payload),
                 model_identity),
             policy.completion_marker,
@@ -2350,6 +1366,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
     };
 
     try {
+      const InteractionUpstreamEventParser upstream_event_parser;
       CompletionMarkerFilterState filter_state;
       nlohmann::json complete_payload = nlohmann::json::object();
       bool saw_complete = false;
@@ -2359,7 +1376,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
       std::string transport_buffer = std::move(stream.initial_body);
       std::string sse_buffer;
       if (stream.chunked_transfer) {
-        DecodeAvailableChunkedHttpBody(
+        upstream_event_parser.DecodeAvailableChunkedHttpBody(
             transport_buffer, &sse_buffer, &upstream_stream_finished);
       } else {
         sse_buffer = std::move(transport_buffer);
@@ -2374,7 +1391,8 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
               visible_text = openai_stream_raw_text.substr(
                   think_close + std::string("</think>").size());
             } else {
-              const std::string trimmed = TrimCopy(openai_stream_raw_text);
+              const std::string trimmed =
+                  runtime_text_support.TrimCopy(openai_stream_raw_text);
               if (!final_flush &&
                   (openai_stream_raw_text.find("<think>") !=
                        std::string::npos ||
@@ -2384,13 +1402,13 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
               visible_text = openai_stream_raw_text;
             }
             bool marker_seen = false;
-            visible_text = RemoveCompletionMarkers(
+            visible_text = text_post_processor.RemoveCompletionMarkers(
                 visible_text,
                 policy.completion_marker,
                 &marker_seen);
             filter_state.marker_seen = filter_state.marker_seen || marker_seen;
             visible_text = sanitize_interaction_text_(std::move(visible_text));
-            visible_text = comet::runtime::ModelAdapter::SanitizeVisibleText(
+            visible_text = naim::runtime::ModelAdapter::SanitizeVisibleText(
                 std::move(visible_text), model_identity);
             if (visible_text.empty()) {
               return;
@@ -2488,7 +1506,8 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
           }
           const nlohmann::json delta_payload =
               nlohmann::json::parse(frame.data);
-          const std::string filtered = ConsumeCompletionMarkerFilteredChunk(
+          const std::string filtered =
+              text_post_processor.ConsumeCompletionMarkerFilteredChunk(
               filter_state,
               delta_payload.value("delta", std::string{}),
               policy.completion_marker,
@@ -2518,7 +1537,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
 
       const auto drain_frames = [&](bool final_chunk) {
         if (stream.chunked_transfer) {
-          DecodeAvailableChunkedHttpBody(
+          upstream_event_parser.DecodeAvailableChunkedHttpBody(
               transport_buffer, &sse_buffer, &upstream_stream_finished);
         }
         if (final_chunk && !sse_buffer.empty() &&
@@ -2526,7 +1545,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
           sse_buffer.append("\n\n");
         }
         InteractionSseFrame frame;
-        while (TryConsumeSseFrame(sse_buffer, &frame)) {
+        while (upstream_event_parser.TryConsumeSseFrame(sse_buffer, &frame)) {
           if (!handle_frame(frame)) {
             break;
           }
@@ -2555,7 +1574,8 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
         }
       }
 
-      const std::string final_filtered = ConsumeCompletionMarkerFilteredChunk(
+      const std::string final_filtered =
+          text_post_processor.ConsumeCompletionMarkerFilteredChunk(
           filter_state,
           std::string{},
           policy.completion_marker,
@@ -2568,14 +1588,14 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
       }
 
       if (!saw_complete) {
-        if (TrimCopy(result.cleaned_text).empty()) {
+        if (runtime_text_support.IsBlank(result.cleaned_text)) {
           if (const auto fallback = run_non_stream_fallback();
               fallback.has_value()) {
             close_stream();
             return *fallback;
           }
         }
-        if (!saw_complete && !TrimCopy(result.cleaned_text).empty()) {
+        if (!saw_complete && !runtime_text_support.IsBlank(result.cleaned_text)) {
           complete_payload = nlohmann::json{
               {"model", result.model},
               {"finish_reason", "length"},
@@ -2620,7 +1640,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
       throw;
     }
   } catch (...) {
-    if (TrimCopy(result.cleaned_text).empty()) {
+    if (runtime_text_support.IsBlank(result.cleaned_text)) {
       try {
         if (const auto fallback = run_non_stream_fallback();
             fallback.has_value()) {
@@ -2656,7 +1676,7 @@ InteractionPlaneResolver::InteractionPlaneResolver(
 PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     const std::string& db_path,
     const std::string& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
 
   const auto desired_state = store.LoadDesiredState(plane_name);
@@ -2682,7 +1702,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       infer_runtime_present = std::any_of(
           instance_statuses.begin(),
           instance_statuses.end(),
-          [&](const comet::RuntimeProcessStatus& status) {
+          [&](const naim::RuntimeProcessStatus& status) {
             return status.instance_name == *infer_instance_name_opt;
           });
     }
@@ -2701,7 +1721,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     }
     if (!resolution.runtime_status.has_value() && observation_matches_plane &&
         !resolution.observation->runtime_status_json.empty()) {
-      const auto observed_runtime = comet::DeserializeRuntimeStatusJson(
+      const auto observed_runtime = naim::DeserializeRuntimeStatusJson(
           resolution.observation->runtime_status_json);
       if (observed_runtime.plane_name == plane_name &&
           (!infer_instance_name_opt.has_value() ||
@@ -2716,7 +1736,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     }
   }
 
-  const bool llm_plane = desired_state->plane_mode == comet::PlaneMode::Llm;
+  const bool llm_plane = desired_state->plane_mode == naim::PlaneMode::Llm;
   const bool running_plane =
       resolution.plane_record.has_value() && resolution.plane_record->state == "running";
   const PlaneSkillsService skills_service;
@@ -2728,8 +1748,8 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const auto skills_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),
-      [](const comet::InstanceSpec& instance) {
-        return instance.role == comet::InstanceRole::Skills;
+      [](const naim::InstanceSpec& instance) {
+        return instance.role == naim::InstanceRole::Skills;
       });
   const PlaneBrowsingService browsing_service;
   const bool browsing_enabled = browsing_service.IsEnabled(*desired_state);
@@ -2740,21 +1760,21 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   const auto browsing_instance = std::find_if(
       desired_state->instances.begin(),
       desired_state->instances.end(),
-      [](const comet::InstanceSpec& instance) {
-        return instance.role == comet::InstanceRole::Browsing;
+      [](const naim::InstanceSpec& instance) {
+        return instance.role == naim::InstanceRole::Browsing;
       });
   const bool data_parallel =
-      comet::DataParallelEnabled(desired_state->inference);
+      naim::DataParallelEnabled(desired_state->inference);
   const bool hybrid_data_parallel =
       data_parallel &&
-      desired_state->inference.data_parallel_lb_mode == comet::kDataParallelLbModeHybrid;
+      desired_state->inference.data_parallel_lb_mode == naim::kDataParallelLbModeHybrid;
   int expected_worker_members =
       std::max(0, desired_state->worker_group.expected_workers);
   int ready_worker_members = count_ready_worker_members_(store, *desired_state);
   int expected_replica_groups =
       resolution.runtime_status.has_value() && resolution.runtime_status->replica_groups_expected > 0
           ? resolution.runtime_status->replica_groups_expected
-          : comet::ExpectedReplicaGroupCount(
+          : naim::ExpectedReplicaGroupCount(
                 desired_state->inference,
                 desired_state->worker_group);
   if (ready_worker_members == 0 && resolution.runtime_status.has_value() &&
@@ -2762,10 +1782,11 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     ready_worker_members = expected_worker_members;
   }
   if (hybrid_data_parallel) {
+    const InteractionReplicaGroupSummaryBuilder replica_group_summary_builder;
     expected_replica_groups =
         resolution.runtime_status.has_value() && resolution.runtime_status->api_endpoints_expected > 0
             ? resolution.runtime_status->api_endpoints_expected
-            : ExpectedHybridApiEndpoints(*desired_state);
+            : replica_group_summary_builder.CountExpectedHybridApiEndpoints(*desired_state);
   }
   int ready_replica_groups =
       resolution.runtime_status.has_value() ? resolution.runtime_status->replica_groups_ready : 0;
@@ -2803,7 +1824,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   }
 
   if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {
-    comet::RuntimeStatus runtime;
+    naim::RuntimeStatus runtime;
     runtime.plane_name = desired_state->plane_name;
     runtime.control_root = desired_state->control_root;
     runtime.primary_infer_node = desired_state->inference.primary_infer_node;
@@ -2823,13 +1844,6 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       runtime.model_path = runtime.cached_local_model_path;
       runtime.active_model_ready = !runtime.active_model_id.empty();
     }
-    if (desired_state->turboquant.has_value() && desired_state->turboquant->enabled) {
-      runtime.turboquant_enabled = true;
-      runtime.active_cache_type_k = desired_state->turboquant->cache_type_k.value_or(
-          std::string(kTurboQuantDefaultCacheTypeK));
-      runtime.active_cache_type_v = desired_state->turboquant->cache_type_v.value_or(
-          std::string(kTurboQuantDefaultCacheTypeV));
-    }
     runtime.gateway_listen =
         desired_state->gateway.listen_host + ":" +
         std::to_string(desired_state->gateway.listen_port);
@@ -2845,7 +1859,9 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     runtime.inference_ready =
         probe_controller_target_ok_(resolution.target, "/v1/models");
     if (hybrid_data_parallel) {
-      const int expected_api_endpoints = ExpectedHybridApiEndpoints(*desired_state);
+      const InteractionReplicaGroupSummaryBuilder replica_group_summary_builder;
+      const int expected_api_endpoints =
+          replica_group_summary_builder.CountExpectedHybridApiEndpoints(*desired_state);
       runtime.api_endpoints_expected = expected_api_endpoints;
       runtime.api_endpoints_ready =
           runtime.inference_ready ? expected_api_endpoints : 0;
@@ -2867,7 +1883,9 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
         expected_worker_members = resolution.runtime_status->api_endpoints_expected;
         expected_replica_groups = resolution.runtime_status->api_endpoints_expected;
       } else {
-        expected_worker_members = ExpectedHybridApiEndpoints(*desired_state);
+        const InteractionReplicaGroupSummaryBuilder replica_group_summary_builder;
+        expected_worker_members =
+            replica_group_summary_builder.CountExpectedHybridApiEndpoints(*desired_state);
         expected_replica_groups = expected_worker_members;
       }
       if (resolution.runtime_status->api_endpoints_ready > 0) {
@@ -2929,7 +1947,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
     reason = "unsupported_local_runtime";
   } else if (!observation_ready) {
     reason = "no_observation";
-  } else if (resolution.observation->status == comet::HostObservationStatus::Failed) {
+  } else if (resolution.observation->status == naim::HostObservationStatus::Failed) {
     reason = "runtime_start_failed";
   } else if (!resolution.runtime_status.has_value()) {
     reason = "runtime_status_missing";
@@ -2965,7 +1983,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
 
   resolution.status_payload = nlohmann::json{
       {"plane_name", plane_name},
-      {"plane_mode", comet::ToString(desired_state->plane_mode)},
+      {"plane_mode", naim::ToString(desired_state->plane_mode)},
       {"interaction_enabled", llm_plane},
       {"skills_enabled", skills_enabled},
       {"skills_ready", skills_ready},
@@ -3222,7 +2240,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       {"runtime_status",
        resolution.runtime_status.has_value()
            ? nlohmann::json::parse(
-                 comet::SerializeRuntimeStatusJson(*resolution.runtime_status))
+                 naim::SerializeRuntimeStatusJson(*resolution.runtime_status))
            : nlohmann::json(nullptr)},
       {"failure_detail",
        reason == "unsupported_local_runtime"
@@ -3238,4 +2256,4 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   return resolution;
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

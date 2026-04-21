@@ -4,15 +4,27 @@
 #include <optional>
 #include <string>
 
-#include "comet/state/models.h"
+#include "naim/state/models.h"
 
-namespace comet::hostd::appsupport {
+namespace naim::hostd {
 
-std::optional<std::filesystem::path> DetectCometRepoRoot();
+class HostdRepoRootSupport final {
+ public:
+  std::optional<std::filesystem::path> DetectNaimRepoRoot() const;
+  std::optional<std::filesystem::path> ResolvePlaneOwnedPath(
+      const naim::DesiredState& state,
+      const std::string& relative_path,
+      const std::string& artifacts_root) const;
 
-std::optional<std::filesystem::path> ResolvePlaneOwnedPath(
-    const comet::DesiredState& state,
-    const std::string& relative_path,
-    const std::string& artifacts_root);
+ private:
+  static std::optional<std::filesystem::path> DetectNaimRepoRootNear(
+      const std::filesystem::path& start);
+  static std::optional<std::filesystem::path> FindRepoRootFromPath(
+      std::filesystem::path current);
+  static std::optional<std::filesystem::path> FindRepoRootInSiblingRepos(
+      std::filesystem::path current);
+  static bool LooksLikeNaimRepoRoot(const std::filesystem::path& path);
+  static std::string StripBundlePrefixIfPresent(const std::string& value);
+};
 
-}  // namespace comet::hostd::appsupport
+}  // namespace naim::hostd

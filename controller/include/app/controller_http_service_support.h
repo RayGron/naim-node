@@ -2,7 +2,7 @@
 
 #include "app/controller_main_includes.h"
 
-namespace comet::controller::http_service_support {
+namespace naim::controller::http_service_support {
 
 std::string BuildInteractionUpstreamBody(
     const PlaneInteractionResolution& resolution,
@@ -26,4 +26,4 @@ ModelLibraryService CreateModelLibraryService(
 ModelLibraryHttpService CreateModelLibraryHttpService(
     const ModelLibraryService& model_library_service);
 
-}  // namespace comet::controller::http_service_support
+}  // namespace naim::controller::http_service_support

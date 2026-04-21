@@ -1,4 +1,5 @@
 export const MODEL_LIBRARY_FORMAT_OPTIONS = [
+  { value: "source", label: "Source files" },
   { value: "gguf", label: "GGUF" },
   { value: "safetensors", label: "safetensors" },
 ];
@@ -45,7 +46,8 @@ export function detectModelSourceFormat(value) {
     if (
       normalized.endsWith(".json") ||
       normalized.endsWith(".model") ||
-      normalized.endsWith(".txt")
+      normalized.endsWith(".txt") ||
+      normalized.endsWith(".jinja")
     ) {
       continue;
     }
@@ -70,6 +72,20 @@ export function shouldShowGgufConversionOptions(detectedSourceFormat, desiredFor
     normalizeModelDownloadFormat(detectedSourceFormat) === "safetensors" &&
     normalizeModelDownloadFormat(desiredFormat) === "gguf"
   );
+}
+
+export function modelLibraryJobProgress(job) {
+  const bytesDone = Number(job?.bytes_done ?? 0);
+  const bytesTotal = Number(job?.bytes_total ?? NaN);
+  if (
+    !Number.isFinite(bytesDone) ||
+    !Number.isFinite(bytesTotal) ||
+    bytesTotal <= 0 ||
+    bytesTotal < bytesDone
+  ) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, (bytesDone / bytesTotal) * 100));
 }
 
 export function normalizeModelLibraryJobKind(value) {

@@ -3,7 +3,7 @@
 #include <map>
 #include <string>
 
-namespace comet::devtool {
+namespace naim::devtool {
 
 struct HttpRequest {
   std::string method;
@@ -21,4 +21,4 @@ struct HttpResponse {
 
 HttpResponse PerformHttpRequest(const HttpRequest& request);
 
-}  // namespace comet::devtool
+}  // namespace naim::devtool

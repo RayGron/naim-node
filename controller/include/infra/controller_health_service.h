@@ -4,11 +4,11 @@
 
 #include <nlohmann/json.hpp>
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerHealthService {
  public:
   nlohmann::json BuildPayload(const std::string& db_path) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

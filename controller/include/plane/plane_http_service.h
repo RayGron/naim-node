@@ -19,7 +19,7 @@ class PlaneHttpService {
  public:
   PlaneHttpService(
       PlaneHttpSupport support,
-      comet::controller::PlaneSkillCatalogService plane_skill_catalog_service);
+      naim::controller::PlaneSkillCatalogService plane_skill_catalog_service);
 
   std::optional<HttpResponse> HandleRequest(
       const std::string& db_path,
@@ -43,6 +43,6 @@ class PlaneHttpService {
       const HttpRequest& request) const;
 
   PlaneHttpSupport support_;
-  comet::controller::PlaneSkillCatalogService plane_skill_catalog_service_;
+  naim::controller::PlaneSkillCatalogService plane_skill_catalog_service_;
   PlaneDesiredStateRequestParser request_parser_;
 };

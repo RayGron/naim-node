@@ -1,13 +1,13 @@
-#include "comet/state/sqlite_store_schema.h"
+#include "naim/state/sqlite_store_schema.h"
 
 #include <string>
 #include <vector>
 
-#include "comet/state/sqlite_statement.h"
-#include "comet/state/sqlite_store_support.h"
-#include "comet/state/state_json.h"
+#include "naim/state/sqlite_statement.h"
+#include "naim/state/sqlite_store_support.h"
+#include "naim/state/state_json.h"
 
-namespace comet::sqlite_store_schema {
+namespace naim::sqlite_store_schema {
 
 namespace {
 
@@ -113,6 +113,11 @@ void InitializeSchema(
       "model_library_download_jobs",
       "keep_base_gguf",
       "keep_base_gguf INTEGER NOT NULL DEFAULT 1");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
+      "node_name",
+      "node_name TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "control_root", "control_root TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "artifacts_root", "artifacts_root TEXT NOT NULL DEFAULT ''");
   EnsureColumn(db, "planes", "plane_mode", "plane_mode TEXT NOT NULL DEFAULT 'compute'");
@@ -256,6 +261,53 @@ void InitializeSchema(
       "registered_hosts",
       "public_key_base64",
       "public_key_base64 TEXT NOT NULL DEFAULT ''");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS host_peer_links("
+      "observer_node_name TEXT NOT NULL,"
+      "peer_node_name TEXT NOT NULL,"
+      "peer_endpoint TEXT NOT NULL DEFAULT '',"
+      "local_interface TEXT NOT NULL DEFAULT '',"
+      "remote_address TEXT NOT NULL DEFAULT '',"
+      "seen_udp INTEGER NOT NULL DEFAULT 0,"
+      "tcp_reachable INTEGER NOT NULL DEFAULT 0,"
+      "rtt_ms INTEGER NOT NULL DEFAULT 0,"
+      "last_seen_at TEXT NOT NULL DEFAULT '',"
+      "last_probe_at TEXT NOT NULL DEFAULT '',"
+      "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "PRIMARY KEY(observer_node_name, peer_node_name)"
+      ");");
+  Exec(
+      db,
+      "CREATE INDEX IF NOT EXISTS idx_host_peer_links_peer "
+      "ON host_peer_links(peer_node_name, observer_node_name);");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS file_transfer_tickets("
+      "ticket_id TEXT PRIMARY KEY,"
+      "source_node_name TEXT NOT NULL,"
+      "requester_node_name TEXT NOT NULL,"
+      "source_paths_json TEXT NOT NULL DEFAULT '[]',"
+      "expires_at TEXT NOT NULL,"
+      "max_chunk_bytes INTEGER NOT NULL DEFAULT 0,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "last_validated_at TEXT NOT NULL DEFAULT ''"
+      ");");
+  Exec(
+      db,
+      "CREATE TABLE IF NOT EXISTS file_upload_tickets("
+      "ticket_id TEXT PRIMARY KEY,"
+      "target_node_name TEXT NOT NULL,"
+      "uploader_node_name TEXT NOT NULL,"
+      "target_relative_path TEXT NOT NULL,"
+      "sha256 TEXT NOT NULL DEFAULT '',"
+      "size_bytes INTEGER NOT NULL DEFAULT 0,"
+      "if_missing INTEGER NOT NULL DEFAULT 1,"
+      "expires_at TEXT NOT NULL,"
+      "max_chunk_bytes INTEGER NOT NULL DEFAULT 0,"
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "last_validated_at TEXT NOT NULL DEFAULT ''"
+      ");");
   Exec(
       db,
       "CREATE TABLE IF NOT EXISTS interaction_sessions("
@@ -415,6 +467,36 @@ void InitializeSchema(
   EnsureColumn(
       db,
       "registered_hosts",
+      "onboarding_key_hash",
+      "onboarding_key_hash TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "onboarding_state",
+      "onboarding_state TEXT NOT NULL DEFAULT 'none'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "derived_role",
+      "derived_role TEXT NOT NULL DEFAULT 'ineligible'");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "role_reason",
+      "role_reason TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "storage_role_enabled",
+      "storage_role_enabled INTEGER NOT NULL DEFAULT 0");
+  EnsureColumn(
+      db,
+      "registered_hosts",
+      "last_inventory_scan_at",
+      "last_inventory_scan_at TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "registered_hosts",
       "session_state",
       "session_state TEXT NOT NULL DEFAULT 'disconnected'");
   EnsureColumn(
@@ -460,8 +542,13 @@ void InitializeSchema(
   EnsureColumn(
       db,
       "model_library_download_jobs",
+      "node_name",
+      "node_name TEXT NOT NULL DEFAULT ''");
+  EnsureColumn(
+      db,
+      "model_library_download_jobs",
       "hidden",
       "hidden INTEGER NOT NULL DEFAULT 0");
 }
 
-}  // namespace comet::sqlite_store_schema
+}  // namespace naim::sqlite_store_schema

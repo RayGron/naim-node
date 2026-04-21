@@ -25,7 +25,7 @@ bool ChildCanAcquire(const std::string& root, const std::string& node) {
     throw std::runtime_error("fork failed");
   }
   if (pid == 0) {
-    const auto lock = comet::hostd::HostdAssignmentLock::TryAcquire(root, node);
+    const auto lock = naim::hostd::HostdAssignmentLock::TryAcquire(root, node);
     _exit(lock.has_value() ? 0 : 2);
   }
   int status = 0;
@@ -37,13 +37,13 @@ bool ChildCanAcquire(const std::string& root, const std::string& node) {
 }  // namespace
 
 int main() {
-  const fs::path root = fs::temp_directory_path() / "comet-hostd-assignment-lock-tests";
+  const fs::path root = fs::temp_directory_path() / "naim-hostd-assignment-lock-tests";
   std::error_code error;
   fs::remove_all(root, error);
   fs::create_directories(root);
 
   {
-    const auto lock = comet::hostd::HostdAssignmentLock::TryAcquire(root.string(), "node-a");
+    const auto lock = naim::hostd::HostdAssignmentLock::TryAcquire(root.string(), "node-a");
     Expect(lock.has_value(), "parent should acquire node lock");
     Expect(!ChildCanAcquire(root.string(), "node-a"),
            "child should not acquire node lock while parent holds it");

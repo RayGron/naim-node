@@ -12,15 +12,15 @@
 
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
-#include "comet/state/models.h"
-#include "comet/core/platform_compat.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/core/platform_compat.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerHttpServer {
  public:
-  using SocketHandle = comet::platform::SocketHandle;
+  using SocketHandle = naim::platform::SocketHandle;
   using RequestHandlerFn = std::function<HttpResponse(const HttpRequest&)>;
   using StreamInteractionSseFn = std::function<void(
       SocketHandle,
@@ -29,7 +29,7 @@ class ControllerHttpServer {
   using ParseInteractionStreamPlaneNameFn = std::function<
       std::optional<std::string>(const std::string&, const std::string&)>;
   using BuildEventPayloadItemFn = std::function<nlohmann::json(
-      const comet::EventRecord&)>;
+      const naim::EventRecord&)>;
 
   struct Deps {
     RequestHandlerFn handle_request;
@@ -57,7 +57,7 @@ class ControllerHttpServer {
   };
 
   static void InstallSignalHandlers(std::atomic<bool>* stop_requested);
-  static std::string BuildSseEventName(const comet::EventRecord& event);
+  static std::string BuildSseEventName(const naim::EventRecord& event);
   static void StreamEventsSse(
       SocketHandle client_fd,
       const std::string& db_path,
@@ -68,4 +68,4 @@ class ControllerHttpServer {
   Deps deps_;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

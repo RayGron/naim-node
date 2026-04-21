@@ -18,11 +18,11 @@
 class PlaneHttpSupport final {
  public:
   PlaneHttpSupport(
-      const comet::controller::ControllerRequestSupport& request_support,
-      const comet::controller::PlaneMutationService& plane_mutation_service,
-      const comet::controller::PlaneRegistryService& plane_registry_service,
-      const comet::controller::ControllerStateService& controller_state_service,
-      const comet::controller::DashboardService& dashboard_service,
+      const naim::controller::ControllerRequestSupport& request_support,
+      const naim::controller::PlaneMutationService& plane_mutation_service,
+      const naim::controller::PlaneRegistryService& plane_registry_service,
+      const naim::controller::ControllerStateService& controller_state_service,
+      const naim::controller::DashboardService& dashboard_service,
       int stale_after_seconds);
 
   HttpResponse build_json_response(
@@ -40,32 +40,32 @@ class PlaneHttpSupport final {
       const std::optional<std::string>& artifacts_root_arg,
       const std::string& fallback_artifacts_root) const;
   nlohmann::json build_controller_action_payload(
-      const comet::controller::ControllerActionResult& result) const;
-  comet::controller::ControllerActionResult upsert_plane_state_action(
+      const naim::controller::ControllerActionResult& result) const;
+  naim::controller::ControllerActionResult upsert_plane_state_action(
       const std::string& db_path,
       const std::string& desired_state_json,
       const std::string& artifacts_root,
       const std::optional<std::string>& plane_name,
       const std::string& source) const;
-  comet::controller::ControllerActionResult start_plane_action(
+  naim::controller::ControllerActionResult start_plane_action(
       const std::string& db_path,
       const std::string& plane_name) const;
-  comet::controller::ControllerActionResult stop_plane_action(
+  naim::controller::ControllerActionResult stop_plane_action(
       const std::string& db_path,
       const std::string& plane_name) const;
-  comet::controller::ControllerActionResult delete_plane_action(
+  naim::controller::ControllerActionResult delete_plane_action(
       const std::string& db_path,
       const std::string& plane_name) const;
   int default_stale_after_seconds() const;
-  const comet::controller::PlaneRegistryService* plane_registry_service() const;
-  const comet::controller::ControllerStateService* controller_state_service() const;
-  const comet::controller::DashboardService* dashboard_service() const;
+  const naim::controller::PlaneRegistryService* plane_registry_service() const;
+  const naim::controller::ControllerStateService* controller_state_service() const;
+  const naim::controller::DashboardService* dashboard_service() const;
 
  private:
-  const comet::controller::ControllerRequestSupport& request_support_;
-  const comet::controller::PlaneMutationService& plane_mutation_service_;
-  const comet::controller::PlaneRegistryService& plane_registry_service_;
-  const comet::controller::ControllerStateService& controller_state_service_;
-  const comet::controller::DashboardService& dashboard_service_;
+  const naim::controller::ControllerRequestSupport& request_support_;
+  const naim::controller::PlaneMutationService& plane_mutation_service_;
+  const naim::controller::PlaneRegistryService& plane_registry_service_;
+  const naim::controller::ControllerStateService& controller_state_service_;
+  const naim::controller::DashboardService& dashboard_service_;
   int stale_after_seconds_;
 };

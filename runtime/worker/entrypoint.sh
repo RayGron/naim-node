@@ -2,17 +2,17 @@
 set -euo pipefail
 
 mkdir -p /tmp
-boot_mode="${COMET_WORKER_BOOT_MODE:-llama-idle}"
-echo "[comet-worker] booting plane=${COMET_PLANE_NAME:-unknown} instance=${COMET_INSTANCE_NAME:-unknown}"
-echo "[comet-worker] control_root=${COMET_CONTROL_ROOT:-unknown}"
-echo "[comet-worker] boot_mode=${boot_mode}"
+boot_mode="${NAIM_WORKER_BOOT_MODE:-llama-idle}"
+echo "[naim-worker] booting plane=${NAIM_PLANE_NAME:-unknown} instance=${NAIM_INSTANCE_NAME:-unknown}"
+echo "[naim-worker] control_root=${NAIM_CONTROL_ROOT:-unknown}"
+echo "[naim-worker] boot_mode=${boot_mode}"
 
 case "${boot_mode}" in
   llama-load|llama-idle|llama-rpc)
-    exec /runtime/bin/comet-workerd
+    exec /runtime/bin/naim-workerd
     ;;
   *)
-    echo "[comet-worker] unsupported boot mode: ${boot_mode}" >&2
+    echo "[naim-worker] unsupported boot mode: ${boot_mode}" >&2
     exit 1
     ;;
 esac

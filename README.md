@@ -1,8 +1,15 @@
-# comet-node
+# naim-node
 
-`comet-node` is a C++ control plane for Docker-based LLM and GPU workloads.
-It manages plane state, host realization, model downloads, telemetry, and authenticated
-interaction endpoints for both application-backed planes and external clients such as Maglev.
+`naim-node` is the implementation repository for the `naim` platform.
+At the product level, the platform is split into:
+
+- `naim`: the control point and operator-facing management surface
+- `naim-node`: the managed host agent package that runs on connected nodes
+
+This repository currently contains both sides of that split through `naim-controller`,
+`naim-hostd`, and the `naim-node` launcher. Together they manage plane state, node realization,
+model workflows, telemetry, and authenticated interaction endpoints for both application-backed
+planes and external clients such as Maglev.
 
 The current primary runtime path is `llama.cpp + llama_rpc` with support for:
 
@@ -16,11 +23,18 @@ The current primary runtime path is `llama.cpp + llama_rpc` with support for:
 
 ## What It Does
 
-`comet-node` currently provides:
+`naim-node` currently provides:
 
-- a SQLite-backed `comet-controller` that stores desired state, rollout state, model-library jobs, auth data, and plane metadata
-- a `comet-hostd` agent that realizes compose artifacts, managed disks, runtime configs, and host telemetry
-- `llama.cpp + llama_rpc` orchestration for same-host and split-host GPU layouts
+- a SQLite-backed `naim-controller` that implements the `naim` control point and stores desired
+  state, rollout state, model-library jobs, auth data, plane metadata, and the connected-node
+  registry
+- a `naim-hostd` agent that implements `naim-node` and realizes compose artifacts, managed
+  disks, runtime configs, and host telemetry on managed nodes
+- secure outbound `naim-node -> naim` connectivity, so managed nodes can connect from behind NAT
+  or firewalls without needing a permanent public IP
+- node inventory scans on connect plus periodic rescans, with controller-derived `Storage` /
+  `Worker` role assignment
+- `llama.cpp + llama_rpc` orchestration for co-located, same-host, and split-host GPU layouts
 - controller-owned interaction endpoints:
   - `/api/v1/planes/<plane>/interaction/status`
   - `/api/v1/planes/<plane>/interaction/models`
@@ -29,6 +43,7 @@ The current primary runtime path is `llama.cpp + llama_rpc` with support for:
 - hidden-thinking support with request-level overrides and plane-level defaults
 - an operator web UI with:
   - plane lifecycle controls
+  - connected-node inventory, role, and plane-participation views
   - host and plane telemetry
   - live charts
   - model library management
@@ -40,10 +55,27 @@ The current primary runtime path is `llama.cpp + llama_rpc` with support for:
 
 At a high level:
 
-- `comet-controller` owns state, HTTP APIs, auth, plane interaction proxying, and the operator UI
-- `comet-hostd` runs on nodes and applies the controller's host assignments
+- `naim` owns onboarding, desired state, scheduling, plane lifecycle, model-library workflows,
+  auth, APIs, and the operator UI
+- `naim-node` runs on managed hosts, scans local inventory, dials out to `naim`, and applies the
+  control point's host assignments
+- `naim-controller` and `naim-hostd` are the current implementation binaries behind that product
+  split
+- co-locating `naim` and `naim-node` on the same machine is a supported normal deployment shape
 - runtime containers are materialized from rendered compose artifacts and per-instance runtime configs
 - LLM planes use `llama.cpp` as the inference runtime and `llama_rpc` as the distributed backend by default
+
+Canonical node-role rules are currently:
+
+- `Storage`: no GPU, disk `> 100 GB`
+- `Worker`: one or more GPUs, RAM `>= 32 GB`, disk `> 100 GB`
+
+Storage capability is tracked separately from the single `derived_role`, so a `Worker` with
+sufficient storage can also be storage-role eligible and operate in both roles when that storage
+role is enabled.
+
+Nodes that do not meet either rule stay connected and observable, but they are not eligible for
+role-dependent placement until a later scan changes their inventory classification.
 
 For replica-parallel `llama_rpc`, the effective instance topology is:
 
@@ -57,7 +89,7 @@ For replica-parallel `llama_rpc`, the effective instance topology is:
 - `common/`: shared state models, JSON/projector/renderer code, planning, importing, SQLite support
 - `controller/`: controller HTTP surface, auth, model library, interaction proxying, rollout orchestration
 - `hostd/`: host agent, telemetry collection, disk lifecycle, local realization logic
-- `runtime/`: runtime images and binaries for infer, worker, base, and web UI
+- `runtime/`: runtime images and binaries for controller, hostd, infer, worker, skills, webgateway, base, and web UI
 - `ui/operator-react/`: operator frontend
 - `config/`: shipped example plane configs and runtime examples
 - `scripts/`: build, smoke, benchmark, and convenience scripts
@@ -83,8 +115,12 @@ See [`config/v2-examples.README.md`](./config/v2-examples.README.md) for a compa
 The repo ships runtime Dockerfiles for the current stack:
 
 - [`runtime/base/Dockerfile`](./runtime/base/Dockerfile)
+- [`runtime/controller/Dockerfile`](./runtime/controller/Dockerfile)
+- [`runtime/hostd/Dockerfile`](./runtime/hostd/Dockerfile)
 - [`runtime/infer/Dockerfile`](./runtime/infer/Dockerfile)
 - [`runtime/worker/Dockerfile`](./runtime/worker/Dockerfile)
+- [`runtime/skills/Dockerfile`](./runtime/skills/Dockerfile)
+- [`runtime/browsing/Dockerfile`](./runtime/browsing/Dockerfile)
 - [`runtime/web-ui/Dockerfile`](./runtime/web-ui/Dockerfile)
 
 Build local dev images with:
@@ -95,10 +131,14 @@ Build local dev images with:
 
 The common dev image names are:
 
-- `comet/base-runtime:dev`
-- `comet/infer-runtime:dev`
-- `comet/worker-runtime:dev`
-- `comet/web-ui:dev`
+- `naim/base-runtime:dev`
+- `naim/controller:dev`
+- `naim/hostd:dev`
+- `naim/infer-runtime:dev`
+- `naim/worker-runtime:dev`
+- `naim/skills-runtime:dev`
+- `naim/webgateway-runtime:dev`
+- `naim/web-ui:dev`
 
 ## Dependencies
 
@@ -129,7 +169,7 @@ That default is equivalent to a host build in `Debug`. The scripts now resolve h
 architecture, build directory, `vcpkg` toolchain, and CUDA/OpenMP hints automatically.
 
 Build output paths are grouped by platform and architecture. By default they live under
-`build/`, but you can relocate the build root with `COMET_BUILD_ROOT`.
+`build/`, but you can relocate the build root with `NAIM_BUILD_ROOT`.
 
 Examples:
 
@@ -168,7 +208,7 @@ Explicit non-host targets still work:
 ```
 
 For the current multi-repo workspace and VS Code user-settings split, see
-[`../comet-docs/process/build-vscode-setup.md`](../comet-docs/process/build-vscode-setup.md).
+[`../naim-docs/process/build-vscode-setup.md`](../naim-docs/process/build-vscode-setup.md).
 
 ## Windows Builds
 
@@ -197,19 +237,19 @@ BUILD_DIR="$(./scripts/print-build-dir.sh)"
 Initialize a local controller DB:
 
 ```bash
-"${BUILD_DIR}/comet-controller" init-db --db var/controller.sqlite
+"${BUILD_DIR}/naim-controller" init-db --db var/controller.sqlite
 ```
 
 Validate a `desired-state.v2.json` bundle:
 
 ```bash
-"${BUILD_DIR}/comet-controller" validate-bundle --bundle config/v2-llama-rpc-backend
+"${BUILD_DIR}/naim-controller" validate-bundle --bundle config/v2-llama-rpc-backend
 ```
 
 Apply a v2 plane state directly:
 
 ```bash
-"${BUILD_DIR}/comet-controller" apply-state-file \
+"${BUILD_DIR}/naim-controller" apply-state-file \
   --db var/controller.sqlite \
   --artifacts-root var/artifacts \
   --state config/v2-llama-rpc-backend/desired-state.v2.json
@@ -218,7 +258,7 @@ Apply a v2 plane state directly:
 Import a bundle directory that contains `desired-state.v2.json`:
 
 ```bash
-"${BUILD_DIR}/comet-controller" import-bundle \
+"${BUILD_DIR}/naim-controller" import-bundle \
   --bundle config/v2-llama-rpc-backend \
   --db var/controller.sqlite
 ```
@@ -273,11 +313,28 @@ It currently supports:
 - discovery of cached models
 - direct downloads into configured roots
 - multipart downloads
+- placement-aware model import onto connected `Storage` or `Worker` nodes with sufficient free
+  capacity
+- worker-only quantization target selection, where the selected `Worker` both stores and quantizes
+  the model artifact
 - stop, resume, hide, and delete operations
 - persistent download jobs across controller restart
 - progress reporting in the UI
 
 The model-library HTTP routes are part of the controller API surface.
+
+Current placement contract:
+
+- model import requires an explicit destination node choice
+- only nodes with enough free capacity for the full resulting artifact are shown as eligible
+- non-quantized imports may target either `Storage` or `Worker`
+- quantized imports may target only `Worker`
+
+For plane-local support services, the current target contract is:
+
+- the canonical `SkillsFactory` container lives on `naim`
+- replicated `skills-<plane>` runtime containers live on the same machine as the plane's `app`
+  container
 
 ## Telemetry And Dashboard
 
@@ -285,7 +342,8 @@ The operator UI now includes a real dashboard rather than a stub status page.
 Current dashboard capabilities include:
 
 - server telemetry summaries
-- host cards with runtime, memory, GPU, and temperature posture
+- host cards with runtime, memory, GPU, disk, and temperature posture
+- connected-node role, inventory, and plane participation visibility
 - active plane overview
 - plane detail modal with status and interaction views
 - live charts for key server and plane metrics
@@ -315,4 +373,4 @@ For new work:
 - use `desired-state.v2.json`
 - prefer `llama.cpp + llama_rpc`
 - prefer controller-owned interaction endpoints
-- treat the operator UI and model library as first-class project surfaces
+- treat the operator UI, node registry, and model library as first-class project surfaces

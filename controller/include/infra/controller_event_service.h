@@ -5,14 +5,14 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 class ControllerEventService {
  public:
   void AppendEvent(
-      comet::ControllerStore& store,
+      naim::ControllerStore& store,
       const std::string& category,
       const std::string& event_type,
       const std::string& message,
@@ -28,4 +28,4 @@ class ControllerEventService {
   std::string SerializePayload(const nlohmann::json& payload) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

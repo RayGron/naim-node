@@ -24,7 +24,7 @@
 
 #include "browsing/cef_support.h"
 
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
 #include "include/cef_browser.h"
 #include "include/cef_browser_process_handler.h"
 #include "include/cef_devtools_message_observer.h"
@@ -39,9 +39,9 @@
 #include "include/cef_task.h"
 #endif
 
-namespace comet::browsing {
+namespace naim::browsing {
 
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -718,7 +718,7 @@ class CefBrowserBackend::Impl {
   explicit Impl(std::filesystem::path state_root) : state_root_(std::move(state_root)) {}
 
   bool IsAvailable() const {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
     return CefRuntimeEnabled();
 #else
     return false;
@@ -730,7 +730,7 @@ class CefBrowserBackend::Impl {
       const std::filesystem::path& worker_root,
       std::string* error_message,
       bool include_html_source) const {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
     if (!IsAvailable()) {
       if (error_message != nullptr) {
         *error_message = "CEF runtime is not initialized";
@@ -769,7 +769,7 @@ class CefBrowserBackend::Impl {
       const std::filesystem::path& session_root,
       const std::string& url,
       std::string* error_message) {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
     if (!IsAvailable()) {
       if (error_message != nullptr) {
         *error_message = "CEF runtime is not initialized";
@@ -826,7 +826,7 @@ class CefBrowserBackend::Impl {
   std::optional<CefRenderedDocument> SnapshotSession(
       const std::string& session_id,
       std::string* error_message) const {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
     CefRefPtr<SessionClient> client = FindSession(session_id);
     if (!client) {
       if (error_message != nullptr) {
@@ -857,7 +857,7 @@ class CefBrowserBackend::Impl {
   std::optional<CefRenderedDocument> ExtractSession(
       const std::string& session_id,
       std::string* error_message) const {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
     CefRefPtr<SessionClient> client = FindSession(session_id);
     if (!client) {
       if (error_message != nullptr) {
@@ -885,7 +885,7 @@ class CefBrowserBackend::Impl {
   }
 
   void DeleteSession(const std::string& session_id) {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
     CefRefPtr<SessionClient> client;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -905,7 +905,7 @@ class CefBrowserBackend::Impl {
   }
 
  private:
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   CefRefPtr<SessionClient> FindSession(const std::string& session_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = sessions_.find(session_id);
@@ -915,7 +915,7 @@ class CefBrowserBackend::Impl {
 
   std::filesystem::path state_root_;
   mutable std::mutex mutex_;
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   mutable std::unordered_map<std::string, CefRefPtr<SessionClient>> sessions_;
 #endif
 };
@@ -961,4 +961,4 @@ void CefBrowserBackend::DeleteSession(const std::string& session_id) {
   impl_->DeleteSession(session_id);
 }
 
-}  // namespace comet::browsing
+}  // namespace naim::browsing

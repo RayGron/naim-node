@@ -15,9 +15,9 @@
 class ReadModelHttpSupport final {
  public:
   ReadModelHttpSupport(
-      const comet::controller::ReadModelService& read_model_service,
+      const naim::controller::ReadModelService& read_model_service,
       const SchedulerViewService& scheduler_view_service,
-      const comet::controller::StateAggregateLoader& state_aggregate_loader,
+      const naim::controller::StateAggregateLoader& state_aggregate_loader,
       int stale_after_seconds);
 
   HttpResponse build_json_response(
@@ -31,7 +31,7 @@ class ReadModelHttpSupport final {
       const HttpRequest& request,
       const std::string& key) const;
   int default_stale_after_seconds() const;
-  const comet::controller::ReadModelService* read_model_service() const;
+  const naim::controller::ReadModelService* read_model_service() const;
   const SchedulerViewService* scheduler_view_service() const;
   RolloutActionsViewData load_rollout_actions_view_data(
       const std::string& db_path,
@@ -44,8 +44,8 @@ class ReadModelHttpSupport final {
       const std::optional<std::string>& plane_name) const;
 
  private:
-  const comet::controller::ReadModelService& read_model_service_;
+  const naim::controller::ReadModelService& read_model_service_;
   const SchedulerViewService& scheduler_view_service_;
-  const comet::controller::StateAggregateLoader& state_aggregate_loader_;
+  const naim::controller::StateAggregateLoader& state_aggregate_loader_;
   int stale_after_seconds_;
 };

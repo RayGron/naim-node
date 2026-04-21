@@ -12,8 +12,8 @@
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
 
-#include "comet/state/models.h"
-#include "comet/state/sqlite_store.h"
+#include "naim/state/models.h"
+#include "naim/state/sqlite_store.h"
 
 class AuthHttpService {
  public:

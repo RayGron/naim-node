@@ -7,10 +7,10 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/state/sqlite_store.h"
-#include "comet/state/state_json.h"
+#include "naim/state/sqlite_store.h"
+#include "naim/state/state_json.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
@@ -133,13 +133,13 @@ PlaneSkillCatalogService::PlaneSkillInput PlaneSkillCatalogService::ParsePlaneSk
     input.internal = payload.at("internal").get<bool>();
   }
   input.session_ids = UniqueNonEmptyStringArray(payload, "session_ids");
-  input.comet_links = UniqueNonEmptyStringArray(payload, "comet_links");
+  input.naim_links = UniqueNonEmptyStringArray(payload, "naim_links");
   return input;
 }
 
 nlohmann::json PlaneSkillCatalogService::BuildSkillPayload(
-    comet::ControllerStore& store,
-    const comet::DesiredState& desired_state,
+    naim::ControllerStore& store,
+    const naim::DesiredState& desired_state,
     const std::string& plane_name,
     const std::string& skill_id) const {
   if (!desired_state.skills.has_value() || !ContainsSkillId(desired_state.skills->factory_skill_ids, skill_id)) {
@@ -159,7 +159,7 @@ nlohmann::json PlaneSkillCatalogService::BuildSkillPayload(
       {"internal", canonical->internal},
       {"enabled", !binding.has_value() || binding->enabled},
       {"session_ids", binding.has_value() ? json(binding->session_ids) : json::array()},
-      {"comet_links", binding.has_value() ? json(binding->comet_links) : json::array()},
+      {"naim_links", binding.has_value() ? json(binding->naim_links) : json::array()},
       {"created_at", canonical->created_at},
       {"updated_at",
        binding.has_value() ? MaxTimestamp(canonical->updated_at, binding->updated_at)
@@ -170,7 +170,7 @@ nlohmann::json PlaneSkillCatalogService::BuildSkillPayload(
 nlohmann::json PlaneSkillCatalogService::BuildListPayload(
     const std::string& db_path,
     const std::string& plane_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state = store.LoadDesiredState(plane_name);
   if (!desired_state.has_value()) {
@@ -189,7 +189,7 @@ nlohmann::json PlaneSkillCatalogService::BuildSkillPayload(
     const std::string& db_path,
     const std::string& plane_name,
     const std::string& skill_id) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto desired_state = store.LoadDesiredState(plane_name);
   if (!desired_state.has_value()) {
@@ -203,14 +203,14 @@ nlohmann::json PlaneSkillCatalogService::CreateSkill(
     const std::string& plane_name,
     const nlohmann::json& payload,
     const std::string& fallback_artifacts_root) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   auto desired_state = store.LoadDesiredState(plane_name);
   const auto plane = store.LoadPlane(plane_name);
   if (!desired_state.has_value() || !plane.has_value()) {
     throw std::runtime_error("plane '" + plane_name + "' not found");
   }
-  if (desired_state->plane_mode != comet::PlaneMode::Llm) {
+  if (desired_state->plane_mode != naim::PlaneMode::Llm) {
     throw std::runtime_error("skills are available only for llm planes");
   }
   if (!desired_state->skills.has_value() || !desired_state->skills->enabled) {
@@ -221,7 +221,7 @@ nlohmann::json PlaneSkillCatalogService::CreateSkill(
   input.id = GenerateSkillId();
 
   const auto existing_canonical = store.LoadSkillsFactorySkill(input.id);
-  comet::SkillsFactorySkillRecord canonical;
+  naim::SkillsFactorySkillRecord canonical;
   canonical.id = input.id;
   canonical.name = input.name;
   canonical.description = input.description;
@@ -232,17 +232,17 @@ nlohmann::json PlaneSkillCatalogService::CreateSkill(
   canonical.updated_at = "";
   store.UpsertSkillsFactorySkill(canonical);
 
-  comet::PlaneSkillBindingRecord binding;
+  naim::PlaneSkillBindingRecord binding;
   binding.plane_name = plane_name;
   binding.skill_id = input.id;
   binding.enabled = input.enabled;
   binding.session_ids = input.session_ids;
-  binding.comet_links = input.comet_links;
+  binding.naim_links = input.naim_links;
   store.UpsertPlaneSkillBinding(binding);
 
   auto next_state = *desired_state;
   if (!next_state.skills.has_value()) {
-    next_state.skills = comet::SkillsSettings{};
+    next_state.skills = naim::SkillsSettings{};
     next_state.skills->enabled = true;
   }
   if (!ContainsSkillId(next_state.skills->factory_skill_ids, input.id)) {
@@ -253,7 +253,7 @@ nlohmann::json PlaneSkillCatalogService::CreateSkill(
       db_path, plane_name, fallback_artifacts_root);
   const auto result = plane_mutation_service_.ExecuteUpsertPlaneStateAction(
       db_path,
-      comet::SerializeDesiredStateJson(next_state),
+      naim::SerializeDesiredStateJson(next_state),
       artifacts_root,
       plane_name,
       "plane-skills:create");
@@ -273,7 +273,7 @@ nlohmann::json PlaneSkillCatalogService::UpdateSkill(
     const nlohmann::json& payload,
     bool partial,
     const std::string& fallback_artifacts_root) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   auto desired_state = store.LoadDesiredState(plane_name);
   if (!desired_state.has_value()) {
@@ -293,7 +293,7 @@ nlohmann::json PlaneSkillCatalogService::UpdateSkill(
   }
 
   const auto input = ParsePlaneSkillInput(payload, partial);
-  comet::SkillsFactorySkillRecord canonical = *canonical_current;
+  naim::SkillsFactorySkillRecord canonical = *canonical_current;
   if (!input.name.empty()) {
     canonical.name = input.name;
   }
@@ -311,7 +311,7 @@ nlohmann::json PlaneSkillCatalogService::UpdateSkill(
   }
   store.UpsertSkillsFactorySkill(canonical);
 
-  comet::PlaneSkillBindingRecord binding;
+  naim::PlaneSkillBindingRecord binding;
   if (binding_current.has_value()) {
     binding = *binding_current;
   } else {
@@ -324,8 +324,8 @@ nlohmann::json PlaneSkillCatalogService::UpdateSkill(
   if (!partial || payload.contains("session_ids")) {
     binding.session_ids = input.session_ids;
   }
-  if (!partial || payload.contains("comet_links")) {
-    binding.comet_links = input.comet_links;
+  if (!partial || payload.contains("naim_links")) {
+    binding.naim_links = input.naim_links;
   }
   store.UpsertPlaneSkillBinding(binding);
 
@@ -337,7 +337,7 @@ nlohmann::json PlaneSkillCatalogService::UpdateSkill(
       db_path, plane_name, fallback_artifacts_root);
   const auto result = plane_mutation_service_.ExecuteUpsertPlaneStateAction(
       db_path,
-      comet::SerializeDesiredStateJson(next_state),
+      naim::SerializeDesiredStateJson(next_state),
       artifacts_root,
       plane_name,
       partial ? "plane-skills:patch" : "plane-skills:update");
@@ -355,7 +355,7 @@ nlohmann::json PlaneSkillCatalogService::DeleteSkill(
     const std::string& plane_name,
     const std::string& skill_id,
     const std::string& fallback_artifacts_root) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   auto desired_state = store.LoadDesiredState(plane_name);
   if (!desired_state.has_value()) {
@@ -378,7 +378,7 @@ nlohmann::json PlaneSkillCatalogService::DeleteSkill(
       db_path, plane_name, fallback_artifacts_root);
   const auto result = plane_mutation_service_.ExecuteUpsertPlaneStateAction(
       db_path,
-      comet::SerializeDesiredStateJson(next_state),
+      naim::SerializeDesiredStateJson(next_state),
       artifacts_root,
       plane_name,
       "plane-skills:detach");
@@ -395,4 +395,4 @@ nlohmann::json PlaneSkillCatalogService::DeleteSkill(
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

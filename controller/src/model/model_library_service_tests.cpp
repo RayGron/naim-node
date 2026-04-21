@@ -1,15 +1,17 @@
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
 #include <nlohmann/json.hpp>
 
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 #include "infra/controller_request_support.h"
 #include "model/model_library_service.h"
 
@@ -45,8 +47,8 @@ void WriteExecutableScript(const fs::path& path, const std::string& body) {
       fs::perm_options::replace);
 }
 
-comet::ModelLibraryDownloadJobRecord WaitForJobStatus(
-    comet::ControllerStore& store,
+naim::ModelLibraryDownloadJobRecord WaitForJobStatus(
+    naim::ControllerStore& store,
     const std::string& job_id,
     const std::string& expected_status) {
   for (int attempt = 0; attempt < 80; ++attempt) {
@@ -72,25 +74,53 @@ HttpRequest JsonRequest(
   return request;
 }
 
+void UpsertHost(
+    naim::ControllerStore& store,
+    const std::string& node_name,
+    const std::string& derived_role,
+    const fs::path& storage_root,
+    std::uint64_t free_bytes) {
+  naim::RegisteredHostRecord host;
+  host.node_name = node_name;
+  host.registration_state = "registered";
+  host.session_state = "connected";
+  host.execution_mode = "mixed";
+  host.derived_role = derived_role;
+  host.role_reason = "test";
+  host.capabilities_json =
+      nlohmann::json{
+          {"storage_root", storage_root.string()},
+          {"storage_total_bytes", 500ULL * 1024ULL * 1024ULL * 1024ULL},
+          {"storage_free_bytes", free_bytes},
+      }
+          .dump();
+  host.created_at = "2026-03-30 00:00:00";
+  host.updated_at = host.created_at;
+  store.UpsertRegisteredHost(host);
+}
+
 }  // namespace
 
 int main() {
   try {
-    const fs::path temp_root = fs::temp_directory_path() / "comet-model-library-tests";
+    const fs::path temp_root = fs::temp_directory_path() / "naim-model-library-tests";
     const fs::path db_path = temp_root / "controller.sqlite";
     const fs::path src_root = temp_root / "src";
     const fs::path dst_root = temp_root / "dst";
+    const fs::path storage_root = temp_root / "storage-dst";
     const fs::path source_path = src_root / "smoke.gguf";
     const fs::path target_path = dst_root / "smoke.gguf";
     std::error_code error;
     fs::remove_all(temp_root, error);
     fs::create_directories(src_root);
     fs::create_directories(dst_root);
-    {
-      std::ofstream out(source_path);
-      out << "persistent-model-library-job";
-    }
-    const fs::path tools_root = temp_root / "tools";
+    fs::create_directories(storage_root);
+	    {
+	      std::ofstream out(source_path);
+	      out << "persistent-model-library-job";
+	    }
+	    const auto source_payload_size = fs::file_size(source_path);
+	    const fs::path tools_root = temp_root / "tools";
     fs::create_directories(tools_root);
     const fs::path fake_convert = tools_root / "fake-convert.sh";
     const fs::path fake_quantize = tools_root / "fake-quantize.sh";
@@ -122,18 +152,37 @@ int main() {
         fake_quantize_fail,
         "#!/bin/sh\n"
         "exit 17\n");
-    setenv("COMET_MODEL_LIBRARY_PYTHON", "/bin/sh", 1);
-    setenv("COMET_MODEL_LIBRARY_CONVERT_SCRIPT", fake_convert.string().c_str(), 1);
-    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
+    setenv("NAIM_MODEL_LIBRARY_PYTHON", "/bin/sh", 1);
+    setenv("NAIM_MODEL_LIBRARY_CONVERT_SCRIPT", fake_convert.string().c_str(), 1);
+    setenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
 
-    comet::ControllerStore store(db_path.string());
+    naim::ControllerStore store(db_path.string());
     store.Initialize();
+    UpsertHost(
+        store,
+        "worker-node-a",
+        "worker",
+        dst_root,
+        500ULL * 1024ULL * 1024ULL * 1024ULL);
+    UpsertHost(
+        store,
+        "storage-node-a",
+        "storage",
+        storage_root,
+        500ULL * 1024ULL * 1024ULL * 1024ULL);
+    UpsertHost(
+        store,
+        "storage-node-low",
+        "storage",
+        temp_root / "storage-low",
+        4);
     const std::string now = "2026-03-30 00:00:00";
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-1",
         .status = "queued",
         .phase = "queued",
         .model_id = "model-1",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "",
         .detected_source_format = "gguf",
@@ -154,11 +203,26 @@ int main() {
         .updated_at = now,
     });
 
-    comet::controller::ControllerRequestSupport request_support;
+    naim::controller::ControllerRequestSupport request_support;
     ModelLibraryService service{ModelLibrarySupport(request_support)};
     const auto payload = service.BuildPayload(db_path.string());
     Expect(payload.at("jobs").is_array(), "jobs payload should be an array");
     Expect(payload.at("jobs").size() == 1, "jobs payload should contain persisted queued job");
+    bool found_worker_node = false;
+    bool found_storage_node = false;
+    for (const auto& node : payload.at("nodes")) {
+      if (node.at("node_name").get<std::string>() == "worker-node-a") {
+        found_worker_node =
+            node.at("derived_role").get<std::string>() == "worker" &&
+            node.at("storage_root").get<std::string>() == dst_root.string();
+      }
+      if (node.at("node_name").get<std::string>() == "storage-node-a") {
+        found_storage_node =
+            node.at("derived_role").get<std::string>() == "storage";
+      }
+    }
+    Expect(found_worker_node, "payload should expose connected worker node capacity");
+    Expect(found_storage_node, "payload should expose connected storage node capacity");
 
     bool completed = false;
     for (int attempt = 0; attempt < 50; ++attempt) {
@@ -176,6 +240,175 @@ int main() {
     Expect(
         ReadFile(target_path) == "persistent-model-library-job",
         "downloaded model payload should match source contents");
+
+    const auto node_download_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-node-aware"},
+                {"target_node_name", "worker-node-a"},
+                {"target_subdir", "node-aware"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(node_download_response.status_code == 202, "node-aware download should be accepted");
+    const auto node_download_job_id =
+        nlohmann::json::parse(node_download_response.body).at("job").at("id").get<std::string>();
+    const auto node_download_job = store.LoadModelLibraryDownloadJob(node_download_job_id);
+    Expect(node_download_job.has_value(), "node-aware download job should be persisted");
+    Expect(node_download_job->node_name == "worker-node-a",
+           "node-aware download job should persist target node_name");
+    Expect(node_download_job->status == "queued",
+           "node-aware download should wait for hostd assignment");
+    const auto node_assignments =
+        store.LoadHostAssignments(
+            std::make_optional<std::string>("worker-node-a"),
+            naim::HostAssignmentStatus::Pending);
+    Expect(
+        std::any_of(
+            node_assignments.begin(),
+            node_assignments.end(),
+            [&](const naim::HostAssignment& assignment) {
+              return assignment.assignment_type == "model-library-download" &&
+                     assignment.desired_state_json.find(node_download_job_id) !=
+                         std::string::npos;
+            }),
+        "node-aware download should enqueue hostd model-library-download assignment");
+
+    const auto storage_download_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-storage-aware"},
+                {"target_node_name", "storage-node-a"},
+                {"target_subdir", "storage-aware"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(storage_download_response.status_code == 202,
+           "storage node should be accepted for non-quantized download");
+    const auto storage_download_job_id =
+        nlohmann::json::parse(storage_download_response.body).at("job").at("id").get<std::string>();
+    const auto storage_download_job = store.LoadModelLibraryDownloadJob(storage_download_job_id);
+    Expect(storage_download_job.has_value(), "storage download job should be persisted");
+    Expect(storage_download_job->node_name == "storage-node-a",
+           "storage download job should persist target node_name");
+    Expect(storage_download_job->status == "queued",
+           "storage download should wait for hostd assignment");
+    const auto storage_assignments =
+        store.LoadHostAssignments(
+            std::make_optional<std::string>("storage-node-a"),
+            naim::HostAssignmentStatus::Pending);
+	    Expect(
+	        std::any_of(
+	            storage_assignments.begin(),
+	            storage_assignments.end(),
+	            [&](const naim::HostAssignment& assignment) {
+	              return assignment.assignment_type == "model-library-download" &&
+	                     assignment.desired_state_json.find(storage_download_job_id) !=
+	                         std::string::npos;
+	            }),
+	        "storage download should enqueue hostd model-library-download assignment");
+	    auto completed_storage_job = *storage_download_job;
+	    completed_storage_job.status = "completed";
+	    completed_storage_job.phase = "completed";
+	    completed_storage_job.bytes_done = source_payload_size;
+	    completed_storage_job.bytes_total = source_payload_size;
+	    store.UpsertModelLibraryDownloadJob(completed_storage_job);
+	    const auto remote_storage_payload = service.BuildPayload(db_path.string());
+	    bool found_remote_storage_item = false;
+	    for (const auto& item : remote_storage_payload.at("items")) {
+	      if (item.at("path").get<std::string>() == completed_storage_job.target_paths.front()) {
+	        found_remote_storage_item =
+	            item.at("node_name").get<std::string>() == "storage-node-a" &&
+	            item.at("size_bytes").get<std::uintmax_t>() == source_payload_size;
+	      }
+	    }
+	    Expect(
+	        found_remote_storage_item,
+	        "completed storage-node downloads should remain visible without controller-local files");
+
+    const fs::path storage_safetensors_source = src_root / "storage-model.safetensors";
+    const fs::path storage_chat_template = src_root / "chat_template.jinja";
+    {
+      std::ofstream out(storage_safetensors_source);
+      out << "raw-storage-safetensors";
+    }
+    {
+      std::ofstream out(storage_chat_template);
+      out << "{{ messages }}";
+    }
+    const auto storage_raw_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "google/gemma-raw-storage"},
+                {"target_node_name", "storage-node-a"},
+                {"target_subdir", "raw-gemma"},
+                {"source_urls",
+                 nlohmann::json::array(
+                     {FileUrlForPath(storage_chat_template),
+                      FileUrlForPath(storage_safetensors_source)})},
+                {"format", "source"},
+            }));
+    Expect(
+        storage_raw_response.status_code == 202,
+        "storage node should accept raw source safetensors downloads");
+    const auto storage_raw_job_id =
+        nlohmann::json::parse(storage_raw_response.body).at("job").at("id").get<std::string>();
+    const auto storage_raw_job = store.LoadModelLibraryDownloadJob(storage_raw_job_id);
+    Expect(storage_raw_job.has_value(), "raw storage job should be persisted");
+    Expect(
+        storage_raw_job->detected_source_format == "safetensors",
+        "raw storage job should detect safetensors bundles with chat templates");
+    Expect(
+        storage_raw_job->desired_output_format == "safetensors",
+        "source format should resolve to safetensors output for raw storage jobs");
+    Expect(
+        storage_raw_job->staging_directory.empty(),
+        "raw storage safetensors download should not create a conversion staging directory");
+    Expect(
+        storage_raw_job->target_paths.size() == 2 &&
+            storage_raw_job->target_paths.front().find("chat_template.jinja") != std::string::npos &&
+            storage_raw_job->target_paths.back().find("storage-model.safetensors") != std::string::npos,
+        "raw storage job should retain source filenames as target paths");
+    const auto raw_storage_assignments =
+        store.LoadHostAssignments(
+            std::make_optional<std::string>("storage-node-a"),
+            naim::HostAssignmentStatus::Pending);
+    Expect(
+        std::any_of(
+            raw_storage_assignments.begin(),
+            raw_storage_assignments.end(),
+            [&](const naim::HostAssignment& assignment) {
+              return assignment.assignment_type == "model-library-download" &&
+                     assignment.desired_state_json.find(storage_raw_job_id) !=
+                         std::string::npos &&
+                     assignment.desired_state_json.find("storage-model.safetensors") !=
+                         std::string::npos;
+            }),
+        "raw storage safetensors download should enqueue a hostd download assignment");
+
+	    const auto low_capacity_response = service.EnqueueDownload(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/download",
+            nlohmann::json{
+                {"model_id", "model-storage-low"},
+                {"target_node_name", "storage-node-low"},
+                {"target_subdir", "storage-aware"},
+                {"source_urls", nlohmann::json::array({FileUrlForPath(source_path)})},
+                {"format", "gguf"},
+            }));
+    Expect(low_capacity_response.status_code == 409,
+           "download should reject nodes without enough free capacity");
 
     const auto set_worker_response = service.SetSkillsFactoryWorker(
         db_path.string(),
@@ -196,11 +429,12 @@ int main() {
     Expect(found_worker, "selected model should be marked as skills_factory_worker");
 
     const fs::path second_target_path = dst_root / "resume.gguf";
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-2",
         .status = "queued",
         .phase = "queued",
         .model_id = "model-2",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "",
         .detected_source_format = "gguf",
@@ -285,8 +519,14 @@ int main() {
             nlohmann::json{{"job_id", "job-2"}}));
     Expect(hide_response.status_code == 200, "hide download job should succeed");
     const auto visible_after_hide = service.BuildPayload(db_path.string());
+    bool hidden_job_visible = false;
+    for (const auto& job : visible_after_hide.at("jobs")) {
+      if (job.at("id").get<std::string>() == "job-2") {
+        hidden_job_visible = true;
+      }
+    }
     Expect(
-        visible_after_hide.at("jobs").size() == 1,
+        !hidden_job_visible,
         "hidden download job should disappear from visible payload");
     auto hidden_job = store.LoadModelLibraryDownloadJob("job-2");
     Expect(hidden_job.has_value(), "hidden job should remain in the database");
@@ -309,7 +549,7 @@ int main() {
     const fs::path recovered_target = recovered_dir / "recovered.gguf";
     const fs::path recovered_part = recovered_dir / "recovered.gguf.part";
     const fs::path recovered_metadata =
-        recovered_dir / ".comet-model-job-job-3.json";
+        recovered_dir / ".naim-model-job-job-3.json";
     fs::create_directories(recovered_dir);
     {
       std::ofstream out(recovered_part);
@@ -342,18 +582,24 @@ int main() {
           {"updated_at", now},
       }.dump(2);
     }
-    setenv("COMET_NODE_MODEL_LIBRARY_ROOTS", dst_root.string().c_str(), 1);
+    setenv("NAIM_NODE_MODEL_LIBRARY_ROOTS", dst_root.string().c_str(), 1);
     ModelLibraryService recovery_service{ModelLibrarySupport(request_support)};
     const auto recovered_payload = recovery_service.BuildPayload(db_path.string());
-    unsetenv("COMET_NODE_MODEL_LIBRARY_ROOTS");
+    unsetenv("NAIM_NODE_MODEL_LIBRARY_ROOTS");
     auto recovered_job = store.LoadModelLibraryDownloadJob("job-3");
     Expect(recovered_job.has_value(), "metadata-backed job should be restored into the database");
     Expect(recovered_job->status == "stopped", "restored metadata job should preserve status");
     Expect(
         recovered_job->bytes_done == fs::file_size(recovered_part),
         "restored metadata job should recover bytes_done from partial file");
+    bool recovered_job_visible = false;
+    for (const auto& job : recovered_payload.at("jobs")) {
+      if (job.at("id").get<std::string>() == "job-3") {
+        recovered_job_visible = true;
+      }
+    }
     Expect(
-        recovered_payload.at("jobs").size() == 2,
+        recovered_job_visible,
         "metadata-backed job should be visible in jobs payload after recovery");
 
     const fs::path resumable_source_path = src_root / "resumable.gguf";
@@ -376,11 +622,12 @@ int main() {
       input.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
       out.write(prefix.data(), static_cast<std::streamsize>(input.gcount()));
     }
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-5",
         .status = "stopped",
         .phase = "stopped",
         .model_id = "model-5",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "",
         .detected_source_format = "gguf",
@@ -438,11 +685,12 @@ int main() {
       std::ofstream out(part1);
       out << "multipart-part-1";
     }
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-4",
         .status = "running",
         .phase = "running",
         .model_id = "model-4",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "multipart",
         .detected_source_format = "gguf",
@@ -480,11 +728,12 @@ int main() {
       std::ofstream out(part2);
       out << "multipart-part-2";
     }
-    store.UpsertModelLibraryDownloadJob(comet::ModelLibraryDownloadJobRecord{
+    store.UpsertModelLibraryDownloadJob(naim::ModelLibraryDownloadJobRecord{
         .id = "job-4",
         .status = "completed",
         .phase = "completed",
         .model_id = "model-4",
+        .node_name = "",
         .target_root = dst_root.string(),
         .target_subdir = "multipart",
         .detected_source_format = "gguf",
@@ -524,7 +773,7 @@ int main() {
       std::ofstream out(safetensors_source);
       out << "safetensors-payload";
     }
-    unsetenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN");
+    unsetenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN");
     const auto conversion_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
@@ -561,7 +810,7 @@ int main() {
         !fs::exists(completed_conversion_job.staging_directory),
         "staging directory should be removed after successful conversion");
 
-    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
+    setenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize.string().c_str(), 1);
     const auto normalized_download_response = service.EnqueueDownload(
         db_path.string(),
         JsonRequest(
@@ -612,6 +861,9 @@ int main() {
     Expect(
         completed_quantized_job.job_kind == "quantization",
         "quantization endpoint should persist job_kind=quantization");
+    Expect(
+        completed_quantized_job.node_name == "worker-node-a",
+        "quantization job should persist the worker node that stores the source model");
     Expect(
         fs::exists(dst_root / "converted-base" / "gemma-4-E2B-Q8_0.gguf"),
         "Q8_0 output should exist after dedicated quantization");
@@ -675,6 +927,25 @@ int main() {
             std::vector<std::string>{"FP16"},
         "FP16 quantization jobs should persist canonical quantization names");
 
+    const fs::path storage_base_path = storage_root / "storage-aware" / "model-storage-aware.gguf";
+    fs::create_directories(storage_base_path.parent_path());
+    {
+      std::ofstream out(storage_base_path);
+      out << "storage-node-base-gguf";
+    }
+    const auto storage_quantization_response = service.EnqueueQuantization(
+        db_path.string(),
+        JsonRequest(
+            "POST",
+            "/api/v1/model-library/quantize",
+            nlohmann::json{
+                {"source_path", storage_base_path.string()},
+                {"replace_existing", true},
+            }));
+    Expect(
+        storage_quantization_response.status_code == 409,
+        "quantization should reject base GGUF files that live on storage nodes");
+
     const fs::path mixed_config_path = src_root / "config.json";
     const fs::path mixed_tokenizer_path = src_root / "tokenizer.json";
     {
@@ -716,7 +987,7 @@ int main() {
         fs::exists(dst_root / "converted-mixed" / "gemma-4-31B-it.gguf"),
         "mixed HF metadata bundle should still produce a GGUF output");
 
-    setenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize_fail.string().c_str(), 1);
+    setenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN", fake_quantize_fail.string().c_str(), 1);
     const auto failed_quantized_response = service.EnqueueQuantization(
         db_path.string(),
         JsonRequest(
@@ -742,9 +1013,9 @@ int main() {
     Expect(
         !failed_job.staging_directory.empty() && fs::exists(failed_job.staging_directory),
         "failed quantization job should retain staging directory for inspection or resume");
-    unsetenv("COMET_MODEL_LIBRARY_PYTHON");
-    unsetenv("COMET_MODEL_LIBRARY_CONVERT_SCRIPT");
-    unsetenv("COMET_MODEL_LIBRARY_QUANTIZE_BIN");
+    unsetenv("NAIM_MODEL_LIBRARY_PYTHON");
+    unsetenv("NAIM_MODEL_LIBRARY_CONVERT_SCRIPT");
+    unsetenv("NAIM_MODEL_LIBRARY_QUANTIZE_BIN");
 
     fs::remove_all(temp_root, error);
     std::cout << "model library service tests passed\n";

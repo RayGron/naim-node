@@ -1,6 +1,6 @@
 #include "app/controller_request_context.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 const HttpRequest*& ControllerRequestContext::CurrentSlot() {
   thread_local const HttpRequest* current_request = nullptr;
@@ -20,4 +20,4 @@ const HttpRequest* ControllerRequestContext::Current() {
   return CurrentSlot();
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

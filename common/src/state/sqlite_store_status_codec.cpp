@@ -1,9 +1,9 @@
-#include "comet/state/sqlite_store.h"
+#include "naim/state/sqlite_store.h"
 
 #include <stdexcept>
 #include <string>
 
-namespace comet {
+namespace naim {
 
 std::string ToString(HostAssignmentStatus status) {
   switch (status) {
@@ -120,4 +120,4 @@ RolloutActionStatus ParseRolloutActionStatus(const std::string& value) {
   throw std::runtime_error("unknown rollout action status '" + value + "'");
 }
 
-}  // namespace comet
+}  // namespace naim

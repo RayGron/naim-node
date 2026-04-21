@@ -10,7 +10,7 @@
 #include "runtime/infer_runtime_types.h"
 #include "runtime/llama_library_engine.h"
 
-namespace comet::infer::runtime_support {
+namespace naim::infer::runtime_support {
 
 int CreateListenSocket(const std::string& host, int port);
 std::optional<UpstreamTarget> ResolveRuntimeUpstreamTarget(const RuntimeConfig& config);
@@ -53,4 +53,4 @@ void WriteInferRuntimeStatus(
     const std::string& started_at,
     const std::optional<std::uint64_t>& kv_cache_bytes = std::nullopt);
 
-}  // namespace comet::infer::runtime_support
+}  // namespace naim::infer::runtime_support

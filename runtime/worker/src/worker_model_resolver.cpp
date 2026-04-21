@@ -12,7 +12,7 @@
 
 namespace fs = std::filesystem;
 
-namespace comet::worker {
+namespace naim::worker {
 
 std::optional<std::string> WorkerModelResolver::ResolveModelPath(
     const WorkerConfig& config) const {
@@ -91,4 +91,4 @@ std::optional<std::string> WorkerModelResolver::ResolveGgufPath(const std::strin
   return candidates.front().string();
 }
 
-}  // namespace comet::worker
+}  // namespace naim::worker

@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/build-context.sh"
 
-comet_resolve_build_context "${script_dir}" "$@"
+naim_resolve_build_context "${script_dir}" "$@"
 
 cmake_exe="$("${script_dir}/find-cmake.sh")"
 

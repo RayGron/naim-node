@@ -4,45 +4,108 @@
 #include <set>
 #include <stdexcept>
 
+#include "naim/state/sqlite_store.h"
 #include "skills/plane_skill_contextual_resolver_service.h"
 #include "skills/plane_skill_runtime_sync_service.h"
+#include "skills/plane_skills_target_resolver.h"
 
-namespace comet::controller {
-
-namespace {
+namespace naim::controller {
 
 using nlohmann::json;
 
-std::vector<std::pair<std::string, std::string>> DefaultJsonHeaders() {
-  return {{"Content-Type", "application/json"}};
+namespace {
+
+bool ContainsSkillId(
+    const std::vector<std::string>& skill_ids,
+    const std::string& skill_id) {
+  return std::find(skill_ids.begin(), skill_ids.end(), skill_id) != skill_ids.end();
 }
 
-std::string NormalizeControllerTargetHost(const PublishedPort& port) {
-  if (port.host_ip.empty() || port.host_ip == "0.0.0.0") {
-    return "127.0.0.1";
+std::optional<json> ResolveSkillsFromControllerCatalog(
+    const std::string& db_path,
+    const DesiredState& desired_state,
+    const json& request_payload,
+    const ContextualSkillSelection& contextual_selection,
+    std::string* error_code,
+    std::string* error_message) {
+  if (db_path.empty() || !desired_state.skills.has_value() ||
+      !desired_state.skills->enabled) {
+    return std::nullopt;
   }
-  return port.host_ip;
-}
 
-const InstanceSpec* FindSkillsInstance(const DesiredState& desired_state) {
-  const auto it = std::find_if(
-      desired_state.instances.begin(),
-      desired_state.instances.end(),
-      [](const InstanceSpec& instance) { return instance.role == InstanceRole::Skills; });
-  if (it == desired_state.instances.end()) {
-    return nullptr;
+  const auto requested = request_payload.value("skill_ids", json::array());
+  if (!requested.is_array()) {
+    if (error_code != nullptr) {
+      *error_code = "invalid_skill_reference";
+    }
+    if (error_message != nullptr) {
+      *error_message = "skill_ids must be an array";
+    }
+    return std::nullopt;
   }
-  return &*it;
-}
 
-std::string NormalizeSkillPathSuffix(const std::string& path_suffix) {
-  if (path_suffix.empty() || path_suffix == "/") {
-    return "/v1/skills";
+  ControllerStore store(db_path);
+  store.Initialize();
+  std::set<std::string> contextual_ids(
+      contextual_selection.selected_skill_ids.begin(),
+      contextual_selection.selected_skill_ids.end());
+  json skills = json::array();
+  for (const auto& item : requested) {
+    if (!item.is_string()) {
+      if (error_code != nullptr) {
+        *error_code = "invalid_skill_reference";
+      }
+      if (error_message != nullptr) {
+        *error_message = "skill_ids items must be strings";
+      }
+      return std::nullopt;
+    }
+    const auto skill_id = item.get<std::string>();
+    if (!ContainsSkillId(desired_state.skills->factory_skill_ids, skill_id)) {
+      if (error_code != nullptr) {
+        *error_code = "invalid_skill_reference";
+      }
+      if (error_message != nullptr) {
+        *error_message = "skill '" + skill_id + "' is not attached to this plane";
+      }
+      return std::nullopt;
+    }
+    const auto canonical = store.LoadSkillsFactorySkill(skill_id);
+    if (!canonical.has_value()) {
+      if (error_code != nullptr) {
+        *error_code = "invalid_skill_reference";
+      }
+      if (error_message != nullptr) {
+        *error_message = "skill '" + skill_id + "' not found";
+      }
+      return std::nullopt;
+    }
+    const auto binding =
+        store.LoadPlaneSkillBinding(desired_state.plane_name, skill_id);
+    if (binding.has_value() && !binding->enabled) {
+      if (error_code != nullptr) {
+        *error_code = "invalid_skill_reference";
+      }
+      if (error_message != nullptr) {
+        *error_message = "skill '" + skill_id + "' is disabled for this plane";
+      }
+      return std::nullopt;
+    }
+    skills.push_back(json{
+        {"id", canonical->id},
+        {"name", canonical->name},
+        {"description", canonical->description},
+        {"content", canonical->content},
+        {"source", contextual_ids.count(canonical->id) > 0 ? "contextual" : "explicit"},
+    });
   }
-  if (path_suffix.front() == '/') {
-    return "/v1/skills" + path_suffix;
+
+  json payload{{"skills", skills}};
+  if (request_payload.contains("session_id") &&
+      !request_payload.at("session_id").is_null()) {
+    payload["skills_session_id"] = request_payload.at("session_id");
   }
-  return "/v1/skills/" + path_suffix;
+  return payload;
 }
 
 }  // namespace
@@ -53,22 +116,7 @@ bool PlaneSkillsService::IsEnabled(const DesiredState& desired_state) const {
 
 std::optional<ControllerEndpointTarget> PlaneSkillsService::ResolveTarget(
     const DesiredState& desired_state) const {
-  const auto* skills = FindSkillsInstance(desired_state);
-  if (skills == nullptr) {
-    return std::nullopt;
-  }
-  const auto published = std::find_if(
-      skills->published_ports.begin(),
-      skills->published_ports.end(),
-      [](const PublishedPort& port) { return port.host_port > 0; });
-  if (published == skills->published_ports.end()) {
-    return std::nullopt;
-  }
-  ControllerEndpointTarget target;
-  target.host = NormalizeControllerTargetHost(*published);
-  target.port = published->host_port;
-  target.raw = "http://" + target.host + ":" + std::to_string(target.port);
-  return target;
+  return PlaneSkillsTargetResolver::ResolvePlaneLocalTarget(desired_state);
 }
 
 std::optional<std::string> PlaneSkillsService::ParseSessionId(const json& payload) {
@@ -263,18 +311,54 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
     };
   }
 
-  const auto target = ResolveTarget(resolution.desired_state);
-  if (!target.has_value()) {
-    return InteractionValidationError{
-        "skills_not_ready",
-        "skills service is not ready for this plane",
-        true,
-        json::object(),
-    };
-  }
-
   const json request_payload =
       BuildResolveRequestPayload(request, contextual_selection);
+
+  auto apply_controller_catalog_fallback =
+      [&](const std::string& fallback_error_code,
+          const std::string& fallback_error_message)
+      -> std::optional<InteractionValidationError> {
+    std::string catalog_error_code;
+    std::string catalog_error_message;
+    const auto response_payload = ResolveSkillsFromControllerCatalog(
+        resolution.db_path,
+        resolution.desired_state,
+        request_payload,
+        contextual_selection,
+        &catalog_error_code,
+        &catalog_error_message);
+    if (response_payload.has_value()) {
+      const json resolved_skills = response_payload->value("skills", json::array());
+      ApplyResolvedSkillMetadata(
+          request,
+          contextual_selection,
+          resolved_skills,
+          *response_payload,
+          context);
+      return std::nullopt;
+    }
+    if (!catalog_error_code.empty()) {
+      return InteractionValidationError{
+          catalog_error_code,
+          catalog_error_message.empty() ? "invalid skill reference" : catalog_error_message,
+          false,
+          json::object(),
+      };
+    }
+    return InteractionValidationError{
+        fallback_error_code,
+        fallback_error_message,
+        fallback_error_code == "skills_not_ready",
+        json::object(),
+    };
+  };
+
+  const auto target = ResolveTarget(resolution.desired_state);
+  if (!target.has_value()) {
+    return apply_controller_catalog_fallback(
+        "skills_not_ready",
+        "skills service is not ready for this plane");
+  }
 
   try {
     if (!resolution.db_path.empty()) {
@@ -282,24 +366,22 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
           resolution.db_path, resolution.desired_state);
     }
     const HttpResponse response = SendControllerHttpRequest(
-        *target, "POST", "/v1/skills/resolve", request_payload.dump(), DefaultJsonHeaders());
+        *target,
+        "POST",
+        "/v1/skills/resolve",
+        request_payload.dump(),
+        PlaneSkillsTargetResolver::DefaultJsonHeaders());
     if (response.status_code == 400) {
       json error_payload = response.body.empty() ? json::object() : json::parse(response.body);
       const std::string code = error_payload.value("error", std::string("invalid_skill_reference"));
-      return InteractionValidationError{
+      return apply_controller_catalog_fallback(
           code == "invalid_skill_reference" ? code : "invalid_skill_reference",
-          error_payload.value("message", std::string("invalid skill reference")),
-          false,
-          json::object(),
-      };
+          error_payload.value("message", std::string("invalid skill reference")));
     }
     if (response.status_code != 200) {
-      return InteractionValidationError{
+      return apply_controller_catalog_fallback(
           "skills_not_ready",
-          "skills service is not ready for this plane",
-          true,
-          json::object(),
-      };
+          "skills service is not ready for this plane");
     }
 
     const json response_payload =
@@ -316,12 +398,9 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
     ApplyResolvedSkillMetadata(
         request, contextual_selection, resolved_skills, response_payload, context);
   } catch (const std::exception&) {
-    return InteractionValidationError{
+    return apply_controller_catalog_fallback(
         "skills_not_ready",
-        "skills service is not ready for this plane",
-        true,
-        json::object(),
-    };
+        "skills service is not ready for this plane");
   }
 
   return std::nullopt;
@@ -365,7 +444,11 @@ std::optional<HttpResponse> PlaneSkillsService::ProxyPlaneSkillsRequest(
 
   try {
     return SendControllerHttpRequest(
-        *target, method, NormalizeSkillPathSuffix(path_suffix), body, DefaultJsonHeaders());
+        *target,
+        method,
+        PlaneSkillsTargetResolver::NormalizeSkillPathSuffix(path_suffix),
+        body,
+        PlaneSkillsTargetResolver::DefaultJsonHeaders());
   } catch (const std::exception&) {
     if (error_code != nullptr) {
       *error_code = "skills_not_ready";
@@ -377,4 +460,4 @@ std::optional<HttpResponse> PlaneSkillsService::ProxyPlaneSkillsRequest(
   }
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

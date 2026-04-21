@@ -1,11 +1,11 @@
-#include "comet/importing/import_bundle.h"
+#include "naim/importing/import_bundle.h"
 
 #include <filesystem>
 #include <stdexcept>
 
-#include "comet/state/state_json.h"
+#include "naim/state/state_json.h"
 
-namespace comet {
+namespace naim {
 
 DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   const std::filesystem::path bundle_path(bundle_dir);
@@ -34,4 +34,4 @@ DesiredState ImportPlaneBundle(const std::string& bundle_dir) {
   return *desired_state;
 }
 
-}  // namespace comet
+}  // namespace naim

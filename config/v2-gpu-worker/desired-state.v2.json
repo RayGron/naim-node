@@ -14,11 +14,11 @@
     },
     "env": {
       "JOB_KIND": "embedding-batch",
-      "OUTPUT_DIR": "/comet/private/output"
+      "OUTPUT_DIR": "/naim/private/output"
     },
     "storage": {
       "size_gb": 24,
-      "mount_path": "/comet/private"
+      "mount_path": "/naim/private"
     }
   },
   "resources": {

@@ -3,15 +3,15 @@
 #include <algorithm>
 #include <map>
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
-bool IsSkillsEnabled(const comet::DesiredState& desired_state) {
+bool IsSkillsEnabled(const naim::DesiredState& desired_state) {
   return desired_state.skills.has_value() && desired_state.skills->enabled;
 }
 
-int CountAttachedSkills(const comet::DesiredState& desired_state) {
+int CountAttachedSkills(const naim::DesiredState& desired_state) {
   if (!desired_state.skills.has_value()) {
     return 0;
   }
@@ -19,7 +19,7 @@ int CountAttachedSkills(const comet::DesiredState& desired_state) {
 }
 
 std::map<std::string, bool> BuildEnabledBySkillId(
-    const std::vector<comet::PlaneSkillBindingRecord>& bindings) {
+    const std::vector<naim::PlaneSkillBindingRecord>& bindings) {
   std::map<std::string, bool> enabled_by_skill_id;
   for (const auto& binding : bindings) {
     enabled_by_skill_id[binding.skill_id] = binding.enabled;
@@ -28,7 +28,7 @@ std::map<std::string, bool> BuildEnabledBySkillId(
 }
 
 int CountEnabledAttachedSkills(
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::map<std::string, bool>& enabled_by_skill_id) {
   if (!desired_state.skills.has_value()) {
     return 0;
@@ -46,8 +46,8 @@ int CountEnabledAttachedSkills(
 }  // namespace
 
 nlohmann::json PlaneDashboardSkillsSummaryService::BuildPayload(
-    const comet::DesiredState& desired_state,
-    const std::vector<comet::PlaneSkillBindingRecord>& bindings) {
+    const naim::DesiredState& desired_state,
+    const std::vector<naim::PlaneSkillBindingRecord>& bindings) {
   const bool enabled = IsSkillsEnabled(desired_state);
   const int total_count = CountAttachedSkills(desired_state);
   const auto enabled_by_skill_id = BuildEnabledBySkillId(bindings);
@@ -61,4 +61,4 @@ nlohmann::json PlaneDashboardSkillsSummaryService::BuildPayload(
   };
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

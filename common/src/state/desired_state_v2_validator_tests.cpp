@@ -9,22 +9,23 @@
 
 #include <nlohmann/json.hpp>
 
-#include "comet/planning/planner.h"
-#include "comet/planning/execution_plan.h"
-#include "comet/runtime/infer_runtime_config.h"
-#include "comet/state/state_json.h"
-#include "comet/state/desired_state_v2_renderer.h"
-#include "comet/state/desired_state_v2_validator.h"
-#include "comet/state/worker_group_topology.h"
+#include "naim/planning/planner.h"
+#include "naim/planning/execution_plan.h"
+#include "naim/runtime/infer_runtime_config.h"
+#include "naim/state/state_json.h"
+#include "naim/state/desired_state_v2_projector.h"
+#include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/desired_state_v2_validator.h"
+#include "naim/state/worker_group_topology.h"
 
 namespace {
 
 using nlohmann::json;
 
-comet::DesiredState RenderValid(const json& value, const std::string& name) {
+naim::DesiredState RenderValid(const json& value, const std::string& name) {
   try {
-    comet::DesiredStateV2Validator::ValidateOrThrow(value);
-    auto state = comet::DesiredStateV2Renderer::Render(value);
+    naim::DesiredStateV2Validator::ValidateOrThrow(value);
+    auto state = naim::DesiredStateV2Renderer::Render(value);
     if (state.plane_name.empty()) {
       throw std::runtime_error("renderer returned empty plane_name");
     }
@@ -36,7 +37,7 @@ comet::DesiredState RenderValid(const json& value, const std::string& name) {
 
 void ExpectInvalid(const json& value, const std::string& name) {
   try {
-    comet::DesiredStateV2Validator::ValidateOrThrow(value);
+    naim::DesiredStateV2Validator::ValidateOrThrow(value);
   } catch (const std::exception&) {
     std::cout << "ok-invalid: " << name << '\n';
     return;
@@ -50,8 +51,8 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-const comet::InstanceSpec& FindInstance(
-    const comet::DesiredState& state,
+const naim::InstanceSpec& FindInstance(
+    const naim::DesiredState& state,
     const std::string& name) {
   for (const auto& instance : state.instances) {
     if (instance.name == name) {
@@ -61,8 +62,8 @@ const comet::InstanceSpec& FindInstance(
   throw std::runtime_error("instance not found: " + name);
 }
 
-comet::InstanceSpec& FindMutableInstance(
-    comet::DesiredState* state,
+naim::InstanceSpec& FindMutableInstance(
+    naim::DesiredState* state,
     const std::string& name) {
   if (state == nullptr) {
     throw std::runtime_error("state is null");
@@ -75,8 +76,8 @@ comet::InstanceSpec& FindMutableInstance(
   throw std::runtime_error("instance not found: " + name);
 }
 
-const comet::DiskSpec& FindDisk(
-    const comet::DesiredState& state,
+const naim::DiskSpec& FindDisk(
+    const naim::DesiredState& state,
     const std::string& name) {
   for (const auto& disk : state.disks) {
     if (disk.name == name) {
@@ -84,6 +85,18 @@ const comet::DiskSpec& FindDisk(
     }
   }
   throw std::runtime_error("disk not found: " + name);
+}
+
+const naim::DiskSpec& FindDiskOnNode(
+    const naim::DesiredState& state,
+    const std::string& name,
+    const std::string& node_name) {
+  for (const auto& disk : state.disks) {
+    if (disk.name == name && disk.node_name == node_name) {
+      return disk;
+    }
+  }
+  throw std::runtime_error("disk not found: " + name + " on " + node_name);
 }
 
 }  // namespace
@@ -185,12 +198,12 @@ int main() {
           {"app", {{"enabled", false}}},
       };
       const auto temp_path =
-          std::filesystem::temp_directory_path() / "comet-state-v2-thinking-flag.json";
+          std::filesystem::temp_directory_path() / "naim-state-v2-thinking-flag.json";
       {
         std::ofstream output(temp_path);
         output << state_file_v2.dump(2) << '\n';
       }
-      const auto loaded = comet::LoadDesiredStateJson(temp_path.string());
+      const auto loaded = naim::LoadDesiredStateJson(temp_path.string());
       std::filesystem::remove(temp_path);
       Expect(loaded.has_value(), "state-file-v2-thinking: state should load");
       Expect(loaded->interaction.has_value(), "state-file-v2-thinking: interaction missing");
@@ -205,14 +218,14 @@ int main() {
           {"plane_mode", "llm"},
       };
       const auto temp_path =
-          std::filesystem::temp_directory_path() / "comet-state-legacy.json";
+          std::filesystem::temp_directory_path() / "naim-state-legacy.json";
       {
         std::ofstream output(temp_path);
         output << legacy_state_file.dump(2) << '\n';
       }
       bool rejected = false;
       try {
-        static_cast<void>(comet::LoadDesiredStateJson(temp_path.string()));
+        static_cast<void>(naim::LoadDesiredStateJson(temp_path.string()));
       } catch (const std::exception& ex) {
         rejected =
             std::string_view(ex.what()).find("version=2") != std::string_view::npos;
@@ -278,7 +291,7 @@ int main() {
       Expect(state.inference.llama_ctx_size == 4096,
              "llama-ctx-runtime: llama_ctx_size should render");
       const auto runtime_json =
-          nlohmann::json::parse(comet::RenderInferRuntimeConfigJson(state));
+          nlohmann::json::parse(naim::RenderInferRuntimeConfigJson(state));
       Expect(runtime_json.at("inference").at("max_model_len").get<int>() == 4096,
              "llama-ctx-runtime: runtime max_model_len mismatch");
       Expect(runtime_json.at("inference").at("llama_ctx_size").get<int>() == 4096,
@@ -431,6 +444,20 @@ int main() {
              "split-topology: worker 0 gpu mismatch");
       Expect(state.disks.front().node_name == "infer-hostd",
              "split-topology: shared disk should follow infer node");
+      Expect(FindDiskOnNode(state, "plane-split-backend-shared", "worker-hostd-a").kind ==
+                 naim::DiskKind::PlaneShared,
+             "split-topology: shared disk should be available on worker-hostd-a");
+      Expect(FindDiskOnNode(state, "plane-split-backend-shared", "worker-hostd-b").kind ==
+                 naim::DiskKind::PlaneShared,
+             "split-topology: shared disk should be available on worker-hostd-b");
+      const auto persisted_v2 = naim::DeserializeDesiredStateJson(
+          naim::SerializeDesiredStateV2Json(state));
+      Expect(persisted_v2.plane_name == state.plane_name,
+             "split-topology: v2 persistence should preserve plane_name");
+      Expect(persisted_v2.nodes.size() == state.nodes.size(),
+             "split-topology: v2 persistence should preserve nodes after placement fallback");
+      Expect(persisted_v2.instances.size() == state.instances.size(),
+             "split-topology: v2 persistence should preserve instances after placement fallback");
       std::cout << "ok: split-topology-with-url-parts" << '\n';
     }
 
@@ -473,43 +500,43 @@ int main() {
              "llama-rpc-backend: worker group backend mismatch");
       Expect(!state.worker_group.members.empty(),
              "llama-rpc-backend: expected at least one worker group member");
-      const int expected_rpc_port = comet::StableLlamaRpcWorkerPort(
+      const int expected_rpc_port = naim::StableLlamaRpcWorkerPort(
           state.plane_name,
           "worker-llama-rpc-backend-a");
       Expect(state.worker_group.members.front().rpc_port == expected_rpc_port,
              "llama-rpc-backend: worker rpc_port should use stable plane-scoped port");
       Expect(FindInstance(state, "worker-llama-rpc-backend-a")
-                     .environment.at("COMET_WORKER_BOOT_MODE") == "llama-rpc",
+                     .environment.at("NAIM_WORKER_BOOT_MODE") == "llama-rpc",
              "llama-rpc-backend: worker boot mode mismatch");
       Expect(FindInstance(state, "worker-llama-rpc-backend-a")
-                     .environment.at("COMET_WORKER_RPC_PORT") ==
+                     .environment.at("NAIM_WORKER_RPC_PORT") ==
                  std::to_string(expected_rpc_port),
              "llama-rpc-backend: worker rpc env mismatch");
       Expect(FindInstance(state, "infer-llama-rpc-backend")
-                     .environment.at("COMET_INFER_RUNTIME_BACKEND") == "llama-rpc-head",
+                     .environment.at("NAIM_INFER_RUNTIME_BACKEND") == "llama-rpc-head",
              "llama-rpc-backend: infer backend mismatch");
       Expect(FindInstance(state, "infer-llama-rpc-backend")
-                     .environment.at("COMET_INSTANCE_SUBROLE") == "aggregator",
+                     .environment.at("NAIM_INSTANCE_SUBROLE") == "aggregator",
              "llama-rpc-backend: primary infer should be aggregator");
       Expect(FindInstance(state, "infer-llama-rpc-backend-a")
-                     .environment.at("COMET_INSTANCE_SUBROLE") == "infer",
+                     .environment.at("NAIM_INSTANCE_SUBROLE") == "infer",
              "llama-rpc-backend: leaf infer should be rendered for single replica");
       Expect(FindInstance(state, "worker-llama-rpc-backend-a")
-                     .environment.at("COMET_INFER_INSTANCE_NAME") == "infer-llama-rpc-backend-a",
+                     .environment.at("NAIM_INFER_INSTANCE_NAME") == "infer-llama-rpc-backend-a",
              "llama-rpc-backend: worker should target leaf infer");
       Expect(
           FindInstance(state, "infer-llama-rpc-backend")
-                  .environment.at("COMET_INFER_RUNTIME_CONFIG") ==
-              "/comet/shared/control/llama-rpc-backend/infer/infer-llama-rpc-backend/infer-runtime.json",
+                  .environment.at("NAIM_INFER_RUNTIME_CONFIG") ==
+              "/naim/shared/control/llama-rpc-backend/infer/infer-llama-rpc-backend/infer-runtime.json",
           "llama-rpc-backend: infer runtime config path mismatch");
       auto stale_state = state;
       auto& stale_worker = FindMutableInstance(&stale_state, "worker-llama-rpc-backend-a");
-      stale_worker.environment["COMET_WORKER_RPC_PORT"] = "29600";
-      stale_worker.environment["COMET_WORKER_RPC_ENDPOINT"] =
+      stale_worker.environment["NAIM_WORKER_RPC_PORT"] = "29600";
+      stale_worker.environment["NAIM_WORKER_RPC_ENDPOINT"] =
           "worker-llama-rpc-backend-a:29600";
       stale_state.worker_group.members.front().rpc_port = 29600;
       const auto stale_runtime_config = json::parse(
-          comet::RenderInferRuntimeConfigJsonForInstance(
+          naim::RenderInferRuntimeConfigJsonForInstance(
               stale_state,
               "infer-llama-rpc-backend-a"));
       Expect(stale_runtime_config.at("worker_group").at("members").at(0).at("rpc_port").get<int>() ==
@@ -580,16 +607,16 @@ int main() {
            {{"replicas", 1},
             {"env",
              {
-                 {"COMET_INFERENCE_PORT", "19180"},
-                 {"COMET_GATEWAY_PORT", "19181"},
-                 {"COMET_LLAMA_PORT", "19182"},
+                 {"NAIM_INFERENCE_PORT", "19180"},
+                 {"NAIM_GATEWAY_PORT", "19181"},
+                 {"NAIM_LLAMA_PORT", "19182"},
              }}}},
           {"app", {{"enabled", false}}},
       };
       const auto state = RenderValid(infer_port_overrides, "llama-rpc-infer-ports");
       const auto infer_name = FindInstance(state, "infer-llama-rpc-ports").name;
       const auto runtime_config = json::parse(
-          comet::RenderInferRuntimeConfigJsonForInstance(state, infer_name));
+          naim::RenderInferRuntimeConfigJsonForInstance(state, infer_name));
       Expect(runtime_config.at("inference").at("api_port").get<int>() == 19180,
              "llama-rpc-infer-ports: api_port override mismatch");
       Expect(runtime_config.at("inference").at("llama_port").get<int>() == 19182,
@@ -620,7 +647,7 @@ int main() {
            {{"replicas", 1},
             {"env",
              {
-                 {"COMET_REPLICA_UPSTREAMS",
+                 {"NAIM_REPLICA_UPSTREAMS",
                   "http://127.0.0.1:19190,http://127.0.0.1:19191"},
              }}}},
           {"app", {{"enabled", false}}},
@@ -628,7 +655,7 @@ int main() {
       const auto state = RenderValid(llama_rpc_replica_upstreams, "llama-rpc-replica-upstreams");
       const auto infer_name = FindInstance(state, "infer-llama-rpc-upstreams").name;
       const auto runtime_config = json::parse(
-          comet::RenderInferRuntimeConfigJsonForInstance(state, infer_name));
+          naim::RenderInferRuntimeConfigJsonForInstance(state, infer_name));
       const auto upstreams = runtime_config.at("replica_upstreams");
       Expect(upstreams.is_array() && upstreams.size() == 2,
              "llama-rpc-replica-upstreams: expected 2 upstreams");
@@ -672,18 +699,18 @@ int main() {
           {"app", {{"enabled", false}}},
       };
       const auto state = RenderValid(llama_rpc_replicas, "llama-rpc-replicas");
-      Expect(FindInstance(state, "infer-llama-rpc-replicas").environment.count("COMET_REPLICA_UPSTREAMS") == 1,
-             "llama-rpc-replicas: aggregator should have COMET_REPLICA_UPSTREAMS");
-      Expect(FindInstance(state, "infer-llama-rpc-replicas-a").environment.at("COMET_GATEWAY_PORT") == "81",
+      Expect(FindInstance(state, "infer-llama-rpc-replicas").environment.count("NAIM_REPLICA_UPSTREAMS") == 1,
+             "llama-rpc-replicas: aggregator should have NAIM_REPLICA_UPSTREAMS");
+      Expect(FindInstance(state, "infer-llama-rpc-replicas-a").environment.at("NAIM_GATEWAY_PORT") == "81",
              "llama-rpc-replicas: first leaf gateway port mismatch");
-      Expect(FindInstance(state, "worker-llama-rpc-replicas-a").environment.at("COMET_INFER_INSTANCE_NAME") ==
+      Expect(FindInstance(state, "worker-llama-rpc-replicas-a").environment.at("NAIM_INFER_INSTANCE_NAME") ==
                  "infer-llama-rpc-replicas-a",
              "llama-rpc-replicas: worker a infer binding mismatch");
-      Expect(FindInstance(state, "worker-llama-rpc-replicas-c").environment.at("COMET_INFER_INSTANCE_NAME") ==
+      Expect(FindInstance(state, "worker-llama-rpc-replicas-c").environment.at("NAIM_INFER_INSTANCE_NAME") ==
                  "infer-llama-rpc-replicas-c",
              "llama-rpc-replicas: worker c infer binding mismatch");
       const auto runtime_config = json::parse(
-          comet::RenderInferRuntimeConfigJsonForInstance(state, "infer-llama-rpc-replicas"));
+          naim::RenderInferRuntimeConfigJsonForInstance(state, "infer-llama-rpc-replicas"));
       Expect(runtime_config.at("replica_upstreams").is_array() &&
                  runtime_config.at("replica_upstreams").size() == 3,
              "llama-rpc-replicas: aggregator runtime config should expose 3 replica upstreams");
@@ -700,12 +727,12 @@ int main() {
               "http://infer-llama-rpc-replicas-c:83",
           "llama-rpc-replicas: replica c upstream mismatch");
       const auto host_plans =
-          comet::BuildNodeExecutionPlans(std::nullopt, state, "/tmp/comet-artifacts");
+          naim::BuildNodeExecutionPlans(std::nullopt, state, "/tmp/naim-artifacts");
       Expect(host_plans.size() == 1,
              "llama-rpc-replicas: expected a single host plan for single-node topology");
       std::vector<std::string> write_runtime_details;
       for (const auto& operation : host_plans.front().operations) {
-        if (operation.kind == comet::HostOperationKind::WriteInferRuntimeConfig) {
+        if (operation.kind == naim::HostOperationKind::WriteInferRuntimeConfig) {
           write_runtime_details.push_back(operation.details);
         }
       }
@@ -738,20 +765,20 @@ int main() {
       auto current_state = state;
       for (auto& instance : current_state.instances) {
         if (instance.name == "infer-llama-rpc-replicas-b") {
-          instance.image = "comet/infer-runtime:previous";
+          instance.image = "naim/infer-runtime:previous";
         }
       }
       const auto refresh_plans =
-          comet::BuildNodeExecutionPlans(current_state, state, "/tmp/comet-artifacts");
+          naim::BuildNodeExecutionPlans(current_state, state, "/tmp/naim-artifacts");
       Expect(refresh_plans.size() == 1,
              "llama-rpc-replicas: expected host plan when infer service image changes");
       std::vector<std::string> refresh_runtime_details;
       bool saw_compose_up = false;
       for (const auto& operation : refresh_plans.front().operations) {
-        if (operation.kind == comet::HostOperationKind::WriteInferRuntimeConfig) {
+        if (operation.kind == naim::HostOperationKind::WriteInferRuntimeConfig) {
           refresh_runtime_details.push_back(operation.details);
         }
-        if (operation.kind == comet::HostOperationKind::ComposeUp) {
+        if (operation.kind == naim::HostOperationKind::ComposeUp) {
           saw_compose_up = true;
         }
       }
@@ -783,15 +810,15 @@ int main() {
               refresh_runtime_details.end(),
               "infer-llama-rpc-replicas-c") != refresh_runtime_details.end(),
           "llama-rpc-replicas: compose refresh missing replica c infer runtime write");
-      const auto compose_plans = comet::BuildNodeComposePlans(state);
+      const auto compose_plans = naim::BuildNodeComposePlans(state);
       Expect(compose_plans.size() == 1,
              "llama-rpc-replicas: expected a single compose plan for single-node topology");
       std::set<int> seen_infer_gateway_ports;
       std::set<int> seen_worker_rpc_ports;
       const std::set<int> expected_worker_rpc_ports{
-          comet::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-a"),
-          comet::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-b"),
-          comet::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-c"),
+          naim::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-a"),
+          naim::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-b"),
+          naim::StableLlamaRpcWorkerPort(state.plane_name, "worker-llama-rpc-replicas-c"),
       };
       bool saw_aggregator = false;
       bool saw_leaf_a = false;
@@ -847,22 +874,22 @@ int main() {
       auto stale_state = state;
       {
         auto& worker_a = FindMutableInstance(&stale_state, "worker-llama-rpc-replicas-a");
-        worker_a.environment["COMET_WORKER_RPC_PORT"] = "29600";
-        worker_a.environment["COMET_WORKER_RPC_ENDPOINT"] =
+        worker_a.environment["NAIM_WORKER_RPC_PORT"] = "29600";
+        worker_a.environment["NAIM_WORKER_RPC_ENDPOINT"] =
             "worker-llama-rpc-replicas-a:29600";
         auto& worker_b = FindMutableInstance(&stale_state, "worker-llama-rpc-replicas-b");
-        worker_b.environment["COMET_WORKER_RPC_PORT"] = "29601";
-        worker_b.environment["COMET_WORKER_RPC_ENDPOINT"] =
+        worker_b.environment["NAIM_WORKER_RPC_PORT"] = "29601";
+        worker_b.environment["NAIM_WORKER_RPC_ENDPOINT"] =
             "worker-llama-rpc-replicas-b:29601";
         auto& worker_c = FindMutableInstance(&stale_state, "worker-llama-rpc-replicas-c");
-        worker_c.environment["COMET_WORKER_RPC_PORT"] = "29602";
-        worker_c.environment["COMET_WORKER_RPC_ENDPOINT"] =
+        worker_c.environment["NAIM_WORKER_RPC_PORT"] = "29602";
+        worker_c.environment["NAIM_WORKER_RPC_ENDPOINT"] =
             "worker-llama-rpc-replicas-c:29602";
       }
       stale_state.worker_group.members.at(0).rpc_port = 29600;
       stale_state.worker_group.members.at(1).rpc_port = 29601;
       stale_state.worker_group.members.at(2).rpc_port = 29602;
-      const auto stale_compose_plans = comet::BuildNodeComposePlans(stale_state);
+      const auto stale_compose_plans = naim::BuildNodeComposePlans(stale_state);
       std::set<int> healed_worker_rpc_ports;
       for (const auto& service : stale_compose_plans.front().services) {
         if (service.name.rfind("worker-llama-rpc-replicas-", 0) != 0) {
@@ -871,7 +898,7 @@ int main() {
         Expect(service.published_ports.size() == 1,
                "llama-rpc-replicas: healed worker should publish one rpc port");
         healed_worker_rpc_ports.insert(service.published_ports.front().host_port);
-        Expect(service.environment.at("COMET_WORKER_RPC_PORT") ==
+        Expect(service.environment.at("NAIM_WORKER_RPC_PORT") ==
                    std::to_string(service.published_ports.front().host_port),
                "llama-rpc-replicas: healed worker env should match published rpc port");
       }
@@ -925,6 +952,14 @@ int main() {
       Expect(state.instances.size() == 2, "gpu-worker: expected 2 worker instances only");
       Expect(state.worker_group.expected_workers == 2,
              "gpu-worker: expected_workers should match runtime.workers");
+      const auto persisted_v2 = naim::DeserializeDesiredStateJson(
+          naim::SerializeDesiredStateV2Json(state));
+      Expect(persisted_v2.plane_name == state.plane_name,
+             "gpu-worker: v2 persistence should preserve plane_name");
+      Expect(!persisted_v2.nodes.empty(),
+             "gpu-worker: v2 persistence should preserve nodes");
+      Expect(persisted_v2.instances.size() == state.instances.size(),
+             "gpu-worker: v2 persistence should preserve instances");
       std::cout << "ok: gpu-worker" << '\n';
     }
 
@@ -985,36 +1020,36 @@ int main() {
           std::none_of(
               state.disks.begin(),
               state.disks.end(),
-              [](const comet::DiskSpec& disk) { return disk.kind == comet::DiskKind::InferPrivate; }),
+              [](const naim::DiskSpec& disk) { return disk.kind == naim::DiskKind::InferPrivate; }),
           "llm-no-infer-private: infer private disk should be absent by default");
       const auto worker_disk_it = std::find_if(
           state.disks.begin(),
           state.disks.end(),
-          [](const comet::DiskSpec& disk) { return disk.kind == comet::DiskKind::WorkerPrivate; });
+          [](const naim::DiskSpec& disk) { return disk.kind == naim::DiskKind::WorkerPrivate; });
       Expect(worker_disk_it != state.disks.end(),
              "llm-no-infer-private: worker private disk should still exist");
       Expect(worker_disk_it->size_gb == 2,
              "llm-no-infer-private: worker private disk default size should be 2 GB");
 
-      const auto compose_plans = comet::BuildNodeComposePlans(state);
+      const auto compose_plans = naim::BuildNodeComposePlans(state);
       const auto infer_it = std::find_if(
           state.instances.begin(),
           state.instances.end(),
-          [](const comet::InstanceSpec& instance) { return instance.role == comet::InstanceRole::Infer; });
+          [](const naim::InstanceSpec& instance) { return instance.role == naim::InstanceRole::Infer; });
       Expect(infer_it != state.instances.end(),
              "llm-no-infer-private: infer instance should exist");
       const auto service_it = std::find_if(
           compose_plans.front().services.begin(),
           compose_plans.front().services.end(),
-          [&](const comet::ComposeService& service) { return service.name == infer_it->name; });
+          [&](const naim::ComposeService& service) { return service.name == infer_it->name; });
       Expect(service_it != compose_plans.front().services.end(),
              "llm-no-infer-private: infer service missing from compose plan");
       Expect(
           std::none_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),
-              [](const comet::ComposeVolume& volume) { return volume.target == "/comet/private"; }),
-          "llm-no-infer-private: infer compose service should not mount /comet/private by default");
+              [](const naim::ComposeVolume& volume) { return volume.target == "/naim/private"; }),
+          "llm-no-infer-private: infer compose service should not mount /naim/private by default");
       std::cout << "ok: llm-no-infer-private" << '\n';
     }
 
@@ -1036,7 +1071,7 @@ int main() {
            {
                {"enabled", true},
                {"image", "example/skills:dev"},
-               {"env", {{"COMET_CUSTOM_SKILLS_FLAG", "enabled"}}},
+               {"env", {{"NAIM_CUSTOM_SKILLS_FLAG", "enabled"}}},
                {"storage", {{"size_gb", 9}, {"mount_path", "/srv/skills"}}},
                {"publish",
                 json::array(
@@ -1050,43 +1085,43 @@ int main() {
       Expect(state.instances.size() == 4,
              "llm-with-skills: expected aggregator + leaf infer + worker + skills");
       const auto skills = FindInstance(state, "skills-llm-with-skills");
-      Expect(skills.role == comet::InstanceRole::Skills,
+      Expect(skills.role == naim::InstanceRole::Skills,
              "llm-with-skills: skills instance role mismatch");
       Expect(skills.image == "example/skills:dev",
              "llm-with-skills: custom skills image mismatch");
-      Expect(skills.environment.count("COMET_CUSTOM_SKILLS_FLAG") == 1 &&
-                 skills.environment.at("COMET_CUSTOM_SKILLS_FLAG") == "enabled",
+      Expect(skills.environment.count("NAIM_CUSTOM_SKILLS_FLAG") == 1 &&
+                 skills.environment.at("NAIM_CUSTOM_SKILLS_FLAG") == "enabled",
              "llm-with-skills: custom skills env mismatch");
       Expect(!skills.published_ports.empty() &&
                  skills.published_ports.front().host_port == 19120 &&
                  skills.published_ports.front().container_port == 18120,
              "llm-with-skills: published port mismatch");
       const auto skills_disk = FindDisk(state, "skills-llm-with-skills-private");
-      Expect(skills_disk.kind == comet::DiskKind::SkillsPrivate,
+      Expect(skills_disk.kind == naim::DiskKind::SkillsPrivate,
              "llm-with-skills: skills disk kind mismatch");
       Expect(skills_disk.container_path == "/srv/skills",
              "llm-with-skills: skills disk mount path mismatch");
       Expect(skills_disk.size_gb == 9,
              "llm-with-skills: skills disk size mismatch");
 
-      const auto compose_plans = comet::BuildNodeComposePlans(state);
+      const auto compose_plans = naim::BuildNodeComposePlans(state);
       Expect(compose_plans.size() == 1,
              "llm-with-skills: expected a single compose plan for single-node topology");
       const auto service_it = std::find_if(
           compose_plans.front().services.begin(),
           compose_plans.front().services.end(),
-          [](const comet::ComposeService& service) {
+          [](const naim::ComposeService& service) {
             return service.name == "skills-llm-with-skills";
           });
       Expect(service_it != compose_plans.front().services.end(),
              "llm-with-skills: skills service missing from compose plan");
-      Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/comet-ready",
+      Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/naim-ready",
              "llm-with-skills: compose healthcheck should use readiness file");
       Expect(
           std::none_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),
-              [](const comet::ComposeVolume& volume) { return volume.target == "/comet/shared"; }),
+              [](const naim::ComposeVolume& volume) { return volume.target == "/naim/shared"; }),
           "llm-with-skills: skills service should not mount shared disk by default");
       std::cout << "ok: llm-with-skills" << '\n';
     }
@@ -1110,7 +1145,7 @@ int main() {
                {"enabled", true},
                {"node", "browse-hostd"},
                {"image", "example/webgateway:dev"},
-               {"env", {{"COMET_WEBGATEWAY_DEBUG", "1"}}},
+               {"env", {{"NAIM_WEBGATEWAY_DEBUG", "1"}}},
                {"policy",
                 {{"browser_session_enabled", true},
                  {"rendered_browser_enabled", false},
@@ -1141,45 +1176,45 @@ int main() {
       Expect(state.instances.size() == 4,
              "llm-with-browsing: expected aggregator + leaf infer + worker + browsing");
       const auto browsing = FindInstance(state, "webgateway-llm-with-browsing");
-      Expect(browsing.role == comet::InstanceRole::Browsing,
+      Expect(browsing.role == naim::InstanceRole::Browsing,
              "llm-with-browsing: browsing instance role mismatch");
       Expect(browsing.image == "example/webgateway:dev",
              "llm-with-browsing: custom browsing image mismatch");
-      Expect(browsing.environment.count("COMET_WEBGATEWAY_DEBUG") == 1 &&
-                 browsing.environment.at("COMET_WEBGATEWAY_DEBUG") == "1",
+      Expect(browsing.environment.count("NAIM_WEBGATEWAY_DEBUG") == 1 &&
+                 browsing.environment.at("NAIM_WEBGATEWAY_DEBUG") == "1",
              "llm-with-browsing: custom browsing env mismatch");
-      Expect(browsing.environment.count("COMET_WEBGATEWAY_POLICY_JSON") == 1,
+      Expect(browsing.environment.count("NAIM_WEBGATEWAY_POLICY_JSON") == 1,
              "llm-with-browsing: browsing policy env should be rendered");
       Expect(!browsing.published_ports.empty() &&
                  browsing.published_ports.front().host_port == 19130 &&
                  browsing.published_ports.front().container_port == 18130,
              "llm-with-browsing: published port mismatch");
       const auto browsing_disk = FindDisk(state, "webgateway-llm-with-browsing-private");
-      Expect(browsing_disk.kind == comet::DiskKind::BrowsingPrivate,
+      Expect(browsing_disk.kind == naim::DiskKind::BrowsingPrivate,
              "llm-with-browsing: browsing disk kind mismatch");
       Expect(browsing_disk.container_path == "/srv/browsing",
              "llm-with-browsing: browsing disk mount path mismatch");
       Expect(browsing_disk.size_gb == 7,
              "llm-with-browsing: browsing disk size mismatch");
 
-      const auto compose_plans = comet::BuildNodeComposePlans(state);
+      const auto compose_plans = naim::BuildNodeComposePlans(state);
       Expect(compose_plans.size() == 2,
              "llm-with-browsing: expected separate compose plans for infer and browsing nodes");
       const auto browse_plan_it = std::find_if(
           compose_plans.begin(),
           compose_plans.end(),
-          [](const comet::NodeComposePlan& plan) { return plan.node_name == "browse-hostd"; });
+          [](const naim::NodeComposePlan& plan) { return plan.node_name == "browse-hostd"; });
       Expect(browse_plan_it != compose_plans.end(),
              "llm-with-browsing: browsing node compose plan missing");
       const auto service_it = std::find_if(
           browse_plan_it->services.begin(),
           browse_plan_it->services.end(),
-          [](const comet::ComposeService& service) {
+          [](const naim::ComposeService& service) {
             return service.name == "webgateway-llm-with-browsing";
           });
       Expect(service_it != browse_plan_it->services.end(),
              "llm-with-browsing: browsing service missing from compose plan");
-      Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/comet-ready",
+      Expect(service_it->healthcheck == "CMD-SHELL test -f /tmp/naim-ready",
              "llm-with-browsing: compose healthcheck should use readiness file");
       Expect(
           std::find(
@@ -1203,7 +1238,7 @@ int main() {
           std::none_of(
               service_it->volumes.begin(),
               service_it->volumes.end(),
-              [](const comet::ComposeVolume& volume) { return volume.target == "/comet/shared"; }),
+              [](const naim::ComposeVolume& volume) { return volume.target == "/naim/shared"; }),
           "llm-with-browsing: browsing service should not mount shared disk by default");
       std::cout << "ok: llm-with-browsing" << '\n';
     }
@@ -1452,6 +1487,215 @@ int main() {
                {{"share_mode", "exclusive"}, {"gpu_fraction", 0.5}, {"memory_cap_mb", 24576}}}}},
         },
         "exclusive-share-mode-requires-full-gpu");
+
+    {
+      const json placement_execution_node{
+          {"version", 2},
+          {"plane_name", "placement-execution-node"},
+          {"plane_mode", "llm"},
+          {"placement", {{"execution_node", "remote-worker-a"}}},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-placement"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 2}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(placement_execution_node, "placement-execution-node");
+      Expect(state.placement_target == std::optional<std::string>("node:remote-worker-a"),
+             "placement-execution-node: placement_target should render from placement.execution_node");
+      Expect(!state.nodes.empty() && state.nodes.front().name == "remote-worker-a",
+             "placement-execution-node: renderer should synthesize node inventory");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.contains("placement") && projected.at("placement").is_object(),
+             "placement-execution-node: projector should emit placement block");
+      Expect(projected.at("placement").at("execution_node").get<std::string>() == "remote-worker-a",
+             "placement-execution-node: projector execution_node mismatch");
+      Expect(!projected.contains("topology"),
+             "placement-execution-node: projector should suppress topology when placement_target is set");
+      const auto persisted = naim::DeserializeDesiredStateJson(
+          naim::SerializeDesiredStateJson(state));
+      Expect(
+          persisted.placement_target == std::optional<std::string>("node:remote-worker-a"),
+          "placement-execution-node: placement_target should survive desired-state persistence");
+      const auto persisted_v2 = naim::DeserializeDesiredStateJson(
+          naim::SerializeDesiredStateV2Json(state));
+      Expect(persisted_v2.plane_name == state.plane_name,
+             "placement-execution-node: v2 persistence should preserve plane_name");
+      Expect(!persisted_v2.nodes.empty(),
+             "placement-execution-node: v2 persistence should preserve nodes");
+      std::cout << "ok: placement-execution-node" << '\n';
+    }
+
+    {
+      const json legacy_placement_primary_node_alias{
+          {"version", 2},
+          {"plane_name", "legacy-placement-primary-node-alias"},
+          {"plane_mode", "compute"},
+          {"placement", {{"primary_node", "remote-worker-a"}}},
+          {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+      };
+      const auto state = RenderValid(
+          legacy_placement_primary_node_alias,
+          "legacy-placement-primary-node-alias");
+      Expect(state.placement_target == std::optional<std::string>("node:remote-worker-a"),
+             "legacy placement.primary_node alias should still render");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("placement").at("execution_node").get<std::string>() == "remote-worker-a",
+             "legacy placement.primary_node alias should project as execution_node");
+      std::cout << "ok: legacy-placement-primary-node-alias" << '\n';
+    }
+
+    {
+      const json legacy_topology_compatibility{
+          {"version", 2},
+          {"plane_name", "legacy-topology-compatibility"},
+          {"plane_mode", "llm"},
+          {"topology",
+           {{"nodes",
+             json::array(
+                 {{{"name", "controller-node"}, {"execution_mode", "mixed"}},
+                  {{"name", "worker-node-a"}, {"execution_mode", "worker-only"}}})}}},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-legacy-topology"},
+           }},
+          {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", true}, {"image", "example/app:dev"}, {"node", "controller-node"}}},
+          {"skills", {{"enabled", true}, {"image", "example/skills:dev"}, {"node", "controller-node"}}},
+          {"worker", {{"assignments", json::array({{{"node", "worker-node-a"}, {"gpu_device", "0"}}})}}},
+      };
+      const auto state = RenderValid(
+          legacy_topology_compatibility,
+          "legacy-topology-compatibility");
+      const auto worker_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const naim::InstanceSpec& instance) {
+            return instance.role == naim::InstanceRole::Worker;
+          });
+      Expect(worker_it != state.instances.end(),
+             "legacy-topology-compatibility: worker instance should render");
+      Expect(worker_it->node_name == "worker-node-a",
+             "legacy-topology-compatibility: worker assignment node mismatch");
+      Expect(worker_it->gpu_device == std::optional<std::string>("0"),
+             "legacy-topology-compatibility: worker assignment gpu_device mismatch");
+      const auto skills_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const naim::InstanceSpec& instance) {
+            return instance.role == naim::InstanceRole::Skills;
+          });
+      Expect(skills_it != state.instances.end(),
+             "legacy-topology-compatibility: skills instance should render");
+      Expect(skills_it->node_name == "controller-node",
+             "legacy-topology-compatibility: skills node mismatch");
+      std::cout << "ok: legacy-topology-compatibility" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-legacy-infer-node-without-topology"},
+            {"plane_mode", "llm"},
+            {"placement", {{"execution_node", "worker-a"}}},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-legacy-infer"},
+             }},
+            {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}, {"node", "other-node"}}},
+        },
+        "legacy-infer-node-requires-topology");
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-legacy-worker-assignments-without-topology"},
+            {"plane_mode", "compute"},
+            {"placement", {{"execution_node", "worker-a"}}},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"worker", {{"assignments", json::array({{{"node", "worker-a"}, {"gpu_device", "0"}}})}}},
+        },
+        "legacy-worker-assignments-require-topology");
+
+    {
+      const json placement_app_host{
+          {"version", 2},
+          {"plane_name", "placement-app-host"},
+          {"plane_mode", "llm"},
+          {"placement",
+           {{"execution_node", "worker-a"},
+            {"app_host", {{"address", "10.0.0.15"}, {"ssh_key_path", "/tmp/id_ed25519"}}}}},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-placement-app-host"},
+           }},
+          {"runtime", {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+          {"skills", {{"enabled", true}, {"image", "example/skills:dev"}}},
+      };
+      const auto state = RenderValid(placement_app_host, "placement-app-host");
+      Expect(state.app_host.has_value(), "placement-app-host: app_host should render");
+      Expect(state.app_host->address == "10.0.0.15",
+             "placement-app-host: app_host address mismatch");
+      const auto app_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const naim::InstanceSpec& instance) {
+            return instance.role == naim::InstanceRole::App;
+          });
+      Expect(app_it != state.instances.end(),
+             "placement-app-host: app instance should render");
+      Expect(app_it->environment.at("NAIM_EXTERNAL_APP_HOST_ADDRESS") == "10.0.0.15",
+             "placement-app-host: app should include external host address");
+      Expect(app_it->labels.at("naim.deployment.target") == "external-app-host",
+             "placement-app-host: app should mark external deployment target");
+      const auto skills_it = std::find_if(
+          state.instances.begin(),
+          state.instances.end(),
+          [](const naim::InstanceSpec& instance) {
+            return instance.role == naim::InstanceRole::Skills;
+          });
+      Expect(skills_it != state.instances.end(),
+             "placement-app-host: skills instance should render");
+      Expect(skills_it->environment.at("NAIM_EXTERNAL_APP_HOST_BINDING") == "skills-follow-app",
+             "placement-app-host: skills should follow app host binding");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.at("placement").at("app_host").at("ssh_key_path").get<std::string>() ==
+                 "/tmp/id_ed25519",
+             "placement-app-host: projector should preserve ssh_key_path");
+      std::cout << "ok: placement-app-host" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "bad-app-host-auth"},
+            {"plane_mode", "compute"},
+            {"placement",
+             {{"execution_node", "worker-a"},
+              {"app_host",
+               {{"address", "10.0.0.15"},
+                {"ssh_key_path", "/tmp/id_ed25519"},
+                {"username", "root"},
+                {"password", "secret"}}}}},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"app", {{"enabled", true}, {"image", "example/app:dev"}}},
+        },
+        "placement-app-host-rejects-mixed-auth");
 
     return 0;
   } catch (const std::exception& ex) {

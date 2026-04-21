@@ -2,12 +2,12 @@
 
 #include <cstdlib>
 
-#include "comet/core/platform_compat.h"
+#include "naim/core/platform_compat.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 std::optional<fs::path> InstallLayoutResolver::InstallRootOverride() const {
-  const char* value = std::getenv("COMET_INSTALL_ROOT");
+  const char* value = std::getenv("NAIM_INSTALL_ROOT");
   if (value == nullptr || *value == '\0') {
     return std::nullopt;
   }
@@ -17,19 +17,19 @@ std::optional<fs::path> InstallLayoutResolver::InstallRootOverride() const {
 InstallLayout InstallLayoutResolver::DefaultInstallLayout() const {
   if (const auto root = InstallRootOverride(); root.has_value()) {
     return InstallLayout{
-        *root / "etc/comet-node/config.toml",
-        *root / "var/lib/comet-node",
-        *root / "var/log/comet-node",
+        *root / "etc/naim-node/config.toml",
+        *root / "var/lib/naim-node",
+        *root / "var/log/naim-node",
         *root / "etc/systemd/system",
     };
   }
-  if (!comet::platform::HasElevatedPrivileges()) {
+  if (!naim::platform::HasElevatedPrivileges()) {
     const fs::path home = std::getenv("HOME") != nullptr ? fs::path(std::getenv("HOME"))
                                                          : fs::current_path();
     return InstallLayout{
-        home / ".config/comet-node/config.toml",
-        home / ".local/share/comet-node",
-        home / ".local/state/comet-node",
+        home / ".config/naim-node/config.toml",
+        home / ".local/share/naim-node",
+        home / ".local/state/naim-node",
         home / ".config/systemd/user",
     };
   }
@@ -61,4 +61,4 @@ bool InstallLayoutResolver::IsUserServiceLayout(const InstallLayout& layout) con
   return rendered.find(".config/systemd/user") != std::string::npos;
 }
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

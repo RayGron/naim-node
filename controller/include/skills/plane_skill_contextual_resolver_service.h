@@ -7,7 +7,7 @@
 
 #include "interaction/interaction_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 struct ContextualSkillSelection {
   std::string mode = "none";
@@ -31,4 +31,4 @@ class PlaneSkillContextualResolverService final {
       const nlohmann::json& payload) const;
 };
 
-}  // namespace comet::controller
+}  // namespace naim::controller

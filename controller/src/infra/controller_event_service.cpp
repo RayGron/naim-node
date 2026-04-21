@@ -1,6 +1,6 @@
 #include "infra/controller_event_service.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string ControllerEventService::SerializePayload(
     const nlohmann::json& payload) const {
@@ -8,7 +8,7 @@ std::string ControllerEventService::SerializePayload(
 }
 
 void ControllerEventService::AppendEvent(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& category,
     const std::string& event_type,
     const std::string& message,
@@ -19,7 +19,7 @@ void ControllerEventService::AppendEvent(
     const std::optional<int>& assignment_id,
     const std::optional<int>& rollout_action_id,
     const std::string& severity) const {
-  store.AppendEvent(comet::EventRecord{
+  store.AppendEvent(naim::EventRecord{
       0,
       plane_name,
       node_name,
@@ -35,4 +35,4 @@ void ControllerEventService::AppendEvent(
   });
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

@@ -1,16 +1,19 @@
 #include "skills/skills_server.h"
 
 #include <array>
+#include <cctype>
 #include <csignal>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 
 #include "http/controller_http_server_support.h"
+#include "http/controller_http_transport.h"
 #include "infra/controller_network_manager.h"
 
-namespace comet::skills {
+namespace naim::skills {
 
 namespace {
 
@@ -20,6 +23,23 @@ void SignalHandler(int) {
   if (g_stop_requested != nullptr) {
     g_stop_requested->store(true);
   }
+}
+
+std::string PercentEncodePathSegment(const std::string& value) {
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string encoded;
+  encoded.reserve(value.size());
+  for (const auto raw : value) {
+    const auto ch = static_cast<unsigned char>(raw);
+    if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+      encoded.push_back(static_cast<char>(ch));
+      continue;
+    }
+    encoded.push_back('%');
+    encoded.push_back(kHex[(ch >> 4) & 0x0F]);
+    encoded.push_back(kHex[ch & 0x0F]);
+  }
+  return encoded;
 }
 
 }  // namespace
@@ -42,7 +62,9 @@ int SkillsServer::Run() {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
-  listen_fd_ = comet::controller::ControllerNetworkManager::CreateListenSocket(
+  SyncFromController();
+
+  listen_fd_ = naim::controller::ControllerNetworkManager::CreateListenSocket(
       config_.listen_host,
       config_.port);
   WriteRuntimeStatus("running", true);
@@ -53,42 +75,42 @@ int SkillsServer::Run() {
   } catch (...) {
     WriteRuntimeStatus("stopped", false);
     SetReadyFile(false);
-    comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
-    listen_fd_ = comet::platform::kInvalidSocket;
+    naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+    listen_fd_ = naim::platform::kInvalidSocket;
     throw;
   }
 
   WriteRuntimeStatus("stopped", false);
   SetReadyFile(false);
-  comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
-  listen_fd_ = comet::platform::kInvalidSocket;
+  naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+  listen_fd_ = naim::platform::kInvalidSocket;
   return 0;
 }
 
 void SkillsServer::RequestStop() {
   const bool was_requested = stop_requested_.exchange(true);
-  if (!was_requested && comet::platform::IsSocketValid(listen_fd_)) {
+  if (!was_requested && naim::platform::IsSocketValid(listen_fd_)) {
     WriteRuntimeStatus("stopping", false);
     SetReadyFile(false);
-    comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
+    naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(listen_fd_);
   }
 }
 
 void SkillsServer::AcceptLoop() {
   while (!stop_requested_.load()) {
     const auto client_fd = accept(listen_fd_, nullptr, nullptr);
-    if (!comet::platform::IsSocketValid(client_fd)) {
-      if (stop_requested_.load() || comet::platform::LastSocketErrorWasInterrupted()) {
+    if (!naim::platform::IsSocketValid(client_fd)) {
+      if (stop_requested_.load() || naim::platform::LastSocketErrorWasInterrupted()) {
         continue;
       }
       throw std::runtime_error(
-          "accept failed: " + comet::controller::ControllerNetworkManager::SocketErrorMessage());
+          "accept failed: " + naim::controller::ControllerNetworkManager::SocketErrorMessage());
     }
     std::thread(&SkillsServer::HandleClient, this, client_fd).detach();
   }
 }
 
-void SkillsServer::HandleClient(comet::platform::SocketHandle client_fd) {
+void SkillsServer::HandleClient(naim::platform::SocketHandle client_fd) {
   std::string request_data;
   std::array<char, 8192> buffer{};
   std::size_t expected_request_bytes = 0;
@@ -100,7 +122,7 @@ void SkillsServer::HandleClient(comet::platform::SocketHandle client_fd) {
     request_data.append(buffer.data(), static_cast<std::size_t>(read_count));
     if (expected_request_bytes == 0) {
       expected_request_bytes =
-          comet::controller::ControllerHttpServerSupport::ExpectedRequestBytes(request_data);
+          naim::controller::ControllerHttpServerSupport::ExpectedRequestBytes(request_data);
     }
     if (expected_request_bytes != 0 && request_data.size() >= expected_request_bytes) {
       break;
@@ -110,25 +132,25 @@ void SkillsServer::HandleClient(comet::platform::SocketHandle client_fd) {
   if (!request_data.empty()) {
     try {
       const HttpRequest request =
-          comet::controller::ControllerHttpServerSupport::ParseHttpRequest(request_data);
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+          naim::controller::ControllerHttpServerSupport::ParseHttpRequest(request_data);
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           HandleRequest(request));
     } catch (const ApiError& error) {
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           BuildJsonResponse(
               error.status(),
               nlohmann::json{{"error", error.code()}, {"message", error.message()}}));
     } catch (const std::exception& error) {
-      comet::controller::ControllerNetworkManager::SendHttpResponse(
+      naim::controller::ControllerNetworkManager::SendHttpResponse(
           client_fd,
           BuildJsonResponse(
               500,
               nlohmann::json{{"error", "internal_error"}, {"message", error.what()}}));
     }
   }
-  comet::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+  naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
 }
 
 HttpResponse SkillsServer::HandleRequest(const HttpRequest& request) {
@@ -239,8 +261,71 @@ HttpResponse SkillsServer::BuildJsonResponse(int status_code, const nlohmann::js
   return response;
 }
 
+void SkillsServer::SyncFromController() {
+  if (config_.controller_url.empty() || config_.plane_name.empty() ||
+      config_.plane_name == "unknown") {
+    return;
+  }
+
+  try {
+    const auto target = ParseControllerEndpointTarget(config_.controller_url);
+    const std::string path =
+        "/api/v1/planes/" + PercentEncodePathSegment(config_.plane_name) + "/skills";
+    const auto response = SendControllerHttpRequest(
+        target,
+        "GET",
+        path,
+        "",
+        {{"Accept", "application/json"}, {"Cache-Control", "no-store"}});
+    if (response.status_code != 200) {
+      std::cerr << "[naim-skills] controller sync skipped: status="
+                << response.status_code << " path=" << path << "\n";
+      return;
+    }
+
+    const auto payload = nlohmann::json::parse(response.body, nullptr, false);
+    if (payload.is_discarded() || !payload.is_object() ||
+        !payload.contains("skills") || !payload.at("skills").is_array()) {
+      std::cerr << "[naim-skills] controller sync skipped: malformed payload\n";
+      return;
+    }
+
+    std::set<std::string> selected_ids;
+    int synced_count = 0;
+    for (const auto& item : payload.at("skills")) {
+      if (!item.is_object() || !item.contains("id") || !item.at("id").is_string()) {
+        continue;
+      }
+      const std::string skill_id = item.at("id").get<std::string>();
+      if (skill_id.empty()) {
+        continue;
+      }
+      selected_ids.insert(skill_id);
+      store_.ReplaceSkill(skill_id, item, false);
+      ++synced_count;
+    }
+
+    const auto existing = store_.ListSkills();
+    if (existing.is_array()) {
+      for (const auto& item : existing) {
+        if (!item.is_object() || !item.contains("id") || !item.at("id").is_string()) {
+          continue;
+        }
+        const std::string skill_id = item.at("id").get<std::string>();
+        if (!skill_id.empty() && selected_ids.count(skill_id) == 0) {
+          store_.DeleteSkill(skill_id);
+        }
+      }
+    }
+
+    std::cout << "[naim-skills] controller sync ok skills=" << synced_count << "\n";
+  } catch (const std::exception& error) {
+    std::cerr << "[naim-skills] controller sync failed: " << error.what() << "\n";
+  }
+}
+
 void SkillsServer::WriteRuntimeStatus(const std::string& phase, bool ready) const {
-  comet::RuntimeStatus status;
+  naim::RuntimeStatus status;
   status.plane_name = config_.plane_name;
   status.control_root = config_.control_root;
   status.controller_url = config_.controller_url;
@@ -271,4 +356,4 @@ void SkillsServer::SetReadyFile(bool ready) const {
   std::filesystem::remove(config_.ready_path, error);
 }
 
-}  // namespace comet::skills
+}  // namespace naim::skills

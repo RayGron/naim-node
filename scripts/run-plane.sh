@@ -17,7 +17,7 @@ repo_root="$(cd -- "${script_dir}/.." && pwd)"
 plane_name="v2-llama-rpc-backend"
 desired_state_path=""
 controller_url="http://127.0.0.1:18080"
-artifacts_root="/var/lib/comet-node/artifacts"
+artifacts_root="/var/lib/naim-node/artifacts"
 wait_seconds="900"
 force_cpu="no"
 wait_for_ready="yes"
@@ -68,7 +68,7 @@ if [[ -z "${desired_state_path}" ]]; then
   desired_state_path="${repo_root}/config/${plane_name}/desired-state.v2.json"
 fi
 if [[ ! -f "${desired_state_path}" ]]; then
-  sibling_app_desired_state="${repo_root}/../${plane_name}/deploy/comet-node/desired-state.v2.json"
+  sibling_app_desired_state="${repo_root}/../${plane_name}/deploy/naim-node/desired-state.v2.json"
   if [[ -f "${sibling_app_desired_state}" ]]; then
     desired_state_path="${sibling_app_desired_state}"
   fi
@@ -78,7 +78,7 @@ if [[ ! -f "${desired_state_path}" ]]; then
   exit 1
 fi
 
-config_summary="$("${repo_root}/scripts/comet-devtool.sh" config-summary --config "${repo_root}/config/comet-node-config.json")"
+config_summary="$("${repo_root}/scripts/naim-devtool.sh" config-summary --config "${repo_root}/config/naim-node-config.json")"
 storage_root="$(printf '%s\n' "${config_summary}" | sed -n '1p')"
 model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
@@ -116,10 +116,10 @@ resolve_sudo_prefix() {
 
 hostd_report_observation() {
   local sudo_prefix="$1"
-  local hostd_bin="${COMET_HOSTD_BIN:-$("${repo_root}/scripts/print-build-dir.sh")/comet-hostd}"
-  local db_path="${COMET_NODE_CONTROLLER_DB:-/var/lib/comet-node/controller.sqlite}"
-  local node_name="${COMET_NODE_NAME:-local-hostd}"
-  local state_root="${COMET_NODE_HOSTD_STATE_ROOT:-/var/lib/comet-node/hostd-state}"
+  local hostd_bin="${NAIM_HOSTD_BIN:-$("${repo_root}/scripts/print-build-dir.sh")/naim-hostd}"
+  local db_path="${NAIM_NODE_CONTROLLER_DB:-/var/lib/naim-node/controller.sqlite}"
+  local node_name="${NAIM_NODE_NAME:-local-hostd}"
+  local state_root="${NAIM_NODE_HOSTD_STATE_ROOT:-/var/lib/naim-node/hostd-state}"
   if [[ ! -x "${hostd_bin}" || ! -f "${db_path}" ]]; then
     return 0
   fi
@@ -164,14 +164,14 @@ if ! wait_for_http "${controller_url}/health" 60; then
   exit 1
 fi
 
-"${repo_root}/scripts/comet-devtool.sh" prepare-run-plane-state \
+"${repo_root}/scripts/naim-devtool.sh" prepare-run-plane-state \
   --input "${desired_state_path}" \
   --output "${tmp_dir}/desired-state.runtime.json" \
   --model-cache-root "${model_cache_root}" \
   --plane-name "${plane_name}" \
   --force-cpu "${force_cpu}"
 
-bootstrap_local_path="$("${repo_root}/scripts/comet-devtool.sh" run-plane-fields --state "${tmp_dir}/desired-state.runtime.json")"
+bootstrap_local_path="$("${repo_root}/scripts/naim-devtool.sh" run-plane-fields --state "${tmp_dir}/desired-state.runtime.json")"
 bootstrap_cached_path="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '1p')"
 bootstrap_is_multipart="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '2p')"
 gateway_port="$(printf '%s\n' "${bootstrap_local_path}" | sed -n '3p')"
@@ -186,7 +186,7 @@ if [[ "${bootstrap_is_multipart}" != "yes" ]] && [[ -n "${bootstrap_cached_path}
 fi
 
 payload_path="${tmp_dir}/apply-plane.json"
-"${repo_root}/scripts/comet-devtool.sh" write-apply-payload \
+"${repo_root}/scripts/naim-devtool.sh" write-apply-payload \
   --desired-state "${tmp_dir}/desired-state.runtime.json" \
   --output "${payload_path}" \
   --artifacts-root "${artifacts_root}"

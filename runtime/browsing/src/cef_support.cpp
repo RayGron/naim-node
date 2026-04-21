@@ -5,7 +5,7 @@
 #include <system_error>
 #include <vector>
 
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
 #include <cstdlib>
 #include <unistd.h>
 
@@ -15,9 +15,9 @@
 #include "include/cef_version.h"
 #endif
 
-namespace comet::browsing {
+namespace naim::browsing {
 
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
 namespace {
 
 void AppendSwitchValue(
@@ -29,7 +29,7 @@ void AppendSwitchValue(
   }
 }
 
-class CometCefApp final : public CefApp, public CefBrowserProcessHandler {
+class NaimCefApp final : public CefApp, public CefBrowserProcessHandler {
  public:
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
     return this;
@@ -59,12 +59,12 @@ class CometCefApp final : public CefApp, public CefBrowserProcessHandler {
     }
   }
 
-  IMPLEMENT_REFCOUNTING(CometCefApp);
+  IMPLEMENT_REFCOUNTING(NaimCefApp);
 };
 
 std::mutex g_cef_mutex;
 bool g_cef_runtime_enabled = false;
-CefRefPtr<CometCefApp> g_cef_app;
+CefRefPtr<NaimCefApp> g_cef_app;
 
 std::string ReadExecutablePath() {
   std::string path(4096, '\0');
@@ -138,7 +138,7 @@ void ApplyEnvironmentIsolation(const std::filesystem::path& cache_root) {
 #endif
 
 bool CefBuildEnabled() {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   return true;
 #else
   return false;
@@ -146,7 +146,7 @@ bool CefBuildEnabled() {
 }
 
 std::string CefBuildSummary() {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   return "cef-chromium-" + std::to_string(CHROME_VERSION_MAJOR);
 #else
   return "cef-disabled";
@@ -154,10 +154,10 @@ std::string CefBuildSummary() {
 }
 
 int MaybeRunCefSubprocess(int argc, char** argv) {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   std::lock_guard<std::mutex> lock(g_cef_mutex);
   if (!g_cef_app) {
-    g_cef_app = new CometCefApp();
+    g_cef_app = new NaimCefApp();
   }
   CefMainArgs main_args(argc, argv);
   return CefExecuteProcess(main_args, g_cef_app, nullptr);
@@ -173,14 +173,14 @@ void InitializeCefOrThrow(
     char** argv,
     const std::filesystem::path& state_root,
     const std::filesystem::path& executable_path) {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   std::lock_guard<std::mutex> lock(g_cef_mutex);
   if (g_cef_runtime_enabled) {
     return;
   }
 
   if (!g_cef_app) {
-    g_cef_app = new CometCefApp();
+    g_cef_app = new NaimCefApp();
   }
 
   CefMainArgs main_args(argc, argv);
@@ -218,7 +218,7 @@ void InitializeCefOrThrow(
 }
 
 void ShutdownCef() {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   std::lock_guard<std::mutex> lock(g_cef_mutex);
   if (!g_cef_runtime_enabled) {
     return;
@@ -229,7 +229,7 @@ void ShutdownCef() {
 }
 
 bool CefRuntimeEnabled() {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   std::lock_guard<std::mutex> lock(g_cef_mutex);
   return g_cef_runtime_enabled;
 #else
@@ -238,11 +238,11 @@ bool CefRuntimeEnabled() {
 }
 
 std::string CurrentExecutablePath() {
-#if COMET_WITH_CEF
+#if NAIM_WITH_CEF
   return ReadExecutablePath();
 #else
   return {};
 #endif
 }
 
-}  // namespace comet::browsing
+}  // namespace naim::browsing

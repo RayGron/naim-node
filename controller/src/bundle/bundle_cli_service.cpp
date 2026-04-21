@@ -8,26 +8,26 @@
 #include <stdexcept>
 #include <utility>
 
-#include "comet/planning/compose_renderer.h"
-#include "comet/state/demo_state.h"
-#include "comet/importing/import_bundle.h"
-#include "comet/runtime/infer_runtime_config.h"
-#include "comet/planning/planner.h"
-#include "comet/planning/reconcile.h"
-#include "comet/state/state_json.h"
+#include "naim/planning/compose_renderer.h"
+#include "naim/state/demo_state.h"
+#include "naim/importing/import_bundle.h"
+#include "naim/runtime/infer_runtime_config.h"
+#include "naim/planning/planner.h"
+#include "naim/planning/reconcile.h"
+#include "naim/state/state_json.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 namespace {
 
-void PrintPreviewSummary(const comet::DesiredState& state) {
+void PrintPreviewSummary(const naim::DesiredState& state) {
   std::cout << "preview:\n";
   std::cout << "  plane=" << state.plane_name << "\n";
   std::cout << "  nodes=" << state.nodes.size() << "\n";
   std::cout << "  disks=" << state.disks.size() << "\n";
   std::cout << "  instances=" << state.instances.size() << "\n";
 
-  const auto node_plans = comet::BuildNodeComposePlans(state);
+  const auto node_plans = naim::BuildNodeComposePlans(state);
   for (const auto& plan : node_plans) {
     std::cout << "  node " << plan.node_name
               << ": services=" << plan.services.size()
@@ -36,36 +36,36 @@ void PrintPreviewSummary(const comet::DesiredState& state) {
 }
 
 int RenderComposeForState(
-    const comet::DesiredState& state,
+    const naim::DesiredState& state,
     const std::optional<std::string>& node_name) {
   if (node_name.has_value()) {
-    const auto plan = comet::FindNodeComposePlan(state, *node_name);
+    const auto plan = naim::FindNodeComposePlan(state, *node_name);
     if (!plan.has_value()) {
       std::cerr << "error: node '" << *node_name << "' not found in state\n";
       return 1;
     }
-    std::cout << comet::RenderComposeYaml(*plan);
+    std::cout << naim::RenderComposeYaml(*plan);
     return 0;
   }
 
-  const auto plans = comet::BuildNodeComposePlans(state);
+  const auto plans = naim::BuildNodeComposePlans(state);
   for (std::size_t index = 0; index < plans.size(); ++index) {
     if (index > 0) {
       std::cout << "\n---\n";
     }
-    std::cout << comet::RenderComposeYaml(plans[index]);
+    std::cout << naim::RenderComposeYaml(plans[index]);
   }
   return 0;
 }
 
-std::vector<comet::NodeExecutionPlan> FilterNodeExecutionPlans(
-    const std::vector<comet::NodeExecutionPlan>& plans,
+std::vector<naim::NodeExecutionPlan> FilterNodeExecutionPlans(
+    const std::vector<naim::NodeExecutionPlan>& plans,
     const std::optional<std::string>& node_name) {
   if (!node_name.has_value()) {
     return plans;
   }
 
-  std::vector<comet::NodeExecutionPlan> filtered;
+  std::vector<naim::NodeExecutionPlan> filtered;
   for (const auto& plan : plans) {
     if (plan.node_name == *node_name) {
       filtered.push_back(plan);
@@ -79,7 +79,7 @@ std::vector<comet::NodeExecutionPlan> FilterNodeExecutionPlans(
   return filtered;
 }
 
-std::string RenderInferenceKnobs(const comet::InferenceRuntimeSettings& inference) {
+std::string RenderInferenceKnobs(const naim::InferenceRuntimeSettings& inference) {
   std::ostringstream output;
   output << "max_model_len=" << inference.max_model_len
          << " llama_ctx_size=" << inference.llama_ctx_size
@@ -89,8 +89,8 @@ std::string RenderInferenceKnobs(const comet::InferenceRuntimeSettings& inferenc
 }
 
 void VerifyStoredDesiredStateInference(
-    comet::ControllerStore& store,
-    const comet::DesiredState& expected_state) {
+    naim::ControllerStore& store,
+    const naim::DesiredState& expected_state) {
   const auto stored_state = store.LoadDesiredState(expected_state.plane_name);
   if (!stored_state.has_value()) {
     throw std::runtime_error(
@@ -112,7 +112,7 @@ void VerifyStoredDesiredStateInference(
   }
 }
 
-std::set<std::string> SelectedFactorySkillIds(const std::optional<comet::DesiredState>& state) {
+std::set<std::string> SelectedFactorySkillIds(const std::optional<naim::DesiredState>& state) {
   std::set<std::string> result;
   if (!state.has_value() || !state->skills.has_value()) {
     return result;
@@ -124,9 +124,9 @@ std::set<std::string> SelectedFactorySkillIds(const std::optional<comet::Desired
 }
 
 void DetachRemovedFactorySkillBindings(
-    comet::ControllerStore& store,
-    const std::optional<comet::DesiredState>& previous_state,
-    const comet::DesiredState& next_state) {
+    naim::ControllerStore& store,
+    const std::optional<naim::DesiredState>& previous_state,
+    const naim::DesiredState& next_state) {
   const auto previous_ids = SelectedFactorySkillIds(previous_state);
   const auto next_ids = SelectedFactorySkillIds(next_state);
   for (const auto& skill_id : previous_ids) {
@@ -153,7 +153,7 @@ BundleCliService::BundleCliService(
       default_stale_after_seconds_(default_stale_after_seconds) {}
 
 void BundleCliService::AppendEvent(
-    comet::ControllerStore& store,
+    naim::ControllerStore& store,
     const std::string& category,
     const std::string& event_type,
     const std::string& message,
@@ -164,7 +164,7 @@ void BundleCliService::AppendEvent(
     const std::optional<int>& assignment_id,
     const std::optional<int>& rollout_action_id,
     const std::string& severity) const {
-  store.AppendEvent(comet::EventRecord{
+  store.AppendEvent(naim::EventRecord{
       0,
       plane_name,
       node_name,
@@ -181,29 +181,29 @@ void BundleCliService::AppendEvent(
 }
 
 void BundleCliService::ShowDemoPlan() const {
-  controller_print_service_.PrintStateSummary(comet::BuildDemoState());
+  controller_print_service_.PrintStateSummary(naim::BuildDemoState());
 }
 
 int BundleCliService::RenderDemoCompose(
     const std::optional<std::string>& node_name) const {
-  return RenderComposeForState(comet::BuildDemoState(), node_name);
+  return RenderComposeForState(naim::BuildDemoState(), node_name);
 }
 
 int BundleCliService::InitDb(const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   std::cout << "initialized db: " << db_path << "\n";
   return 0;
 }
 
 int BundleCliService::ValidateBundle(const std::string& bundle_dir) const {
-  const comet::DesiredState state = comet::ImportPlaneBundle(bundle_dir);
-  comet::RequireSchedulingPolicy(state);
-  const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(state);
+  const naim::DesiredState state = naim::ImportPlaneBundle(bundle_dir);
+  naim::RequireSchedulingPolicy(state);
+  const naim::SchedulingPolicyReport scheduling_report =
+      naim::EvaluateSchedulingPolicy(state);
   std::cout << "bundle validation: OK\n";
   PrintPreviewSummary(state);
-  std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
+  std::cout << naim::RenderSchedulingPolicyReport(scheduling_report);
   controller_print_service_.PrintSchedulerDecisionSummary(state);
   controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   return 0;
@@ -212,11 +212,11 @@ int BundleCliService::ValidateBundle(const std::string& bundle_dir) const {
 int BundleCliService::PreviewBundle(
     const std::string& bundle_dir,
     const std::optional<std::string>& node_name) const {
-  const comet::DesiredState state = comet::ImportPlaneBundle(bundle_dir);
-  const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(state);
+  const naim::DesiredState state = naim::ImportPlaneBundle(bundle_dir);
+  const naim::SchedulingPolicyReport scheduling_report =
+      naim::EvaluateSchedulingPolicy(state);
   PrintPreviewSummary(state);
-  std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
+  std::cout << naim::RenderSchedulingPolicyReport(scheduling_report);
   controller_print_service_.PrintSchedulerDecisionSummary(state);
   controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   std::cout << "\ncompose-preview:\n";
@@ -226,22 +226,22 @@ int BundleCliService::PreviewBundle(
 int BundleCliService::PlanBundle(
     const std::string& db_path,
     const std::string& bundle_dir) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto current_state = store.LoadDesiredState();
-  const comet::DesiredState desired_state = comet::ImportPlaneBundle(bundle_dir);
+  const naim::DesiredState desired_state = naim::ImportPlaneBundle(bundle_dir);
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto observations = store.LoadHostObservations();
-  const comet::ReconcilePlan plan =
-      comet::BuildReconcilePlan(current_state, desired_state);
-  const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(desired_state);
+  const naim::ReconcilePlan plan =
+      naim::BuildReconcilePlan(current_state, desired_state);
+  const naim::SchedulingPolicyReport scheduling_report =
+      naim::EvaluateSchedulingPolicy(desired_state);
 
   std::cout << "bundle-plan:\n";
   std::cout << "  db=" << db_path << "\n";
   std::cout << "  bundle=" << bundle_dir << "\n";
-  std::cout << comet::RenderReconcilePlan(plan);
-  std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
+  std::cout << naim::RenderReconcilePlan(plan);
+  std::cout << naim::RenderSchedulingPolicyReport(scheduling_report);
   controller_print_service_.PrintSchedulerDecisionSummary(desired_state);
   controller_print_service_.PrintRolloutGateSummary(scheduling_report);
   controller_print_service_.PrintAssignmentDispatchSummary(
@@ -257,30 +257,30 @@ int BundleCliService::PlanHostOps(
     const std::string& bundle_dir,
     const std::string& artifacts_root,
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto current_state = store.LoadDesiredState();
-  const comet::DesiredState desired_state = comet::ImportPlaneBundle(bundle_dir);
+  const naim::DesiredState desired_state = naim::ImportPlaneBundle(bundle_dir);
   const auto host_plans =
       FilterNodeExecutionPlans(
-          comet::BuildNodeExecutionPlans(current_state, desired_state, artifacts_root),
+          naim::BuildNodeExecutionPlans(current_state, desired_state, artifacts_root),
           node_name);
 
   std::cout << "host-op-plan:\n";
   std::cout << "  db=" << db_path << "\n";
   std::cout << "  bundle=" << bundle_dir << "\n";
   std::cout << "  artifacts_root=" << artifacts_root << "\n";
-  std::cout << comet::RenderNodeExecutionPlans(host_plans);
+  std::cout << naim::RenderNodeExecutionPlans(host_plans);
   return 0;
 }
 
 int BundleCliService::SeedDemo(const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
-  const comet::DesiredState desired_state = comet::BuildDemoState();
-  comet::RequireSchedulingPolicy(desired_state);
-  const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(desired_state);
+  const naim::DesiredState desired_state = naim::BuildDemoState();
+  naim::RequireSchedulingPolicy(desired_state);
+  const naim::SchedulingPolicyReport scheduling_report =
+      naim::EvaluateSchedulingPolicy(desired_state);
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto observations = store.LoadHostObservations();
   const int desired_generation =
@@ -312,10 +312,10 @@ int BundleCliService::SeedDemo(const std::string& db_path) const {
 int BundleCliService::ImportBundle(
     const std::string& db_path,
     const std::string& bundle_dir) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
-  const comet::DesiredState desired_state = comet::ImportPlaneBundle(bundle_dir);
-  comet::RequireSchedulingPolicy(desired_state);
+  const naim::DesiredState desired_state = naim::ImportPlaneBundle(bundle_dir);
+  naim::RequireSchedulingPolicy(desired_state);
   const int desired_generation =
       store.LoadDesiredGeneration(desired_state.plane_name).value_or(0) + 1;
   store.ReplaceDesiredState(desired_state, desired_generation, 0);
@@ -349,26 +349,26 @@ int BundleCliService::ApplyBundle(
     const std::string& db_path,
     const std::string& bundle_dir,
     const std::string& artifacts_root) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
-  const comet::DesiredState desired_state = comet::ImportPlaneBundle(bundle_dir);
+  const naim::DesiredState desired_state = naim::ImportPlaneBundle(bundle_dir);
   const auto current_state = store.LoadDesiredState(desired_state.plane_name);
-  comet::RequireSchedulingPolicy(desired_state);
+  naim::RequireSchedulingPolicy(desired_state);
   const int desired_generation =
       store.LoadDesiredGeneration(desired_state.plane_name).value_or(0) + 1;
-  const comet::ReconcilePlan plan =
-      comet::BuildReconcilePlan(current_state, desired_state);
-  const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(desired_state);
+  const naim::ReconcilePlan plan =
+      naim::BuildReconcilePlan(current_state, desired_state);
+  const naim::SchedulingPolicyReport scheduling_report =
+      naim::EvaluateSchedulingPolicy(desired_state);
   const auto host_plans =
-      comet::BuildNodeExecutionPlans(current_state, desired_state, artifacts_root);
+      naim::BuildNodeExecutionPlans(current_state, desired_state, artifacts_root);
 
   std::cout << "apply-plan:\n";
-  std::cout << comet::RenderReconcilePlan(plan);
-  std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
+  std::cout << naim::RenderReconcilePlan(plan);
+  std::cout << naim::RenderSchedulingPolicyReport(scheduling_report);
   controller_print_service_.PrintSchedulerDecisionSummary(desired_state);
   controller_print_service_.PrintRolloutGateSummary(scheduling_report);
-  std::cout << comet::RenderNodeExecutionPlans(host_plans);
+  std::cout << naim::RenderNodeExecutionPlans(host_plans);
 
   plane_realization_service_.MaterializeComposeArtifacts(desired_state, host_plans);
   plane_realization_service_.MaterializeInferRuntimeArtifact(desired_state, artifacts_root);
@@ -404,39 +404,40 @@ int BundleCliService::ApplyBundle(
 
 int BundleCliService::ApplyDesiredState(
     const std::string& db_path,
-    const comet::DesiredState& desired_state,
+    const naim::DesiredState& desired_state,
     const std::string& artifacts_root,
     const std::string& source_label) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
-  comet::DesiredState effective_desired_state = desired_state;
+  naim::DesiredState effective_desired_state = desired_state;
   desired_state_policy_service_.ApplyRegisteredHostExecutionModes(
       store, &effective_desired_state);
   desired_state_policy_service_.ResolveDesiredStateDynamicPlacements(
       store, &effective_desired_state);
   desired_state_policy_service_.ValidateDesiredStateForControllerAdmission(
+      store,
       effective_desired_state);
   desired_state_policy_service_.ValidateDesiredStateExecutionModes(
       effective_desired_state);
   const auto current_state = store.LoadDesiredState(effective_desired_state.plane_name);
-  comet::RequireSchedulingPolicy(effective_desired_state);
+  naim::RequireSchedulingPolicy(effective_desired_state);
   const auto availability_overrides = store.LoadNodeAvailabilityOverrides();
   const auto observations = store.LoadHostObservations();
   const int desired_generation =
       store.LoadDesiredGeneration(effective_desired_state.plane_name).value_or(0) + 1;
-  const comet::ReconcilePlan plan =
-      comet::BuildReconcilePlan(current_state, effective_desired_state);
-  const comet::SchedulingPolicyReport scheduling_report =
-      comet::EvaluateSchedulingPolicy(effective_desired_state);
+  const naim::ReconcilePlan plan =
+      naim::BuildReconcilePlan(current_state, effective_desired_state);
+  const naim::SchedulingPolicyReport scheduling_report =
+      naim::EvaluateSchedulingPolicy(effective_desired_state);
   const auto host_plans =
-      comet::BuildNodeExecutionPlans(current_state, effective_desired_state, artifacts_root);
+      naim::BuildNodeExecutionPlans(current_state, effective_desired_state, artifacts_root);
 
   std::cout << "apply-plan:\n";
-  std::cout << comet::RenderReconcilePlan(plan);
-  std::cout << comet::RenderSchedulingPolicyReport(scheduling_report);
+  std::cout << naim::RenderReconcilePlan(plan);
+  std::cout << naim::RenderSchedulingPolicyReport(scheduling_report);
   controller_print_service_.PrintSchedulerDecisionSummary(effective_desired_state);
   controller_print_service_.PrintRolloutGateSummary(scheduling_report);
-  std::cout << comet::RenderNodeExecutionPlans(host_plans);
+  std::cout << naim::RenderNodeExecutionPlans(host_plans);
 
   plane_realization_service_.MaterializeComposeArtifacts(
       effective_desired_state, host_plans);
@@ -491,7 +492,7 @@ int BundleCliService::ApplyStateFile(
     const std::string& db_path,
     const std::string& state_path,
     const std::string& artifacts_root) const {
-  const auto desired_state = comet::LoadDesiredStateJson(state_path);
+  const auto desired_state = naim::LoadDesiredStateJson(state_path);
   if (!desired_state.has_value()) {
     throw std::runtime_error("failed to load desired state file '" + state_path + "'");
   }
@@ -505,7 +506,7 @@ int BundleCliService::ApplyStateFile(
 int BundleCliService::RenderCompose(
     const std::string& db_path,
     const std::optional<std::string>& node_name) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto state = store.LoadDesiredState();
   if (!state.has_value()) {
@@ -516,14 +517,14 @@ int BundleCliService::RenderCompose(
 }
 
 int BundleCliService::RenderInferRuntime(const std::string& db_path) const {
-  comet::ControllerStore store(db_path);
+  naim::ControllerStore store(db_path);
   store.Initialize();
   const auto state = store.LoadDesiredState();
   if (!state.has_value()) {
     std::cerr << "error: no desired state found in db '" << db_path << "'\n";
     return 1;
   }
-  std::cout << comet::RenderInferRuntimeConfigJson(*state) << "\n";
+  std::cout << naim::RenderInferRuntimeConfigJson(*state) << "\n";
   return 0;
 }
 
@@ -559,4 +560,4 @@ ControllerActionResult BundleCliService::ExecuteApplyBundleAction(
       [&]() { return ApplyBundle(db_path, bundle_dir, artifacts_root); });
 }
 
-}  // namespace comet::controller
+}  // namespace naim::controller

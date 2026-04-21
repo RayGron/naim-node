@@ -47,6 +47,49 @@ CREATE TABLE registered_hosts (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE host_peer_links (
+    observer_node_name TEXT NOT NULL,
+    peer_node_name TEXT NOT NULL,
+    peer_endpoint TEXT NOT NULL DEFAULT '',
+    local_interface TEXT NOT NULL DEFAULT '',
+    remote_address TEXT NOT NULL DEFAULT '',
+    seen_udp INTEGER NOT NULL DEFAULT 0,
+    tcp_reachable INTEGER NOT NULL DEFAULT 0,
+    rtt_ms INTEGER NOT NULL DEFAULT 0,
+    last_seen_at TEXT NOT NULL DEFAULT '',
+    last_probe_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(observer_node_name, peer_node_name)
+);
+
+CREATE INDEX idx_host_peer_links_peer
+    ON host_peer_links(peer_node_name, observer_node_name);
+
+CREATE TABLE file_transfer_tickets (
+    ticket_id TEXT PRIMARY KEY,
+    source_node_name TEXT NOT NULL,
+    requester_node_name TEXT NOT NULL,
+    source_paths_json TEXT NOT NULL DEFAULT '[]',
+    expires_at TEXT NOT NULL,
+    max_chunk_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_validated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE file_upload_tickets (
+    ticket_id TEXT PRIMARY KEY,
+    target_node_name TEXT NOT NULL,
+    uploader_node_name TEXT NOT NULL,
+    target_relative_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    if_missing INTEGER NOT NULL DEFAULT 1,
+    expires_at TEXT NOT NULL,
+    max_chunk_bytes INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_validated_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE plane_nodes (
     plane_name TEXT NOT NULL,
     node_name TEXT NOT NULL,

@@ -4,13 +4,15 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/build-context.sh"
 
-comet_resolve_build_context "${script_dir}" "$@"
+naim_resolve_build_context "${script_dir}" "$@"
 
 cuda_root=""
 cuda_nvcc=""
 openmp_root=""
 openmp_include_dir=""
 openmp_library=""
+: "${NAIM_CUDA_NATIVE:=OFF}"
+: "${NAIM_CUDA_ARCHITECTURES:=}"
 
 detect_cuda_root() {
   local candidate=""
@@ -99,7 +101,7 @@ if detect_cuda_root; then
   export CUDA_BIN_PATH="${cuda_root}/bin"
   export CUDACXX="${cuda_nvcc}"
 else
-  echo "[cmake] CUDA toolkit is required for comet-node builds; none was found" >&2
+  echo "[cmake] CUDA toolkit is required for naim-node builds; none was found" >&2
   echo "[cmake] checked CUDA_TOOLKIT_ROOT_DIR, CUDA_HOME, CUDA_PATH, /usr/local/cuda*, and nvcc on PATH" >&2
   exit 1
 fi
@@ -116,10 +118,10 @@ ninja_exe="$("${script_dir}/find-ninja.sh")"
 cmake_exe="$("${script_dir}/find-cmake.sh")"
 extra_cmake_args=()
 
-if [[ -n "${COMET_CMAKE_ARGS:-}" ]]; then
-  # COMET_CMAKE_ARGS uses shell-style tokenization so callers can pass multiple -D flags.
+if [[ -n "${NAIM_CMAKE_ARGS:-}" ]]; then
+  # NAIM_CMAKE_ARGS uses shell-style tokenization so callers can pass multiple -D flags.
   # shellcheck disable=SC2206
-  extra_cmake_args=( ${COMET_CMAKE_ARGS} )
+  extra_cmake_args=( ${NAIM_CMAKE_ARGS} )
 fi
 
 if [[ ! -f "${vcpkg_toolchain}" ]]; then
@@ -154,6 +156,15 @@ if [[ -f "${cache_path}" ]]; then
     if ! grep -Fq "CMAKE_CUDA_COMPILER:FILEPATH=${cuda_nvcc}" "${cache_path}" \
       && ! grep -Fq "CMAKE_CUDA_COMPILER:UNINITIALIZED=${cuda_nvcc}" "${cache_path}" \
       && ! grep -Fq "CMAKE_CUDA_COMPILER:STRING=${cuda_nvcc}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
+    if ! grep -Fq "NAIM_CUDA_NATIVE:BOOL=${NAIM_CUDA_NATIVE}" "${cache_path}" \
+      && ! grep -Fq "NAIM_CUDA_NATIVE:UNINITIALIZED=${NAIM_CUDA_NATIVE}" "${cache_path}" \
+      && ! grep -Fq "NAIM_CUDA_NATIVE:STRING=${NAIM_CUDA_NATIVE}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
+    if ! grep -Fq "NAIM_CUDA_ARCHITECTURES:STRING=${NAIM_CUDA_ARCHITECTURES}" "${cache_path}" \
+      && ! grep -Fq "NAIM_CUDA_ARCHITECTURES:UNINITIALIZED=${NAIM_CUDA_ARCHITECTURES}" "${cache_path}"; then
       needs_clean_reconfigure=1
     fi
   else
@@ -214,6 +225,8 @@ cmake_args=(
 
 cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
 cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
+cmake_args+=("-DNAIM_CUDA_NATIVE=${NAIM_CUDA_NATIVE}")
+cmake_args+=("-DNAIM_CUDA_ARCHITECTURES=${NAIM_CUDA_ARCHITECTURES}")
 if [[ -n "${openmp_root}" ]]; then
   cmake_args+=(
     "-DOpenMP_ROOT=${openmp_root}"
@@ -221,6 +234,11 @@ if [[ -n "${openmp_root}" ]]; then
     "-DOpenMP_CXX_INCLUDE_DIR=${openmp_include_dir}"
     "-DOpenMP_libomp_LIBRARY=${openmp_library}"
   )
+fi
+if [[ -n "${NAIM_CMAKE_ARGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  extra_cmake_args=(${NAIM_CMAKE_ARGS})
+  cmake_args+=("${extra_cmake_args[@]}")
 fi
 
 "${cmake_exe}" "${cmake_args[@]}"

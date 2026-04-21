@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <stdexcept>
 
-namespace comet::hostd {
+namespace naim::hostd {
 
 namespace {
 
@@ -66,4 +66,4 @@ std::optional<HostdAssignmentLock> HostdAssignmentLock::TryAcquire(
   return HostdAssignmentLock(fd);
 }
 
-}  // namespace comet::hostd
+}  // namespace naim::hostd

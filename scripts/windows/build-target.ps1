@@ -56,8 +56,8 @@ function Resolve-CMakeGenerator {
     [string]$CmakeExe
   )
 
-  if ($env:COMET_WINDOWS_CMAKE_GENERATOR) {
-    return $env:COMET_WINDOWS_CMAKE_GENERATOR
+  if ($env:NAIM_WINDOWS_CMAKE_GENERATOR) {
+    return $env:NAIM_WINDOWS_CMAKE_GENERATOR
   }
 
   $helpText = & $CmakeExe --help 2>$null
@@ -76,8 +76,8 @@ function Resolve-CMakeExe {
     [string]$VcpkgExe
   )
 
-  if ($env:COMET_WINDOWS_CMAKE) {
-    return $env:COMET_WINDOWS_CMAKE
+  if ($env:NAIM_WINDOWS_CMAKE) {
+    return $env:NAIM_WINDOWS_CMAKE
   }
 
   $command = Get-Command cmake.exe -ErrorAction SilentlyContinue
@@ -96,7 +96,7 @@ function Resolve-CMakeExe {
     }
   }
 
-  throw "Unable to find cmake.exe. Install CMake, set COMET_WINDOWS_CMAKE, or let vcpkg download CMake first."
+  throw "Unable to find cmake.exe. Install CMake, set NAIM_WINDOWS_CMAKE, or let vcpkg download CMake first."
 }
 
 $scriptDir = Split-Path -Parent $PSCommandPath

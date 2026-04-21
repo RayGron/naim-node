@@ -10,9 +10,9 @@
 #include <sstream>
 #include <stdexcept>
 
-#include "comet/state/sqlite_statement.h"
+#include "naim/state/sqlite_statement.h"
 
-namespace comet::skills {
+namespace naim::skills {
 
 namespace {
 
@@ -277,10 +277,10 @@ json SkillsStore::NormalizeSkillPayload(const json& payload, bool partial) {
     normalized["session_ids"] = json::array();
   }
 
-  if (payload.contains("comet_links")) {
-    normalized["comet_links"] = NormalizeStringList(payload.at("comet_links"), "comet_links");
+  if (payload.contains("naim_links")) {
+    normalized["naim_links"] = NormalizeStringList(payload.at("naim_links"), "naim_links");
   } else if (!partial) {
-    normalized["comet_links"] = json::array();
+    normalized["naim_links"] = json::array();
   }
 
   if (payload.contains("match_terms")) {
@@ -309,7 +309,7 @@ SkillsStore::SkillArrays SkillsStore::LoadSkillArraysLocked(const std::string& s
         "SELECT link FROM skill_links WHERE skill_id = ? ORDER BY link");
     statement.BindText(1, skill_id);
     while (statement.StepRow()) {
-      arrays.comet_links.push_back(ToColumnText(statement.raw(), 0));
+      arrays.naim_links.push_back(ToColumnText(statement.raw(), 0));
     }
   }
   return arrays;
@@ -327,7 +327,7 @@ json SkillsStore::SkillFromStatementLocked(sqlite3_stmt* statement) {
       {"internal", sqlite3_column_int(statement, 5) != 0},
       {"enabled", sqlite3_column_int(statement, 6) != 0},
       {"session_ids", arrays.session_ids},
-      {"comet_links", arrays.comet_links},
+      {"naim_links", arrays.naim_links},
       {"created_at", ToColumnText(statement, 7)},
       {"updated_at", ToColumnText(statement, 8)},
   };
@@ -336,7 +336,7 @@ json SkillsStore::SkillFromStatementLocked(sqlite3_stmt* statement) {
 void SkillsStore::ReplaceArraysLocked(
     const std::string& skill_id,
     const std::vector<std::string>& session_ids,
-    const std::vector<std::string>& comet_links) {
+    const std::vector<std::string>& naim_links) {
   {
     SqliteStatement clear_sessions(db_, "DELETE FROM skill_session_bindings WHERE skill_id = ?");
     clear_sessions.BindText(1, skill_id);
@@ -353,7 +353,7 @@ void SkillsStore::ReplaceArraysLocked(
     insert.BindText(2, session_id);
     insert.StepDone();
   }
-  for (const auto& link : comet_links) {
+  for (const auto& link : naim_links) {
     SqliteStatement insert(db_, "INSERT INTO skill_links(skill_id, link) VALUES (?, ?)");
     insert.BindText(1, skill_id);
     insert.BindText(2, link);
@@ -435,7 +435,7 @@ nlohmann::json SkillsStore::CreateSkill(const json& payload) {
       ReplaceArraysLocked(
           skill_id,
           normalized.at("session_ids").get<std::vector<std::string>>(),
-          normalized.at("comet_links").get<std::vector<std::string>>());
+          normalized.at("naim_links").get<std::vector<std::string>>());
       created = *FindSkillLocked(skill_id, false);
       Exec(db_, "COMMIT");
     } catch (...) {
@@ -496,7 +496,7 @@ nlohmann::json SkillsStore::ReplaceSkill(
       ReplaceArraysLocked(
           skill_id,
           merged.at("session_ids").get<std::vector<std::string>>(),
-          merged.at("comet_links").get<std::vector<std::string>>());
+          merged.at("naim_links").get<std::vector<std::string>>());
       Exec(db_, "COMMIT");
     } catch (...) {
       Exec(db_, "ROLLBACK");
@@ -586,4 +586,4 @@ nlohmann::json SkillsStore::ResolveSkills(const json& payload) {
   };
 }
 
-}  // namespace comet::skills
+}  // namespace naim::skills

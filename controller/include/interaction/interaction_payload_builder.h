@@ -4,9 +4,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include "interaction/interaction_service.h"
+#include "interaction/interaction_types.h"
 
-namespace comet::controller {
+namespace naim::controller {
 
 std::string BuildInteractionUpstreamBodyPayload(
     const PlaneInteractionResolution& resolution,
@@ -15,4 +15,4 @@ std::string BuildInteractionUpstreamBodyPayload(
     const ResolvedInteractionPolicy& resolved_policy,
     bool structured_output_json = false);
 
-}  // namespace comet::controller
+}  // namespace naim::controller

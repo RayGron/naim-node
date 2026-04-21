@@ -5,7 +5,7 @@
 
 #include "runtime/infer_runtime_types.h"
 
-namespace comet::infer::prewarm_support {
+namespace naim::infer::prewarm_support {
 
 struct PrewarmState {
   int ready_upstreams = 0;
@@ -21,4 +21,4 @@ std::vector<std::string> FilterPrewarmedReplicaBaseUrls(
 void ResetPrewarmState(const RuntimeConfig& config);
 PrewarmState PrewarmReadyReplicaLeaders(const RuntimeConfig& config);
 
-}  // namespace comet::infer::prewarm_support
+}  // namespace naim::infer::prewarm_support

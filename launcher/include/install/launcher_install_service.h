@@ -10,7 +10,7 @@
 #include "config/launcher_options.h"
 #include "platform/process_runner.h"
 
-namespace comet::launcher {
+namespace naim::launcher {
 
 class LauncherInstallService {
  public:
@@ -60,4 +60,4 @@ class LauncherInstallService {
   const ProcessRunner& process_runner_;
 };
 
-}  // namespace comet::launcher
+}  // namespace naim::launcher

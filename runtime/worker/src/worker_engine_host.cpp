@@ -16,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-namespace comet::worker {
+namespace naim::worker {
 
 namespace fs = std::filesystem;
 
@@ -30,7 +30,7 @@ std::string ResolveExecutablePath(const char* env_name, const char* fallback) {
   return fallback;
 }
 
-std::string ResolveRpcDevice(const comet::worker::WorkerConfig& config) {
+std::string ResolveRpcDevice(const naim::worker::WorkerConfig& config) {
   if (!config.rpc_device.empty()) {
     return config.rpc_device;
   }
@@ -65,7 +65,7 @@ WorkerEngineHost::~WorkerEngineHost() = default;
 
 int WorkerEngineHost::Run() {
   signal_service_.RegisterHandlers();
-  std::cout << "[comet-workerd] booting plane=" << config_.plane_name
+  std::cout << "[naim-workerd] booting plane=" << config_.plane_name
             << " instance=" << config_.instance_name
             << " node=" << config_.node_name
             << " gpu=" << (config_.gpu_device.empty() ? "(auto)" : config_.gpu_device)
@@ -95,7 +95,7 @@ int WorkerEngineHost::RunIdleWorker() {
       std::this_thread::sleep_for(std::chrono::seconds(2));
     } catch (const std::exception& error) {
       status_service_.MarkFailed(config_, started_at_, loaded_model_path_);
-      std::cerr << "[comet-workerd] " << error.what() << "\n";
+      std::cerr << "[naim-workerd] " << error.what() << "\n";
       std::this_thread::sleep_for(std::chrono::seconds(2));
     }
   }
@@ -117,7 +117,7 @@ int WorkerEngineHost::RunRpcWorker() {
 
   if (child == 0) {
     std::vector<std::string> args = {
-        ResolveExecutablePath("COMET_RPC_SERVER_BIN", "/runtime/bin/rpc-server"),
+        ResolveExecutablePath("NAIM_RPC_SERVER_BIN", "/runtime/bin/rpc-server"),
         "--host",
         config_.rpc_host,
         "--port",
@@ -142,7 +142,7 @@ int WorkerEngineHost::RunRpcWorker() {
   }
 
   child_pid_ = child;
-  std::cout << "[comet-workerd] launching rpc-server host=" << config_.rpc_host
+  std::cout << "[naim-workerd] launching rpc-server host=" << config_.rpc_host
             << " port=" << config_.rpc_port
             << " threads=" << std::max(1, config_.llama_threads)
             << " device=" << (rpc_device.empty() ? "(default)" : rpc_device)
@@ -162,7 +162,7 @@ int WorkerEngineHost::RunRpcWorker() {
     if (wait_result == *child_pid_) {
       child_pid_.reset();
       status_service_.MarkFailed(config_, started_at_, std::nullopt);
-      std::cerr << "[comet-workerd] rpc-server exited unexpectedly";
+      std::cerr << "[naim-workerd] rpc-server exited unexpectedly";
       if (WIFEXITED(child_status)) {
         std::cerr << " exit_code=" << WEXITSTATUS(child_status);
       } else if (WIFSIGNALED(child_status)) {
@@ -248,4 +248,4 @@ void WorkerEngineHost::StopChildProcess() {
   child_pid_.reset();
 }
 
-}  // namespace comet::worker
+}  // namespace naim::worker

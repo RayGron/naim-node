@@ -1,4 +1,4 @@
-#include "comet/state/desired_state_v2_projector.h"
+#include "naim/state/desired_state_v2_projector.h"
 
 #include <algorithm>
 #include <set>
@@ -6,26 +6,26 @@
 #include <string>
 #include <utility>
 
-#include "comet/state/worker_group_topology.h"
+#include "naim/state/desired_state_placement_resolver.h"
+#include "naim/state/desired_state_v2_projector_support.h"
+#include "naim/state/worker_group_topology.h"
 
-namespace comet {
+namespace naim {
 
 namespace {
 
-constexpr int kDefaultSharedDiskSizeGb = 40;
-constexpr int kDefaultInferPrivateDiskSizeGb = 12;
-constexpr int kDefaultWorkerPrivateDiskSizeGb = 2;
-constexpr int kDefaultAppPrivateDiskSizeGb = 8;
-constexpr int kDefaultSkillsPrivateDiskSizeGb = 1;
-constexpr int kDefaultWebGatewayPrivateDiskSizeGb = 1;
-constexpr std::string_view kDefaultInferImage = "comet/infer-runtime:dev";
-constexpr std::string_view kDefaultWorkerImage = "comet/worker-runtime:dev";
-constexpr std::string_view kDefaultSkillsImage = "comet/skills-runtime:dev";
-constexpr std::string_view kDefaultWebGatewayImage = "comet/webgateway-runtime:dev";
-constexpr std::string_view kDefaultInferCommand = "/runtime/bin/comet-inferctl container-boot";
-constexpr std::string_view kDefaultWorkerCommand = "/runtime/bin/comet-workerd";
-constexpr std::string_view kDefaultSkillsCommand = "/runtime/bin/comet-skillsd";
-constexpr std::string_view kDefaultWebGatewayCommand = "/runtime/bin/comet-webgatewayd";
+using ProjectorSupport = DesiredStateV2ProjectorSupport;
+
+constexpr int kDefaultSharedDiskSizeGb = ProjectorSupport::kDefaultSharedDiskSizeGb;
+constexpr std::string_view kDefaultInferImage = ProjectorSupport::kDefaultInferImage;
+constexpr std::string_view kDefaultSkillsImage = ProjectorSupport::kDefaultSkillsImage;
+constexpr std::string_view kDefaultWebGatewayImage =
+    ProjectorSupport::kDefaultWebGatewayImage;
+constexpr std::string_view kDefaultInferCommand = ProjectorSupport::kDefaultInferCommand;
+constexpr std::string_view kDefaultWorkerCommand = ProjectorSupport::kDefaultWorkerCommand;
+constexpr std::string_view kDefaultSkillsCommand = ProjectorSupport::kDefaultSkillsCommand;
+constexpr std::string_view kDefaultWebGatewayCommand =
+    ProjectorSupport::kDefaultWebGatewayCommand;
 
 }  // namespace
 
@@ -40,6 +40,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
   value_["version"] = 2;
   CollectInstancesAndDisks();
   ProjectIdentity();
+  ProjectPlacement();
   ProjectFeatures();
   ProjectHooks();
   ProjectModel();
@@ -70,6 +71,36 @@ void DesiredStateV2Projector::ProjectIdentity() {
   value_["plane_mode"] = ToString(state_.plane_mode);
   if (state_.protected_plane) {
     value_["protected"] = true;
+  }
+}
+
+void DesiredStateV2Projector::ProjectPlacement() {
+  nlohmann::json placement = nlohmann::json::object();
+  if (state_.placement_target.has_value() && !state_.placement_target->empty()) {
+    constexpr std::string_view kNodePrefix = "node:";
+    if (state_.placement_target->rfind(kNodePrefix, 0) == 0) {
+      placement["execution_node"] = state_.placement_target->substr(kNodePrefix.size());
+    }
+  } else if (!state_.nodes.empty()) {
+    placement["execution_node"] = DefaultNodeName();
+  }
+  if (state_.app_host.has_value()) {
+    nlohmann::json app_host = {
+        {"address", state_.app_host->address},
+    };
+    if (state_.app_host->ssh_key_path.has_value() && !state_.app_host->ssh_key_path->empty()) {
+      app_host["ssh_key_path"] = *state_.app_host->ssh_key_path;
+    }
+    if (state_.app_host->username.has_value() && !state_.app_host->username->empty()) {
+      app_host["username"] = *state_.app_host->username;
+    }
+    if (state_.app_host->password.has_value() && !state_.app_host->password->empty()) {
+      app_host["password"] = *state_.app_host->password;
+    }
+    placement["app_host"] = std::move(app_host);
+  }
+  if (!placement.empty()) {
+    value_["placement"] = std::move(placement);
   }
 }
 
@@ -113,6 +144,38 @@ void DesiredStateV2Projector::ProjectModel() {
   };
   if (model.local_path.has_value() && !model.local_path->empty()) {
     model_json["materialization"]["local_path"] = *model.local_path;
+  }
+  if (model.source_node_name.has_value() && !model.source_node_name->empty()) {
+    model_json["materialization"]["source_node_name"] = *model.source_node_name;
+  }
+  if (!model.source_paths.empty()) {
+    model_json["materialization"]["source_paths"] = model.source_paths;
+  }
+  if (model.source_format.has_value() && !model.source_format->empty()) {
+    model_json["materialization"]["source_format"] = *model.source_format;
+  }
+  if (model.source_quantization.has_value() && !model.source_quantization->empty()) {
+    model_json["materialization"]["source_quantization"] = *model.source_quantization;
+  }
+  if (model.desired_output_format.has_value() && !model.desired_output_format->empty()) {
+    model_json["materialization"]["desired_output_format"] = *model.desired_output_format;
+  }
+  if (model.quantization.has_value() && !model.quantization->empty()) {
+    model_json["materialization"]["quantization"] = *model.quantization;
+  }
+  if (!model.keep_source) {
+    model_json["materialization"]["keep_source"] = model.keep_source;
+  }
+  if (model.writeback_enabled) {
+    model_json["materialization"]["writeback"] = {
+        {"enabled", model.writeback_enabled},
+        {"if_missing", model.writeback_if_missing},
+    };
+    if (model.writeback_target_node_name.has_value() &&
+        !model.writeback_target_node_name->empty()) {
+      model_json["materialization"]["writeback"]["target_node_name"] =
+          *model.writeback_target_node_name;
+    }
   }
   if (model.served_model_name.has_value() && !model.served_model_name->empty()) {
     model_json["served_model_name"] = *model.served_model_name;
@@ -224,15 +287,16 @@ void DesiredStateV2Projector::ProjectInfer() {
   if (infer_instance_->image != kDefaultInferImage) {
     infer["image"] = infer_instance_->image;
   }
-  const auto start = ProjectServiceStart(*infer_instance_, std::string(kDefaultInferCommand));
+  const auto start =
+      ProjectorSupport::ProjectServiceStart(*infer_instance_, std::string(kDefaultInferCommand));
   if (!start.is_null()) {
     infer["start"] = start;
   }
-  const auto env = ProjectCustomEnv(*infer_instance_, true);
+  const auto env = ProjectorSupport::ProjectCustomEnv(*infer_instance_, true);
   if (!env.empty()) {
     infer["env"] = env;
   }
-  const auto publish = ProjectPublishedPorts(*infer_instance_);
+  const auto publish = ProjectorSupport::ProjectPublishedPorts(*infer_instance_);
   if (!publish.empty()) {
     infer["publish"] = publish;
   }
@@ -244,7 +308,8 @@ void DesiredStateV2Projector::ProjectInfer() {
       state_.inference.distributed_backend == "llama_rpc") {
     infer["replicas"] = std::max(1, replicas);
   }
-  const auto storage = ProjectServiceStorage(FindDiskByName(infer_instance_->private_disk_name));
+  const auto storage =
+      ProjectorSupport::ProjectServiceStorage(FindDiskByName(infer_instance_->private_disk_name));
   if (!storage.is_null()) {
     infer["storage"] = storage;
   }
@@ -259,19 +324,21 @@ void DesiredStateV2Projector::ProjectWorker() {
   }
 
   nlohmann::json worker = nlohmann::json::object();
-  if (!IsDefaultWorkerImage(worker_instances_.front()->image)) {
+  if (!ProjectorSupport::IsDefaultWorkerImage(worker_instances_.front()->image)) {
     worker["image"] = worker_instances_.front()->image;
   }
   const auto start =
-      ProjectServiceStart(*worker_instances_.front(), std::string(kDefaultWorkerCommand));
+      ProjectorSupport::ProjectServiceStart(
+          *worker_instances_.front(),
+          std::string(kDefaultWorkerCommand));
   if (!start.is_null()) {
     worker["start"] = start;
   }
-  const auto env = ProjectCustomEnv(*worker_instances_.front(), true);
+  const auto env = ProjectorSupport::ProjectCustomEnv(*worker_instances_.front(), true);
   if (!env.empty()) {
     worker["env"] = env;
   }
-  const auto publish = ProjectPublishedPorts(*worker_instances_.front());
+  const auto publish = ProjectorSupport::ProjectPublishedPorts(*worker_instances_.front());
   if (!publish.empty()) {
     worker["publish"] = publish;
   }
@@ -307,7 +374,8 @@ void DesiredStateV2Projector::ProjectWorker() {
   }
 
   const auto storage =
-      ProjectServiceStorage(FindDiskByName(worker_instances_.front()->private_disk_name));
+      ProjectorSupport::ProjectServiceStorage(
+          FindDiskByName(worker_instances_.front()->private_disk_name));
   if (!storage.is_null()) {
     worker["storage"] = storage;
   }
@@ -327,14 +395,14 @@ void DesiredStateV2Projector::ProjectApp() {
       {"enabled", true},
       {"image", app_instance_->image},
   };
-  const auto start = ProjectServiceStart(*app_instance_, std::string{});
+  const auto start = ProjectorSupport::ProjectServiceStart(*app_instance_, std::string{});
   if (!start.is_null()) {
     app["start"] = start;
   }
   if (!app_instance_->environment.empty()) {
     app["env"] = app_instance_->environment;
   }
-  const auto publish = ProjectPublishedPorts(*app_instance_);
+  const auto publish = ProjectorSupport::ProjectPublishedPorts(*app_instance_);
   if (!publish.empty()) {
     app["publish"] = publish;
   }
@@ -342,7 +410,7 @@ void DesiredStateV2Projector::ProjectApp() {
     app["node"] = app_instance_->node_name;
   }
   const auto app_disk = FindDiskByName(app_instance_->private_disk_name);
-  const auto volumes = ProjectAppVolumes(app_disk);
+  const auto volumes = ProjectorSupport::ProjectAppVolumes(app_disk);
   if (!volumes.empty()) {
     app["volumes"] = std::move(volumes);
   }
@@ -369,15 +437,17 @@ void DesiredStateV2Projector::ProjectSkills() {
     skills["image"] = skills_instance_->image;
   }
   const auto start =
-      ProjectServiceStart(*skills_instance_, std::string(kDefaultSkillsCommand));
+      ProjectorSupport::ProjectServiceStart(
+          *skills_instance_,
+          std::string(kDefaultSkillsCommand));
   if (!start.is_null()) {
     skills["start"] = start;
   }
-  const auto env = ProjectCustomEnv(*skills_instance_, true);
+  const auto env = ProjectorSupport::ProjectCustomEnv(*skills_instance_, true);
   if (!env.empty()) {
     skills["env"] = env;
   }
-  const auto publish = ProjectPublishedPorts(*skills_instance_);
+  const auto publish = ProjectorSupport::ProjectPublishedPorts(*skills_instance_);
   if (!publish.empty()) {
     skills["publish"] = publish;
   }
@@ -385,7 +455,8 @@ void DesiredStateV2Projector::ProjectSkills() {
     skills["node"] = skills_instance_->node_name;
   }
   const auto storage =
-      ProjectServiceStorage(FindDiskByName(skills_instance_->private_disk_name));
+      ProjectorSupport::ProjectServiceStorage(
+          FindDiskByName(skills_instance_->private_disk_name));
   if (!storage.is_null()) {
     skills["storage"] = storage;
   }
@@ -438,15 +509,17 @@ void DesiredStateV2Projector::ProjectBrowsing() {
     browsing["image"] = browsing_instance_->image;
   }
   const auto start =
-      ProjectServiceStart(*browsing_instance_, std::string(kDefaultWebGatewayCommand));
+      ProjectorSupport::ProjectServiceStart(
+          *browsing_instance_,
+          std::string(kDefaultWebGatewayCommand));
   if (!start.is_null()) {
     browsing["start"] = start;
   }
-  const auto env = ProjectCustomEnv(*browsing_instance_, true);
+  const auto env = ProjectorSupport::ProjectCustomEnv(*browsing_instance_, true);
   if (!env.empty()) {
     browsing["env"] = env;
   }
-  const auto publish = ProjectPublishedPorts(*browsing_instance_);
+  const auto publish = ProjectorSupport::ProjectPublishedPorts(*browsing_instance_);
   if (!publish.empty()) {
     browsing["publish"] = publish;
   }
@@ -454,7 +527,8 @@ void DesiredStateV2Projector::ProjectBrowsing() {
     browsing["node"] = browsing_instance_->node_name;
   }
   const auto storage =
-      ProjectServiceStorage(FindDiskByName(browsing_instance_->private_disk_name));
+      ProjectorSupport::ProjectServiceStorage(
+          FindDiskByName(browsing_instance_->private_disk_name));
   if (!storage.is_null()) {
     browsing["storage"] = storage;
   }
@@ -485,7 +559,7 @@ void DesiredStateV2Projector::ProjectResources() {
 }
 
 bool DesiredStateV2Projector::ShouldEmitTopology() const {
-  return !state_.nodes.empty() && !IsDefaultSingleNodeTopology();
+  return DesiredStatePlacementResolver(state_).ShouldEmitTopology();
 }
 
 bool DesiredStateV2Projector::IsDefaultSingleNodeTopology() const {
@@ -499,16 +573,13 @@ bool DesiredStateV2Projector::IsDefaultSingleNodeTopology() const {
 }
 
 std::string DesiredStateV2Projector::DefaultNodeName() const {
-  if (!state_.nodes.empty()) {
-    return state_.nodes.front().name;
-  }
-  return "local-hostd";
+  return DesiredStatePlacementResolver(state_).DefaultNodeName();
 }
 
 int DesiredStateV2Projector::InferReplicaCount() const {
   std::set<std::string> infer_instance_names;
   for (const auto* worker_instance : worker_instances_) {
-    const auto it = worker_instance->environment.find("COMET_INFER_INSTANCE_NAME");
+    const auto it = worker_instance->environment.find("NAIM_INFER_INSTANCE_NAME");
     if (it == worker_instance->environment.end() || it->second.empty()) {
       continue;
     }
@@ -579,86 +650,6 @@ nlohmann::json DesiredStateV2Projector::ProjectModelSource() const {
   return source;
 }
 
-nlohmann::json DesiredStateV2Projector::ProjectServiceStart(
-    const InstanceSpec& instance,
-    const std::string& default_command) const {
-  if (instance.command.empty() || instance.command == default_command) {
-    return nullptr;
-  }
-  return {
-      {"type", "command"},
-      {"command", instance.command},
-  };
-}
-
-nlohmann::json DesiredStateV2Projector::ProjectPublishedPorts(
-    const InstanceSpec& instance) const {
-  if (instance.published_ports.empty()) {
-    return nlohmann::json::array();
-  }
-  nlohmann::json ports = nlohmann::json::array();
-  for (const auto& port : instance.published_ports) {
-    ports.push_back({
-        {"host_ip", port.host_ip},
-        {"host_port", port.host_port},
-        {"container_port", port.container_port},
-    });
-  }
-  return ports;
-}
-
-nlohmann::json DesiredStateV2Projector::ProjectServiceStorage(const DiskSpec* disk) const {
-  if (disk == nullptr) {
-    return nullptr;
-  }
-  const bool default_size = disk->kind == DiskKind::InferPrivate
-          ? disk->size_gb == kDefaultInferPrivateDiskSizeGb
-          : disk->kind == DiskKind::WorkerPrivate
-              ? disk->size_gb == kDefaultWorkerPrivateDiskSizeGb
-              : disk->kind == DiskKind::SkillsPrivate
-                  ? disk->size_gb == kDefaultSkillsPrivateDiskSizeGb
-                  : disk->kind == DiskKind::BrowsingPrivate
-                      ? disk->size_gb == kDefaultWebGatewayPrivateDiskSizeGb
-                  : disk->size_gb == kDefaultAppPrivateDiskSizeGb;
-  const bool default_mount = disk->container_path == "/comet/private";
-  if (default_size && default_mount) {
-    return nullptr;
-  }
-  return {
-      {"size_gb", disk->size_gb},
-      {"mount_path", disk->container_path},
-  };
-}
-
-nlohmann::json DesiredStateV2Projector::ProjectAppVolumes(const DiskSpec* disk) const {
-  if (disk == nullptr) {
-    return nlohmann::json::array();
-  }
-  return nlohmann::json::array(
-      {{{"name", "private-data"},
-        {"type", "persistent"},
-        {"size_gb", disk->size_gb},
-        {"mount_path", disk->container_path},
-        {"access", "rw"}}});
-}
-
-std::map<std::string, std::string> DesiredStateV2Projector::ProjectCustomEnv(
-    const InstanceSpec& instance,
-    bool strip_comet_env) const {
-  std::map<std::string, std::string> env;
-  for (const auto& [key, value] : instance.environment) {
-    if (strip_comet_env && key.rfind("COMET_", 0) == 0) {
-      continue;
-    }
-    env[key] = value;
-  }
-  return env;
-}
-
-bool DesiredStateV2Projector::IsDefaultWorkerImage(const std::string& image) const {
-  return image == kDefaultWorkerImage;
-}
-
 std::string DesiredStateV2Projector::PreferredModelSourceType() const {
   const auto& model = *state_.bootstrap_model;
   if (model.source_url.has_value() || !model.source_urls.empty()) {
@@ -666,6 +657,9 @@ std::string DesiredStateV2Projector::PreferredModelSourceType() const {
   }
   if (model.local_path.has_value() && model.materialization_mode == "reference") {
     return "local";
+  }
+  if (model.materialization_mode == "prepare_on_worker") {
+    return "library";
   }
   return "huggingface";
 }
@@ -677,4 +671,4 @@ std::string DesiredStateV2Projector::AddBundlePrefixIfRelative(const std::string
   return "bundle://" + value;
 }
 
-}  // namespace comet
+}  // namespace naim

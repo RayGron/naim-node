@@ -63,7 +63,7 @@
         "name": "private-data",
         "type": "persistent",
         "size_gb": 8,
-        "mount_path": "/comet/private",
+        "mount_path": "/naim/private",
         "access": "rw"
       }
     ]
