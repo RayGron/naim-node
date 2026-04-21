@@ -1,10 +1,17 @@
 #include "app/hostd_app_assignment_support.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <sstream>
 #include <stdexcept>
 
+#include <netdb.h>
+
+#include "naim/core/platform_compat.h"
 #include "naim/security/crypto_utils.h"
 
 namespace naim::hostd {
@@ -58,6 +65,202 @@ std::string BuildManifestCanonicalText(const nlohmann::json& files) {
     canonical += "\n";
   }
   return canonical;
+}
+
+struct RuntimeHttpResponse {
+  int status_code = 502;
+  std::string content_type = "application/json";
+  std::string body;
+  std::map<std::string, std::string> headers;
+};
+
+std::string TrimAscii(std::string value) {
+  const auto begin = std::find_if(
+      value.begin(),
+      value.end(),
+      [](unsigned char ch) { return std::isspace(ch) == 0; });
+  const auto end = std::find_if(
+      value.rbegin(),
+      value.rend(),
+      [](unsigned char ch) { return std::isspace(ch) == 0; }).base();
+  if (begin >= end) {
+    return {};
+  }
+  return std::string(begin, end);
+}
+
+std::string LowercaseAscii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+bool IsLoopbackRuntimeHost(const std::string& host) {
+  return host == "127.0.0.1" || host == "localhost" || host == "::1";
+}
+
+bool IsAllowedRuntimeProxyPath(const std::string& method, const std::string& path) {
+  if (method == "GET" && path == "/health") {
+    return true;
+  }
+  if (method == "GET" && path.rfind("/v1/models", 0) == 0) {
+    return true;
+  }
+  if (method == "POST" && path.rfind("/v1/chat/completions", 0) == 0) {
+    return true;
+  }
+  return false;
+}
+
+RuntimeHttpResponse ParseRuntimeHttpResponse(const std::string& response_text) {
+  RuntimeHttpResponse response;
+  const std::size_t headers_end = response_text.find("\r\n\r\n");
+  const std::string header_text =
+      headers_end == std::string::npos ? response_text : response_text.substr(0, headers_end);
+  response.body =
+      headers_end == std::string::npos ? std::string{} : response_text.substr(headers_end + 4);
+
+  const std::size_t line_end = header_text.find("\r\n");
+  const std::string first_line =
+      line_end == std::string::npos ? header_text : header_text.substr(0, line_end);
+  std::stringstream stream(first_line);
+  std::string http_version;
+  stream >> http_version >> response.status_code;
+
+  std::size_t offset = line_end == std::string::npos ? header_text.size() : line_end + 2;
+  while (offset < header_text.size()) {
+    const std::size_t next = header_text.find("\r\n", offset);
+    const std::string line = header_text.substr(
+        offset,
+        next == std::string::npos ? std::string::npos : next - offset);
+    const std::size_t colon = line.find(':');
+    if (colon != std::string::npos) {
+      const std::string key = LowercaseAscii(TrimAscii(line.substr(0, colon)));
+      const std::string value = TrimAscii(line.substr(colon + 1));
+      response.headers[key] = value;
+      if (key == "content-type") {
+        response.content_type = value;
+      }
+    }
+    if (next == std::string::npos) {
+      break;
+    }
+    offset = next + 2;
+  }
+  return response;
+}
+
+RuntimeHttpResponse SendRuntimeHttpRequest(
+    const std::string& host,
+    int port,
+    const std::string& method,
+    const std::string& path,
+    const std::string& body,
+    const std::map<std::string, std::string>& headers) {
+  if (!IsLoopbackRuntimeHost(host)) {
+    throw std::runtime_error("runtime-http-proxy target host must be loopback");
+  }
+  if (port <= 0) {
+    throw std::runtime_error("runtime-http-proxy target port is invalid");
+  }
+  if (!IsAllowedRuntimeProxyPath(method, path)) {
+    throw std::runtime_error("runtime-http-proxy rejected unsupported path: " + path);
+  }
+
+  naim::platform::EnsureSocketsInitialized();
+  addrinfo hints{};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* results = nullptr;
+  const std::string port_text = std::to_string(port);
+  const int lookup = getaddrinfo(host.c_str(), port_text.c_str(), &hints, &results);
+  if (lookup != 0) {
+    throw std::runtime_error("failed to resolve runtime proxy target: " + std::string(gai_strerror(lookup)));
+  }
+
+  naim::platform::SocketHandle fd = naim::platform::kInvalidSocket;
+  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
+    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+    if (!naim::platform::IsSocketValid(fd)) {
+      continue;
+    }
+    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
+      break;
+    }
+    naim::platform::CloseSocket(fd);
+    fd = naim::platform::kInvalidSocket;
+  }
+  freeaddrinfo(results);
+  if (!naim::platform::IsSocketValid(fd)) {
+    throw std::runtime_error("failed to connect to runtime proxy target");
+  }
+
+  std::ostringstream request;
+  request << method << " " << path << " HTTP/1.1\r\n";
+  request << "Host: " << host << ":" << port << "\r\n";
+  request << "Connection: close\r\n";
+  for (const auto& [key, value] : headers) {
+    request << key << ": " << value << "\r\n";
+  }
+  if (!body.empty()) {
+    if (headers.find("Content-Type") == headers.end() &&
+        headers.find("content-type") == headers.end()) {
+      request << "Content-Type: application/json\r\n";
+    }
+    request << "Content-Length: " << body.size() << "\r\n";
+  }
+  request << "\r\n";
+  request << body;
+
+  const std::string request_text = request.str();
+  const char* data = request_text.c_str();
+  std::size_t remaining = request_text.size();
+  while (remaining > 0) {
+    const ssize_t written = send(fd, data, remaining, 0);
+    if (written <= 0) {
+      const std::string error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(fd);
+      throw std::runtime_error("failed to write runtime proxy request: " + error);
+    }
+    data += written;
+    remaining -= static_cast<std::size_t>(written);
+  }
+
+  std::string response_text;
+  std::array<char, 8192> buffer{};
+  while (true) {
+    const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
+    if (read_count < 0) {
+      const std::string error = naim::platform::LastSocketErrorMessage();
+      naim::platform::CloseSocket(fd);
+      throw std::runtime_error("failed to read runtime proxy response: " + error);
+    }
+    if (read_count == 0) {
+      break;
+    }
+    response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
+  }
+  naim::platform::CloseSocket(fd);
+  return ParseRuntimeHttpResponse(response_text);
+}
+
+std::map<std::string, std::string> ParseRuntimeProxyHeaders(const nlohmann::json& headers_json) {
+  std::map<std::string, std::string> headers;
+  if (!headers_json.is_array()) {
+    return headers;
+  }
+  for (const auto& item : headers_json) {
+    if (item.is_array() && item.size() == 2 && item[0].is_string() && item[1].is_string()) {
+      const std::string key = item[0].get<std::string>();
+      if (LowercaseAscii(key) == "host" || LowercaseAscii(key) == "content-length" ||
+          LowercaseAscii(key) == "connection") {
+        continue;
+      }
+      headers[key] = item[1].get<std::string>();
+    }
+  }
+  return headers;
 }
 
 }  // namespace
@@ -460,6 +663,42 @@ void HostdAppAssignmentSupport::BuildModelArtifactManifest(
           {"manifest_algorithm", "naim-model-manifest-v1"},
           {"manifest_sha256", manifest_sha256},
       });
+}
+
+void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
+    const nlohmann::json& payload,
+    const std::string& node_name,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (backend == nullptr || !assignment_id.has_value()) {
+    throw std::runtime_error("runtime-http-proxy requires a controller assignment");
+  }
+  const std::string method = payload.value("method", std::string{});
+  const std::string path = payload.value("path", std::string{});
+  const std::string host = payload.value("target_host", std::string("127.0.0.1"));
+  const int port = payload.value("target_port", 0);
+  const std::string body = payload.value("body", std::string{});
+  const std::map<std::string, std::string> headers =
+      ParseRuntimeProxyHeaders(payload.value("headers", nlohmann::json::array()));
+
+  const RuntimeHttpResponse response =
+      SendRuntimeHttpRequest(host, port, method, path, body, headers);
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "response-ready"},
+          {"title", "Runtime proxy response ready"},
+          {"detail", "Hostd executed the runtime HTTP request locally."},
+          {"percent", 100},
+          {"request_id", payload.value("request_id", std::string{})},
+          {"plane_name", payload.value("plane_name", std::string{})},
+          {"node_name", node_name},
+          {"method", method},
+          {"path", path},
+          {"status_code", response.status_code},
+          {"content_type", response.content_type},
+          {"headers", response.headers},
+          {"body", response.body}});
 }
 
 void HostdAppAssignmentSupport::ShowDemoOps(
