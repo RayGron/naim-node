@@ -82,6 +82,7 @@ infer_ref="$(image_ref infer-runtime)"
 worker_ref="$(image_ref worker-runtime)"
 web_ui_ref="$(image_ref web-ui)"
 skills_ref="$(image_ref skills-runtime)"
+knowledge_ref="$(image_ref knowledge-runtime)"
 webgateway_ref="$(image_ref webgateway-runtime)"
 controller_ref="$(image_ref controller)"
 hostd_ref="$(image_ref hostd)"
@@ -95,6 +96,7 @@ build_args=(
   "${webgateway_ref}"
   "${controller_ref}"
   "${hostd_ref}"
+  "${knowledge_ref}"
 )
 
 if [[ "${skip_web_ui}" == "yes" ]]; then
@@ -110,6 +112,7 @@ declare -a image_names=(
   infer-runtime
   worker-runtime
   skills-runtime
+  knowledge-runtime
   webgateway-runtime
 )
 if [[ "${skip_web_ui}" != "yes" ]]; then

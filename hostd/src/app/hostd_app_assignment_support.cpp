@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 #include <netdb.h>
 
@@ -101,13 +103,43 @@ bool IsLoopbackRuntimeHost(const std::string& host) {
 }
 
 bool IsAllowedRuntimeProxyPath(const std::string& method, const std::string& path) {
-  if (method == "GET" && path == "/health") {
+  const std::string route = path.substr(0, path.find('?'));
+  if (method == "GET" && route == "/health") {
     return true;
   }
-  if (method == "GET" && path.rfind("/v1/models", 0) == 0) {
+  if (method == "GET" && route.rfind("/v1/models", 0) == 0) {
     return true;
   }
-  if (method == "POST" && path.rfind("/v1/chat/completions", 0) == 0) {
+  if (method == "POST" && route.rfind("/v1/chat/completions", 0) == 0) {
+    return true;
+  }
+  return false;
+}
+
+bool IsAllowedKnowledgeVaultProxyPath(const std::string& method, const std::string& path) {
+  const std::string route = path.substr(0, path.find('?'));
+  if (method == "GET" && route == "/health") {
+    return true;
+  }
+  if (method == "GET" && route == "/v1/status") {
+    return true;
+  }
+  if (method == "GET" && route.rfind("/v1/blocks/", 0) == 0) {
+    return true;
+  }
+  if (method == "GET" && route.rfind("/v1/heads/", 0) == 0) {
+    return true;
+  }
+  if (method == "GET" && route == "/v1/replica-merges/status") {
+    return true;
+  }
+  if (method == "POST" &&
+      (route == "/v1/blocks" || route == "/v1/relations" || route == "/v1/search" ||
+       route == "/v1/capsules" || route == "/v1/overlays" ||
+       route == "/v1/replica-merges/trigger")) {
+    return true;
+  }
+  if (method == "PUT" && route.rfind("/v1/heads/", 0) == 0) {
     return true;
   }
   return false;
@@ -157,15 +189,17 @@ RuntimeHttpResponse SendRuntimeHttpRequest(
     const std::string& method,
     const std::string& path,
     const std::string& body,
-    const std::map<std::string, std::string>& headers) {
+    const std::map<std::string, std::string>& headers,
+    bool (*is_allowed_path)(const std::string&, const std::string&),
+    const std::string& proxy_label) {
   if (!IsLoopbackRuntimeHost(host)) {
-    throw std::runtime_error("runtime-http-proxy target host must be loopback");
+    throw std::runtime_error(proxy_label + " target host must be loopback");
   }
   if (port <= 0) {
-    throw std::runtime_error("runtime-http-proxy target port is invalid");
+    throw std::runtime_error(proxy_label + " target port is invalid");
   }
-  if (!IsAllowedRuntimeProxyPath(method, path)) {
-    throw std::runtime_error("runtime-http-proxy rejected unsupported path: " + path);
+  if (!is_allowed_path(method, path)) {
+    throw std::runtime_error(proxy_label + " rejected unsupported path: " + path);
   }
 
   naim::platform::EnsureSocketsInitialized();
@@ -176,7 +210,8 @@ RuntimeHttpResponse SendRuntimeHttpRequest(
   const std::string port_text = std::to_string(port);
   const int lookup = getaddrinfo(host.c_str(), port_text.c_str(), &hints, &results);
   if (lookup != 0) {
-    throw std::runtime_error("failed to resolve runtime proxy target: " + std::string(gai_strerror(lookup)));
+    throw std::runtime_error(
+        "failed to resolve " + proxy_label + " target: " + std::string(gai_strerror(lookup)));
   }
 
   naim::platform::SocketHandle fd = naim::platform::kInvalidSocket;
@@ -193,7 +228,7 @@ RuntimeHttpResponse SendRuntimeHttpRequest(
   }
   freeaddrinfo(results);
   if (!naim::platform::IsSocketValid(fd)) {
-    throw std::runtime_error("failed to connect to runtime proxy target");
+    throw std::runtime_error("failed to connect to " + proxy_label + " target");
   }
 
   std::ostringstream request;
@@ -221,7 +256,7 @@ RuntimeHttpResponse SendRuntimeHttpRequest(
     if (written <= 0) {
       const std::string error = naim::platform::LastSocketErrorMessage();
       naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to write runtime proxy request: " + error);
+      throw std::runtime_error("failed to write " + proxy_label + " request: " + error);
     }
     data += written;
     remaining -= static_cast<std::size_t>(written);
@@ -234,7 +269,7 @@ RuntimeHttpResponse SendRuntimeHttpRequest(
     if (read_count < 0) {
       const std::string error = naim::platform::LastSocketErrorMessage();
       naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to read runtime proxy response: " + error);
+      throw std::runtime_error("failed to read " + proxy_label + " response: " + error);
     }
     if (read_count == 0) {
       break;
@@ -243,6 +278,19 @@ RuntimeHttpResponse SendRuntimeHttpRequest(
   }
   naim::platform::CloseSocket(fd);
   return ParseRuntimeHttpResponse(response_text);
+}
+
+std::string SafeContainerToken(std::string value) {
+  for (char& ch : value) {
+    const unsigned char uch = static_cast<unsigned char>(ch);
+    if (std::isalnum(uch) == 0 && ch != '-' && ch != '_') {
+      ch = '-';
+    }
+  }
+  if (value.empty()) {
+    return "default";
+  }
+  return value;
 }
 
 std::map<std::string, std::string> ParseRuntimeProxyHeaders(const nlohmann::json& headers_json) {
@@ -681,8 +729,15 @@ void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
   const std::map<std::string, std::string> headers =
       ParseRuntimeProxyHeaders(payload.value("headers", nlohmann::json::array()));
 
-  const RuntimeHttpResponse response =
-      SendRuntimeHttpRequest(host, port, method, path, body, headers);
+  const RuntimeHttpResponse response = SendRuntimeHttpRequest(
+      host,
+      port,
+      method,
+      path,
+      body,
+      headers,
+      IsAllowedRuntimeProxyPath,
+      "runtime-http-proxy");
   backend->UpdateHostAssignmentProgress(
       *assignment_id,
       nlohmann::json{
@@ -692,6 +747,186 @@ void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
           {"percent", 100},
           {"request_id", payload.value("request_id", std::string{})},
           {"plane_name", payload.value("plane_name", std::string{})},
+          {"node_name", node_name},
+          {"method", method},
+          {"path", path},
+          {"status_code", response.status_code},
+          {"content_type", response.content_type},
+          {"headers", response.headers},
+          {"body", response.body}});
+}
+
+void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
+    const nlohmann::json& payload,
+    const std::string& node_name,
+    const std::string& storage_root,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (backend == nullptr || !assignment_id.has_value()) {
+    throw std::runtime_error("knowledge-vault-apply requires a controller assignment");
+  }
+  const std::string service_id = payload.value("service_id", std::string("kv_default"));
+  const std::string image = payload.value("image", std::string{});
+  const int port = payload.value("endpoint_port", 18200);
+  if (image.empty()) {
+    throw std::runtime_error("knowledge-vault-apply payload is missing image");
+  }
+  if (port <= 0) {
+    throw std::runtime_error("knowledge-vault-apply endpoint port is invalid");
+  }
+
+  const std::string safe_service_id = SafeContainerToken(service_id);
+  const std::string container_name = "naim-knowledge-vault-" + safe_service_id;
+  const std::string effective_storage_root =
+      storage_root.empty() ? payload.value("storage_root", std::string{}) : storage_root;
+  if (effective_storage_root.empty()) {
+    throw std::runtime_error("knowledge-vault-apply storage root is empty");
+  }
+  const std::filesystem::path service_root =
+      std::filesystem::path(effective_storage_root) / "knowledge-vault" / safe_service_id;
+  std::filesystem::create_directories(service_root);
+
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "starting"},
+          {"title", "Starting knowledge vault"},
+          {"detail", "Hostd is preparing the knowledge vault container."},
+          {"percent", 10},
+          {"service_id", service_id},
+          {"node_name", node_name},
+          {"storage_root", service_root.string()}});
+
+  const std::string docker = command_support_.ResolvedDockerCommand();
+  const auto quote = [&](const std::string& value) {
+    return command_support_.ShellQuote(value);
+  };
+  command_support_.RunCommandOk(
+      docker + " rm -f " + quote(container_name) + " >/dev/null 2>&1 || true");
+  if (!command_support_.RunCommandOk(docker + " pull " + quote(image))) {
+    throw std::runtime_error("failed to pull knowledge vault image: " + image);
+  }
+
+  std::ostringstream run_command;
+  run_command
+      << docker << " run -d"
+      << " --name " << quote(container_name)
+      << " --restart unless-stopped"
+      << " -p 127.0.0.1:" << port << ":" << port
+      << " -v " << quote(service_root.string()) << ":/naim/knowledge"
+      << " -e " << quote("NAIM_KNOWLEDGE_SERVICE_ID=" + service_id)
+      << " -e " << quote("NAIM_NODE_NAME=" + node_name)
+      << " -e " << quote("NAIM_KNOWLEDGE_PORT=" + std::to_string(port))
+      << " -e " << quote("NAIM_KNOWLEDGE_DB_PATH=/naim/knowledge/knowledge.sqlite")
+      << " -e " << quote("NAIM_KNOWLEDGE_STATUS_PATH=/naim/knowledge/runtime-status.json")
+      << " " << quote(image);
+  if (!command_support_.RunCommandOk(run_command.str())) {
+    throw std::runtime_error("failed to start knowledge vault container: " + container_name);
+  }
+
+  RuntimeHttpResponse health;
+  bool ready = false;
+  for (int attempt = 0; attempt < 40; ++attempt) {
+    try {
+      health = SendRuntimeHttpRequest(
+          "127.0.0.1",
+          port,
+          "GET",
+          "/health",
+          "",
+          {},
+          IsAllowedKnowledgeVaultProxyPath,
+          "knowledge-vault-http-proxy");
+      if (health.status_code >= 200 && health.status_code < 300) {
+        ready = true;
+        break;
+      }
+    } catch (const std::exception&) {
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  }
+  if (!ready) {
+    throw std::runtime_error("knowledge vault container did not become healthy");
+  }
+
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "completed"},
+          {"title", "Knowledge vault ready"},
+          {"detail", "Knowledge vault container is running on this storage node."},
+          {"percent", 100},
+          {"service_id", service_id},
+          {"node_name", node_name},
+          {"container_name", container_name},
+          {"endpoint_port", port},
+          {"health_status_code", health.status_code}});
+}
+
+void HostdAppAssignmentSupport::StopKnowledgeVaultService(
+    const nlohmann::json& payload,
+    const std::string& node_name,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (backend == nullptr || !assignment_id.has_value()) {
+    throw std::runtime_error("knowledge-vault-stop requires a controller assignment");
+  }
+  const std::string service_id = payload.value("service_id", std::string("kv_default"));
+  const std::string container_name =
+      "naim-knowledge-vault-" + SafeContainerToken(service_id);
+  const std::string docker = command_support_.ResolvedDockerCommand();
+  const std::string command = docker + " rm -f " +
+                              command_support_.ShellQuote(container_name) +
+                              " >/dev/null 2>&1 || true";
+  if (!command_support_.RunCommandOk(command)) {
+    throw std::runtime_error("failed to stop knowledge vault container: " + container_name);
+  }
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "completed"},
+          {"title", "Knowledge vault stopped"},
+          {"detail", "Hostd stopped the knowledge vault container."},
+          {"percent", 100},
+          {"service_id", service_id},
+          {"node_name", node_name},
+          {"container_name", container_name}});
+}
+
+void HostdAppAssignmentSupport::ExecuteKnowledgeVaultHttpProxy(
+    const nlohmann::json& payload,
+    const std::string& node_name,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (backend == nullptr || !assignment_id.has_value()) {
+    throw std::runtime_error("knowledge-vault-http-proxy requires a controller assignment");
+  }
+  const std::string method = payload.value("method", std::string{});
+  const std::string path = payload.value("path", std::string{});
+  const std::string host = payload.value("target_host", std::string("127.0.0.1"));
+  const int port = payload.value("target_port", 0);
+  const std::string body = payload.value("body", std::string{});
+  const std::map<std::string, std::string> headers =
+      ParseRuntimeProxyHeaders(payload.value("headers", nlohmann::json::array()));
+
+  const RuntimeHttpResponse response = SendRuntimeHttpRequest(
+      host,
+      port,
+      method,
+      path,
+      body,
+      headers,
+      IsAllowedKnowledgeVaultProxyPath,
+      "knowledge-vault-http-proxy");
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "response-ready"},
+          {"title", "Knowledge vault proxy response ready"},
+          {"detail", "Hostd executed the knowledge vault HTTP request locally."},
+          {"percent", 100},
+          {"relay_id", payload.value("relay_id", std::string{})},
+          {"service_id", payload.value("service_id", std::string{})},
           {"node_name", node_name},
           {"method", method},
           {"path", path},

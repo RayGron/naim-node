@@ -43,6 +43,7 @@ skills_tag="${5:-naim/skills-runtime:dev}"
 webgateway_tag="${6:-naim/webgateway-runtime:dev}"
 controller_tag="${7:-naim/controller:dev}"
 hostd_tag="${8:-naim/hostd:dev}"
+knowledge_tag="${9:-naim/knowledge-runtime:dev}"
 
 build_dir="$("${script_dir}/print-build-dir.sh")"
 mkdir -p "${repo_root}/var"
@@ -60,7 +61,7 @@ cp "${repo_root}/ui/operator-react/package.json" \
   "${image_context}/ui/operator-react/"
 cp "${repo_root}/ui/operator-react/scripts/webauthn-helper.mjs" \
   "${image_context}/ui/operator-react/scripts/webauthn-helper.mjs"
-for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd naim-skillsd naim-webgatewayd; do
+for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd naim-skillsd naim-knowledged naim-webgatewayd; do
   cp "${build_dir}/${binary}" "${image_context}/build/linux/x64/${binary}"
 done
 cp "${build_dir}/bin/llama-server" "${image_context}/build/linux/x64/bin/llama-server"
@@ -145,6 +146,13 @@ echo "building ${skills_tag}"
   -t "${skills_tag}" \
   "${image_context}"
 
+echo "building ${knowledge_tag}"
+"${docker_cmd[@]}" build \
+  -f "${image_context}/runtime/knowledge/Dockerfile" \
+  --build-arg "BASE_IMAGE=${base_tag}" \
+  -t "${knowledge_tag}" \
+  "${image_context}"
+
 echo "building ${webgateway_tag}"
 "${docker_cmd[@]}" build \
   -f "${image_context}/runtime/browsing/Dockerfile" \
@@ -164,6 +172,7 @@ echo "  hostd=${hostd_tag}"
 echo "  infer=${infer_tag}"
 echo "  worker=${worker_tag}"
 echo "  skills=${skills_tag}"
+echo "  knowledge=${knowledge_tag}"
 echo "  webgateway=${webgateway_tag}"
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "  web_ui=${web_ui_tag}"

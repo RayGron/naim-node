@@ -525,6 +525,34 @@ CREATE INDEX IF NOT EXISTS idx_event_log_worker_name
 CREATE INDEX IF NOT EXISTS idx_event_log_category
     ON event_log(category);
 
+CREATE TABLE IF NOT EXISTS knowledge_vault_services (
+    service_id TEXT PRIMARY KEY,
+    node_name TEXT NOT NULL,
+    image TEXT NOT NULL,
+    endpoint_host TEXT NOT NULL,
+    endpoint_port INTEGER NOT NULL,
+    desired_state_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'stopped',
+    status_message TEXT NOT NULL DEFAULT '',
+    schema_version TEXT NOT NULL DEFAULT '',
+    index_epoch TEXT NOT NULL DEFAULT '',
+    latest_event_sequence INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_replica_merge_schedules (
+    plane_id TEXT NOT NULL,
+    capsule_id TEXT NOT NULL,
+    service_id TEXT NOT NULL,
+    cadence TEXT NOT NULL DEFAULT 'daily',
+    next_run_at TEXT NOT NULL DEFAULT '',
+    last_checkpoint_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (plane_id, capsule_id, service_id)
+);
+
 CREATE TABLE IF NOT EXISTS scheduler_plane_runtime (
     plane_name TEXT PRIMARY KEY,
     active_action TEXT NOT NULL DEFAULT '',

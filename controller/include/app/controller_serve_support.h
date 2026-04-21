@@ -16,6 +16,7 @@ int ServeControllerHttp(
     HostdHttpService& hostd_http_service,
     BundleHttpService& bundle_http_service,
     ModelLibraryHttpService& model_library_http_service,
+    KnowledgeVaultHttpService& knowledge_vault_http_service,
     PlaneHttpService& plane_http_service,
     SkillsFactoryHttpService& skills_factory_http_service,
     ReadModelService& read_model_service,
