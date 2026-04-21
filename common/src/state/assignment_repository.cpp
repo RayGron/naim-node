@@ -144,23 +144,24 @@ std::vector<HostAssignment> AssignmentRepository::LoadHostAssignments(
       "SELECT id, node_name, plane_name, desired_generation, attempt_count, max_attempts, "
       "assignment_type, desired_state_json, artifacts_root, status, status_message, progress_json "
       "FROM host_assignments";
+  std::vector<std::string> filters;
   int bind_index = 1;
   if (has_node || has_status || has_plane) {
-    sql += " WHERE ";
     if (has_node) {
-      sql += "node_name = ?" + std::to_string(bind_index++);
-    }
-    if (has_node && (has_status || has_plane)) {
-      sql += " AND ";
+      filters.push_back("node_name = ?" + std::to_string(bind_index++));
     }
     if (has_status) {
-      sql += "status = ?" + std::to_string(bind_index++);
+      filters.push_back("status = ?" + std::to_string(bind_index++));
     }
     if (has_plane) {
-      if (has_node || has_status) {
+      filters.push_back("plane_name = ?" + std::to_string(bind_index++));
+    }
+    sql += " WHERE ";
+    for (std::size_t index = 0; index < filters.size(); ++index) {
+      if (index != 0) {
         sql += " AND ";
       }
-      sql += "plane_name = ?" + std::to_string(bind_index++);
+      sql += filters[index];
     }
   }
   sql += " ORDER BY id ASC;";
