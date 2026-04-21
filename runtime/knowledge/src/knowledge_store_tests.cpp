@@ -110,6 +110,8 @@ int main() {
       {"scope_id", "scope.default"},
       {"request_id", "req-store-test"},
       {"token_budget", 1200},
+      {"plane_id", "plane-test"},
+      {"capsule_id", "cap-test"},
   });
   Expect(!context.value("context", nlohmann::json::array()).empty(), "context should return bundle");
 
@@ -120,6 +122,20 @@ int main() {
       {"scope_ids", nlohmann::json::array({"scope.default"})},
   });
   Expect(!markdown.value("files", nlohmann::json::array()).empty(), "markdown export should produce files");
+
+  const auto import = store.MarkdownImport(nlohmann::json{
+      {"plane_id", "plane-test"},
+      {"capsule_id", "cap-test"},
+      {"files",
+       nlohmann::json::array({nlohmann::json{
+           {"path", "Imported.md"},
+           {"content", "# Imported\n\nImported proposal body."},
+           {"scope_ids", nlohmann::json::array({"scope.default"})},
+       }})},
+  });
+  Expect(
+      !import.value("accepted_for_review", nlohmann::json::array()).empty(),
+      "markdown import should create proposals");
 
   std::cout << "ok: knowledge-store-integration\n";
   return 0;

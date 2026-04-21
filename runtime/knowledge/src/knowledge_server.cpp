@@ -80,6 +80,21 @@ void KnowledgeServer::RequestStop() {
 
 void KnowledgeServer::AcceptLoop() {
   while (!stop_requested_.load()) {
+    naim::platform::PollFd fd_state{};
+    fd_state.fd = listen_fd_;
+    fd_state.events = POLLIN;
+    const int poll_result = naim::platform::Poll(&fd_state, 1, 250);
+    if (poll_result < 0) {
+      if (stop_requested_.load() || naim::platform::LastSocketErrorWasInterrupted()) {
+        continue;
+      }
+      throw std::runtime_error(
+          "poll failed: " + naim::controller::ControllerNetworkManager::SocketErrorMessage());
+    }
+    if (poll_result == 0 || (fd_state.revents & POLLIN) == 0) {
+      continue;
+    }
+
     const auto client_fd = accept(listen_fd_, nullptr, nullptr);
     if (!naim::platform::IsSocketValid(client_fd)) {
       if (stop_requested_.load() || naim::platform::LastSocketErrorWasInterrupted()) {
@@ -241,6 +256,9 @@ HttpResponse KnowledgeServer::HandlePost(const HttpRequest& request) {
   }
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "markdown-export") {
     return BuildJsonResponse(200, store_.MarkdownExport(ParseJsonBody(request)));
+  }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "markdown-import") {
+    return BuildJsonResponse(200, store_.MarkdownImport(ParseJsonBody(request)));
   }
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "graph-neighborhood") {
     return BuildJsonResponse(200, store_.GraphNeighborhood(ParseJsonBody(request)));

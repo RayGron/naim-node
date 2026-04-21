@@ -145,6 +145,7 @@ bool IsAllowedKnowledgeVaultProxyPath(const std::string& method, const std::stri
        route == "/v1/overlays" || route == "/v1/replica-merges/trigger" ||
        route == "/v1/replica-merges/schedule" || route == "/v1/replica-merges/run-due" ||
        route == "/v1/repair" || route == "/v1/markdown-export" ||
+       route == "/v1/markdown-import" ||
        route == "/v1/graph-neighborhood" || route == "/v1/catalog")) {
     return true;
   }

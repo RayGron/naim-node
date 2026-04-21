@@ -552,6 +552,35 @@ nlohmann::json KnowledgeStore::Context(const nlohmann::json& payload) const {
     }
     context.push_back(entry);
   }
+  if (!request.plane_id.empty() && payload.contains("capsule_id")) {
+    naim::SqliteStatement overlays(
+        db_,
+        "SELECT overlay_json FROM overlays WHERE plane_id = ?1 AND capsule_id = ?2 "
+        "ORDER BY overlay_event_seq DESC LIMIT 20;");
+    overlays.BindText(1, request.plane_id);
+    overlays.BindText(2, payload.value("capsule_id", std::string{}));
+    while (overlays.StepRow()) {
+      const auto overlay = ParseJsonOr(ColumnText(overlays.raw(), 0), nlohmann::json::object());
+      for (const auto& block : overlay.value("proposed_blocks", nlohmann::json::array())) {
+        if (!block.is_object()) {
+          continue;
+        }
+        context.push_back(nlohmann::json{
+            {"block_id", block.value("block_id", std::string{})},
+            {"knowledge_id", block.value("knowledge_id", std::string{})},
+            {"version_id", block.value("version_id", std::string("overlay"))},
+            {"shard_id", "overlay"},
+            {"title", block.value("title", std::string{})},
+            {"text", block.value("body", std::string{})},
+            {"relations", nlohmann::json::array()},
+            {"provenance", nlohmann::json::array({nlohmann::json{{"source", "overlay"}}})},
+            {"confidence", overlay.value("confidence", 1.0)},
+            {"freshness", "overlay"},
+            {"content_hash", block.value("content_hash", std::string{})},
+        });
+      }
+    }
+  }
   return nlohmann::json{
       {"request_id", request.request_id},
       {"context", context},
@@ -1050,6 +1079,29 @@ nlohmann::json KnowledgeStore::DecideReviewItem(
   update.BindText(3, JsonText(item_json));
   update.BindText(4, UtcNow());
   update.StepDone();
+  if (action == "accept" && item_json.contains("conflicts") && item_json.at("conflicts").is_array() &&
+      !item_json.at("conflicts").empty()) {
+    const auto overlay_json = item_json.at("conflicts").front();
+    if (overlay_json.is_object()) {
+      for (const auto& block : overlay_json.value("proposed_blocks", nlohmann::json::array())) {
+        if (!block.is_object()) {
+          continue;
+        }
+        const auto written = WriteBlock(block);
+        const auto block_json = written.value("block", nlohmann::json::object());
+        const std::string knowledge_id = block_json.value("knowledge_id", std::string{});
+        const std::string block_id = block_json.value("block_id", std::string{});
+        if (!knowledge_id.empty() && !block_id.empty()) {
+          UpdateHead(knowledge_id, nlohmann::json{{"head_block_id", block_id}});
+        }
+      }
+      for (const auto& relation : overlay_json.value("proposed_relations", nlohmann::json::array())) {
+        if (relation.is_object()) {
+          WriteRelation(relation);
+        }
+      }
+    }
+  }
   AppendEvent(
       "review." + new_status,
       {},
@@ -1207,6 +1259,64 @@ nlohmann::json KnowledgeStore::MarkdownExport(const nlohmann::json& payload) con
     });
   }
   return nlohmann::json{{"files", files}, {"warnings", warnings}, {"status", "generated"}};
+}
+
+nlohmann::json KnowledgeStore::MarkdownImport(const nlohmann::json& payload) {
+  const std::string plane_id = payload.value("plane_id", std::string("markdown-import"));
+  const std::string capsule_id = payload.value("capsule_id", std::string("markdown-import"));
+  nlohmann::json accepted_for_review = nlohmann::json::array();
+  nlohmann::json rejected = nlohmann::json::array();
+  for (const auto& file : payload.value("files", nlohmann::json::array())) {
+    if (!file.is_object()) {
+      rejected.push_back(nlohmann::json{{"reason", "malformed_file"}});
+      continue;
+    }
+    const std::string content = file.value("content", std::string{});
+    if (content.empty()) {
+      rejected.push_back(nlohmann::json{{"path", file.value("path", std::string{})}, {"reason", "empty_content"}});
+      continue;
+    }
+    std::string title = file.value("title", std::string{});
+    if (title.empty()) {
+      std::istringstream input(content);
+      std::string line;
+      while (std::getline(input, line)) {
+        if (line.rfind("# ", 0) == 0) {
+          title = line.substr(2);
+          break;
+        }
+      }
+    }
+    if (title.empty()) {
+      title = file.value("path", std::string("Imported Markdown"));
+    }
+    const auto overlay = WriteOverlay(nlohmann::json{
+        {"plane_id", plane_id},
+        {"capsule_id", capsule_id},
+        {"change_type", "markdown_import"},
+        {"confidence", 0.4},
+        {"proposed_blocks",
+         nlohmann::json::array({nlohmann::json{
+             {"knowledge_id", "markdown." + naim::ComputeSha256Hex(title).substr(0, 16)},
+             {"title", title},
+             {"body", content},
+             {"scope_ids", file.value("scope_ids", nlohmann::json::array())},
+             {"source_ids", nlohmann::json::array({file.value("path", std::string{})})},
+         }})},
+        {"rationale", "Imported Markdown is treated as a proposal, not canonical truth."},
+    });
+    accepted_for_review.push_back(overlay);
+  }
+  AppendEvent(
+      "markdown.import.proposed",
+      {},
+      {},
+      nlohmann::json{{"accepted", accepted_for_review.size()}, {"rejected", rejected.size()}});
+  return nlohmann::json{
+      {"accepted_for_review", accepted_for_review},
+      {"rejected", rejected},
+      {"status", "proposed"},
+  };
 }
 
 nlohmann::json KnowledgeStore::GraphNeighborhood(const nlohmann::json& payload) const {

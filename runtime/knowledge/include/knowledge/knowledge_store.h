@@ -41,6 +41,7 @@ class KnowledgeStore final {
   nlohmann::json DecideReviewItem(const std::string& review_id, const nlohmann::json& payload);
   nlohmann::json RunRepair(const nlohmann::json& payload);
   nlohmann::json MarkdownExport(const nlohmann::json& payload) const;
+  nlohmann::json MarkdownImport(const nlohmann::json& payload);
   nlohmann::json GraphNeighborhood(const nlohmann::json& payload) const;
   nlohmann::json CatalogUpsert(const nlohmann::json& payload);
   nlohmann::json CatalogQuery(const nlohmann::json& payload) const;

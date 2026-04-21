@@ -50,6 +50,7 @@ std::optional<HttpResponse> KnowledgeVaultHttpService::HandleRequest(
         suffix.rfind("/reviews", 0) == 0 ||
         suffix.rfind("/repair", 0) == 0 ||
         suffix.rfind("/markdown-export", 0) == 0 ||
+        suffix.rfind("/markdown-import", 0) == 0 ||
         suffix.rfind("/graph-neighborhood", 0) == 0 ||
         suffix.rfind("/catalog", 0) == 0) {
       return service_.ProxyServiceRequest(db_path, request, "/v1" + suffix);
