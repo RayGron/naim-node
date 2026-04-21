@@ -130,16 +130,26 @@ bool IsAllowedKnowledgeVaultProxyPath(const std::string& method, const std::stri
   if (method == "GET" && route.rfind("/v1/heads/", 0) == 0) {
     return true;
   }
+  if (method == "GET" && route.rfind("/v1/capsules/", 0) == 0) {
+    return true;
+  }
+  if (method == "GET" && (route == "/v1/reviews" || route == "/v1/catalog")) {
+    return true;
+  }
   if (method == "GET" && route == "/v1/replica-merges/status") {
     return true;
   }
   if (method == "POST" &&
       (route == "/v1/blocks" || route == "/v1/relations" || route == "/v1/search" ||
-       route == "/v1/capsules" || route == "/v1/overlays" ||
-       route == "/v1/replica-merges/trigger")) {
+       route == "/v1/context" || route == "/v1/source-ingest" || route == "/v1/capsules" ||
+       route == "/v1/overlays" || route == "/v1/replica-merges/trigger" ||
+       route == "/v1/replica-merges/schedule" || route == "/v1/replica-merges/run-due" ||
+       route == "/v1/repair" || route == "/v1/markdown-export" ||
+       route == "/v1/graph-neighborhood" || route == "/v1/catalog")) {
     return true;
   }
-  if (method == "PUT" && route.rfind("/v1/heads/", 0) == 0) {
+  if (method == "PUT" &&
+      (route.rfind("/v1/heads/", 0) == 0 || route.rfind("/v1/reviews/", 0) == 0)) {
     return true;
   }
   return false;

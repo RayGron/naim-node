@@ -5,7 +5,9 @@
 #include <cctype>
 #include <filesystem>
 #include <iomanip>
+#include <map>
 #include <random>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -28,6 +30,14 @@ void Exec(sqlite3* db, const std::string& sql) {
   }
 }
 
+void TryExec(sqlite3* db, const std::string& sql) {
+  char* error_message = nullptr;
+  const int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error_message);
+  if (rc != SQLITE_OK) {
+    sqlite3_free(error_message);
+  }
+}
+
 std::string ColumnText(sqlite3_stmt* statement, int column) {
   const auto* value = sqlite3_column_text(statement, column);
   return value == nullptr ? std::string{} : reinterpret_cast<const char*>(value);
@@ -39,6 +49,18 @@ nlohmann::json ParseJsonOr(const std::string& text, nlohmann::json fallback) {
   }
   const auto parsed = nlohmann::json::parse(text, nullptr, false);
   return parsed.is_discarded() ? fallback : parsed;
+}
+
+bool JsonArrayContainsString(const nlohmann::json& values, const std::string& expected) {
+  if (!values.is_array()) {
+    return false;
+  }
+  for (const auto& value : values) {
+    if (value.is_string() && value.get<std::string>() == expected) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace
@@ -121,6 +143,7 @@ void KnowledgeStore::Open() {
       "payload_json TEXT NOT NULL,"
       "created_at TEXT NOT NULL,"
       "created_by TEXT NOT NULL);");
+  Exec(db_, "CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);");
   Exec(
       db_,
       "CREATE TABLE IF NOT EXISTS capsules("
@@ -134,8 +157,11 @@ void KnowledgeStore::Open() {
       "overlay_change_id TEXT PRIMARY KEY,"
       "plane_id TEXT NOT NULL,"
       "capsule_id TEXT NOT NULL,"
+      "overlay_event_seq INTEGER NOT NULL DEFAULT 0,"
       "overlay_json TEXT NOT NULL,"
       "created_at TEXT NOT NULL);");
+  TryExec(db_, "ALTER TABLE overlays ADD COLUMN overlay_event_seq INTEGER NOT NULL DEFAULT 0;");
+  Exec(db_, "CREATE INDEX IF NOT EXISTS idx_overlays_plane_capsule_seq ON overlays(plane_id, capsule_id, overlay_event_seq);");
   Exec(
       db_,
       "CREATE TABLE IF NOT EXISTS replica_merge_checkpoints("
@@ -146,6 +172,72 @@ void KnowledgeStore::Open() {
       "status TEXT NOT NULL,"
       "started_at TEXT NOT NULL,"
       "completed_at TEXT NOT NULL);");
+  Exec(
+      db_,
+      "CREATE TABLE IF NOT EXISTS replica_merge_schedules("
+      "plane_id TEXT NOT NULL,"
+      "capsule_id TEXT NOT NULL,"
+      "cadence TEXT NOT NULL DEFAULT 'daily',"
+      "next_run_at TEXT NOT NULL,"
+      "last_checkpoint_json TEXT NOT NULL DEFAULT '{}',"
+      "status TEXT NOT NULL DEFAULT 'scheduled',"
+      "updated_at TEXT NOT NULL,"
+      "PRIMARY KEY(plane_id, capsule_id));");
+  Exec(
+      db_,
+      "CREATE TABLE IF NOT EXISTS sources("
+      "source_key TEXT PRIMARY KEY,"
+      "source_kind TEXT NOT NULL,"
+      "source_ref TEXT NOT NULL,"
+      "content_hash TEXT NOT NULL,"
+      "block_id TEXT NOT NULL,"
+      "event_id TEXT NOT NULL,"
+      "status TEXT NOT NULL,"
+      "metadata_json TEXT NOT NULL,"
+      "created_at TEXT NOT NULL);");
+  Exec(db_, "CREATE INDEX IF NOT EXISTS idx_sources_hash ON sources(content_hash);");
+  Exec(
+      db_,
+      "CREATE TABLE IF NOT EXISTS review_queue("
+      "review_id TEXT PRIMARY KEY,"
+      "overlay_change_id TEXT NOT NULL,"
+      "knowledge_id TEXT NOT NULL,"
+      "type TEXT NOT NULL,"
+      "status TEXT NOT NULL,"
+      "item_json TEXT NOT NULL,"
+      "created_at TEXT NOT NULL,"
+      "updated_at TEXT NOT NULL);");
+  Exec(db_, "CREATE INDEX IF NOT EXISTS idx_review_status ON review_queue(status);");
+  Exec(
+      db_,
+      "CREATE TABLE IF NOT EXISTS repair_reports("
+      "report_id TEXT PRIMARY KEY,"
+      "status TEXT NOT NULL,"
+      "findings_json TEXT NOT NULL,"
+      "created_at TEXT NOT NULL);");
+  Exec(
+      db_,
+      "CREATE TABLE IF NOT EXISTS catalog_objects("
+      "object_id TEXT PRIMARY KEY,"
+      "shard_id TEXT NOT NULL,"
+      "scope_ids_json TEXT NOT NULL,"
+      "hints_json TEXT NOT NULL,"
+      "updated_at TEXT NOT NULL);");
+  Exec(
+      db_,
+      "CREATE TABLE IF NOT EXISTS catalog_terms("
+      "term TEXT NOT NULL,"
+      "object_id TEXT NOT NULL,"
+      "shard_id TEXT NOT NULL,"
+      "scope_ids_json TEXT NOT NULL,"
+      "updated_at TEXT NOT NULL,"
+      "PRIMARY KEY(term, object_id));");
+  Exec(
+      db_,
+      "CREATE TABLE IF NOT EXISTS consumer_checkpoints("
+      "consumer_id TEXT PRIMARY KEY,"
+      "event_sequence INTEGER NOT NULL,"
+      "updated_at TEXT NOT NULL);");
 }
 
 nlohmann::json KnowledgeStore::Status(const std::string& service_id) const {
@@ -374,12 +466,21 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
   if (query.empty()) {
     return nlohmann::json{{"results", nlohmann::json::array()}};
   }
+  std::vector<std::string> requested_scopes;
+  if (payload.contains("scope_ids") && payload.at("scope_ids").is_array()) {
+    requested_scopes = JsonStringArray(payload.at("scope_ids"));
+  } else if (const std::string scope_id = payload.value("scope_id", std::string{});
+             !scope_id.empty()) {
+    requested_scopes.push_back(scope_id);
+  }
+  const int limit = std::max(1, std::min(100, payload.value("limit", 20)));
   naim::SqliteStatement statement(
       db_,
-      "SELECT b.block_id, b.knowledge_id, b.version_id, b.title, substr(b.body, 1, 240) "
+      "SELECT b.block_id, b.knowledge_id, b.version_id, b.title, substr(b.body, 1, 240), "
+      "b.scope_ids_json, b.content_hash, b.confidence "
       "FROM block_search s JOIN blocks b ON b.block_id = s.block_id "
       "WHERE lower(s.title) LIKE ?1 OR lower(s.body) LIKE ?1 "
-      "ORDER BY b.created_at DESC LIMIT 20;");
+      "ORDER BY b.created_at DESC LIMIT ?2;");
   std::string lowered_query = query;
   std::transform(
       lowered_query.begin(),
@@ -387,8 +488,19 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
       lowered_query.begin(),
       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   statement.BindText(1, "%" + lowered_query + "%");
+  statement.BindInt(2, limit);
   nlohmann::json results = nlohmann::json::array();
   while (statement.StepRow()) {
+    const auto scope_ids = ParseJsonOr(ColumnText(statement.raw(), 5), nlohmann::json::array());
+    if (!ScopeAllowed(scope_ids, requested_scopes)) {
+      results.push_back(nlohmann::json{
+          {"block_id", ColumnText(statement.raw(), 0)},
+          {"knowledge_id", ColumnText(statement.raw(), 1)},
+          {"mode", "redacted"},
+          {"redaction", nlohmann::json{{"reason", "out_of_scope"}}},
+      });
+      continue;
+    }
     results.push_back(nlohmann::json{
         {"block_id", ColumnText(statement.raw(), 0)},
         {"knowledge_id", ColumnText(statement.raw(), 1)},
@@ -396,11 +508,56 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
         {"title", ColumnText(statement.raw(), 3)},
         {"summary", ColumnText(statement.raw(), 4)},
         {"score", 1.0},
+        {"confidence", sqlite3_column_double(statement.raw(), 7)},
+        {"freshness", "current"},
         {"shard_id", "kv_default"},
+        {"content_hash", ColumnText(statement.raw(), 6)},
         {"redaction", nullptr},
     });
   }
   return nlohmann::json{{"results", results}};
+}
+
+nlohmann::json KnowledgeStore::Context(const nlohmann::json& payload) const {
+  auto request = naim::knowledge::ContextRequestFromJson(payload);
+  const auto search = Search(nlohmann::json{
+      {"query", request.query},
+      {"scope_id", request.scope_id},
+      {"limit", std::max(1, std::min(20, request.token_budget / 600))},
+  });
+  nlohmann::json context = nlohmann::json::array();
+  nlohmann::json redacted = nlohmann::json::array();
+  for (const auto& result : search.value("results", nlohmann::json::array())) {
+    if (!result.value("mode", std::string{}).empty() || !result.at("redaction").is_null()) {
+      redacted.push_back(result);
+      continue;
+    }
+    nlohmann::json entry{
+        {"block_id", result.value("block_id", std::string{})},
+        {"knowledge_id", result.value("knowledge_id", std::string{})},
+        {"version_id", result.value("version_id", std::string{})},
+        {"shard_id", result.value("shard_id", std::string("kv_default"))},
+        {"title", result.value("title", std::string{})},
+        {"text", result.value("summary", std::string{})},
+        {"relations", nlohmann::json::array()},
+        {"provenance", nlohmann::json::array()},
+        {"confidence", result.value("confidence", 1.0)},
+        {"freshness", result.value("freshness", std::string("current"))},
+        {"content_hash", result.value("content_hash", std::string{})},
+      };
+    if (request.include_graph && request.max_graph_depth > 0) {
+      entry["relations"] = Neighbors(result.value("block_id", std::string{})).value(
+          "neighbors",
+          nlohmann::json::array());
+    }
+    context.push_back(entry);
+  }
+  return nlohmann::json{
+      {"request_id", request.request_id},
+      {"context", context},
+      {"redacted", redacted},
+      {"warnings", nlohmann::json::array()},
+  };
 }
 
 nlohmann::json KnowledgeStore::BuildCapsule(const nlohmann::json& payload) {
@@ -428,6 +585,136 @@ nlohmann::json KnowledgeStore::BuildCapsule(const nlohmann::json& payload) {
   return nlohmann::json{{"capsule_id", manifest.capsule_id}, {"manifest", naim::knowledge::ToJson(manifest)}};
 }
 
+nlohmann::json KnowledgeStore::ReadCapsule(const std::string& capsule_id) const {
+  naim::SqliteStatement statement(
+      db_,
+      "SELECT manifest_json FROM capsules WHERE capsule_id = ?1;");
+  statement.BindText(1, capsule_id);
+  if (!statement.StepRow()) {
+    return nlohmann::json{{"error", "not_found"}, {"message", "capsule not found"}};
+  }
+  const auto manifest = ParseJsonOr(ColumnText(statement.raw(), 0), nlohmann::json::object());
+  if (!manifest.is_object() || manifest.value("capsule_id", std::string{}) != capsule_id) {
+    return nlohmann::json{{"error", "invalid_capsule"}, {"message", "capsule manifest is invalid"}};
+  }
+  return nlohmann::json{{"manifest", manifest}, {"status", "valid"}};
+}
+
+nlohmann::json KnowledgeStore::IngestSource(const nlohmann::json& payload) {
+  auto request = naim::knowledge::SourceIngestRequestFromJson(payload);
+  static const std::set<std::string> kAllowedKinds{
+      "document",
+      "api",
+      "operator",
+      "agent",
+      "runtime",
+      "web",
+  };
+  if (kAllowedKinds.find(request.source_kind) == kAllowedKinds.end()) {
+    const int sequence = AppendEvent(
+        "source.rejected",
+        {},
+        {},
+        nlohmann::json{{"source_kind", request.source_kind}, {"reason", "unsupported_source_kind"}});
+    return nlohmann::json{
+        {"status", "rejected"},
+        {"reason", "unsupported_source_kind"},
+        {"source_event_sequence", sequence},
+    };
+  }
+  if (request.content.empty() && request.content_hash.empty()) {
+    const int sequence = AppendEvent(
+        "source.rejected",
+        {},
+        {},
+        nlohmann::json{{"source_kind", request.source_kind}, {"reason", "missing_content"}});
+    return nlohmann::json{
+        {"status", "rejected"},
+        {"reason", "missing_content"},
+        {"source_event_sequence", sequence},
+    };
+  }
+  if (request.content_hash.empty()) {
+    request.content_hash = naim::ComputeSha256Hex(request.content);
+  }
+  const std::string source_key =
+      naim::ComputeSha256Hex(request.source_kind + "\n" + request.source_ref + "\n" + request.content_hash);
+  {
+    naim::SqliteStatement duplicate(
+        db_,
+        "SELECT block_id, event_id FROM sources WHERE source_key = ?1 OR content_hash = ?2 LIMIT 1;");
+    duplicate.BindText(1, source_key);
+    duplicate.BindText(2, request.content_hash);
+    if (duplicate.StepRow()) {
+      const int sequence = AppendEvent(
+          "source.duplicate",
+          {},
+          {ColumnText(duplicate.raw(), 0)},
+          nlohmann::json{{"source_key", source_key}, {"content_hash", request.content_hash}});
+      return nlohmann::json{
+          {"status", "duplicate"},
+          {"source_block_id", ColumnText(duplicate.raw(), 0)},
+          {"source_event_id", ColumnText(duplicate.raw(), 1)},
+          {"event_sequence", sequence},
+      };
+    }
+  }
+
+  naim::knowledge::KnowledgeBlock block;
+  block.block_id = NewId("src");
+  block.knowledge_id = "source." + source_key.substr(0, 16);
+  block.version_id = "v1";
+  block.type = "source";
+  block.title = request.metadata.value("title", request.source_ref.empty() ? request.source_kind : request.source_ref);
+  block.body = request.content;
+  block.content_hash = request.content_hash;
+  block.created_at = UtcNow();
+  block.created_by = "source-ingest";
+  block.source_ids = {source_key};
+  block.scope_ids = request.scope_ids;
+  block.payload = nlohmann::json{
+      {"source_kind", request.source_kind},
+      {"source_ref", request.source_ref},
+      {"metadata", request.metadata},
+      {"provenance", nlohmann::json{{"content_hash", request.content_hash}}},
+  };
+
+  const auto written = WriteBlock(naim::knowledge::ToJson(block));
+  const std::string event_id = NewId("evt_source");
+  const int sequence = AppendEvent(
+      "source.ingested",
+      {block.knowledge_id},
+      {block.block_id},
+      nlohmann::json{
+          {"source_kind", request.source_kind},
+          {"source_ref", request.source_ref},
+          {"content_hash", request.content_hash},
+          {"block_id", block.block_id},
+      });
+  naim::SqliteStatement source_insert(
+      db_,
+      "INSERT INTO sources(source_key, source_kind, source_ref, content_hash, block_id, event_id, "
+      "status, metadata_json, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'accepted', ?7, ?8);");
+  source_insert.BindText(1, source_key);
+  source_insert.BindText(2, request.source_kind);
+  source_insert.BindText(3, request.source_ref);
+  source_insert.BindText(4, request.content_hash);
+  source_insert.BindText(5, block.block_id);
+  source_insert.BindText(6, event_id);
+  source_insert.BindText(7, JsonText(request.metadata));
+  source_insert.BindText(8, block.created_at);
+  source_insert.StepDone();
+
+  return nlohmann::json{
+      {"status", "accepted"},
+      {"source_event_id", event_id},
+      {"source_block_id", block.block_id},
+      {"event_sequence", sequence},
+      {"block", written.value("block", nlohmann::json::object())},
+      {"index_triggers", nlohmann::json::array({"text", "catalog", "capsule-delta"})},
+  };
+}
+
 nlohmann::json KnowledgeStore::WriteOverlay(const nlohmann::json& payload) {
   auto proposal = naim::knowledge::OverlayFromJson(payload);
   if (proposal.overlay_change_id.empty()) {
@@ -444,24 +731,103 @@ nlohmann::json KnowledgeStore::WriteOverlay(const nlohmann::json& payload) {
   }
   naim::SqliteStatement statement(
       db_,
-      "INSERT INTO overlays(overlay_change_id, plane_id, capsule_id, overlay_json, created_at) "
-      "VALUES(?1, ?2, ?3, ?4, ?5);");
-  statement.BindText(1, proposal.overlay_change_id);
-  statement.BindText(2, proposal.plane_id);
-  statement.BindText(3, proposal.capsule_id);
-  statement.BindText(4, JsonText(naim::knowledge::ToJson(proposal)));
-  statement.BindText(5, proposal.created_at);
-  statement.StepDone();
+      "INSERT INTO overlays(overlay_change_id, plane_id, capsule_id, overlay_event_seq, overlay_json, created_at) "
+      "VALUES(?1, ?2, ?3, ?4, ?5, ?6);");
   const int sequence = AppendEvent(
       "overlay.proposed",
       {},
       {},
       nlohmann::json{{"overlay_change_id", proposal.overlay_change_id}});
+  statement.BindText(1, proposal.overlay_change_id);
+  statement.BindText(2, proposal.plane_id);
+  statement.BindText(3, proposal.capsule_id);
+  statement.BindInt(4, sequence);
+  statement.BindText(5, JsonText(naim::knowledge::ToJson(proposal)));
+  statement.BindText(6, proposal.created_at);
+  statement.StepDone();
   return nlohmann::json{
       {"overlay_change_id", proposal.overlay_change_id},
       {"status", "stored"},
       {"event_sequence", sequence},
+      {"overlay_event_seq", sequence},
   };
+}
+
+nlohmann::json KnowledgeStore::ScheduleReplicaMerge(const nlohmann::json& payload) {
+  const std::string plane_id = payload.value("plane_id", std::string{});
+  const std::string capsule_id = payload.value("capsule_id", std::string{});
+  if (plane_id.empty() || capsule_id.empty()) {
+    throw std::runtime_error("plane_id and capsule_id are required");
+  }
+  const std::string cadence = payload.value("cadence", std::string("daily"));
+  if (cadence != "daily") {
+    throw std::runtime_error("only daily replica merge cadence is supported");
+  }
+  const std::string next_run_at = payload.value("next_run_at", UtcNow());
+  naim::SqliteStatement statement(
+      db_,
+      "INSERT INTO replica_merge_schedules(plane_id, capsule_id, cadence, next_run_at, "
+      "last_checkpoint_json, status, updated_at) VALUES(?1, ?2, ?3, ?4, '{}', 'scheduled', ?5) "
+      "ON CONFLICT(plane_id, capsule_id) DO UPDATE SET cadence=excluded.cadence, "
+      "next_run_at=excluded.next_run_at, status='scheduled', updated_at=excluded.updated_at;");
+  statement.BindText(1, plane_id);
+  statement.BindText(2, capsule_id);
+  statement.BindText(3, cadence);
+  statement.BindText(4, next_run_at);
+  statement.BindText(5, UtcNow());
+  statement.StepDone();
+  AppendEvent(
+      "replica.merge.scheduled",
+      {},
+      {},
+      nlohmann::json{{"plane_id", plane_id}, {"capsule_id", capsule_id}, {"cadence", cadence}});
+  return nlohmann::json{
+      {"plane_id", plane_id},
+      {"capsule_id", capsule_id},
+      {"cadence", cadence},
+      {"next_run_at", next_run_at},
+      {"status", "scheduled"},
+  };
+}
+
+nlohmann::json KnowledgeStore::RunScheduledReplicaMerges(const nlohmann::json& payload) {
+  const bool force = payload.value("force", false);
+  const std::string plane_filter = payload.value("plane_id", std::string{});
+  naim::SqliteStatement statement(
+      db_,
+      plane_filter.empty()
+          ? "SELECT plane_id, capsule_id FROM replica_merge_schedules WHERE status = 'scheduled' ORDER BY next_run_at ASC;"
+          : "SELECT plane_id, capsule_id FROM replica_merge_schedules WHERE status = 'scheduled' AND plane_id = ?1 ORDER BY next_run_at ASC;");
+  if (!plane_filter.empty()) {
+    statement.BindText(1, plane_filter);
+  }
+  std::vector<std::pair<std::string, std::string>> scheduled;
+  while (statement.StepRow()) {
+    scheduled.emplace_back(ColumnText(statement.raw(), 0), ColumnText(statement.raw(), 1));
+  }
+  nlohmann::json jobs = nlohmann::json::array();
+  for (const auto& [plane_id, capsule_id] : scheduled) {
+    if (!force) {
+      // The first version intentionally lets controller ticks call this once per daily window.
+      // Time-window enforcement belongs to the controller scheduler that owns the cadence.
+    }
+    auto result = TriggerReplicaMerge(nlohmann::json{
+        {"plane_id", plane_id},
+        {"capsule_id", capsule_id},
+        {"reason", "scheduled"},
+    });
+    jobs.push_back(result);
+    naim::SqliteStatement update(
+        db_,
+        "UPDATE replica_merge_schedules SET last_checkpoint_json = ?3, next_run_at = ?4, "
+        "updated_at = ?4 WHERE plane_id = ?1 AND capsule_id = ?2;");
+    update.BindText(1, plane_id);
+    update.BindText(2, capsule_id);
+    update.BindText(3, JsonText(result.value("checkpoint", nlohmann::json::object())));
+    update.BindText(4, UtcNow());
+    update.StepDone();
+  }
+  return nlohmann::json{{"jobs", jobs}, {"status", "completed"}};
 }
 
 nlohmann::json KnowledgeStore::TriggerReplicaMerge(const nlohmann::json& payload) {
@@ -473,20 +839,127 @@ nlohmann::json KnowledgeStore::TriggerReplicaMerge(const nlohmann::json& payload
     throw std::runtime_error("plane_id and capsule_id are required");
   }
   checkpoint.base_event_seq = payload.value("base_event_seq", 0);
+  checkpoint.overlay_event_seq_from =
+      LastCheckpointSequence(checkpoint.plane_id, checkpoint.capsule_id) + 1;
   checkpoint.canonical_event_seq_before = LatestEventSequence();
   checkpoint.started_at = UtcNow();
-  checkpoint.completed_at = checkpoint.started_at;
-  checkpoint.status = "completed";
-  checkpoint.canonical_event_seq_after = AppendEvent(
-      "replica.merge.completed",
+  AppendEvent(
+      "replica.merge.started",
       {},
       {},
       nlohmann::json{
           {"replica_merge_id", checkpoint.replica_merge_id},
           {"plane_id", checkpoint.plane_id},
           {"capsule_id", checkpoint.capsule_id},
-          {"mode", "v0-checkpoint-only"},
       });
+
+  int accepted = 0;
+  int review = 0;
+  int rejected = 0;
+  int max_overlay_seq = checkpoint.overlay_event_seq_from - 1;
+  try {
+    naim::SqliteStatement overlays(
+        db_,
+        "SELECT overlay_change_id, overlay_event_seq, overlay_json FROM overlays "
+        "WHERE plane_id = ?1 AND capsule_id = ?2 AND overlay_event_seq >= ?3 "
+        "ORDER BY overlay_event_seq ASC;");
+    overlays.BindText(1, checkpoint.plane_id);
+    overlays.BindText(2, checkpoint.capsule_id);
+    overlays.BindInt(3, checkpoint.overlay_event_seq_from);
+    while (overlays.StepRow()) {
+      const std::string overlay_change_id = ColumnText(overlays.raw(), 0);
+      const int overlay_seq = sqlite3_column_int(overlays.raw(), 1);
+      max_overlay_seq = std::max(max_overlay_seq, overlay_seq);
+      const auto overlay_json = ParseJsonOr(ColumnText(overlays.raw(), 2), nlohmann::json::object());
+      if (!overlay_json.is_object()) {
+        ++rejected;
+        continue;
+      }
+      const auto proposal = naim::knowledge::OverlayFromJson(overlay_json);
+      bool conflict = false;
+      std::string conflict_knowledge_id;
+      if (proposal.base_versions.is_object()) {
+        for (const auto& item : proposal.base_versions.items()) {
+          const std::string knowledge_id = item.key();
+          const std::string expected_version =
+              item.value().is_string() ? item.value().get<std::string>() : std::string{};
+          const nlohmann::json current_head =
+              ResolveHead(knowledge_id).value("head", nlohmann::json(nullptr));
+          if (!current_head.is_null() &&
+              current_head.value("version_id", std::string{}) != expected_version) {
+            conflict = true;
+            conflict_knowledge_id = knowledge_id;
+            break;
+          }
+        }
+      }
+      const double confidence = proposal.confidence;
+      if (conflict || confidence < 0.5) {
+        naim::knowledge::ReviewItem item;
+        item.review_id = NewId("rev");
+        item.overlay_change_id = overlay_change_id;
+        item.knowledge_id = conflict_knowledge_id.empty() ? proposal.plane_id : conflict_knowledge_id;
+        item.type = conflict ? "version_conflict" : "low_confidence";
+        item.created_at = UtcNow();
+        item.safe_summary = "Knowledge overlay requires review";
+        item.affected_scopes = {};
+        item.conflicts = nlohmann::json::array({overlay_json});
+        PersistReviewItem(item);
+        ++review;
+        continue;
+      }
+      for (const auto& block : proposal.proposed_blocks) {
+        if (!block.is_object()) {
+          continue;
+        }
+        const auto written = WriteBlock(block);
+        const auto block_json = written.value("block", nlohmann::json::object());
+        const std::string knowledge_id = block_json.value("knowledge_id", std::string{});
+        const std::string block_id = block_json.value("block_id", std::string{});
+        if (!knowledge_id.empty() && !block_id.empty()) {
+          UpdateHead(knowledge_id, nlohmann::json{{"head_block_id", block_id}});
+        }
+        ++accepted;
+      }
+      for (const auto& relation : proposal.proposed_relations) {
+        if (relation.is_object()) {
+          WriteRelation(relation);
+          ++accepted;
+        }
+      }
+    }
+    checkpoint.overlay_event_seq_to = max_overlay_seq;
+    checkpoint.status = "completed";
+    checkpoint.completed_at = UtcNow();
+    checkpoint.canonical_event_seq_after = AppendEvent(
+        "replica.merge.completed",
+        {},
+        {},
+        nlohmann::json{
+            {"replica_merge_id", checkpoint.replica_merge_id},
+            {"plane_id", checkpoint.plane_id},
+            {"capsule_id", checkpoint.capsule_id},
+            {"accepted", accepted},
+            {"review", review},
+            {"rejected", rejected},
+            {"capsule_publication", accepted > 0 ? "delta_requested" : "skipped"},
+        });
+  } catch (const std::exception& error) {
+    checkpoint.status = "failed";
+    checkpoint.completed_at = UtcNow();
+    checkpoint.overlay_event_seq_to = max_overlay_seq;
+    checkpoint.canonical_event_seq_after = LatestEventSequence();
+    AppendEvent(
+        "replica.merge.failed",
+        {},
+        {},
+        nlohmann::json{
+            {"replica_merge_id", checkpoint.replica_merge_id},
+            {"plane_id", checkpoint.plane_id},
+            {"capsule_id", checkpoint.capsule_id},
+            {"message", error.what()},
+        });
+  }
   naim::SqliteStatement statement(
       db_,
       "INSERT INTO replica_merge_checkpoints(replica_merge_id, plane_id, capsule_id, "
@@ -502,6 +975,9 @@ nlohmann::json KnowledgeStore::TriggerReplicaMerge(const nlohmann::json& payload
   return nlohmann::json{
       {"replica_merge_id", checkpoint.replica_merge_id},
       {"status", checkpoint.status},
+      {"accepted", accepted},
+      {"review", review},
+      {"rejected", rejected},
       {"checkpoint", naim::knowledge::ToJson(checkpoint)},
   };
 }
@@ -519,6 +995,319 @@ nlohmann::json KnowledgeStore::ReplicaMergeStatus(const std::string& plane_id) c
       {"last_successful_checkpoint", ParseJsonOr(ColumnText(statement.raw(), 0), nullptr)},
       {"status", "completed"},
   };
+}
+
+nlohmann::json KnowledgeStore::ListReviewItems(const nlohmann::json& payload) const {
+  const std::string status = payload.value("status", std::string("pending"));
+  naim::SqliteStatement statement(
+      db_,
+      "SELECT item_json FROM review_queue WHERE status = ?1 ORDER BY created_at ASC LIMIT ?2;");
+  statement.BindText(1, status);
+  statement.BindInt(2, std::max(1, std::min(200, payload.value("limit", 50))));
+  nlohmann::json items = nlohmann::json::array();
+  while (statement.StepRow()) {
+    items.push_back(ParseJsonOr(ColumnText(statement.raw(), 0), nlohmann::json::object()));
+  }
+  return nlohmann::json{{"items", items}, {"status", status}};
+}
+
+nlohmann::json KnowledgeStore::DecideReviewItem(
+    const std::string& review_id,
+    const nlohmann::json& payload) {
+  const std::string action = payload.value("action", std::string{});
+  static const std::set<std::string> kAllowedActions{
+      "accept",
+      "reject",
+      "request-more-evidence",
+      "needs_evidence",
+  };
+  if (kAllowedActions.find(action) == kAllowedActions.end()) {
+    throw std::runtime_error("unsupported review action");
+  }
+  naim::SqliteStatement load(
+      db_,
+      "SELECT item_json FROM review_queue WHERE review_id = ?1;");
+  load.BindText(1, review_id);
+  if (!load.StepRow()) {
+    return nlohmann::json{{"error", "not_found"}, {"message", "review item not found"}};
+  }
+  auto item_json = ParseJsonOr(ColumnText(load.raw(), 0), nlohmann::json::object());
+  std::string new_status = action == "accept" ? "accepted" : action;
+  if (action == "request-more-evidence") {
+    new_status = "needs_evidence";
+  }
+  item_json["status"] = new_status;
+  item_json["decision"] = nlohmann::json{
+      {"action", action},
+      {"reason", payload.value("reason", std::string{})},
+      {"decided_at", UtcNow()},
+  };
+  naim::SqliteStatement update(
+      db_,
+      "UPDATE review_queue SET status = ?2, item_json = ?3, updated_at = ?4 WHERE review_id = ?1;");
+  update.BindText(1, review_id);
+  update.BindText(2, new_status);
+  update.BindText(3, JsonText(item_json));
+  update.BindText(4, UtcNow());
+  update.StepDone();
+  AppendEvent(
+      "review." + new_status,
+      {},
+      {},
+      nlohmann::json{{"review_id", review_id}, {"action", action}});
+  return nlohmann::json{{"review_id", review_id}, {"status", new_status}, {"item", item_json}};
+}
+
+nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
+  const bool apply = payload.value("apply", false);
+  nlohmann::json findings = nlohmann::json::array();
+  const auto add_finding = [&](const std::string& severity,
+                               const std::string& type,
+                               const std::string& block_id,
+                               const std::string& relation_id,
+                               const std::string& action) {
+    naim::knowledge::RepairFinding finding;
+    finding.finding_id = NewId("repair");
+    finding.severity = severity;
+    finding.type = type;
+    finding.block_id = block_id;
+    finding.relation_id = relation_id;
+    finding.event_seq = LatestEventSequence();
+    finding.repair_action = action;
+    finding.created_at = UtcNow();
+    findings.push_back(naim::knowledge::ToJson(finding));
+  };
+
+  {
+    naim::SqliteStatement missing_search(
+        db_,
+        "SELECT b.block_id, b.title, b.body FROM blocks b "
+        "LEFT JOIN block_search s ON s.block_id = b.block_id WHERE s.block_id IS NULL;");
+    while (missing_search.StepRow()) {
+      const std::string block_id = ColumnText(missing_search.raw(), 0);
+      add_finding("warning", "stale_text_index", block_id, "", apply ? "applied" : "queued");
+      if (apply) {
+        naim::SqliteStatement insert(
+            db_,
+            "INSERT OR REPLACE INTO block_search(block_id, title, body) VALUES(?1, ?2, ?3);");
+        insert.BindText(1, block_id);
+        insert.BindText(2, ColumnText(missing_search.raw(), 1));
+        insert.BindText(3, ColumnText(missing_search.raw(), 2));
+        insert.StepDone();
+      }
+    }
+  }
+  {
+    naim::SqliteStatement broken_edges(
+        db_,
+        "SELECT r.relation_id, r.from_block_id, r.to_block_id FROM relations r "
+        "LEFT JOIN blocks bf ON bf.block_id = r.from_block_id "
+        "LEFT JOIN blocks bt ON bt.block_id = r.to_block_id "
+        "WHERE bf.block_id IS NULL OR bt.block_id IS NULL;");
+    while (broken_edges.StepRow()) {
+      add_finding(
+          "error",
+          "edge_missing_block",
+          ColumnText(broken_edges.raw(), 1),
+          ColumnText(broken_edges.raw(), 0),
+          "manual_review");
+    }
+  }
+  {
+    naim::SqliteStatement capsule_members(
+        db_,
+        "SELECT capsule_id, manifest_json FROM capsules;");
+    while (capsule_members.StepRow()) {
+      const auto manifest =
+          ParseJsonOr(ColumnText(capsule_members.raw(), 1), nlohmann::json::object());
+      for (const auto& item : manifest.value("included", nlohmann::json::array())) {
+        const std::string block_id =
+            item.is_string() ? item.get<std::string>() : item.value("block_id", std::string{});
+        if (block_id.empty()) {
+          continue;
+        }
+        const auto block = ReadBlock(block_id);
+        if (block.contains("error")) {
+          add_finding("error", "missing_capsule_member", block_id, "", "manual_review");
+        }
+      }
+    }
+  }
+
+  const std::string report_id = NewId("rr");
+  naim::SqliteStatement insert_report(
+      db_,
+      "INSERT INTO repair_reports(report_id, status, findings_json, created_at) "
+      "VALUES(?1, ?2, ?3, ?4);");
+  insert_report.BindText(1, report_id);
+  insert_report.BindText(2, findings.empty() ? "clean" : "findings");
+  insert_report.BindText(3, JsonText(findings));
+  insert_report.BindText(4, UtcNow());
+  insert_report.StepDone();
+  const int sequence = AppendEvent(
+      "repair.completed",
+      {},
+      {},
+      nlohmann::json{{"report_id", report_id}, {"finding_count", findings.size()}});
+  return nlohmann::json{
+      {"report_id", report_id},
+      {"status", findings.empty() ? "clean" : "findings"},
+      {"findings", findings},
+      {"event_sequence", sequence},
+      {"index_epoch", "idx_" + std::to_string(LatestEventSequence())},
+  };
+}
+
+nlohmann::json KnowledgeStore::MarkdownExport(const nlohmann::json& payload) const {
+  std::vector<std::string> requested_scopes;
+  if (payload.contains("scope_ids")) {
+    requested_scopes = JsonStringArray(payload.at("scope_ids"));
+  }
+  nlohmann::json files = nlohmann::json::array();
+  nlohmann::json warnings = nlohmann::json::array();
+  naim::SqliteStatement statement(
+      db_,
+      "SELECT block_id, knowledge_id, version_id, type, title, body, source_ids_json, "
+      "scope_ids_json, confidence, content_hash FROM blocks ORDER BY knowledge_id, created_at;");
+  while (statement.StepRow()) {
+    const auto scope_ids = ParseJsonOr(ColumnText(statement.raw(), 7), nlohmann::json::array());
+    if (!ScopeAllowed(scope_ids, requested_scopes)) {
+      warnings.push_back(nlohmann::json{
+          {"block_id", ColumnText(statement.raw(), 0)},
+          {"warning", "restricted_export_skipped"},
+      });
+      continue;
+    }
+    const std::string title = ColumnText(statement.raw(), 4).empty()
+                                  ? ColumnText(statement.raw(), 1)
+                                  : ColumnText(statement.raw(), 4);
+    std::string slug = NormalizeTerm(title);
+    std::replace(slug.begin(), slug.end(), ' ', '-');
+    if (slug.empty()) {
+      slug = ColumnText(statement.raw(), 0);
+    }
+    std::ostringstream markdown;
+    markdown << "---\n"
+             << "type: " << ColumnText(statement.raw(), 3) << "\n"
+             << "status: generated\n"
+             << "knowledge_id: " << ColumnText(statement.raw(), 1) << "\n"
+             << "block_id: " << ColumnText(statement.raw(), 0) << "\n"
+             << "version_id: " << ColumnText(statement.raw(), 2) << "\n"
+             << "content_hash: " << ColumnText(statement.raw(), 9) << "\n"
+             << "scope_ids: " << scope_ids.dump() << "\n"
+             << "source_ids: " << ParseJsonOr(ColumnText(statement.raw(), 6), nlohmann::json::array()).dump() << "\n"
+             << "related: []\n"
+             << "---\n\n"
+             << "# " << MarkdownEscape(title) << "\n\n"
+             << MarkdownEscape(ColumnText(statement.raw(), 5)) << "\n";
+    files.push_back(nlohmann::json{
+        {"path", slug + ".md"},
+        {"block_id", ColumnText(statement.raw(), 0)},
+        {"content", markdown.str()},
+    });
+  }
+  return nlohmann::json{{"files", files}, {"warnings", warnings}, {"status", "generated"}};
+}
+
+nlohmann::json KnowledgeStore::GraphNeighborhood(const nlohmann::json& payload) const {
+  const std::string center = payload.value("center_id", std::string{});
+  const int depth = std::max(1, std::min(2, payload.value("depth", 1)));
+  std::set<std::string> visited;
+  std::vector<std::string> frontier{center};
+  nlohmann::json nodes = nlohmann::json::array();
+  nlohmann::json edges = nlohmann::json::array();
+  for (int current_depth = 0; current_depth < depth && !frontier.empty(); ++current_depth) {
+    std::vector<std::string> next;
+    for (const auto& block_id : frontier) {
+      if (!visited.insert(block_id).second) {
+        continue;
+      }
+      const auto block = ReadBlock(block_id);
+      if (!block.contains("error")) {
+        nodes.push_back(block.value("block", nlohmann::json::object()));
+      }
+      const auto neighbors = Neighbors(block_id).value("neighbors", nlohmann::json::array());
+      for (const auto& relation : neighbors) {
+        edges.push_back(relation);
+        const std::string from = relation.value("from_block_id", std::string{});
+        const std::string to = relation.value("to_block_id", std::string{});
+        next.push_back(from == block_id ? to : from);
+      }
+    }
+    frontier = std::move(next);
+  }
+  return nlohmann::json{{"nodes", nodes}, {"edges", edges}, {"warnings", nlohmann::json::array()}};
+}
+
+nlohmann::json KnowledgeStore::CatalogUpsert(const nlohmann::json& payload) {
+  const std::string object_id = payload.value("object_id", std::string{});
+  if (object_id.empty()) {
+    throw std::runtime_error("object_id is required");
+  }
+  const std::string shard_id = payload.value("shard_id", std::string("kv_default"));
+  const nlohmann::json scope_ids = payload.value("scope_ids", nlohmann::json::array());
+  const nlohmann::json hints = payload.value("hints", nlohmann::json::array());
+  naim::SqliteStatement upsert(
+      db_,
+      "INSERT INTO catalog_objects(object_id, shard_id, scope_ids_json, hints_json, updated_at) "
+      "VALUES(?1, ?2, ?3, ?4, ?5) "
+      "ON CONFLICT(object_id) DO UPDATE SET shard_id=excluded.shard_id, "
+      "scope_ids_json=excluded.scope_ids_json, hints_json=excluded.hints_json, updated_at=excluded.updated_at;");
+  upsert.BindText(1, object_id);
+  upsert.BindText(2, shard_id);
+  upsert.BindText(3, JsonText(scope_ids));
+  upsert.BindText(4, JsonText(hints));
+  upsert.BindText(5, UtcNow());
+  upsert.StepDone();
+  for (const auto& hint : hints) {
+    const std::string term = NormalizeTerm(hint.is_string() ? hint.get<std::string>() : hint.dump());
+    if (term.empty()) {
+      continue;
+    }
+    naim::SqliteStatement term_upsert(
+        db_,
+        "INSERT OR REPLACE INTO catalog_terms(term, object_id, shard_id, scope_ids_json, updated_at) "
+        "VALUES(?1, ?2, ?3, ?4, ?5);");
+    term_upsert.BindText(1, term);
+    term_upsert.BindText(2, object_id);
+    term_upsert.BindText(3, shard_id);
+    term_upsert.BindText(4, JsonText(scope_ids));
+    term_upsert.BindText(5, UtcNow());
+    term_upsert.StepDone();
+  }
+  return nlohmann::json{{"object_id", object_id}, {"shard_id", shard_id}, {"status", "stored"}};
+}
+
+nlohmann::json KnowledgeStore::CatalogQuery(const nlohmann::json& payload) const {
+  const std::string term = NormalizeTerm(payload.value("term", std::string{}));
+  std::vector<std::string> requested_scopes;
+  if (payload.contains("scope_ids")) {
+    requested_scopes = JsonStringArray(payload.at("scope_ids"));
+  }
+  naim::SqliteStatement query(
+      db_,
+      "SELECT object_id, shard_id, scope_ids_json FROM catalog_terms WHERE term LIKE ?1 LIMIT ?2;");
+  query.BindText(1, "%" + term + "%");
+  query.BindInt(2, std::max(1, std::min(200, payload.value("limit", 50))));
+  nlohmann::json candidates = nlohmann::json::array();
+  while (query.StepRow()) {
+    const auto scope_ids = ParseJsonOr(ColumnText(query.raw(), 2), nlohmann::json::array());
+    if (!ScopeAllowed(scope_ids, requested_scopes)) {
+      candidates.push_back(nlohmann::json{
+          {"object_id", ColumnText(query.raw(), 0)},
+          {"mode", "redacted"},
+          {"redaction", nlohmann::json{{"reason", "out_of_scope"}}},
+      });
+      continue;
+    }
+    candidates.push_back(nlohmann::json{
+        {"object_id", ColumnText(query.raw(), 0)},
+        {"shard_id", ColumnText(query.raw(), 1)},
+        {"scope_ids", scope_ids},
+        {"stale_hint", false},
+    });
+  }
+  return nlohmann::json{{"candidates", candidates}, {"status", "ok"}};
 }
 
 std::string KnowledgeStore::UtcNow() const {
@@ -551,6 +1340,23 @@ int KnowledgeStore::LatestEventSequence() const {
   return sqlite3_column_int(statement.raw(), 0);
 }
 
+int KnowledgeStore::LastCheckpointSequence(
+    const std::string& plane_id,
+    const std::string& capsule_id) const {
+  naim::SqliteStatement statement(
+      db_,
+      "SELECT checkpoint_json FROM replica_merge_checkpoints "
+      "WHERE plane_id = ?1 AND capsule_id = ?2 AND status = 'completed' "
+      "ORDER BY completed_at DESC LIMIT 1;");
+  statement.BindText(1, plane_id);
+  statement.BindText(2, capsule_id);
+  if (!statement.StepRow()) {
+    return 0;
+  }
+  return ParseJsonOr(ColumnText(statement.raw(), 0), nlohmann::json::object())
+      .value("overlay_event_seq_to", 0);
+}
+
 int KnowledgeStore::AppendEvent(
     const std::string& type,
     const std::vector<std::string>& knowledge_ids,
@@ -572,8 +1378,90 @@ int KnowledgeStore::AppendEvent(
   return static_cast<int>(sqlite3_last_insert_rowid(db_));
 }
 
+void KnowledgeStore::PersistReviewItem(const naim::knowledge::ReviewItem& item) {
+  naim::SqliteStatement statement(
+      db_,
+      "INSERT INTO review_queue(review_id, overlay_change_id, knowledge_id, type, status, "
+      "item_json, created_at, updated_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) "
+      "ON CONFLICT(review_id) DO UPDATE SET status=excluded.status, "
+      "item_json=excluded.item_json, updated_at=excluded.updated_at;");
+  statement.BindText(1, item.review_id);
+  statement.BindText(2, item.overlay_change_id);
+  statement.BindText(3, item.knowledge_id);
+  statement.BindText(4, item.type);
+  statement.BindText(5, item.status);
+  statement.BindText(6, JsonText(naim::knowledge::ToJson(item)));
+  statement.BindText(7, item.created_at.empty() ? UtcNow() : item.created_at);
+  statement.StepDone();
+  AppendEvent(
+      "review.queued",
+      {item.knowledge_id},
+      {},
+      nlohmann::json{{"review_id", item.review_id}, {"overlay_change_id", item.overlay_change_id}});
+}
+
+bool KnowledgeStore::ScopeAllowed(
+    const nlohmann::json& record_scope_ids,
+    const std::vector<std::string>& requested_scope_ids) const {
+  if (requested_scope_ids.empty()) {
+    return true;
+  }
+  if (!record_scope_ids.is_array() || record_scope_ids.empty()) {
+    return true;
+  }
+  for (const auto& scope : requested_scope_ids) {
+    if (JsonArrayContainsString(record_scope_ids, scope)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<std::string> KnowledgeStore::JsonStringArray(const nlohmann::json& value) {
+  std::vector<std::string> result;
+  if (!value.is_array()) {
+    return result;
+  }
+  for (const auto& item : value) {
+    if (item.is_string()) {
+      result.push_back(item.get<std::string>());
+    }
+  }
+  return result;
+}
+
 std::string KnowledgeStore::JsonText(const nlohmann::json& value) {
   return value.dump();
+}
+
+std::string KnowledgeStore::NormalizeTerm(const std::string& value) {
+  std::string result;
+  bool previous_space = false;
+  for (unsigned char ch : value) {
+    if (std::isalnum(ch)) {
+      result.push_back(static_cast<char>(std::tolower(ch)));
+      previous_space = false;
+    } else if (!previous_space && !result.empty()) {
+      result.push_back(' ');
+      previous_space = true;
+    }
+  }
+  while (!result.empty() && result.back() == ' ') {
+    result.pop_back();
+  }
+  return result;
+}
+
+std::string KnowledgeStore::MarkdownEscape(const std::string& value) {
+  std::string result;
+  result.reserve(value.size());
+  for (char ch : value) {
+    if (ch == '\r') {
+      continue;
+    }
+    result.push_back(ch);
+  }
+  return result;
 }
 
 }  // namespace naim::knowledge_runtime

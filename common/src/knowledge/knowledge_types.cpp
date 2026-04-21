@@ -100,6 +100,7 @@ nlohmann::json ToJson(const OverlayProposal& value) {
       {"change_type", value.change_type},
       {"proposed_blocks", value.proposed_blocks},
       {"proposed_relations", value.proposed_relations},
+      {"confidence", value.confidence},
       {"rationale", value.rationale},
       {"created_at", value.created_at},
       {"created_by", value.created_by},
@@ -120,6 +121,102 @@ nlohmann::json ToJson(const ReplicaMergeCheckpoint& value) {
       {"merge_policy_version", value.merge_policy_version},
       {"started_at", value.started_at},
       {"completed_at", value.completed_at.empty() ? nlohmann::json(nullptr) : nlohmann::json(value.completed_at)},
+  };
+}
+
+nlohmann::json ToJson(const KnowledgeVaultPlacement& value) {
+  return nlohmann::json{
+      {"service_id", value.service_id},
+      {"node_name", value.node_name},
+      {"storage_root", value.storage_root},
+      {"image", value.image},
+      {"endpoint", value.endpoint},
+  };
+}
+
+nlohmann::json ToJson(const KnowledgeVaultStatus& value) {
+  return nlohmann::json{
+      {"service_id", value.service_id},
+      {"status", value.status},
+      {"storage_node", value.storage_node},
+      {"endpoint", value.endpoint},
+      {"store_profile", value.store_profile},
+      {"schema_version", value.schema_version},
+      {"index_epoch", value.index_epoch},
+      {"latest_event_sequence", value.latest_event_sequence},
+      {"checkpoints", value.checkpoints},
+  };
+}
+
+nlohmann::json ToJson(const ContextRequest& value) {
+  return nlohmann::json{
+      {"plane_id", value.plane_id},
+      {"scope_id", value.scope_id},
+      {"request_id", value.request_id},
+      {"mode", value.mode},
+      {"token_budget", value.token_budget},
+      {"freshness", value.freshness},
+      {"query", value.query},
+      {"include_graph", value.include_graph},
+      {"max_graph_depth", value.max_graph_depth},
+  };
+}
+
+nlohmann::json ToJson(const ContextBundle& value) {
+  return nlohmann::json{
+      {"request_id", value.request_id},
+      {"context", value.context},
+      {"redacted", value.redacted},
+      {"warnings", value.warnings},
+  };
+}
+
+nlohmann::json ToJson(const SourceIngestRequest& value) {
+  return nlohmann::json{
+      {"source_kind", value.source_kind},
+      {"source_ref", value.source_ref},
+      {"content", value.content},
+      {"content_hash", value.content_hash},
+      {"scope_ids", value.scope_ids},
+      {"metadata", value.metadata},
+  };
+}
+
+nlohmann::json ToJson(const SourceIngestResult& value) {
+  return nlohmann::json{
+      {"source_event_id", value.source_event_id},
+      {"source_block_id", value.source_block_id},
+      {"status", value.status},
+      {"reason", value.reason.empty() ? nlohmann::json(nullptr) : nlohmann::json(value.reason)},
+  };
+}
+
+nlohmann::json ToJson(const ReviewItem& value) {
+  return nlohmann::json{
+      {"review_id", value.review_id},
+      {"overlay_change_id", value.overlay_change_id},
+      {"knowledge_id", value.knowledge_id},
+      {"type", value.type},
+      {"status", value.status},
+      {"created_at", value.created_at},
+      {"safe_summary", value.safe_summary},
+      {"affected_scopes", value.affected_scopes},
+      {"evidence", value.evidence},
+      {"conflicts", value.conflicts},
+  };
+}
+
+nlohmann::json ToJson(const RepairFinding& value) {
+  return nlohmann::json{
+      {"finding_id", value.finding_id},
+      {"severity", value.severity},
+      {"type", value.type},
+      {"shard_id", value.shard_id},
+      {"block_id", value.block_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(value.block_id)},
+      {"relation_id", value.relation_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(value.relation_id)},
+      {"event_seq", value.event_seq},
+      {"repair_action", value.repair_action},
+      {"created_at", value.created_at},
   };
 }
 
@@ -164,10 +261,69 @@ OverlayProposal OverlayFromJson(const nlohmann::json& value) {
   proposal.change_type = value.value("change_type", std::string{});
   proposal.proposed_blocks = value.value("proposed_blocks", nlohmann::json::array());
   proposal.proposed_relations = value.value("proposed_relations", nlohmann::json::array());
+  proposal.confidence = value.value("confidence", 1.0);
   proposal.rationale = value.value("rationale", std::string{});
   proposal.created_at = value.value("created_at", std::string{});
   proposal.created_by = value.value("created_by", std::string{});
   return proposal;
+}
+
+ContextRequest ContextRequestFromJson(const nlohmann::json& value) {
+  ContextRequest request;
+  request.plane_id = value.value("plane_id", std::string{});
+  request.scope_id = value.value("scope_id", std::string{});
+  request.request_id = value.value("request_id", std::string{});
+  request.mode = value.value("mode", std::string("normal"));
+  request.token_budget = value.value("token_budget", 12000);
+  request.freshness = value.value("freshness", std::string("current"));
+  request.query = value.value("query", std::string{});
+  request.include_graph = value.value("include_graph", true);
+  request.max_graph_depth = value.value("max_graph_depth", 1);
+  return request;
+}
+
+SourceIngestRequest SourceIngestRequestFromJson(const nlohmann::json& value) {
+  SourceIngestRequest request;
+  request.source_kind = value.value("source_kind", std::string{});
+  request.source_ref = value.value("source_ref", std::string{});
+  request.content = value.value("content", std::string{});
+  request.content_hash = value.value("content_hash", std::string{});
+  request.scope_ids = StringArray(value, "scope_ids");
+  request.metadata = value.value("metadata", nlohmann::json::object());
+  return request;
+}
+
+ReviewItem ReviewItemFromJson(const nlohmann::json& value) {
+  ReviewItem item;
+  item.review_id = value.value("review_id", std::string{});
+  item.overlay_change_id = value.value("overlay_change_id", std::string{});
+  item.knowledge_id = value.value("knowledge_id", std::string{});
+  item.type = value.value("type", std::string{});
+  item.status = value.value("status", std::string("pending"));
+  item.created_at = value.value("created_at", std::string{});
+  item.safe_summary = value.value("safe_summary", std::string{});
+  item.affected_scopes = StringArray(value, "affected_scopes");
+  item.evidence = value.value("evidence", nlohmann::json::array());
+  item.conflicts = value.value("conflicts", nlohmann::json::array());
+  return item;
+}
+
+RepairFinding RepairFindingFromJson(const nlohmann::json& value) {
+  RepairFinding finding;
+  finding.finding_id = value.value("finding_id", std::string{});
+  finding.severity = value.value("severity", std::string("info"));
+  finding.type = value.value("type", std::string{});
+  finding.shard_id = value.value("shard_id", std::string("kv_default"));
+  if (value.contains("block_id") && value.at("block_id").is_string()) {
+    finding.block_id = value.at("block_id").get<std::string>();
+  }
+  if (value.contains("relation_id") && value.at("relation_id").is_string()) {
+    finding.relation_id = value.at("relation_id").get<std::string>();
+  }
+  finding.event_seq = value.value("event_seq", 0);
+  finding.repair_action = value.value("repair_action", std::string("none"));
+  finding.created_at = value.value("created_at", std::string{});
+  return finding;
 }
 
 }  // namespace naim::knowledge

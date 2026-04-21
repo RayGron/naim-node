@@ -1,3 +1,4 @@
+#include "naim/knowledge/knowledge_interfaces.h"
 #include "naim/knowledge/knowledge_types.h"
 
 #include <iostream>
@@ -43,6 +44,49 @@ int main() {
   const auto proposal_round_trip =
       naim::knowledge::OverlayFromJson(naim::knowledge::ToJson(proposal));
   Expect(proposal_round_trip.change_type == "claim_add", "overlay should round-trip");
+
+  naim::knowledge::ContextRequest context_request;
+  context_request.plane_id = "plane";
+  context_request.scope_id = "scope.default";
+  context_request.request_id = "req_test";
+  context_request.query = "knowledge";
+  const auto context_round_trip =
+      naim::knowledge::ContextRequestFromJson(naim::knowledge::ToJson(context_request));
+  Expect(context_round_trip.scope_id == "scope.default", "context request should round-trip");
+
+  naim::knowledge::SourceIngestRequest ingest_request;
+  ingest_request.source_kind = "document";
+  ingest_request.source_ref = "doc://test";
+  ingest_request.content_hash = "hash";
+  ingest_request.scope_ids = {"scope.default"};
+  const auto ingest_round_trip =
+      naim::knowledge::SourceIngestRequestFromJson(naim::knowledge::ToJson(ingest_request));
+  Expect(ingest_round_trip.source_kind == "document", "source ingest should round-trip");
+
+  naim::knowledge::KnowledgeVaultPlacement placement;
+  placement.service_id = "kv_default";
+  placement.node_name = "storage1";
+  const auto placement_json = naim::knowledge::ToJson(placement);
+  Expect(placement_json.value("node_name", std::string{}) == "storage1", "placement should serialize");
+
+  naim::knowledge::KnowledgeVaultStatus status;
+  status.status = "ready";
+  status.schema_version = "knowledge.v1";
+  status.latest_event_sequence = 7;
+  const auto status_json = naim::knowledge::ToJson(status);
+  Expect(status_json.value("schema_version", std::string{}) == "knowledge.v1", "status should serialize");
+
+  naim::knowledge::RepairFinding finding;
+  finding.finding_id = "repair_test";
+  finding.type = "stale_text_index";
+  const auto finding_round_trip =
+      naim::knowledge::RepairFindingFromJson(naim::knowledge::ToJson(finding));
+  Expect(finding_round_trip.type == "stale_text_index", "repair finding should round-trip");
+
+  naim::knowledge::InMemoryKnowledgeStoreFake fake_store;
+  fake_store.WriteBlockBatch({block});
+  const auto fake_block = fake_store.ReadBlock("blk_test");
+  Expect(fake_block.knowledge_id == "knowledge.test", "fake store should expose interface behavior");
 
   std::cout << "ok: knowledge-contract-dtos-round-trip\n";
   return 0;

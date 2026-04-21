@@ -170,6 +170,27 @@ HttpResponse KnowledgeServer::HandleGet(const HttpRequest& request) {
       parts[3] == "neighbors") {
     return BuildJsonResponse(200, store_.Neighbors(parts[2]));
   }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "capsules") {
+    const auto result = store_.ReadCapsule(parts[2]);
+    if (result.contains("error")) {
+      throw ApiError(404, result.value("error", "not_found"), result.value("message", "not found"));
+    }
+    return BuildJsonResponse(200, result);
+  }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "reviews") {
+    return BuildJsonResponse(
+        200,
+        store_.ListReviewItems(nlohmann::json{
+            {"status", request.query_params.count("status") == 0
+                           ? std::string("pending")
+                           : request.query_params.at("status")}}));
+  }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "catalog") {
+    return BuildJsonResponse(
+        200,
+        store_.CatalogQuery(nlohmann::json{
+            {"term", request.query_params.count("term") == 0 ? std::string{} : request.query_params.at("term")}}));
+  }
   if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "replica-merges" &&
       parts[2] == "status") {
     const auto it = request.query_params.find("plane_id");
@@ -191,6 +212,12 @@ HttpResponse KnowledgeServer::HandlePost(const HttpRequest& request) {
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "search") {
     return BuildJsonResponse(200, store_.Search(ParseJsonBody(request)));
   }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "context") {
+    return BuildJsonResponse(200, store_.Context(ParseJsonBody(request)));
+  }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "source-ingest") {
+    return BuildJsonResponse(200, store_.IngestSource(ParseJsonBody(request)));
+  }
   if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "capsules") {
     return BuildJsonResponse(201, store_.BuildCapsule(ParseJsonBody(request)));
   }
@@ -198,8 +225,28 @@ HttpResponse KnowledgeServer::HandlePost(const HttpRequest& request) {
     return BuildJsonResponse(201, store_.WriteOverlay(ParseJsonBody(request)));
   }
   if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "replica-merges" &&
+      parts[2] == "schedule") {
+    return BuildJsonResponse(200, store_.ScheduleReplicaMerge(ParseJsonBody(request)));
+  }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "replica-merges" &&
+      parts[2] == "run-due") {
+    return BuildJsonResponse(200, store_.RunScheduledReplicaMerges(ParseJsonBody(request)));
+  }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "replica-merges" &&
       parts[2] == "trigger") {
     return BuildJsonResponse(200, store_.TriggerReplicaMerge(ParseJsonBody(request)));
+  }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "repair") {
+    return BuildJsonResponse(200, store_.RunRepair(ParseJsonBody(request)));
+  }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "markdown-export") {
+    return BuildJsonResponse(200, store_.MarkdownExport(ParseJsonBody(request)));
+  }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "graph-neighborhood") {
+    return BuildJsonResponse(200, store_.GraphNeighborhood(ParseJsonBody(request)));
+  }
+  if (parts.size() == 2 && parts[0] == "v1" && parts[1] == "catalog") {
+    return BuildJsonResponse(200, store_.CatalogUpsert(ParseJsonBody(request)));
   }
   throw ApiError(404, "not_found", "route not found");
 }
@@ -208,6 +255,13 @@ HttpResponse KnowledgeServer::HandlePut(const HttpRequest& request) {
   const auto parts = SplitPath(request.path);
   if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "heads") {
     return BuildJsonResponse(200, store_.UpdateHead(parts[2], ParseJsonBody(request)));
+  }
+  if (parts.size() == 3 && parts[0] == "v1" && parts[1] == "reviews") {
+    const auto result = store_.DecideReviewItem(parts[2], ParseJsonBody(request));
+    if (result.contains("error")) {
+      throw ApiError(404, result.value("error", "not_found"), result.value("message", "not found"));
+    }
+    return BuildJsonResponse(200, result);
   }
   throw ApiError(404, "not_found", "route not found");
 }

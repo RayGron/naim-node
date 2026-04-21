@@ -42,9 +42,16 @@ std::optional<HttpResponse> KnowledgeVaultHttpService::HandleRequest(
         suffix.rfind("/heads", 0) == 0 ||
         suffix.rfind("/relations", 0) == 0 ||
         suffix.rfind("/search", 0) == 0 ||
+        suffix.rfind("/context", 0) == 0 ||
+        suffix.rfind("/source-ingest", 0) == 0 ||
         suffix.rfind("/capsules", 0) == 0 ||
         suffix.rfind("/overlays", 0) == 0 ||
-        suffix.rfind("/replica-merges", 0) == 0) {
+        suffix.rfind("/replica-merges", 0) == 0 ||
+        suffix.rfind("/reviews", 0) == 0 ||
+        suffix.rfind("/repair", 0) == 0 ||
+        suffix.rfind("/markdown-export", 0) == 0 ||
+        suffix.rfind("/graph-neighborhood", 0) == 0 ||
+        suffix.rfind("/catalog", 0) == 0) {
       return service_.ProxyServiceRequest(db_path, request, "/v1" + suffix);
     }
     return KnowledgeVaultService::BuildJsonResponse(
