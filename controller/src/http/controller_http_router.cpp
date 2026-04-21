@@ -83,6 +83,13 @@ bool IsHostdStorageRoleRequest(const std::string& path) {
          suffix_pos + std::string("/storage-role").size() == path.size();
 }
 
+bool IsKnowledgeVaultRequest(const std::string& path) {
+  return path == "/api/v1/knowledge-vault/status" ||
+         ControllerHttpServerSupport::StartsWithPath(
+             path,
+             "/api/v1/knowledge-vault/");
+}
+
 int InteractionErrorStatusCode(const InteractionValidationError& error) {
   if (error.code == "model_mismatch" ||
       error.code == "skills_disabled" ||
@@ -692,6 +699,15 @@ HttpResponse ControllerHttpRouter::HandleRequest(
       !ControllerHttpServerSupport::StartsWithPath(
           request.path,
           "/api/v1/hostd/")) {
+    if (IsKnowledgeVaultRequest(request.path)) {
+      for (const auto& handler : post_auth_handlers_) {
+        if (const auto response =
+                handler->TryHandle(db_path_, default_artifacts_root_, request);
+            response.has_value()) {
+          return *response;
+        }
+      }
+    }
     const bool interaction_request = IsPlaneInteractionRequest(request.path);
     const bool skills_request = IsPlaneSkillsRequest(request.path);
     const bool browsing_request = IsPlaneBrowsingRequest(request.path);
