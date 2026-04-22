@@ -36,6 +36,14 @@ naim::controller::KnowledgeVaultServiceRecord BuildServiceRecord() {
   return record;
 }
 
+naim::controller::KnowledgeVaultServiceRecord BuildReadyServiceRecord() {
+  auto record = BuildServiceRecord();
+  record.status = "ready";
+  record.schema_version = "knowledge.v1";
+  record.index_epoch = "idx_0";
+  return record;
+}
+
 void SeedApplyAssignment(
     const std::string& db_path,
     naim::HostAssignmentStatus status,
@@ -106,10 +114,25 @@ void TestStatusReportsApplyFailureWithoutProxy() {
   Expect(CountProxyAssignments(db_path) == 0, "failed apply should not enqueue proxy requests");
 }
 
+void TestReadyStatusUsesCacheWithoutProxy() {
+  const std::string db_path = MakeTempDbPath("ready");
+  naim::controller::KnowledgeVaultServiceRepository{}.UpsertService(
+      db_path,
+      BuildReadyServiceRecord());
+
+  const auto status = naim::controller::KnowledgeVaultService{}.BuildStatus(db_path);
+  Expect(status.value("status", std::string{}) == "ready", "ready status should remain ready");
+  Expect(
+      status.value("schema_version", std::string{}) == "knowledge.v1",
+      "ready status should include cached schema");
+  Expect(CountProxyAssignments(db_path) == 0, "ready status should not enqueue proxy requests");
+}
+
 }  // namespace
 
 int main() {
   TestStatusDoesNotProxyWhileApplyIsPending();
   TestStatusReportsApplyFailureWithoutProxy();
+  TestReadyStatusUsesCacheWithoutProxy();
   return 0;
 }

@@ -70,6 +70,10 @@ bool RuntimeProbeShouldWaitForApply(
   return true;
 }
 
+bool CachedStatusIsUsable(const KnowledgeVaultServiceRecord& record) {
+  return record.status == "ready" && !record.schema_version.empty();
+}
+
 }  // namespace
 
 nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) const {
@@ -99,6 +103,9 @@ nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) co
   };
 
   if (RuntimeProbeShouldWaitForApply(db_path, *record, status)) {
+    return status;
+  }
+  if (CachedStatusIsUsable(*record)) {
     return status;
   }
 
