@@ -131,6 +131,13 @@ for image in "${image_names[@]}"; do
     repo_digest="${ref}"
   fi
   json_entries+=("$(printf '    \"%s\": \"%s\"' "${image}" "${repo_digest}")")
+  if [[ "${image}" == "knowledge-runtime" ]]; then
+    latest_ref="$(image_ref "${image}")"
+    latest_ref="${latest_ref%:*}:latest"
+    echo "pushing ${latest_ref}"
+    docker tag "${ref}" "${latest_ref}"
+    docker push "${latest_ref}"
+  fi
 done
 
 {

@@ -92,6 +92,8 @@ REMOTE
 
 echo "${log_prefix} ensuring worker can pull ${hostd_image}"
 compose_skip_pull="${skip_pull}"
+registry_config_dir=""
+runtime_registry_config_dir="${NAIM_HOSTD_ROOT}/install-state/registry-docker"
 if [[ "${skip_pull}" != "yes" ]]; then
   registry_username="$(naim_registry_username)"
   registry_password="$(naim_registry_password)"
@@ -111,11 +113,28 @@ if [[ "${skip_pull}" != "yes" ]]; then
       fi
       docker pull ${hostd_image_q} >/dev/null
     "
+    registry_config_dir="${runtime_registry_config_dir}"
+    registry_config_dir_q="$(printf '%q' "${registry_config_dir}")"
+    registry_q="$(printf '%q' "${NAIM_REGISTRY}")"
+    registry_username_q="$(printf '%q' "${registry_username}")"
+    printf '%s' "${registry_password}" | ssh_hpc1 "
+      set -euo pipefail
+      sudo install -d -m 0700 -o \"\$(id -un)\" -g \"\$(id -gn)\" ${registry_config_dir_q}
+      export DOCKER_CONFIG=${registry_config_dir_q}
+      if ! login_output=\"\$(docker login ${registry_q} -u ${registry_username_q} --password-stdin 2>&1 >/dev/null)\"; then
+        printf '%s\n' \"\${login_output}\" >&2
+        exit 1
+      fi
+      chmod 0600 ${registry_config_dir_q}/config.json
+    "
   else
     ssh_hpc1 "docker pull '${hostd_image}' >/dev/null"
+    registry_config_dir=""
   fi
   unset registry_username registry_password
   compose_skip_pull="yes"
+elif ssh_hpc1 "test -f $(printf '%q' "${runtime_registry_config_dir}/config.json")"; then
+  registry_config_dir="${runtime_registry_config_dir}"
 fi
 
 echo "${log_prefix} provisioning host record"
@@ -317,7 +336,8 @@ remote_hpc1_bash \
   "${NAIM_HOSTD_INVENTORY_SCAN_INTERVAL_SEC}" \
   "${NAIM_HOSTD_ENABLE_NVIDIA}" \
   "${NAIM_CONTROLLER_INTERNAL_HOST}" \
-  "${compose_skip_pull}" <<'REMOTE'
+  "${compose_skip_pull}" \
+  "${registry_config_dir}" <<'REMOTE'
 set -euo pipefail
 hostd_image="$1"
 hostd_root="$2"
@@ -329,6 +349,7 @@ inventory_scan_interval_sec="$7"
 enable_nvidia="$8"
 controller_internal_host="$9"
 skip_pull="${10}"
+registry_config_dir="${11}"
 
 cd "${hostd_root}"
 if [[ -e docker-compose.yml && ! -w docker-compose.yml ]]; then
@@ -354,6 +375,13 @@ if [[ "${enable_nvidia}" == "yes" ]]; then
   nvidia_mount="      - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro"
 fi
 
+registry_env=""
+registry_mount=""
+if [[ -n "${registry_config_dir}" ]]; then
+  registry_env="      DOCKER_CONFIG: ${registry_config_dir}"
+  registry_mount="      - ${registry_config_dir}:${registry_config_dir}:ro"
+fi
+
 cat > docker-compose.yml <<YAML
 services:
   naim-hostd:
@@ -371,6 +399,7 @@ ${nvidia_runtime}
       NAIM_HOSTD_DISCOVERY_GROUP: 239.255.42.42
       NAIM_HOSTD_DISCOVERY_PORT: "29998"
       NAIM_CONTROLLER_INTERNAL_HOST: ${controller_internal_host}
+${registry_env}
 ${nvidia_env}
     command:
       - run
@@ -397,6 +426,7 @@ ${nvidia_env}
       - "${inventory_scan_interval_sec}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+${registry_mount}
 ${nvidia_mount}
       - ${hostd_root}:${hostd_root}
       - type: bind

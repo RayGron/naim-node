@@ -146,18 +146,8 @@ REMOTE
     "test ! -f '${NAIM_HOSTD_ROOT}/.env' && ! grep -R 'onboarding_key = \".\\+\"' '${NAIM_HOSTD_ROOT}/naim-node.toml' >/dev/null"
   check "worker.${node_name}.key_permissions" ssh_hpc1 \
     "test \"\$(stat -c %a '${NAIM_HOSTD_ROOT}' 2>/dev/null)\" = 700 && test \"\$(stat -c %a '${NAIM_HOSTD_ROOT}/install-state/keys/hostd.key.b64' 2>/dev/null)\" = 600"
-  check "worker.${node_name}.no_persistent_registry_auth" ssh_hpc1 \
-    "python3 - <<'PY'
-import json
-from pathlib import Path
-
-path = Path.home() / '.docker' / 'config.json'
-if not path.exists() or path.stat().st_size == 0:
-    raise SystemExit(0)
-data = json.loads(path.read_text())
-if data.get('auths') or data.get('credHelpers') or data.get('credsStore'):
-    raise SystemExit(1)
-PY"
+  check "worker.${node_name}.runtime_registry_auth" ssh_hpc1 \
+    "docker exec naim-hostd sh -lc 'test -n \"\${DOCKER_CONFIG:-}\" && test -f \"\${DOCKER_CONFIG}/config.json\" && test \"\$(stat -c %a \"\${DOCKER_CONFIG}/config.json\")\" = 600'"
   if [[ "${NAIM_HOSTD_ENABLE_NVIDIA}" == "yes" ]]; then
     check "worker.${node_name}.gpu_visible_in_hostd" ssh_hpc1 \
       "docker exec naim-hostd nvidia-smi --query-gpu=index,memory.total --format=csv,noheader | grep -q ."

@@ -21,6 +21,55 @@ bool IsSelectedStorageNode(const ModelLibraryNodeSummary& summary) {
          (summary.derived_role == "storage" || summary.storage_role_enabled);
 }
 
+std::string KnowledgeVaultPlaneName(const std::string& service_id) {
+  return "knowledge-vault:" + service_id;
+}
+
+nlohmann::json SerializeApplyAssignment(const naim::HostAssignment& assignment) {
+  return nlohmann::json{
+      {"id", assignment.id},
+      {"status", naim::ToString(assignment.status)},
+      {"attempt_count", assignment.attempt_count},
+      {"max_attempts", assignment.max_attempts},
+      {"status_message", assignment.status_message},
+  };
+}
+
+std::optional<naim::HostAssignment> LoadLatestApplyAssignment(
+    const std::string& db_path,
+    const KnowledgeVaultServiceRecord& record) {
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  const auto assignments = store.LoadHostAssignments(
+      record.node_name,
+      std::nullopt,
+      KnowledgeVaultPlaneName(record.service_id));
+  for (auto it = assignments.rbegin(); it != assignments.rend(); ++it) {
+    if (it->assignment_type == "knowledge-vault-apply") {
+      return *it;
+    }
+  }
+  return std::nullopt;
+}
+
+bool RuntimeProbeShouldWaitForApply(
+    const std::string& db_path,
+    const KnowledgeVaultServiceRecord& record,
+    nlohmann::json& status) {
+  const auto apply_assignment = LoadLatestApplyAssignment(db_path, record);
+  if (!apply_assignment.has_value() ||
+      apply_assignment->status == naim::HostAssignmentStatus::Applied) {
+    return false;
+  }
+
+  status["apply_assignment"] = SerializeApplyAssignment(*apply_assignment);
+  if (apply_assignment->status == naim::HostAssignmentStatus::Failed) {
+    status["status"] = "failed";
+    status["runtime_error"] = apply_assignment->status_message;
+  }
+  return true;
+}
+
 }  // namespace
 
 nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) const {
@@ -48,6 +97,10 @@ nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) co
       {"managed_by", "naim-controller"},
       {"runtime_entity", "separate-container"},
   };
+
+  if (RuntimeProbeShouldWaitForApply(db_path, *record, status)) {
+    return status;
+  }
 
   try {
     const auto live = SendViaHostdProxy(
@@ -95,7 +148,7 @@ HttpResponse KnowledgeVaultService::ApplyService(
 
   naim::HostAssignment assignment;
   assignment.node_name = record.node_name;
-  assignment.plane_name = "knowledge-vault:" + record.service_id;
+  assignment.plane_name = KnowledgeVaultPlaneName(record.service_id);
   assignment.desired_generation = 0;
   assignment.max_attempts = 3;
   assignment.assignment_type = "knowledge-vault-apply";
@@ -131,7 +184,7 @@ HttpResponse KnowledgeVaultService::StopService(
 
   naim::HostAssignment assignment;
   assignment.node_name = record->node_name;
-  assignment.plane_name = "knowledge-vault:" + record->service_id;
+  assignment.plane_name = KnowledgeVaultPlaneName(record->service_id);
   assignment.desired_generation = 0;
   assignment.max_attempts = 3;
   assignment.assignment_type = "knowledge-vault-stop";
@@ -207,7 +260,7 @@ std::string KnowledgeVaultService::DefaultKnowledgeImage() {
   const char* image = std::getenv("NAIM_KNOWLEDGE_IMAGE");
   return image != nullptr && *image != '\0'
              ? std::string(image)
-             : std::string("chainzano.com/naim/knowledge-runtime:dev");
+             : std::string("chainzano.com/naim/knowledge-runtime:latest");
 }
 
 std::string KnowledgeVaultService::HeaderValue(

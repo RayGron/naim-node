@@ -867,6 +867,20 @@ target_link_libraries(
   naim-interaction-utf8-payload-sanitizer-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-interaction-utf8-payload-sanitizer-tests)
 
+add_executable(
+  naim-knowledge-vault-service-tests
+  controller/src/http/controller_http_server_support.cpp
+  controller/src/knowledge/knowledge_vault_service.cpp
+  controller/src/knowledge/knowledge_vault_service_repository.cpp
+  controller/src/model/model_library_node_placement.cpp
+  controller/src/knowledge/knowledge_vault_service_tests.cpp
+)
+target_include_directories(
+  naim-knowledge-vault-service-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  naim-knowledge-vault-service-tests PRIVATE naim-common Threads::Threads)
+naim_enable_strict_warnings(naim-knowledge-vault-service-tests)
+
 add_library(
   naim-webgateway-runtime
   controller/src/http/controller_http_server_support.cpp

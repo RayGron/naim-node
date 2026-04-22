@@ -50,7 +50,7 @@ fi
 
 controller_image="$(naim_image controller)"
 web_ui_image="$(naim_image web-ui)"
-knowledge_image="$(naim_image knowledge-runtime)"
+knowledge_image="${NAIM_KNOWLEDGE_IMAGE:-${NAIM_REGISTRY}/${NAIM_REGISTRY_PROJECT}/knowledge-runtime:latest}"
 registry_username=""
 registry_password_file_on_main=""
 if [[ "${skip_pull}" != "yes" ]]; then
