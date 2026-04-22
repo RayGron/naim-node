@@ -2235,25 +2235,6 @@ body {
   overflow: hidden;
 }
 
-.knowledge-vault-graph-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-  background: linear-gradient(180deg, rgba(4, 15, 31, 0.08), rgba(4, 15, 31, 0.42));
-}
-
-.knowledge-vault-graph-overlay > span {
-  border: 1px solid rgba(120, 190, 255, 0.24);
-  border-radius: 999px;
-  background: rgba(5, 16, 32, 0.82);
-  color: var(--text-dim);
-  font-size: 0.88rem;
-  padding: 8px 12px;
-}
-
 .plane-editor-modal {
   width: min(1180px, calc(100vw - 48px));
   display: grid;

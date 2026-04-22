@@ -184,13 +184,6 @@ export function KnowledgeCubeGraph({
           group.add(createLine(from, to, edgeMaterial));
         }
       });
-
-      const cubeSize = Math.max(2.5, Math.cbrt(latticePositions.length) * 0.78);
-      const cube = new THREE.LineSegments(
-        new THREE.EdgesGeometry(new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize)),
-        new THREE.LineBasicMaterial({ color: 0x5f7d92, transparent: true, opacity: 0.4 }),
-      );
-      group.add(cube);
     } else {
       const cube = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.BoxGeometry(5, 5, 5)),
