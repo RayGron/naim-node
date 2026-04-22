@@ -50,6 +50,15 @@ int main() {
   });
   Expect(duplicate.value("status", std::string{}) == "duplicate", "source ingest should deduplicate");
 
+  const auto restricted = store.IngestSource(nlohmann::json{
+      {"source_kind", "document"},
+      {"source_ref", "doc://restricted-store-test"},
+      {"content", "restricted.example.internal should never leak into public export warnings."},
+      {"scope_ids", nlohmann::json::array({"scope.private"})},
+      {"metadata", nlohmann::json{{"title", "Restricted Store Test"}}},
+  });
+  Expect(restricted.value("status", std::string{}) == "accepted", "restricted source ingest should accept");
+
   const auto search = store.Search(nlohmann::json{
       {"query", "scheduled merge"},
       {"scope_id", "scope.default"},
@@ -155,6 +164,13 @@ int main() {
       {"scope_ids", nlohmann::json::array({"scope.default"})},
   });
   Expect(!markdown.value("files", nlohmann::json::array()).empty(), "markdown export should produce files");
+  const std::string markdown_text = markdown.dump();
+  Expect(
+      markdown_text.find(restricted.value("source_block_id", std::string{})) == std::string::npos,
+      "markdown export warnings should not leak restricted block ids");
+  Expect(
+      markdown_text.find("restricted.example.internal") == std::string::npos,
+      "markdown export should not leak restricted content");
   Expect(
       markdown.at("files").front().value("content", std::string{}).find("related:") != std::string::npos,
       "markdown export should include Obsidian-compatible frontmatter");

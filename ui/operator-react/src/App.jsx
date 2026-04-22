@@ -5539,19 +5539,6 @@ function App() {
 
         <div className="knowledge-vault-graph-panel">
           <KnowledgeCubeGraph graph={knowledgeVaultGraph} variant="lattice" />
-          {knowledgeVaultGraphBusy ? (
-            <div className="knowledge-vault-graph-overlay">
-              <span>Loading</span>
-            </div>
-          ) : null}
-          {!knowledgeVaultGraphBusy && knowledgeGraphSummary.nodeCount === 0 ? (
-            <div className="knowledge-vault-graph-overlay">
-              <EmptyState
-                title="No active molecules"
-                detail="No canonical knowledge records are available."
-              />
-            </div>
-          ) : null}
         </div>
       </section>
     );

@@ -1025,7 +1025,6 @@ nlohmann::json KnowledgeStore::MarkdownExport(const nlohmann::json& payload) con
     const auto scope_ids = block.value("scope_ids", nlohmann::json::array());
     if (!ScopeAllowed(scope_ids, requested_scopes)) {
       warnings.push_back(nlohmann::json{
-          {"block_id", block.value("block_id", std::string{})},
           {"warning", "restricted_export_skipped"},
       });
       continue;

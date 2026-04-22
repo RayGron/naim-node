@@ -56,9 +56,9 @@ void SeedApplyAssignment(
   assignment.plane_name = "knowledge-vault:kv_default";
   assignment.assignment_type = "knowledge-vault-apply";
   assignment.desired_state_json = "{}";
-  assignment.status = status;
-  assignment.status_message = status_message;
-  assignment.attempt_count = status == naim::HostAssignmentStatus::Pending ? 0 : 1;
+  assignment.status = naim::HostAssignmentStatus::Pending;
+  assignment.status_message = "";
+  assignment.attempt_count = 0;
   assignment.max_attempts = 3;
   store.EnqueueHostAssignments({assignment}, "test");
   if (status != naim::HostAssignmentStatus::Pending) {
