@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { KnowledgeCubeGraph } from "./KnowledgeCubeGraph.jsx";
 import {
   buildKnowledgeGraphRequest,
+  KNOWLEDGE_GRAPH_LIMIT,
   knowledgeIdFromItem,
   normalizeKnowledgeResults,
 } from "./knowledgeVault.js";
@@ -46,7 +47,7 @@ export function KnowledgeBaseSelectorModal({
           body: JSON.stringify({
             query,
             list_all: !query.trim(),
-            limit: 100,
+            limit: KNOWLEDGE_GRAPH_LIMIT,
           }),
           signal: controller.signal,
         });
@@ -75,7 +76,7 @@ export function KnowledgeBaseSelectorModal({
     if (!open) {
       return undefined;
     }
-    const graphRequest = buildKnowledgeGraphRequest(results, [...selectedSet], 80);
+    const graphRequest = buildKnowledgeGraphRequest(results, [...selectedSet], KNOWLEDGE_GRAPH_LIMIT);
     if (graphRequest.knowledge_ids.length === 0) {
       setGraph({ nodes: [], edges: [] });
       return undefined;

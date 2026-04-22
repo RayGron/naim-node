@@ -41,7 +41,9 @@ import {
 } from "./skillsFactory.js";
 import { KnowledgeCubeGraph } from "./KnowledgeCubeGraph.jsx";
 import {
+  areKnowledgeGraphsEqual,
   buildKnowledgeGraphRequest,
+  KNOWLEDGE_GRAPH_LIMIT,
   normalizeKnowledgeResults,
   summarizeKnowledgeGraph,
 } from "./knowledgeVault.js";
@@ -2186,13 +2188,16 @@ function App() {
         body: JSON.stringify({
           query: "",
           list_all: true,
-          limit: 100,
+          limit: KNOWLEDGE_GRAPH_LIMIT,
         }),
       });
       const results = normalizeKnowledgeResults(searchPayload?.results);
-      const graphRequest = buildKnowledgeGraphRequest(results, [], 100);
+      const graphRequest = buildKnowledgeGraphRequest(results, [], KNOWLEDGE_GRAPH_LIMIT);
       if (graphRequest.knowledge_ids.length === 0) {
-        setKnowledgeVaultGraph({ nodes: [], edges: [], warnings: [] });
+        const emptyGraph = { nodes: [], edges: [], warnings: [] };
+        setKnowledgeVaultGraph((current) =>
+          areKnowledgeGraphsEqual(current, emptyGraph) ? current : emptyGraph,
+        );
         return;
       }
       const graphPayload = await fetchJson(knowledgeVaultPath("graph-neighborhood"), {
@@ -2202,18 +2207,24 @@ function App() {
         },
         body: JSON.stringify(graphRequest),
       });
-      setKnowledgeVaultGraph({
+      const nextGraph = {
         nodes: Array.isArray(graphPayload?.nodes) ? graphPayload.nodes : [],
         edges: Array.isArray(graphPayload?.edges) ? graphPayload.edges : [],
         warnings: Array.isArray(graphPayload?.warnings) ? graphPayload.warnings : [],
-      });
+      };
+      setKnowledgeVaultGraph((current) =>
+        areKnowledgeGraphsEqual(current, nextGraph) ? current : nextGraph,
+      );
     } catch (error) {
       if (error?.status === 401) {
         handleUnauthorized();
         return;
       }
       setKnowledgeVaultGraphError(error.message || String(error));
-      setKnowledgeVaultGraph({ nodes: [], edges: [], warnings: [] });
+      const emptyGraph = { nodes: [], edges: [], warnings: [] };
+      setKnowledgeVaultGraph((current) =>
+        areKnowledgeGraphsEqual(current, emptyGraph) ? current : emptyGraph,
+      );
     } finally {
       setKnowledgeVaultGraphBusy(false);
     }
