@@ -10,6 +10,7 @@
 #include "naim/state/desired_state_v2_validator.h"
 #include "naim/state/sqlite_store.h"
 #include "plane/plane_mutation_service.h"
+#include "skills/knowledge_vault_common_skills.h"
 #include "skills/plane_skill_catalog_service.h"
 #include "skills/skills_factory_service.h"
 
@@ -80,6 +81,15 @@ void SeedDesiredState(
   Expect(plane.has_value(), "plane should exist after replacing desired state");
 }
 
+json FindSkillById(const json& skills, const std::string& skill_id) {
+  for (const auto& skill : skills) {
+    if (skill.value("id", std::string{}) == skill_id) {
+      return skill;
+    }
+  }
+  throw std::runtime_error("skill '" + skill_id + "' not found in payload");
+}
+
 }  // namespace
 
 int main() {
@@ -123,9 +133,9 @@ int main() {
             return fallback;
           });
       const auto payload = factory_service.BuildListPayload(db_path.string());
-      Expect(payload.at("skills").size() == 1, "factory list should contain one skill");
+      Expect(payload.at("skills").size() == 4, "factory list should contain seeded common skills");
       Expect(payload.at("groups").size() == 0, "factory list should start without explicit groups");
-      const auto& item = payload.at("skills").front();
+      const auto& item = FindSkillById(payload.at("skills"), "skill-alpha");
       Expect(item.at("id").get<std::string>() == "skill-alpha", "factory skill id mismatch");
       Expect(item.at("plane_count").get<int>() == 1, "factory skill plane_count mismatch");
       Expect(
@@ -140,6 +150,15 @@ int main() {
               std::vector<std::string>({"alpha", "core"}),
           "factory skill match_terms mismatch");
       Expect(item.at("internal").get<bool>(), "factory skill internal flag mismatch");
+
+      const auto& common_item =
+          FindSkillById(payload.at("skills"), "knowledge-vault-replica-search");
+      Expect(
+          common_item.at("group_path").get<std::string>().empty(),
+          "common Knowledge Vault skill should not belong to a group");
+      Expect(
+          !common_item.at("internal").get<bool>(),
+          "common Knowledge Vault skill should be user-visible");
 
       const auto deleted =
           factory_service.DeleteSkill(db_path.string(), "skill-alpha", temp_root.string());
@@ -158,6 +177,41 @@ int main() {
           next_state->skills.has_value() && next_state->skills->factory_skill_ids.empty(),
           "factory delete should detach skill id from plane desired state");
       std::cout << "ok: factory-delete-detaches-all-planes" << '\n';
+    }
+
+    {
+      naim::ControllerStore store(db_path.string());
+      store.Initialize();
+      auto desired_state = BuildDesiredState("knowledge-plane", {"existing-skill"});
+      naim::KnowledgeSettings knowledge;
+      knowledge.enabled = true;
+      desired_state.knowledge = knowledge;
+
+      const bool changed =
+          naim::controller::EnsureKnowledgeVaultCommonSkills(store, &desired_state);
+      Expect(changed, "Knowledge Vault common skills should be attached to eligible planes");
+      Expect(
+          desired_state.skills->factory_skill_ids ==
+              std::vector<std::string>({
+                  "existing-skill",
+                  "knowledge-vault-replica-search",
+                  "knowledge-vault-replica-answer-with-citations",
+                  "knowledge-vault-replica-gap-check",
+              }),
+          "Knowledge Vault common skills should append after existing ids");
+      Expect(
+          store.LoadSkillsFactorySkill("knowledge-vault-replica-search").has_value(),
+          "Knowledge Vault common skill records should be seeded");
+
+      auto non_knowledge_state = BuildDesiredState("no-knowledge-plane", {"existing-skill"});
+      const bool non_knowledge_changed =
+          naim::controller::AttachKnowledgeVaultCommonSkills(&non_knowledge_state);
+      Expect(
+          !non_knowledge_changed &&
+              non_knowledge_state.skills->factory_skill_ids ==
+                  std::vector<std::string>({"existing-skill"}),
+          "Knowledge Vault common skills should not attach without enabled knowledge");
+      std::cout << "ok: knowledge-vault-common-skills-auto-attach" << '\n';
     }
 
     {

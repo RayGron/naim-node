@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <iostream>
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <map>
@@ -20,6 +21,7 @@
 #include "interaction/interaction_service.h"
 #include "browsing/plane_browsing_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
+#include "skills/knowledge_vault_common_skills.h"
 #include "skills/plane_skill_contextual_resolver_service.h"
 #include "skills/plane_skills_service.h"
 
@@ -2422,6 +2424,43 @@ int main() {
               selection.selected_skill_ids.front() == "code-agent-root-cause-debug",
           "resolver should use controller catalog entries when runtime skillsd is remote or unreachable");
       std::cout << "ok: contextual-resolver-uses-controller-catalog" << '\n';
+    }
+
+    {
+      const std::string db_path = MakeTempDbPath();
+      fs::remove(db_path);
+      naim::ControllerStore store(db_path);
+      store.Initialize();
+      auto desired_state = BuildDesiredState("knowledge-plane", {});
+      naim::KnowledgeSettings knowledge;
+      knowledge.enabled = true;
+      desired_state.knowledge = knowledge;
+      naim::controller::EnsureKnowledgeVaultCommonSkills(store, &desired_state);
+      store.ReplaceDesiredState(desired_state, 1);
+
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.db_path = db_path;
+      resolution.desired_state = desired_state;
+
+      const auto selection =
+          naim::controller::PlaneSkillContextualResolverService().Resolve(
+              db_path,
+              resolution,
+              json{{"messages",
+                    json::array(
+                        {json{{"role", "user"},
+                              {"content",
+                               "Найди в Knowledge Vault, что известно по реплике plane."}}})}});
+      Expect(
+          selection.mode == "contextual" &&
+              selection.candidate_count == 3 &&
+              std::find(
+                  selection.selected_skill_ids.begin(),
+                  selection.selected_skill_ids.end(),
+                  "knowledge-vault-replica-search") !=
+                  selection.selected_skill_ids.end(),
+          "resolver should select common Knowledge Vault search skill");
+      std::cout << "ok: contextual-resolver-selects-knowledge-vault-common-skill" << '\n';
     }
 
     {

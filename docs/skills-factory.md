@@ -124,6 +124,21 @@ Debugging:
   - returns selected ids, selected records, candidate count, and compact rationale
   - uses only plane-local enabled skills
 
+### Common Knowledge Vault Skills
+
+`naim-node` seeds three built-in, ungrouped SkillsFactory records for read-only Knowledge Vault
+replica work:
+
+- `knowledge-vault-replica-search`
+- `knowledge-vault-replica-answer-with-citations`
+- `knowledge-vault-replica-gap-check`
+
+These records use an empty `group_path`, so the Operator UI displays them under `No group`.
+When an LLM plane has both `skills.enabled=true` and `knowledge.enabled=true`, controller
+desired-state preparation appends these ids to `skills.factory_skill_ids[]` if they are missing.
+The skills do not add a new tool-calling API; they steer the model to use the existing
+controller-injected Knowledge Vault context for the current plane only.
+
 ## Operator UI
 
 ### Sidebar

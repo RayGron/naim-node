@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -29,8 +30,8 @@ void Expect(bool condition, const std::string& message) {
   }
 }
 
-naim::DesiredState BuildRenderedState(int max_num_seqs) {
-  const json desired_state_v2{
+naim::DesiredState BuildRenderedState(int max_num_seqs, bool enable_knowledge_skills = false) {
+  json desired_state_v2{
       {"version", 2},
       {"plane_name", "apply-runtime-overrides"},
       {"plane_mode", "llm"},
@@ -63,6 +64,15 @@ naim::DesiredState BuildRenderedState(int max_num_seqs) {
              {{{"node", "gpu-hostd"}, {"gpu_device", "0"}}})}}},
       {"app", {{"enabled", false}}},
   };
+  if (enable_knowledge_skills) {
+    desired_state_v2["skills"] = {
+        {"enabled", true},
+        {"factory_skill_ids", json::array({"existing-skill"})},
+    };
+    desired_state_v2["knowledge"] = {
+        {"enabled", true},
+    };
+  }
   naim::DesiredStateV2Validator::ValidateOrThrow(desired_state_v2);
   return naim::DesiredStateV2Renderer::Render(desired_state_v2);
 }
@@ -130,6 +140,29 @@ int main() {
     Expect(
         serialized_v2.at("runtime").at("max_num_seqs").get<int>() == 24,
         "projected desired-state.v2 should preserve updated max_num_seqs");
+
+    Expect(
+        bundle_cli_service.ApplyDesiredState(
+            db_path.string(),
+            BuildRenderedState(32, true),
+            artifacts_root.string(),
+            "test-knowledge-skills") == 0,
+        "knowledge skills apply should succeed");
+    const auto knowledge_state = store.LoadDesiredState("apply-runtime-overrides");
+    Expect(knowledge_state.has_value(), "knowledge desired state should exist");
+    Expect(
+        knowledge_state->skills.has_value() &&
+            knowledge_state->skills->factory_skill_ids ==
+                std::vector<std::string>({
+                    "existing-skill",
+                    "knowledge-vault-replica-search",
+                    "knowledge-vault-replica-answer-with-citations",
+                    "knowledge-vault-replica-gap-check",
+                }),
+        "Knowledge Vault common skills should auto-attach during apply");
+    Expect(
+        store.LoadSkillsFactorySkill("knowledge-vault-replica-search").has_value(),
+        "Knowledge Vault common skill should be seeded during apply");
 
     std::cout << "bundle_cli_service_tests passed\n";
     return 0;
