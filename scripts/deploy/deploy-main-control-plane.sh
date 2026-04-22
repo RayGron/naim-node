@@ -111,6 +111,10 @@ sudo install -d -m 0750 -o "$(id -un)" -g "$(id -gn)" \
   "${main_root}/artifacts"
 cd "${main_root}"
 
+if [[ -e docker-compose.yml && ! -w docker-compose.yml ]]; then
+  sudo chown "$(id -un):$(id -gn)" docker-compose.yml
+  chmod u+rw docker-compose.yml
+fi
 if [[ -f docker-compose.yml ]]; then
   cp docker-compose.yml "docker-compose.yml.bak-$(date +%Y%m%d-%H%M%S)"
 fi

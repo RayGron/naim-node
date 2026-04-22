@@ -325,6 +325,10 @@ controller_internal_host="$9"
 skip_pull="${10}"
 
 cd "${hostd_root}"
+if [[ -e docker-compose.yml && ! -w docker-compose.yml ]]; then
+  sudo chown "$(id -un):$(id -gn)" docker-compose.yml
+  chmod u+rw docker-compose.yml
+fi
 if [[ -f docker-compose.yml ]]; then
   cp docker-compose.yml "docker-compose.yml.bak-$(date +%Y%m%d-%H%M%S)"
 fi
