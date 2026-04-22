@@ -819,6 +819,7 @@ add_executable(
   controller/src/infra/controller_runtime_support_service.cpp
   controller/src/interaction/interaction_continuation_payload_builder.cpp
   controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_hostd_runtime_relay_service.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_model_identity_builder.cpp
   controller/src/interaction/interaction_payload_builder.cpp
