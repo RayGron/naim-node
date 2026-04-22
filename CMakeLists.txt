@@ -147,6 +147,8 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
         "/usr/lib/nvidia-cuda-toolkit")
 
     find_program(_naim_nvcc_executable NAMES nvcc)
+    find_program(_naim_glslc_executable NAMES glslc)
+
     if(_naim_nvcc_executable)
       get_filename_component(_naim_nvcc_bin_dir "${_naim_nvcc_executable}" DIRECTORY)
       get_filename_component(_naim_nvcc_root_from_path "${_naim_nvcc_bin_dir}" DIRECTORY)
@@ -174,6 +176,8 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
   endif()
 
   set(_naim_cuda_available OFF)
+  set(_naim_vulkan_available OFF)
+
   if(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/include/cuda_runtime.h")
     set(_naim_cuda_available ON)
   elseif(DEFINED CMAKE_CUDA_COMPILER)
@@ -183,12 +187,26 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
       set(_naim_cuda_available ON)
     endif()
   endif()
-  if(NOT _naim_cuda_available)
-    message(FATAL_ERROR
-      "CUDA toolkit is required for naim-node inference runtime builds. "
-      "Provide CUDAToolkit_ROOT or CMAKE_CUDA_COMPILER so GGML_CUDA can be enabled.")
+
+  if (EXISTS "${_naim_glslc_executable}")
+    set(_naim_vulkan_available ON)
+  endif ()
+
+  if (_naim_cuda_available)
+    # use cuda API first - if exists.
+    set(GGML_CUDA ON CACHE BOOL "" FORCE)
+    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+
+  elseif(_naim_vulkan_available)
+    # rest of this - use Vulkan API.
+    # note : The Vulkan api should works fine many devices include intel graphics crards.
+    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+  else()
+    message(FATAL_ERROR "Any supported backend api is not finded! Supported API: CUDA,Vulkan")
   endif()
-  set(GGML_CUDA ON CACHE BOOL "" FORCE)
+
+
   message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
   message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
 
