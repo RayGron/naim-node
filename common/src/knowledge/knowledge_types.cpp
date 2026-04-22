@@ -2,9 +2,7 @@
 
 namespace naim::knowledge {
 
-namespace {
-
-std::vector<std::string> StringArray(const nlohmann::json& value, const char* key) {
+std::vector<std::string> KnowledgeJsonCodec::StringArray(const nlohmann::json& value, const char* key) {
   if (!value.contains(key) || !value.at(key).is_array()) {
     return {};
   }
@@ -17,9 +15,7 @@ std::vector<std::string> StringArray(const nlohmann::json& value, const char* ke
   return result;
 }
 
-}  // namespace
-
-nlohmann::json ToJson(const KnowledgeBlock& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const KnowledgeBlock& value) {
   return nlohmann::json{
       {"block_id", value.block_id},
       {"knowledge_id", value.knowledge_id},
@@ -37,7 +33,7 @@ nlohmann::json ToJson(const KnowledgeBlock& value) {
   };
 }
 
-nlohmann::json ToJson(const KnowledgeHead& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const KnowledgeHead& value) {
   return nlohmann::json{
       {"knowledge_id", value.knowledge_id},
       {"head_block_id", value.head_block_id},
@@ -48,7 +44,7 @@ nlohmann::json ToJson(const KnowledgeHead& value) {
   };
 }
 
-nlohmann::json ToJson(const KnowledgeRelation& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const KnowledgeRelation& value) {
   return nlohmann::json{
       {"relation_id", value.relation_id},
       {"from_block_id", value.from_block_id},
@@ -61,7 +57,7 @@ nlohmann::json ToJson(const KnowledgeRelation& value) {
   };
 }
 
-nlohmann::json ToJson(const KnowledgeEvent& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const KnowledgeEvent& value) {
   return nlohmann::json{
       {"event_id", value.event_id},
       {"sequence", value.sequence},
@@ -75,7 +71,7 @@ nlohmann::json ToJson(const KnowledgeEvent& value) {
   };
 }
 
-nlohmann::json ToJson(const CapsuleManifest& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const CapsuleManifest& value) {
   return nlohmann::json{
       {"capsule_id", value.capsule_id},
       {"plane_id", value.plane_id},
@@ -90,7 +86,7 @@ nlohmann::json ToJson(const CapsuleManifest& value) {
   };
 }
 
-nlohmann::json ToJson(const OverlayProposal& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const OverlayProposal& value) {
   return nlohmann::json{
       {"overlay_change_id", value.overlay_change_id},
       {"plane_id", value.plane_id},
@@ -107,7 +103,7 @@ nlohmann::json ToJson(const OverlayProposal& value) {
   };
 }
 
-nlohmann::json ToJson(const ReplicaMergeCheckpoint& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const ReplicaMergeCheckpoint& value) {
   return nlohmann::json{
       {"replica_merge_id", value.replica_merge_id},
       {"plane_id", value.plane_id},
@@ -124,7 +120,7 @@ nlohmann::json ToJson(const ReplicaMergeCheckpoint& value) {
   };
 }
 
-nlohmann::json ToJson(const KnowledgeVaultPlacement& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const KnowledgeVaultPlacement& value) {
   return nlohmann::json{
       {"service_id", value.service_id},
       {"node_name", value.node_name},
@@ -134,7 +130,7 @@ nlohmann::json ToJson(const KnowledgeVaultPlacement& value) {
   };
 }
 
-nlohmann::json ToJson(const KnowledgeVaultStatus& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const KnowledgeVaultStatus& value) {
   return nlohmann::json{
       {"service_id", value.service_id},
       {"status", value.status},
@@ -148,7 +144,7 @@ nlohmann::json ToJson(const KnowledgeVaultStatus& value) {
   };
 }
 
-nlohmann::json ToJson(const ContextRequest& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const ContextRequest& value) {
   return nlohmann::json{
       {"plane_id", value.plane_id},
       {"scope_id", value.scope_id},
@@ -162,7 +158,7 @@ nlohmann::json ToJson(const ContextRequest& value) {
   };
 }
 
-nlohmann::json ToJson(const ContextBundle& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const ContextBundle& value) {
   return nlohmann::json{
       {"request_id", value.request_id},
       {"context", value.context},
@@ -171,7 +167,7 @@ nlohmann::json ToJson(const ContextBundle& value) {
   };
 }
 
-nlohmann::json ToJson(const SourceIngestRequest& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const SourceIngestRequest& value) {
   return nlohmann::json{
       {"source_kind", value.source_kind},
       {"source_ref", value.source_ref},
@@ -182,7 +178,7 @@ nlohmann::json ToJson(const SourceIngestRequest& value) {
   };
 }
 
-nlohmann::json ToJson(const SourceIngestResult& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const SourceIngestResult& value) {
   return nlohmann::json{
       {"source_event_id", value.source_event_id},
       {"source_block_id", value.source_block_id},
@@ -191,7 +187,7 @@ nlohmann::json ToJson(const SourceIngestResult& value) {
   };
 }
 
-nlohmann::json ToJson(const ReviewItem& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const ReviewItem& value) {
   return nlohmann::json{
       {"review_id", value.review_id},
       {"overlay_change_id", value.overlay_change_id},
@@ -206,7 +202,7 @@ nlohmann::json ToJson(const ReviewItem& value) {
   };
 }
 
-nlohmann::json ToJson(const RepairFinding& value) {
+nlohmann::json KnowledgeJsonCodec::ToJson(const RepairFinding& value) {
   return nlohmann::json{
       {"finding_id", value.finding_id},
       {"severity", value.severity},
@@ -220,7 +216,7 @@ nlohmann::json ToJson(const RepairFinding& value) {
   };
 }
 
-KnowledgeBlock BlockFromJson(const nlohmann::json& value) {
+KnowledgeBlock KnowledgeJsonCodec::BlockFromJson(const nlohmann::json& value) {
   KnowledgeBlock block;
   block.block_id = value.value("block_id", std::string{});
   block.knowledge_id = value.value("knowledge_id", std::string{});
@@ -238,7 +234,7 @@ KnowledgeBlock BlockFromJson(const nlohmann::json& value) {
   return block;
 }
 
-KnowledgeRelation RelationFromJson(const nlohmann::json& value) {
+KnowledgeRelation KnowledgeJsonCodec::RelationFromJson(const nlohmann::json& value) {
   KnowledgeRelation relation;
   relation.relation_id = value.value("relation_id", std::string{});
   relation.from_block_id = value.value("from_block_id", std::string{});
@@ -251,7 +247,7 @@ KnowledgeRelation RelationFromJson(const nlohmann::json& value) {
   return relation;
 }
 
-OverlayProposal OverlayFromJson(const nlohmann::json& value) {
+OverlayProposal KnowledgeJsonCodec::OverlayFromJson(const nlohmann::json& value) {
   OverlayProposal proposal;
   proposal.overlay_change_id = value.value("overlay_change_id", std::string{});
   proposal.plane_id = value.value("plane_id", std::string{});
@@ -268,7 +264,7 @@ OverlayProposal OverlayFromJson(const nlohmann::json& value) {
   return proposal;
 }
 
-ContextRequest ContextRequestFromJson(const nlohmann::json& value) {
+ContextRequest KnowledgeJsonCodec::ContextRequestFromJson(const nlohmann::json& value) {
   ContextRequest request;
   request.plane_id = value.value("plane_id", std::string{});
   request.scope_id = value.value("scope_id", std::string{});
@@ -282,7 +278,7 @@ ContextRequest ContextRequestFromJson(const nlohmann::json& value) {
   return request;
 }
 
-SourceIngestRequest SourceIngestRequestFromJson(const nlohmann::json& value) {
+SourceIngestRequest KnowledgeJsonCodec::SourceIngestRequestFromJson(const nlohmann::json& value) {
   SourceIngestRequest request;
   request.source_kind = value.value("source_kind", std::string{});
   request.source_ref = value.value("source_ref", std::string{});
@@ -293,7 +289,7 @@ SourceIngestRequest SourceIngestRequestFromJson(const nlohmann::json& value) {
   return request;
 }
 
-ReviewItem ReviewItemFromJson(const nlohmann::json& value) {
+ReviewItem KnowledgeJsonCodec::ReviewItemFromJson(const nlohmann::json& value) {
   ReviewItem item;
   item.review_id = value.value("review_id", std::string{});
   item.overlay_change_id = value.value("overlay_change_id", std::string{});
@@ -308,7 +304,7 @@ ReviewItem ReviewItemFromJson(const nlohmann::json& value) {
   return item;
 }
 
-RepairFinding RepairFindingFromJson(const nlohmann::json& value) {
+RepairFinding KnowledgeJsonCodec::RepairFindingFromJson(const nlohmann::json& value) {
   RepairFinding finding;
   finding.finding_id = value.value("finding_id", std::string{});
   finding.severity = value.value("severity", std::string("info"));

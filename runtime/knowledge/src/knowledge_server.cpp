@@ -1,7 +1,6 @@
 #include "knowledge/knowledge_server.h"
 
 #include <array>
-#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -10,20 +9,9 @@
 
 #include "http/controller_http_server_support.h"
 #include "infra/controller_network_manager.h"
+#include "knowledge/knowledge_server_signal_handler.h"
 
 namespace naim::knowledge_runtime {
-
-namespace {
-
-std::atomic<bool>* g_stop_requested = nullptr;
-
-void SignalHandler(int) {
-  if (g_stop_requested != nullptr) {
-    g_stop_requested->store(true);
-  }
-}
-
-}  // namespace
 
 KnowledgeServer::ApiError::ApiError(int status, std::string code, std::string message)
     : std::runtime_error(std::move(message)), status_(status), code_(std::move(code)) {}
@@ -42,9 +30,7 @@ int KnowledgeServer::Run() {
   store_.Open();
   WriteRuntimeStatus("starting", false);
 
-  g_stop_requested = &stop_requested_;
-  std::signal(SIGINT, SignalHandler);
-  std::signal(SIGTERM, SignalHandler);
+  KnowledgeServerSignalHandler::Install(stop_requested_);
 
   listen_fd_ = naim::controller::ControllerNetworkManager::CreateListenSocket(
       config_.listen_host,

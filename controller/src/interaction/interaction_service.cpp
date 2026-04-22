@@ -7,6 +7,7 @@
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_replica_group_summary_builder.h"
 #include "interaction/interaction_runtime_text_support.h"
+#include "interaction/interaction_target_relay_policy.h"
 #include "interaction/interaction_text_post_processor.h"
 #include "interaction/interaction_upstream_event_parser.h"
 #include <algorithm>
@@ -20,37 +21,6 @@
 #include "naim/state/worker_group_topology.h"
 
 namespace naim::controller {
-
-namespace {
-
-bool IsLoopbackInteractionTarget(const ControllerEndpointTarget& target) {
-  return target.host == "127.0.0.1" || target.host == "localhost" ||
-         target.host == "::1";
-}
-
-void EnableHostdRuntimeRelayForRemoteLoopback(
-    naim::ControllerStore& store,
-    const std::string& db_path,
-    const std::string& node_name,
-    const std::string& plane_name,
-    std::optional<ControllerEndpointTarget>* target) {
-  if (target == nullptr || !target->has_value() ||
-      !IsLoopbackInteractionTarget(**target) || node_name.empty()) {
-    return;
-  }
-  const auto host = store.LoadRegisteredHost(node_name);
-  if (!host.has_value() ||
-      host->registration_state != "registered" ||
-      host->transport_mode != "out") {
-    return;
-  }
-  (*target)->use_hostd_runtime_relay = true;
-  (*target)->relay_db_path = db_path;
-  (*target)->relay_node_name = node_name;
-  (*target)->relay_plane_name = plane_name;
-}
-
-}  // namespace
 
 nlohmann::json InteractionRequestValidator::ParsePayload(
     const std::string& body) const {
@@ -1764,7 +1734,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       resolution.target = parse_interaction_target_(
           resolution.runtime_status->gateway_listen,
           desired_state->gateway.listen_port);
-      EnableHostdRuntimeRelayForRemoteLoopback(
+      InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
           store,
           db_path,
           primary_node,
@@ -1858,7 +1828,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
         desired_state->gateway.listen_host + ":" +
             std::to_string(desired_state->gateway.listen_port),
         desired_state->gateway.listen_port);
-    EnableHostdRuntimeRelayForRemoteLoopback(
+    InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
         store,
         db_path,
         primary_node,

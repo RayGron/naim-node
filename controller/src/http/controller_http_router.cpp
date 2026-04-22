@@ -83,13 +83,6 @@ bool IsHostdStorageRoleRequest(const std::string& path) {
          suffix_pos + std::string("/storage-role").size() == path.size();
 }
 
-bool IsKnowledgeVaultRequest(const std::string& path) {
-  return path == "/api/v1/knowledge-vault/status" ||
-         ControllerHttpServerSupport::StartsWithPath(
-             path,
-             "/api/v1/knowledge-vault/");
-}
-
 int InteractionErrorStatusCode(const InteractionValidationError& error) {
   if (error.code == "model_mismatch" ||
       error.code == "skills_disabled" ||
@@ -111,6 +104,13 @@ int InteractionErrorStatusCode(const InteractionValidationError& error) {
 }
 
 }  // namespace
+
+bool ControllerHttpRouter::IsKnowledgeVaultRequest(const std::string& path) {
+  return path == "/api/v1/knowledge-vault/status" ||
+         ControllerHttpServerSupport::StartsWithPath(
+             path,
+             "/api/v1/knowledge-vault/");
+}
 
 ControllerHttpRouter::ControllerHttpRouter(
     std::string db_path,

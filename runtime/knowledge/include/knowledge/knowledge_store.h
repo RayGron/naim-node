@@ -8,11 +8,9 @@
 
 #include "naim/knowledge/knowledge_types.h"
 
-namespace rocksdb {
-class DB;
-}
-
 namespace naim::knowledge_runtime {
+
+class RocksDbJsonRepository;
 
 class KnowledgeStore final {
  public:
@@ -70,8 +68,7 @@ class KnowledgeStore final {
   static std::string NormalizeTerm(const std::string& value);
   static std::string MarkdownEscape(const std::string& value);
 
-  std::filesystem::path store_path_;
-  std::unique_ptr<rocksdb::DB> db_;
+  std::unique_ptr<RocksDbJsonRepository> repository_;
 };
 
 }  // namespace naim::knowledge_runtime

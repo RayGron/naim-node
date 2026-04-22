@@ -56,6 +56,8 @@ class ControllerHttpRouter {
   HttpResponse HandleRequest(const HttpRequest& request) const;
 
  private:
+  static bool IsKnowledgeVaultRequest(const std::string& path);
+
   HttpResponse HandlePlaneInteractionRequest(
       const HttpRequest& request) const;
 

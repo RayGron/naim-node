@@ -11,6 +11,7 @@
 #include "app/controller_time_support.h"
 #include "http/controller_http_transport.h"
 #include "http/controller_http_types.h"
+#include "interaction/interaction_hostd_runtime_relay_service.h"
 #include "interaction/interaction_runtime_support_service.h"
 #include "interaction/interaction_types.h"
 #include "infra/controller_network_manager.h"
@@ -81,5 +82,6 @@ class InteractionHttpSupport final {
   const naim::controller::DesiredStatePolicyService& desired_state_policy_service_;
   const naim::controller::InteractionRuntimeSupportService&
       interaction_runtime_support_service_;
+  naim::controller::InteractionHostdRuntimeRelayService hostd_runtime_relay_service_;
   naim::controller::PlaneObservationMatcher plane_observation_matcher_;
 };

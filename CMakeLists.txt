@@ -299,6 +299,9 @@ naim_enable_strict_warnings(naim-knowledge-contract-tests)
 
 add_executable(
   naim-knowledge-store-tests
+  runtime/knowledge/src/knowledge_store_keys.cpp
+  runtime/knowledge/src/knowledge_text_processor.cpp
+  runtime/knowledge/src/rocksdb_json_repository.cpp
   runtime/knowledge/src/knowledge_store.cpp
   runtime/knowledge/src/knowledge_store_tests.cpp
 )
@@ -1076,6 +1079,7 @@ add_executable(
   hostd/src/app/hostd_bootstrap_transfer_support.cpp
   hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_compose_runtime_support.cpp
+  hostd/src/app/hostd_container_name_support.cpp
   hostd/src/app/hostd_controller_transport_support.cpp
   hostd/src/app/hostd_desired_state_apply_plan_support.cpp
   hostd/src/app/hostd_desired_state_apply_support.cpp
@@ -1086,10 +1090,12 @@ add_executable(
   hostd/src/app/hostd_local_runtime_state_support.cpp
   hostd/src/app/hostd_local_state_path_support.cpp
   hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_model_artifact_request_support.cpp
   hostd/src/app/hostd_observed_state_snapshot_builder.cpp
   hostd/src/app/hostd_post_deploy_support.cpp
   hostd/src/app/hostd_reporting_support.cpp
   hostd/src/app/hostd_repo_root_support.cpp
+  hostd/src/app/hostd_runtime_http_proxy.cpp
   hostd/src/app/hostd_runtime_telemetry_support.cpp
   hostd/src/app/hostd_system_telemetry_collector.cpp
   hostd/src/app/hostd_desired_state_apply_support_tests.cpp
@@ -1173,8 +1179,10 @@ add_executable(
   controller/src/app/controller_component_factory_support.cpp
   controller/src/app/controller_composition_support.cpp
   controller/src/app/controller_http_service_support.cpp
+  controller/src/app/controller_listener_policy.cpp
   controller/src/app/controller_plane_support.cpp
   controller/src/app/controller_read_model_support.cpp
+  controller/src/app/controller_route_summary_builder.cpp
   controller/src/app/controller_serve_support.cpp
   controller/src/app/controller_language_support.cpp
   controller/src/app/controller_request_context.cpp
@@ -1212,6 +1220,7 @@ add_executable(
   controller/src/interaction/interaction_contract_responder.cpp
   controller/src/interaction/interaction_conversation_service.cpp
   controller/src/interaction/interaction_http_service.cpp
+  controller/src/interaction/interaction_hostd_runtime_relay_service.cpp
   controller/src/interaction/interaction_http_executor_factory.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_model_identity_builder.cpp
@@ -1224,6 +1233,7 @@ add_executable(
   controller/src/interaction/interaction_sse_frame_builder.cpp
   controller/src/interaction/interaction_stream_http_error_response_builder.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service.cpp
+  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/interaction/interaction_text_post_processor.cpp
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
@@ -1231,6 +1241,7 @@ add_executable(
   controller/src/interaction/interaction_service.cpp
   controller/src/knowledge/knowledge_vault_http_service.cpp
   controller/src/knowledge/knowledge_vault_service.cpp
+  controller/src/knowledge/knowledge_vault_service_repository.cpp
   controller/src/model/model_library_http_service.cpp
   controller/src/model/model_library_http_support.cpp
   controller/src/model/model_conversion_service.cpp
@@ -1309,6 +1320,7 @@ add_executable(
   hostd/src/app/hostd_bootstrap_transfer_support.cpp
   hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_compose_runtime_support.cpp
+  hostd/src/app/hostd_container_name_support.cpp
   hostd/src/app/hostd_controller_transport_support.cpp
   hostd/src/app/hostd_desired_state_apply_plan_support.cpp
   hostd/src/app/hostd_desired_state_apply_support.cpp
@@ -1319,10 +1331,12 @@ add_executable(
   hostd/src/app/hostd_local_runtime_state_support.cpp
   hostd/src/app/hostd_local_state_path_support.cpp
   hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_model_artifact_request_support.cpp
   hostd/src/app/hostd_observed_state_snapshot_builder.cpp
   hostd/src/app/hostd_post_deploy_support.cpp
   hostd/src/app/hostd_reporting_support.cpp
   hostd/src/app/hostd_repo_root_support.cpp
+  hostd/src/app/hostd_runtime_http_proxy.cpp
   hostd/src/app/hostd_runtime_telemetry_support.cpp
   hostd/src/app/hostd_system_telemetry_collector.cpp
   hostd/src/backend/hostd_backend_factory.cpp
@@ -1441,8 +1455,13 @@ if(NOT WIN32)
     controller/src/http/controller_http_server_support.cpp
     controller/src/http/controller_http_transport.cpp
     controller/src/infra/controller_network_manager.cpp
+    runtime/knowledge/src/knowledge_runtime_config_loader.cpp
     runtime/knowledge/src/knowledge_server.cpp
+    runtime/knowledge/src/knowledge_server_signal_handler.cpp
+    runtime/knowledge/src/knowledge_store_keys.cpp
     runtime/knowledge/src/knowledge_store.cpp
+    runtime/knowledge/src/knowledge_text_processor.cpp
+    runtime/knowledge/src/rocksdb_json_repository.cpp
     runtime/knowledge/src/main.cpp
   )
   target_include_directories(

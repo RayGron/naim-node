@@ -17,6 +17,9 @@ class KnowledgeVaultHttpService final {
       const HttpRequest& request) const;
 
  private:
+  static bool StartsWith(const std::string& value, const std::string& prefix);
+  static std::string StripPrefix(const std::string& value, const std::string& prefix);
+
   KnowledgeVaultService service_;
 };
 

@@ -5,18 +5,6 @@
 
 namespace naim::controller {
 
-namespace {
-
-bool StartsWith(const std::string& value, const std::string& prefix) {
-  return value.rfind(prefix, 0) == 0;
-}
-
-std::string StripPrefix(const std::string& value, const std::string& prefix) {
-  return value.substr(prefix.size());
-}
-
-}  // namespace
-
 KnowledgeVaultHttpService::KnowledgeVaultHttpService(KnowledgeVaultService service)
     : service_(std::move(service)) {}
 
@@ -64,6 +52,18 @@ std::optional<HttpResponse> KnowledgeVaultHttpService::HandleRequest(
         500,
         nlohmann::json{{"status", "internal_error"}, {"message", error.what()}});
   }
+}
+
+bool KnowledgeVaultHttpService::StartsWith(
+    const std::string& value,
+    const std::string& prefix) {
+  return value.rfind(prefix, 0) == 0;
+}
+
+std::string KnowledgeVaultHttpService::StripPrefix(
+    const std::string& value,
+    const std::string& prefix) {
+  return value.substr(prefix.size());
 }
 
 }  // namespace naim::controller

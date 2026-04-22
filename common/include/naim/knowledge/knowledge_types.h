@@ -179,28 +179,34 @@ struct RepairFinding {
   std::string created_at;
 };
 
-nlohmann::json ToJson(const KnowledgeBlock& value);
-nlohmann::json ToJson(const KnowledgeHead& value);
-nlohmann::json ToJson(const KnowledgeRelation& value);
-nlohmann::json ToJson(const KnowledgeEvent& value);
-nlohmann::json ToJson(const CapsuleManifest& value);
-nlohmann::json ToJson(const OverlayProposal& value);
-nlohmann::json ToJson(const ReplicaMergeCheckpoint& value);
-nlohmann::json ToJson(const KnowledgeVaultPlacement& value);
-nlohmann::json ToJson(const KnowledgeVaultStatus& value);
-nlohmann::json ToJson(const ContextRequest& value);
-nlohmann::json ToJson(const ContextBundle& value);
-nlohmann::json ToJson(const SourceIngestRequest& value);
-nlohmann::json ToJson(const SourceIngestResult& value);
-nlohmann::json ToJson(const ReviewItem& value);
-nlohmann::json ToJson(const RepairFinding& value);
+class KnowledgeJsonCodec final {
+ public:
+  static nlohmann::json ToJson(const KnowledgeBlock& value);
+  static nlohmann::json ToJson(const KnowledgeHead& value);
+  static nlohmann::json ToJson(const KnowledgeRelation& value);
+  static nlohmann::json ToJson(const KnowledgeEvent& value);
+  static nlohmann::json ToJson(const CapsuleManifest& value);
+  static nlohmann::json ToJson(const OverlayProposal& value);
+  static nlohmann::json ToJson(const ReplicaMergeCheckpoint& value);
+  static nlohmann::json ToJson(const KnowledgeVaultPlacement& value);
+  static nlohmann::json ToJson(const KnowledgeVaultStatus& value);
+  static nlohmann::json ToJson(const ContextRequest& value);
+  static nlohmann::json ToJson(const ContextBundle& value);
+  static nlohmann::json ToJson(const SourceIngestRequest& value);
+  static nlohmann::json ToJson(const SourceIngestResult& value);
+  static nlohmann::json ToJson(const ReviewItem& value);
+  static nlohmann::json ToJson(const RepairFinding& value);
 
-KnowledgeBlock BlockFromJson(const nlohmann::json& value);
-KnowledgeRelation RelationFromJson(const nlohmann::json& value);
-OverlayProposal OverlayFromJson(const nlohmann::json& value);
-ContextRequest ContextRequestFromJson(const nlohmann::json& value);
-SourceIngestRequest SourceIngestRequestFromJson(const nlohmann::json& value);
-ReviewItem ReviewItemFromJson(const nlohmann::json& value);
-RepairFinding RepairFindingFromJson(const nlohmann::json& value);
+  static KnowledgeBlock BlockFromJson(const nlohmann::json& value);
+  static KnowledgeRelation RelationFromJson(const nlohmann::json& value);
+  static OverlayProposal OverlayFromJson(const nlohmann::json& value);
+  static ContextRequest ContextRequestFromJson(const nlohmann::json& value);
+  static SourceIngestRequest SourceIngestRequestFromJson(const nlohmann::json& value);
+  static ReviewItem ReviewItemFromJson(const nlohmann::json& value);
+  static RepairFinding RepairFindingFromJson(const nlohmann::json& value);
+
+ private:
+  static std::vector<std::string> StringArray(const nlohmann::json& value, const char* key);
+};
 
 }  // namespace naim::knowledge

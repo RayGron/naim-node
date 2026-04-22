@@ -1,329 +1,16 @@
 #include "app/hostd_app_assignment_support.h"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
-#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
-#include <sstream>
 #include <stdexcept>
 #include <thread>
 
-#include <netdb.h>
-
-#include "naim/core/platform_compat.h"
 #include "naim/security/crypto_utils.h"
 
 namespace naim::hostd {
-
-namespace {
-
-constexpr std::uintmax_t kMaxModelArtifactChunkBytes = 4ULL * 1024ULL * 1024ULL;
-
-std::string NormalizePathString(const std::filesystem::path& path) {
-  return path.lexically_normal().string();
-}
-
-bool IsSafeRelativePath(const std::filesystem::path& path) {
-  const auto normalized = path.lexically_normal();
-  const std::string text = normalized.generic_string();
-  return !text.empty() && text != "." && text.front() != '/' &&
-         text != ".." && text.rfind("../", 0) != 0;
-}
-
-std::optional<std::uintmax_t> JsonUintmax(const nlohmann::json& payload, const std::string& key) {
-  if (!payload.contains(key) || !payload.at(key).is_number_unsigned()) {
-    return std::nullopt;
-  }
-  return payload.at(key).get<std::uintmax_t>();
-}
-
-std::string BuildManifestCanonicalText(const nlohmann::json& files) {
-  std::vector<nlohmann::json> sorted_files = files.get<std::vector<nlohmann::json>>();
-  std::sort(
-      sorted_files.begin(),
-      sorted_files.end(),
-      [](const nlohmann::json& lhs, const nlohmann::json& rhs) {
-        const int lhs_root = lhs.value("root_index", 0);
-        const int rhs_root = rhs.value("root_index", 0);
-        if (lhs_root != rhs_root) {
-          return lhs_root < rhs_root;
-        }
-        return lhs.value("relative_path", std::string{}) <
-               rhs.value("relative_path", std::string{});
-      });
-  std::string canonical = "naim-model-manifest-v1\n";
-  for (const auto& file : sorted_files) {
-    canonical += "file ";
-    canonical += std::to_string(file.value("root_index", 0));
-    canonical += " ";
-    canonical += file.value("relative_path", std::string{});
-    canonical += " ";
-    canonical += std::to_string(JsonUintmax(file, "size_bytes").value_or(0));
-    canonical += " ";
-    canonical += file.value("sha256", std::string{});
-    canonical += "\n";
-  }
-  return canonical;
-}
-
-struct RuntimeHttpResponse {
-  int status_code = 502;
-  std::string content_type = "application/json";
-  std::string body;
-  std::map<std::string, std::string> headers;
-};
-
-std::string TrimAscii(std::string value) {
-  const auto begin = std::find_if(
-      value.begin(),
-      value.end(),
-      [](unsigned char ch) { return std::isspace(ch) == 0; });
-  const auto end = std::find_if(
-      value.rbegin(),
-      value.rend(),
-      [](unsigned char ch) { return std::isspace(ch) == 0; }).base();
-  if (begin >= end) {
-    return {};
-  }
-  return std::string(begin, end);
-}
-
-std::string LowercaseAscii(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return value;
-}
-
-bool IsLoopbackRuntimeHost(const std::string& host) {
-  return host == "127.0.0.1" || host == "localhost" || host == "::1";
-}
-
-bool IsAllowedRuntimeProxyPath(const std::string& method, const std::string& path) {
-  const std::string route = path.substr(0, path.find('?'));
-  if (method == "GET" && route == "/health") {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/models", 0) == 0) {
-    return true;
-  }
-  if (method == "POST" && route.rfind("/v1/chat/completions", 0) == 0) {
-    return true;
-  }
-  return false;
-}
-
-bool IsAllowedKnowledgeVaultProxyPath(const std::string& method, const std::string& path) {
-  const std::string route = path.substr(0, path.find('?'));
-  if (method == "GET" && route == "/health") {
-    return true;
-  }
-  if (method == "GET" && route == "/v1/status") {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/blocks/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/heads/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/capsules/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && (route == "/v1/reviews" || route == "/v1/catalog")) {
-    return true;
-  }
-  if (method == "GET" && route == "/v1/replica-merges/status") {
-    return true;
-  }
-  if (method == "POST" &&
-      (route == "/v1/blocks" || route == "/v1/relations" || route == "/v1/search" ||
-       route == "/v1/context" || route == "/v1/query-route" || route == "/v1/source-ingest" || route == "/v1/capsules" ||
-       route == "/v1/overlays" || route == "/v1/replica-merges/trigger" ||
-       route == "/v1/replica-merges/schedule" || route == "/v1/replica-merges/run-due" ||
-       route == "/v1/replica-merges/reconcile-daily" ||
-       route == "/v1/repair" || route == "/v1/markdown-export" ||
-       route == "/v1/markdown-import" ||
-       route == "/v1/graph-neighborhood" || route == "/v1/catalog")) {
-    return true;
-  }
-  if (method == "PUT" &&
-      (route.rfind("/v1/heads/", 0) == 0 || route.rfind("/v1/reviews/", 0) == 0)) {
-    return true;
-  }
-  return false;
-}
-
-RuntimeHttpResponse ParseRuntimeHttpResponse(const std::string& response_text) {
-  RuntimeHttpResponse response;
-  const std::size_t headers_end = response_text.find("\r\n\r\n");
-  const std::string header_text =
-      headers_end == std::string::npos ? response_text : response_text.substr(0, headers_end);
-  response.body =
-      headers_end == std::string::npos ? std::string{} : response_text.substr(headers_end + 4);
-
-  const std::size_t line_end = header_text.find("\r\n");
-  const std::string first_line =
-      line_end == std::string::npos ? header_text : header_text.substr(0, line_end);
-  std::stringstream stream(first_line);
-  std::string http_version;
-  stream >> http_version >> response.status_code;
-
-  std::size_t offset = line_end == std::string::npos ? header_text.size() : line_end + 2;
-  while (offset < header_text.size()) {
-    const std::size_t next = header_text.find("\r\n", offset);
-    const std::string line = header_text.substr(
-        offset,
-        next == std::string::npos ? std::string::npos : next - offset);
-    const std::size_t colon = line.find(':');
-    if (colon != std::string::npos) {
-      const std::string key = LowercaseAscii(TrimAscii(line.substr(0, colon)));
-      const std::string value = TrimAscii(line.substr(colon + 1));
-      response.headers[key] = value;
-      if (key == "content-type") {
-        response.content_type = value;
-      }
-    }
-    if (next == std::string::npos) {
-      break;
-    }
-    offset = next + 2;
-  }
-  return response;
-}
-
-RuntimeHttpResponse SendRuntimeHttpRequest(
-    const std::string& host,
-    int port,
-    const std::string& method,
-    const std::string& path,
-    const std::string& body,
-    const std::map<std::string, std::string>& headers,
-    bool (*is_allowed_path)(const std::string&, const std::string&),
-    const std::string& proxy_label) {
-  if (!IsLoopbackRuntimeHost(host)) {
-    throw std::runtime_error(proxy_label + " target host must be loopback");
-  }
-  if (port <= 0) {
-    throw std::runtime_error(proxy_label + " target port is invalid");
-  }
-  if (!is_allowed_path(method, path)) {
-    throw std::runtime_error(proxy_label + " rejected unsupported path: " + path);
-  }
-
-  naim::platform::EnsureSocketsInitialized();
-  addrinfo hints{};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  addrinfo* results = nullptr;
-  const std::string port_text = std::to_string(port);
-  const int lookup = getaddrinfo(host.c_str(), port_text.c_str(), &hints, &results);
-  if (lookup != 0) {
-    throw std::runtime_error(
-        "failed to resolve " + proxy_label + " target: " + std::string(gai_strerror(lookup)));
-  }
-
-  naim::platform::SocketHandle fd = naim::platform::kInvalidSocket;
-  for (addrinfo* candidate = results; candidate != nullptr; candidate = candidate->ai_next) {
-    fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-    if (!naim::platform::IsSocketValid(fd)) {
-      continue;
-    }
-    if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
-      break;
-    }
-    naim::platform::CloseSocket(fd);
-    fd = naim::platform::kInvalidSocket;
-  }
-  freeaddrinfo(results);
-  if (!naim::platform::IsSocketValid(fd)) {
-    throw std::runtime_error("failed to connect to " + proxy_label + " target");
-  }
-
-  std::ostringstream request;
-  request << method << " " << path << " HTTP/1.1\r\n";
-  request << "Host: " << host << ":" << port << "\r\n";
-  request << "Connection: close\r\n";
-  for (const auto& [key, value] : headers) {
-    request << key << ": " << value << "\r\n";
-  }
-  if (!body.empty()) {
-    if (headers.find("Content-Type") == headers.end() &&
-        headers.find("content-type") == headers.end()) {
-      request << "Content-Type: application/json\r\n";
-    }
-    request << "Content-Length: " << body.size() << "\r\n";
-  }
-  request << "\r\n";
-  request << body;
-
-  const std::string request_text = request.str();
-  const char* data = request_text.c_str();
-  std::size_t remaining = request_text.size();
-  while (remaining > 0) {
-    const ssize_t written = send(fd, data, remaining, 0);
-    if (written <= 0) {
-      const std::string error = naim::platform::LastSocketErrorMessage();
-      naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to write " + proxy_label + " request: " + error);
-    }
-    data += written;
-    remaining -= static_cast<std::size_t>(written);
-  }
-
-  std::string response_text;
-  std::array<char, 8192> buffer{};
-  while (true) {
-    const ssize_t read_count = recv(fd, buffer.data(), buffer.size(), 0);
-    if (read_count < 0) {
-      const std::string error = naim::platform::LastSocketErrorMessage();
-      naim::platform::CloseSocket(fd);
-      throw std::runtime_error("failed to read " + proxy_label + " response: " + error);
-    }
-    if (read_count == 0) {
-      break;
-    }
-    response_text.append(buffer.data(), static_cast<std::size_t>(read_count));
-  }
-  naim::platform::CloseSocket(fd);
-  return ParseRuntimeHttpResponse(response_text);
-}
-
-std::string SafeContainerToken(std::string value) {
-  for (char& ch : value) {
-    const unsigned char uch = static_cast<unsigned char>(ch);
-    if (std::isalnum(uch) == 0 && ch != '-' && ch != '_') {
-      ch = '-';
-    }
-  }
-  if (value.empty()) {
-    return "default";
-  }
-  return value;
-}
-
-std::map<std::string, std::string> ParseRuntimeProxyHeaders(const nlohmann::json& headers_json) {
-  std::map<std::string, std::string> headers;
-  if (!headers_json.is_array()) {
-    return headers;
-  }
-  for (const auto& item : headers_json) {
-    if (item.is_array() && item.size() == 2 && item[0].is_string() && item[1].is_string()) {
-      const std::string key = item[0].get<std::string>();
-      if (LowercaseAscii(key) == "host" || LowercaseAscii(key) == "content-length" ||
-          LowercaseAscii(key) == "connection") {
-        continue;
-      }
-      headers[key] = item[1].get<std::string>();
-    }
-  }
-  return headers;
-}
-
-}  // namespace
 
 HostdAppAssignmentSupport::HostdAppAssignmentSupport()
     : path_support_(),
@@ -539,7 +226,8 @@ void HostdAppAssignmentSupport::ReadModelArtifactChunk(
     throw std::runtime_error("model-artifact-read-chunk source node mismatch");
   }
   const std::string source_path =
-      NormalizePathString(std::filesystem::path(payload.value("source_path", std::string{})));
+      model_artifact_request_support_.NormalizePathString(
+          std::filesystem::path(payload.value("source_path", std::string{})));
   if (source_path.empty() || source_path.front() != '/') {
     throw std::runtime_error("model-artifact-read-chunk payload is missing source_path");
   }
@@ -550,9 +238,9 @@ void HostdAppAssignmentSupport::ReadModelArtifactChunk(
   std::uintmax_t max_bytes =
       payload.contains("max_bytes") && payload.at("max_bytes").is_number_unsigned()
           ? payload.at("max_bytes").get<std::uintmax_t>()
-          : kMaxModelArtifactChunkBytes;
-  if (max_bytes == 0 || max_bytes > kMaxModelArtifactChunkBytes) {
-    max_bytes = kMaxModelArtifactChunkBytes;
+          : HostdModelArtifactRequestSupport::kMaxChunkBytes;
+  if (max_bytes == 0 || max_bytes > HostdModelArtifactRequestSupport::kMaxChunkBytes) {
+    max_bytes = HostdModelArtifactRequestSupport::kMaxChunkBytes;
   }
 
   std::ifstream input(source_path, std::ios::binary);
@@ -627,7 +315,8 @@ void HostdAppAssignmentSupport::BuildModelArtifactManifest(
       continue;
     }
     const std::filesystem::path source_path(
-        NormalizePathString(std::filesystem::path(source_path_item.get<std::string>())));
+        model_artifact_request_support_.NormalizePathString(
+            std::filesystem::path(source_path_item.get<std::string>())));
     const std::string source_path_text = source_path.string();
     if (source_path_text.empty() || source_path_text.front() != '/') {
       throw std::runtime_error("model-artifact-build-manifest source path must be absolute");
@@ -648,7 +337,7 @@ void HostdAppAssignmentSupport::BuildModelArtifactManifest(
 
     auto append_file =
         [&](const std::filesystem::path& current_path, const std::filesystem::path& relative_path) {
-          if (!IsSafeRelativePath(relative_path)) {
+          if (!model_artifact_request_support_.IsSafeRelativePath(relative_path)) {
             throw std::runtime_error(
                 "model artifact manifest contains unsafe relative path: " +
                 relative_path.generic_string());
@@ -664,7 +353,7 @@ void HostdAppAssignmentSupport::BuildModelArtifactManifest(
           files.push_back(
               nlohmann::json{
                   {"root_index", root_index},
-                  {"source_path", NormalizePathString(current_path)},
+                  {"source_path", model_artifact_request_support_.NormalizePathString(current_path)},
                   {"relative_path", relative_path.generic_string()},
                   {"size_bytes", size},
                   {"sha256", sha256},
@@ -704,7 +393,8 @@ void HostdAppAssignmentSupport::BuildModelArtifactManifest(
   if (files.empty()) {
     throw std::runtime_error("model artifact manifest has no files");
   }
-  const std::string manifest_sha256 = naim::ComputeSha256Hex(BuildManifestCanonicalText(files));
+  const std::string manifest_sha256 = naim::ComputeSha256Hex(
+      model_artifact_request_support_.BuildManifestCanonicalText(files));
 
   backend->UpdateHostAssignmentProgress(
       *assignment_id,
@@ -739,17 +429,16 @@ void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
   const int port = payload.value("target_port", 0);
   const std::string body = payload.value("body", std::string{});
   const std::map<std::string, std::string> headers =
-      ParseRuntimeProxyHeaders(payload.value("headers", nlohmann::json::array()));
+      runtime_http_proxy_.ParseProxyHeaders(payload.value("headers", nlohmann::json::array()));
 
-  const RuntimeHttpResponse response = SendRuntimeHttpRequest(
+  const HostdRuntimeHttpResponse response = runtime_http_proxy_.Send(
       host,
       port,
       method,
       path,
       body,
       headers,
-      IsAllowedRuntimeProxyPath,
-      "runtime-http-proxy");
+      HostdRuntimeProxyPolicy::Runtime);
   backend->UpdateHostAssignmentProgress(
       *assignment_id,
       nlohmann::json{
@@ -787,15 +476,16 @@ void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
     throw std::runtime_error("knowledge-vault-apply endpoint port is invalid");
   }
 
-  const std::string safe_service_id = SafeContainerToken(service_id);
-  const std::string container_name = "naim-knowledge-vault-" + safe_service_id;
+  const std::string container_name =
+      container_name_support_.KnowledgeVaultContainerName(service_id);
   const std::string effective_storage_root =
       storage_root.empty() ? payload.value("storage_root", std::string{}) : storage_root;
   if (effective_storage_root.empty()) {
     throw std::runtime_error("knowledge-vault-apply storage root is empty");
   }
   const std::filesystem::path service_root =
-      std::filesystem::path(effective_storage_root) / "knowledge-vault" / safe_service_id;
+      std::filesystem::path(effective_storage_root) / "knowledge-vault" /
+      container_name_support_.KnowledgeVaultStorageSegment(service_id);
   std::filesystem::create_directories(service_root);
 
   backend->UpdateHostAssignmentProgress(
@@ -837,19 +527,18 @@ void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
     throw std::runtime_error("failed to start knowledge vault container: " + container_name);
   }
 
-  RuntimeHttpResponse health;
+  HostdRuntimeHttpResponse health;
   bool ready = false;
   for (int attempt = 0; attempt < 40; ++attempt) {
     try {
-      health = SendRuntimeHttpRequest(
+      health = runtime_http_proxy_.Send(
           "127.0.0.1",
           port,
           "GET",
           "/health",
           "",
           {},
-          IsAllowedKnowledgeVaultProxyPath,
-          "knowledge-vault-http-proxy");
+          HostdRuntimeProxyPolicy::KnowledgeVault);
       if (health.status_code >= 200 && health.status_code < 300) {
         ready = true;
         break;
@@ -886,7 +575,7 @@ void HostdAppAssignmentSupport::StopKnowledgeVaultService(
   }
   const std::string service_id = payload.value("service_id", std::string("kv_default"));
   const std::string container_name =
-      "naim-knowledge-vault-" + SafeContainerToken(service_id);
+      container_name_support_.KnowledgeVaultContainerName(service_id);
   const std::string docker = command_support_.ResolvedDockerCommand();
   const std::string command = docker + " rm -f " +
                               command_support_.ShellQuote(container_name) +
@@ -920,17 +609,16 @@ void HostdAppAssignmentSupport::ExecuteKnowledgeVaultHttpProxy(
   const int port = payload.value("target_port", 0);
   const std::string body = payload.value("body", std::string{});
   const std::map<std::string, std::string> headers =
-      ParseRuntimeProxyHeaders(payload.value("headers", nlohmann::json::array()));
+      runtime_http_proxy_.ParseProxyHeaders(payload.value("headers", nlohmann::json::array()));
 
-  const RuntimeHttpResponse response = SendRuntimeHttpRequest(
+  const HostdRuntimeHttpResponse response = runtime_http_proxy_.Send(
       host,
       port,
       method,
       path,
       body,
       headers,
-      IsAllowedKnowledgeVaultProxyPath,
-      "knowledge-vault-http-proxy");
+      HostdRuntimeProxyPolicy::KnowledgeVault);
   backend->UpdateHostAssignmentProgress(
       *assignment_id,
       nlohmann::json{

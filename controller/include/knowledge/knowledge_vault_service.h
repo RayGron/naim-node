@@ -38,15 +38,9 @@ class KnowledgeVaultService final {
 
  private:
   static nlohmann::json ParseJsonBody(const HttpRequest& request);
+  static std::string DefaultKnowledgeImage();
+  static std::string HeaderValue(const HttpRequest& request, const std::string& key);
   static std::string NewRequestId();
-  static std::optional<KnowledgeVaultServiceRecord> LoadService(
-      const std::string& db_path,
-      const std::string& service_id);
-  static void UpsertService(const std::string& db_path, const KnowledgeVaultServiceRecord& record);
-  static void UpdateServiceStatus(
-      const std::string& db_path,
-      const std::string& service_id,
-      const nlohmann::json& status);
   std::string SelectStorageNode(const std::string& db_path, const nlohmann::json& request) const;
   std::string LoadStorageRoot(
       const std::string& db_path,

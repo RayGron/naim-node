@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
-#include <filesystem>
-#include <iomanip>
 #include <map>
 #include <random>
 #include <set>
@@ -12,222 +10,22 @@
 #include <stdexcept>
 #include <utility>
 
-#include <rocksdb/db.h>
-#include <rocksdb/iterator.h>
-#include <rocksdb/options.h>
 #include <rocksdb/write_batch.h>
 
+#include "knowledge/knowledge_store_keys.h"
+#include "knowledge/knowledge_text_processor.h"
+#include "knowledge/rocksdb_json_repository.h"
 #include "naim/security/crypto_utils.h"
 
 namespace naim::knowledge_runtime {
 
-namespace {
-
-constexpr const char* kDefaultShardId = "kv_default";
-
-void CheckStatus(const rocksdb::Status& status, const std::string& action) {
-  if (!status.ok()) {
-    throw std::runtime_error(action + ": " + status.ToString());
-  }
-}
-
-nlohmann::json ParseJsonOr(const std::string& text, nlohmann::json fallback) {
-  if (text.empty()) {
-    return fallback;
-  }
-  const auto parsed = nlohmann::json::parse(text, nullptr, false);
-  return parsed.is_discarded() ? fallback : parsed;
-}
-
-std::string EventKey(int sequence) {
-  std::ostringstream stream;
-  stream << "events:" << std::setw(20) << std::setfill('0') << sequence;
-  return stream.str();
-}
-
-bool HasPrefix(const std::string& value, const std::string& prefix) {
-  return value.rfind(prefix, 0) == 0;
-}
-
-std::vector<std::pair<std::string, std::string>> ScanRaw(rocksdb::DB* db, const std::string& prefix) {
-  std::vector<std::pair<std::string, std::string>> rows;
-  rocksdb::ReadOptions options;
-  std::unique_ptr<rocksdb::Iterator> iterator(db->NewIterator(options));
-  for (iterator->Seek(prefix); iterator->Valid(); iterator->Next()) {
-    const std::string key = iterator->key().ToString();
-    if (!HasPrefix(key, prefix)) {
-      break;
-    }
-    rows.emplace_back(key, iterator->value().ToString());
-  }
-  CheckStatus(iterator->status(), "rocksdb scan " + prefix);
-  return rows;
-}
-
-std::vector<std::pair<std::string, nlohmann::json>> ScanJson(
-    rocksdb::DB* db,
-    const std::string& prefix) {
-  std::vector<std::pair<std::string, nlohmann::json>> rows;
-  for (const auto& [key, value] : ScanRaw(db, prefix)) {
-    rows.emplace_back(key, ParseJsonOr(value, nlohmann::json::object()));
-  }
-  return rows;
-}
-
-std::optional<nlohmann::json> GetJson(rocksdb::DB* db, const std::string& key) {
-  std::string value;
-  const auto status = db->Get(rocksdb::ReadOptions{}, key, &value);
-  if (status.IsNotFound()) {
-    return std::nullopt;
-  }
-  CheckStatus(status, "rocksdb get " + key);
-  return ParseJsonOr(value, nlohmann::json::object());
-}
-
-void PutJson(rocksdb::DB* db, const std::string& key, const nlohmann::json& value) {
-  CheckStatus(db->Put(rocksdb::WriteOptions{}, key, value.dump()), "rocksdb put " + key);
-}
-
-bool JsonArrayContainsString(const nlohmann::json& values, const std::string& expected) {
-  if (!values.is_array()) {
-    return false;
-  }
-  for (const auto& value : values) {
-    if (value.is_string() && value.get<std::string>() == expected) {
-      return true;
-    }
-  }
-  return false;
-}
-
-std::string Lowercase(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return value;
-}
-
-void IndexTerms(rocksdb::WriteBatch& batch, const nlohmann::json& block) {
-  const std::string block_id = block.value("block_id", std::string{});
-  if (block_id.empty()) {
-    return;
-  }
-  std::set<std::string> terms;
-  auto add_terms = [&](const std::string& text) {
-    std::string current;
-    for (unsigned char ch : text) {
-      if (std::isalnum(ch)) {
-        current.push_back(static_cast<char>(std::tolower(ch)));
-      } else if (!current.empty()) {
-        terms.insert(current);
-        current.clear();
-      }
-    }
-    if (!current.empty()) {
-      terms.insert(current);
-    }
-  };
-  add_terms(block.value("title", std::string{}));
-  add_terms(block.value("body", std::string{}));
-  for (const auto& term : terms) {
-    batch.Put("terms:" + term + ":" + block_id, block.dump());
-  }
-}
-
-std::vector<nlohmann::json> ChunkSource(
-    const std::string& source_key,
-    const std::string& block_id,
-    const std::string& content) {
-  std::vector<nlohmann::json> chunks;
-  std::string current;
-  int index = 0;
-  auto flush = [&]() {
-    if (current.empty()) {
-      return;
-    }
-    chunks.push_back(nlohmann::json{
-        {"chunk_id", source_key.substr(0, 16) + ".chunk." + std::to_string(index++)},
-        {"source_key", source_key},
-        {"block_id", block_id},
-        {"text", current},
-        {"token_estimate", std::max<std::size_t>(1, current.size() / 4)},
-    });
-    current.clear();
-  };
-  std::istringstream input(content);
-  std::string line;
-  while (std::getline(input, line)) {
-    if (line.empty()) {
-      flush();
-      continue;
-    }
-    if (current.size() + line.size() > 1200) {
-      flush();
-    }
-    if (!current.empty()) {
-      current += "\n";
-    }
-    current += line;
-  }
-  flush();
-  if (chunks.empty() && !content.empty()) {
-    chunks.push_back(nlohmann::json{
-        {"chunk_id", source_key.substr(0, 16) + ".chunk.0"},
-        {"source_key", source_key},
-        {"block_id", block_id},
-        {"text", content},
-        {"token_estimate", std::max<std::size_t>(1, content.size() / 4)},
-    });
-  }
-  return chunks;
-}
-
-std::vector<nlohmann::json> ExtractClaims(
-    const std::string& source_key,
-    const std::string& block_id,
-    const std::vector<nlohmann::json>& chunks) {
-  std::vector<nlohmann::json> claims;
-  int index = 0;
-  for (const auto& chunk : chunks) {
-    std::istringstream input(chunk.value("text", std::string{}));
-    std::string sentence;
-    while (std::getline(input, sentence, '.')) {
-      sentence.erase(
-          sentence.begin(),
-          std::find_if(sentence.begin(), sentence.end(), [](unsigned char ch) {
-            return std::isspace(ch) == 0;
-          }));
-      if (sentence.size() < 16) {
-        continue;
-      }
-      claims.push_back(nlohmann::json{
-          {"claim_id", source_key.substr(0, 16) + ".claim." + std::to_string(index++)},
-          {"source_key", source_key},
-          {"block_id", block_id},
-          {"text", sentence},
-          {"confidence", 0.65},
-      });
-    }
-  }
-  return claims;
-}
-
-}  // namespace
-
 KnowledgeStore::KnowledgeStore(std::filesystem::path store_path)
-    : store_path_(std::move(store_path)) {}
+    : repository_(std::make_unique<RocksDbJsonRepository>(std::move(store_path))) {}
 
 KnowledgeStore::~KnowledgeStore() = default;
 
 void KnowledgeStore::Open() {
-  std::filesystem::create_directories(store_path_);
-  rocksdb::Options options;
-  options.create_if_missing = true;
-  options.IncreaseParallelism();
-  options.OptimizeLevelStyleCompaction();
-  rocksdb::DB* raw = nullptr;
-  CheckStatus(rocksdb::DB::Open(options, store_path_.string(), &raw), "open rocksdb knowledge store");
-  db_.reset(raw);
+  repository_->Open();
 }
 
 nlohmann::json KnowledgeStore::Status(const std::string& service_id) const {
@@ -236,7 +34,7 @@ nlohmann::json KnowledgeStore::Status(const std::string& service_id) const {
       {"status", "ready"},
       {"store_profile", "canonical-shard"},
       {"storage_engine", "rocksdb"},
-      {"store_path", store_path_.string()},
+      {"store_path", repository_->path().string()},
       {"schema_version", "knowledge.v1"},
       {"index_epoch", "idx_" + std::to_string(LatestEventSequence())},
       {"latest_event_sequence", LatestEventSequence()},
@@ -244,7 +42,7 @@ nlohmann::json KnowledgeStore::Status(const std::string& service_id) const {
 }
 
 nlohmann::json KnowledgeStore::WriteBlock(const nlohmann::json& payload) {
-  auto block = naim::knowledge::BlockFromJson(payload);
+  auto block = naim::knowledge::KnowledgeJsonCodec::BlockFromJson(payload);
   if (block.block_id.empty()) {
     block.block_id = NewId("blk");
   }
@@ -264,14 +62,14 @@ nlohmann::json KnowledgeStore::WriteBlock(const nlohmann::json& payload) {
     block.content_hash = naim::ComputeSha256Hex(block.title + "\n" + block.body);
   }
 
-  const auto block_json = naim::knowledge::ToJson(block);
+  const auto block_json = naim::knowledge::KnowledgeJsonCodec::ToJson(block);
   rocksdb::WriteBatch batch;
   batch.Put("blocks:" + block.block_id, block_json.dump());
-  IndexTerms(batch, block_json);
+  KnowledgeTextProcessor::IndexTerms(batch, block_json);
   for (const auto& scope_id : block.scope_ids) {
     batch.Put("acl:" + scope_id + ":" + block.block_id, block_json.dump());
   }
-  CheckStatus(db_->Write(rocksdb::WriteOptions{}, &batch), "write knowledge block");
+  repository_->Write(batch, "write knowledge block");
 
   const int sequence = AppendEvent(
       "block.created",
@@ -282,7 +80,7 @@ nlohmann::json KnowledgeStore::WriteBlock(const nlohmann::json& payload) {
 }
 
 nlohmann::json KnowledgeStore::ReadBlock(const std::string& block_id) const {
-  const auto block = GetJson(db_.get(), "blocks:" + block_id);
+  const auto block = repository_->GetJson("blocks:" + block_id);
   if (!block.has_value()) {
     return nlohmann::json{{"error", "not_found"}, {"message", "block not found"}};
   }
@@ -290,7 +88,7 @@ nlohmann::json KnowledgeStore::ReadBlock(const std::string& block_id) const {
 }
 
 nlohmann::json KnowledgeStore::ResolveHead(const std::string& knowledge_id) const {
-  const auto head = GetJson(db_.get(), "heads:" + knowledge_id);
+  const auto head = repository_->GetJson("heads:" + knowledge_id);
   return nlohmann::json{{"head", head.has_value() ? *head : nlohmann::json(nullptr)}};
 }
 
@@ -313,17 +111,17 @@ nlohmann::json KnowledgeStore::UpdateHead(
   head.updated_at = UtcNow();
   head.event_id = NewId("evt");
   head.content_hash = block.value("content_hash", std::string{});
-  PutJson(db_.get(), "heads:" + knowledge_id, naim::knowledge::ToJson(head));
+  repository_->PutJson("heads:" + knowledge_id, naim::knowledge::KnowledgeJsonCodec::ToJson(head));
   const int sequence = AppendEvent(
       "head.updated",
       {knowledge_id},
       {head_block_id},
       nlohmann::json{{"knowledge_id", knowledge_id}, {"head_block_id", head_block_id}});
-  return nlohmann::json{{"head", naim::knowledge::ToJson(head)}, {"event_sequence", sequence}};
+  return nlohmann::json{{"head", naim::knowledge::KnowledgeJsonCodec::ToJson(head)}, {"event_sequence", sequence}};
 }
 
 nlohmann::json KnowledgeStore::WriteRelation(const nlohmann::json& payload) {
-  auto relation = naim::knowledge::RelationFromJson(payload);
+  auto relation = naim::knowledge::KnowledgeJsonCodec::RelationFromJson(payload);
   if (relation.relation_id.empty()) {
     relation.relation_id = NewId("rel");
   }
@@ -336,7 +134,7 @@ nlohmann::json KnowledgeStore::WriteRelation(const nlohmann::json& payload) {
   if (relation.created_by.empty()) {
     relation.created_by = "naim-knowledged";
   }
-  const auto relation_json = naim::knowledge::ToJson(relation);
+  const auto relation_json = naim::knowledge::KnowledgeJsonCodec::ToJson(relation);
   rocksdb::WriteBatch batch;
   batch.Put(
       "edges_out:" + relation.from_block_id + ":" + relation.type + ":" + relation.to_block_id +
@@ -346,7 +144,7 @@ nlohmann::json KnowledgeStore::WriteRelation(const nlohmann::json& payload) {
       "edges_in:" + relation.to_block_id + ":" + relation.type + ":" + relation.from_block_id +
           ":" + relation.relation_id,
       relation_json.dump());
-  CheckStatus(db_->Write(rocksdb::WriteOptions{}, &batch), "write relation");
+  repository_->Write(batch, "write relation");
   const int sequence = AppendEvent(
       "relation.created",
       {},
@@ -358,13 +156,13 @@ nlohmann::json KnowledgeStore::WriteRelation(const nlohmann::json& payload) {
 nlohmann::json KnowledgeStore::Neighbors(const std::string& block_id) const {
   nlohmann::json items = nlohmann::json::array();
   std::set<std::string> seen;
-  for (const auto& [key, value] : ScanJson(db_.get(), "edges_out:" + block_id + ":")) {
+  for (const auto& [key, value] : repository_->ScanJson("edges_out:" + block_id + ":")) {
     const std::string relation_id = value.value("relation_id", key);
     if (seen.insert(relation_id).second) {
       items.push_back(value);
     }
   }
-  for (const auto& [key, value] : ScanJson(db_.get(), "edges_in:" + block_id + ":")) {
+  for (const auto& [key, value] : repository_->ScanJson("edges_in:" + block_id + ":")) {
     const std::string relation_id = value.value("relation_id", key);
     if (seen.insert(relation_id).second) {
       items.push_back(value);
@@ -386,11 +184,11 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
     requested_scopes.push_back(scope_id);
   }
   const int limit = std::max(1, std::min(100, payload.value("limit", 20)));
-  const std::string lowered_query = Lowercase(query);
+  const std::string lowered_query = KnowledgeTextProcessor::Lowercase(query);
   nlohmann::json results = nlohmann::json::array();
-  for (const auto& [key, block] : ScanJson(db_.get(), "blocks:")) {
+  for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
     const std::string haystack =
-        Lowercase(block.value("title", std::string{}) + "\n" + block.value("body", std::string{}));
+        KnowledgeTextProcessor::Lowercase(block.value("title", std::string{}) + "\n" + block.value("body", std::string{}));
     if (haystack.find(lowered_query) == std::string::npos) {
       continue;
     }
@@ -413,7 +211,7 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
           {"score", 1.0},
           {"confidence", block.value("confidence", 1.0)},
           {"freshness", "current"},
-          {"shard_id", kDefaultShardId},
+          {"shard_id", std::string(KnowledgeStoreKeys::kDefaultShardId)},
           {"content_hash", block.value("content_hash", std::string{})},
           {"redaction", nullptr},
       });
@@ -426,7 +224,7 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
 }
 
 nlohmann::json KnowledgeStore::Context(const nlohmann::json& payload) const {
-  auto request = naim::knowledge::ContextRequestFromJson(payload);
+  auto request = naim::knowledge::KnowledgeJsonCodec::ContextRequestFromJson(payload);
   const auto search = Search(nlohmann::json{
       {"query", request.query},
       {"scope_id", request.scope_id},
@@ -443,7 +241,7 @@ nlohmann::json KnowledgeStore::Context(const nlohmann::json& payload) const {
         {"block_id", result.value("block_id", std::string{})},
         {"knowledge_id", result.value("knowledge_id", std::string{})},
         {"version_id", result.value("version_id", std::string{})},
-        {"shard_id", result.value("shard_id", std::string(kDefaultShardId))},
+        {"shard_id", result.value("shard_id", std::string(KnowledgeStoreKeys::kDefaultShardId))},
         {"title", result.value("title", std::string{})},
         {"text", result.value("summary", std::string{})},
         {"relations", nlohmann::json::array()},
@@ -462,7 +260,7 @@ nlohmann::json KnowledgeStore::Context(const nlohmann::json& payload) const {
   if (!request.plane_id.empty() && payload.contains("capsule_id")) {
     const std::string prefix =
         "overlays:" + request.plane_id + ":" + payload.value("capsule_id", std::string{}) + ":";
-    auto overlays = ScanJson(db_.get(), prefix);
+    auto overlays = repository_->ScanJson(prefix);
     std::reverse(overlays.begin(), overlays.end());
     for (const auto& [key, overlay] : overlays) {
       for (const auto& block : overlay.value("proposed_blocks", nlohmann::json::array())) {
@@ -507,7 +305,7 @@ nlohmann::json KnowledgeStore::BuildCapsule(const nlohmann::json& payload) {
   manifest.policy = payload.value("policy", nlohmann::json::object());
   manifest.indexes = nlohmann::json{{"text", "idx_" + std::to_string(manifest.base_event_seq)}};
   manifest.included = payload.value("included", nlohmann::json::array());
-  const auto manifest_json = naim::knowledge::ToJson(manifest);
+  const auto manifest_json = naim::knowledge::KnowledgeJsonCodec::ToJson(manifest);
   rocksdb::WriteBatch batch;
   batch.Put("capsules:" + manifest.capsule_id, manifest_json.dump());
   for (const auto& item : manifest.included) {
@@ -517,13 +315,13 @@ nlohmann::json KnowledgeStore::BuildCapsule(const nlohmann::json& payload) {
       batch.Put("capsule_members:" + manifest.capsule_id + ":" + block_id, manifest_json.dump());
     }
   }
-  CheckStatus(db_->Write(rocksdb::WriteOptions{}, &batch), "write capsule");
+  repository_->Write(batch, "write capsule");
   AppendEvent("capsule.published", {}, {}, manifest_json);
   return nlohmann::json{{"capsule_id", manifest.capsule_id}, {"manifest", manifest_json}};
 }
 
 nlohmann::json KnowledgeStore::ReadCapsule(const std::string& capsule_id) const {
-  const auto manifest = GetJson(db_.get(), "capsules:" + capsule_id);
+  const auto manifest = repository_->GetJson("capsules:" + capsule_id);
   if (!manifest.has_value()) {
     return nlohmann::json{{"error", "not_found"}, {"message", "capsule not found"}};
   }
@@ -534,7 +332,7 @@ nlohmann::json KnowledgeStore::ReadCapsule(const std::string& capsule_id) const 
 }
 
 nlohmann::json KnowledgeStore::IngestSource(const nlohmann::json& payload) {
-  auto request = naim::knowledge::SourceIngestRequestFromJson(payload);
+  auto request = naim::knowledge::KnowledgeJsonCodec::SourceIngestRequestFromJson(payload);
   static const std::set<std::string> kAllowedKinds{
       "document",
       "api",
@@ -572,7 +370,7 @@ nlohmann::json KnowledgeStore::IngestSource(const nlohmann::json& payload) {
   }
   const std::string source_key = naim::ComputeSha256Hex(
       request.source_kind + "\n" + request.source_ref + "\n" + request.content_hash);
-  if (const auto existing = GetJson(db_.get(), "sources:" + source_key); existing.has_value()) {
+  if (const auto existing = repository_->GetJson("sources:" + source_key); existing.has_value()) {
     const int sequence = AppendEvent(
         "source.duplicate",
         {},
@@ -585,7 +383,7 @@ nlohmann::json KnowledgeStore::IngestSource(const nlohmann::json& payload) {
         {"event_sequence", sequence},
     };
   }
-  const auto hash_hits = ScanJson(db_.get(), "source_hash:" + request.content_hash + ":");
+  const auto hash_hits = repository_->ScanJson("source_hash:" + request.content_hash + ":");
   if (!hash_hits.empty()) {
     const auto existing = hash_hits.front().second;
     const int sequence = AppendEvent(
@@ -614,8 +412,8 @@ nlohmann::json KnowledgeStore::IngestSource(const nlohmann::json& payload) {
   block.created_by = "source-ingest";
   block.source_ids = {source_key};
   block.scope_ids = request.scope_ids;
-  const auto chunks = ChunkSource(source_key, block.block_id, request.content);
-  const auto claims = ExtractClaims(source_key, block.block_id, chunks);
+  const auto chunks = KnowledgeTextProcessor::ChunkSource(source_key, block.block_id, request.content);
+  const auto claims = KnowledgeTextProcessor::ExtractClaims(source_key, block.block_id, chunks);
   nlohmann::json relation_candidates = nlohmann::json::array();
   for (const auto& claim : claims) {
     relation_candidates.push_back(nlohmann::json{
@@ -636,7 +434,7 @@ nlohmann::json KnowledgeStore::IngestSource(const nlohmann::json& payload) {
       {"relation_candidates", relation_candidates},
   };
 
-  const auto written = WriteBlock(naim::knowledge::ToJson(block));
+  const auto written = WriteBlock(naim::knowledge::KnowledgeJsonCodec::ToJson(block));
   const std::string event_id = NewId("evt_source");
   const int sequence = AppendEvent(
       "source.ingested",
@@ -668,7 +466,7 @@ nlohmann::json KnowledgeStore::IngestSource(const nlohmann::json& payload) {
   for (const auto& claim : claims) {
     batch.Put("source_claims:" + claim.value("claim_id", std::string{}), claim.dump());
   }
-  CheckStatus(db_->Write(rocksdb::WriteOptions{}, &batch), "write source ingest records");
+  repository_->Write(batch, "write source ingest records");
   return nlohmann::json{
       {"status", "accepted"},
       {"source_event_id", event_id},
@@ -684,7 +482,7 @@ nlohmann::json KnowledgeStore::IngestSource(const nlohmann::json& payload) {
 }
 
 nlohmann::json KnowledgeStore::WriteOverlay(const nlohmann::json& payload) {
-  auto proposal = naim::knowledge::OverlayFromJson(payload);
+  auto proposal = naim::knowledge::KnowledgeJsonCodec::OverlayFromJson(payload);
   if (proposal.overlay_change_id.empty()) {
     proposal.overlay_change_id = NewId("ov");
   }
@@ -702,16 +500,16 @@ nlohmann::json KnowledgeStore::WriteOverlay(const nlohmann::json& payload) {
       {},
       {},
       nlohmann::json{{"overlay_change_id", proposal.overlay_change_id}});
-  auto proposal_json = naim::knowledge::ToJson(proposal);
+  auto proposal_json = naim::knowledge::KnowledgeJsonCodec::ToJson(proposal);
   proposal_json["overlay_event_seq"] = sequence;
-  const std::string sequence_key = EventKey(sequence).substr(std::string("events:").size());
+  const std::string sequence_key = KnowledgeStoreKeys::EventKey(sequence).substr(std::string("events:").size());
   rocksdb::WriteBatch batch;
   batch.Put(
       "overlays:" + proposal.plane_id + ":" + proposal.capsule_id + ":" + sequence_key + ":" +
           proposal.overlay_change_id,
       proposal_json.dump());
   batch.Put("overlay_by_id:" + proposal.overlay_change_id, proposal_json.dump());
-  CheckStatus(db_->Write(rocksdb::WriteOptions{}, &batch), "write overlay");
+  repository_->Write(batch, "write overlay");
   return nlohmann::json{
       {"overlay_change_id", proposal.overlay_change_id},
       {"status", "stored"},
@@ -740,7 +538,7 @@ nlohmann::json KnowledgeStore::ScheduleReplicaMerge(const nlohmann::json& payloa
       {"status", "scheduled"},
       {"updated_at", UtcNow()},
   };
-  PutJson(db_.get(), "replica_schedules:" + plane_id + ":" + capsule_id, schedule);
+  repository_->PutJson("replica_schedules:" + plane_id + ":" + capsule_id, schedule);
   AppendEvent(
       "replica.merge.scheduled",
       {},
@@ -753,7 +551,7 @@ nlohmann::json KnowledgeStore::RunScheduledReplicaMerges(const nlohmann::json& p
   const bool force = payload.value("force", false);
   const std::string plane_filter = payload.value("plane_id", std::string{});
   nlohmann::json jobs = nlohmann::json::array();
-  for (const auto& [key, schedule] : ScanJson(db_.get(), "replica_schedules:")) {
+  for (const auto& [key, schedule] : repository_->ScanJson("replica_schedules:")) {
     if (schedule.value("status", std::string{}) != "scheduled") {
       continue;
     }
@@ -774,7 +572,7 @@ nlohmann::json KnowledgeStore::RunScheduledReplicaMerges(const nlohmann::json& p
     updated["last_checkpoint"] = result.value("checkpoint", nlohmann::json::object());
     updated["next_run_at"] = UtcNow();
     updated["updated_at"] = UtcNow();
-    PutJson(db_.get(), key, updated);
+    repository_->PutJson(key, updated);
   }
   return nlohmann::json{{"jobs", jobs}, {"status", "completed"}};
 }
@@ -808,13 +606,13 @@ nlohmann::json KnowledgeStore::TriggerReplicaMerge(const nlohmann::json& payload
   int max_overlay_seq = checkpoint.overlay_event_seq_from - 1;
   try {
     const std::string prefix = "overlays:" + checkpoint.plane_id + ":" + checkpoint.capsule_id + ":";
-    for (const auto& [key, overlay_json] : ScanJson(db_.get(), prefix)) {
+    for (const auto& [key, overlay_json] : repository_->ScanJson(prefix)) {
       const int overlay_seq = overlay_json.value("overlay_event_seq", 0);
       if (overlay_seq < checkpoint.overlay_event_seq_from) {
         continue;
       }
       max_overlay_seq = std::max(max_overlay_seq, overlay_seq);
-      const auto proposal = naim::knowledge::OverlayFromJson(overlay_json);
+      const auto proposal = naim::knowledge::KnowledgeJsonCodec::OverlayFromJson(overlay_json);
       bool conflict = false;
       std::string conflict_knowledge_id;
       if (proposal.base_versions.is_object()) {
@@ -898,9 +696,8 @@ nlohmann::json KnowledgeStore::TriggerReplicaMerge(const nlohmann::json& payload
             {"message", error.what()},
         });
   }
-  const auto checkpoint_json = naim::knowledge::ToJson(checkpoint);
-  PutJson(
-      db_.get(),
+  const auto checkpoint_json = naim::knowledge::KnowledgeJsonCodec::ToJson(checkpoint);
+  repository_->PutJson(
       "replica_checkpoints:" + checkpoint.plane_id + ":" + checkpoint.capsule_id + ":" +
           checkpoint.replica_merge_id,
       checkpoint_json);
@@ -918,7 +715,7 @@ nlohmann::json KnowledgeStore::ReconcileDailyReplicaSchedules(const nlohmann::js
   nlohmann::json reconciled = nlohmann::json::array();
   nlohmann::json skipped = nlohmann::json::array();
   const std::string plane_filter = payload.value("plane_id", std::string{});
-  for (const auto& [key, schedule] : ScanJson(db_.get(), "replica_schedules:")) {
+  for (const auto& [key, schedule] : repository_->ScanJson("replica_schedules:")) {
     if (schedule.value("cadence", std::string("daily")) != "daily") {
       skipped.push_back(nlohmann::json{{"key", key}, {"reason", "non_daily"}});
       continue;
@@ -941,7 +738,7 @@ nlohmann::json KnowledgeStore::ReplicaMergeStatus(const std::string& plane_id) c
   std::string latest_started;
   const std::string prefix =
       plane_id.empty() ? std::string("replica_checkpoints:") : "replica_checkpoints:" + plane_id + ":";
-  for (const auto& [key, checkpoint] : ScanJson(db_.get(), prefix)) {
+  for (const auto& [key, checkpoint] : repository_->ScanJson(prefix)) {
     if (checkpoint.value("status", std::string{}) != "completed") {
       continue;
     }
@@ -961,7 +758,7 @@ nlohmann::json KnowledgeStore::ListReviewItems(const nlohmann::json& payload) co
   const std::string status = payload.value("status", std::string("pending"));
   const int limit = std::max(1, std::min(200, payload.value("limit", 50)));
   nlohmann::json items = nlohmann::json::array();
-  for (const auto& [key, item] : ScanJson(db_.get(), "review_items:")) {
+  for (const auto& [key, item] : repository_->ScanJson("review_items:")) {
     if (item.value("status", std::string("pending")) != status) {
       continue;
     }
@@ -986,7 +783,7 @@ nlohmann::json KnowledgeStore::DecideReviewItem(
   if (kAllowedActions.find(action) == kAllowedActions.end()) {
     throw std::runtime_error("unsupported review action");
   }
-  const auto existing = GetJson(db_.get(), "review_items:" + review_id);
+  const auto existing = repository_->GetJson("review_items:" + review_id);
   if (!existing.has_value()) {
     return nlohmann::json{{"error", "not_found"}, {"message", "review item not found"}};
   }
@@ -1001,7 +798,7 @@ nlohmann::json KnowledgeStore::DecideReviewItem(
       {"reason", payload.value("reason", std::string{})},
       {"decided_at", UtcNow()},
   };
-  PutJson(db_.get(), "review_items:" + review_id, item_json);
+  repository_->PutJson("review_items:" + review_id, item_json);
   if (action == "accept" && item_json.contains("conflicts") && item_json.at("conflicts").is_array() &&
       !item_json.at("conflicts").empty()) {
     const auto overlay_json = item_json.at("conflicts").front();
@@ -1051,21 +848,21 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
     finding.event_seq = LatestEventSequence();
     finding.repair_action = action;
     finding.created_at = UtcNow();
-    findings.push_back(naim::knowledge::ToJson(finding));
+    findings.push_back(naim::knowledge::KnowledgeJsonCodec::ToJson(finding));
   };
 
   rocksdb::WriteBatch batch;
   if (full_rebuild) {
-    for (const auto& [key, value] : ScanRaw(db_.get(), "terms:")) {
+    for (const auto& [key, value] : repository_->ScanRaw("terms:")) {
       batch.Delete(key);
     }
   }
-  for (const auto& [key, block] : ScanJson(db_.get(), "blocks:")) {
+  for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
     const std::string block_id = block.value("block_id", std::string{});
     if (block_id.empty()) {
       continue;
     }
-    const auto term_hits = ScanRaw(db_.get(), "terms:");
+    const auto term_hits = repository_->ScanRaw("terms:");
     const bool has_any_term = std::any_of(term_hits.begin(), term_hits.end(), [&](const auto& row) {
       return row.first.size() >= block_id.size() &&
              row.first.compare(row.first.size() - block_id.size(), block_id.size(), block_id) == 0;
@@ -1073,7 +870,7 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
     if (full_rebuild || !has_any_term) {
       add_finding("warning", "stale_text_index", block_id, "", apply ? "applied" : "queued");
       if (apply || full_rebuild) {
-        IndexTerms(batch, block);
+        KnowledgeTextProcessor::IndexTerms(batch, block);
       }
     }
     for (const auto& scope_id : block.value("scope_ids", nlohmann::json::array())) {
@@ -1081,7 +878,7 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
         continue;
       }
       const std::string acl_key = "acl:" + scope_id.get<std::string>() + ":" + block_id;
-      if (!GetJson(db_.get(), acl_key).has_value()) {
+      if (!repository_->GetJson(acl_key).has_value()) {
         add_finding("error", "acl_index_missing", block_id, "", apply ? "applied" : "queued");
         if (apply) {
           batch.Put(acl_key, block.dump());
@@ -1089,7 +886,7 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
       }
     }
   }
-  for (const auto& [key, relation] : ScanJson(db_.get(), "edges_out:")) {
+  for (const auto& [key, relation] : repository_->ScanJson("edges_out:")) {
     const std::string from = relation.value("from_block_id", std::string{});
     const std::string to = relation.value("to_block_id", std::string{});
     const std::string type = relation.value("type", std::string{});
@@ -1098,14 +895,14 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
       add_finding("error", "edge_missing_block", from, relation_id, "manual_review");
     }
     const std::string inverse_key = "edges_in:" + to + ":" + type + ":" + from + ":" + relation_id;
-    if (!GetJson(db_.get(), inverse_key).has_value()) {
+    if (!repository_->GetJson(inverse_key).has_value()) {
       add_finding("error", "edge_symmetry_missing", from, relation_id, apply ? "applied" : "queued");
       if (apply) {
         batch.Put(inverse_key, relation.dump());
       }
     }
   }
-  for (const auto& [key, manifest] : ScanJson(db_.get(), "capsules:")) {
+  for (const auto& [key, manifest] : repository_->ScanJson("capsules:")) {
     const std::string capsule_id = manifest.value("capsule_id", std::string{});
     for (const auto& item : manifest.value("included", nlohmann::json::array())) {
       const std::string block_id =
@@ -1117,7 +914,7 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
         add_finding("error", "missing_capsule_member", block_id, "", "manual_review");
       }
       const std::string member_key = "capsule_members:" + capsule_id + ":" + block_id;
-      if (!GetJson(db_.get(), member_key).has_value()) {
+      if (!repository_->GetJson(member_key).has_value()) {
         add_finding("warning", "capsule_membership_index_missing", block_id, "", apply ? "applied" : "queued");
         if (apply) {
           batch.Put(member_key, manifest.dump());
@@ -1126,7 +923,7 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
     }
   }
   if (apply || full_rebuild) {
-    CheckStatus(db_->Write(rocksdb::WriteOptions{}, &batch), "apply repair batch");
+    repository_->Write(batch, "apply repair batch");
   }
 
   const std::string report_id = NewId("rr");
@@ -1136,7 +933,7 @@ nlohmann::json KnowledgeStore::RunRepair(const nlohmann::json& payload) {
       {"findings", findings},
       {"created_at", UtcNow()},
   };
-  PutJson(db_.get(), "repair_reports:" + report_id, report);
+  repository_->PutJson("repair_reports:" + report_id, report);
   const int sequence = AppendEvent(
       "repair.completed",
       {},
@@ -1160,11 +957,11 @@ nlohmann::json KnowledgeStore::MarkdownExport(const nlohmann::json& payload) con
   nlohmann::json files = nlohmann::json::array();
   nlohmann::json warnings = nlohmann::json::array();
   std::map<std::string, std::string> titles;
-  for (const auto& [key, block] : ScanJson(db_.get(), "blocks:")) {
+  for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
     titles[block.value("block_id", std::string{})] =
         block.value("title", block.value("knowledge_id", std::string{}));
   }
-  for (const auto& [key, block] : ScanJson(db_.get(), "blocks:")) {
+  for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
     const auto scope_ids = block.value("scope_ids", nlohmann::json::array());
     if (!ScopeAllowed(scope_ids, requested_scopes)) {
       warnings.push_back(nlohmann::json{
@@ -1356,7 +1153,7 @@ nlohmann::json KnowledgeStore::CatalogUpsert(const nlohmann::json& payload) {
   if (object_id.empty()) {
     throw std::runtime_error("object_id is required");
   }
-  const std::string shard_id = payload.value("shard_id", std::string(kDefaultShardId));
+  const std::string shard_id = payload.value("shard_id", std::string(KnowledgeStoreKeys::kDefaultShardId));
   auto object = payload;
   object["object_id"] = object_id;
   object["shard_id"] = shard_id;
@@ -1385,7 +1182,7 @@ nlohmann::json KnowledgeStore::CatalogUpsert(const nlohmann::json& payload) {
     health["updated_at"] = UtcNow();
     batch.Put("shard_health:" + shard_id, health.dump());
   }
-  CheckStatus(db_->Write(rocksdb::WriteOptions{}, &batch), "write catalog");
+  repository_->Write(batch, "write catalog");
   return nlohmann::json{{"object_id", object_id}, {"shard_id", shard_id}, {"status", "stored"}};
 }
 
@@ -1397,7 +1194,7 @@ nlohmann::json KnowledgeStore::CatalogQuery(const nlohmann::json& payload) const
   }
   const int limit = std::max(1, std::min(200, payload.value("limit", 50)));
   nlohmann::json candidates = nlohmann::json::array();
-  for (const auto& [key, object] : ScanJson(db_.get(), "catalog_terms:")) {
+  for (const auto& [key, object] : repository_->ScanJson("catalog_terms:")) {
     if (!term.empty() && key.find(term) == std::string::npos) {
       continue;
     }
@@ -1409,13 +1206,13 @@ nlohmann::json KnowledgeStore::CatalogQuery(const nlohmann::json& payload) const
           {"redaction", nlohmann::json{{"reason", "out_of_scope"}}},
       });
     } else {
-      const std::string shard_id = object.value("shard_id", std::string(kDefaultShardId));
-      const auto health = GetJson(db_.get(), "shard_health:" + shard_id);
+      const std::string shard_id = object.value("shard_id", std::string(KnowledgeStoreKeys::kDefaultShardId));
+      const auto health = repository_->GetJson("shard_health:" + shard_id);
       candidates.push_back(nlohmann::json{
           {"object_id", object.value("object_id", std::string{})},
           {"shard_id", shard_id},
           {"scope_ids", scope_ids},
-          {"stale_hint", !GetJson(db_.get(), "catalog_objects:" + object.value("object_id", std::string{})).has_value()},
+          {"stale_hint", !repository_->GetJson("catalog_objects:" + object.value("object_id", std::string{})).has_value()},
           {"shard_status", health.value_or(nlohmann::json{{"status", "unknown"}}).value("status", "unknown")},
       });
     }
@@ -1440,8 +1237,8 @@ nlohmann::json KnowledgeStore::QueryRoute(const nlohmann::json& payload) const {
       redacted.push_back(candidate);
       continue;
     }
-    const std::string shard_id = candidate.value("shard_id", std::string(kDefaultShardId));
-    const auto health = GetJson(db_.get(), "shard_health:" + shard_id);
+    const std::string shard_id = candidate.value("shard_id", std::string(KnowledgeStoreKeys::kDefaultShardId));
+    const auto health = repository_->GetJson("shard_health:" + shard_id);
     const std::string shard_status =
         health.value_or(nlohmann::json{{"status", "unknown"}}).value("status", "unknown");
     if (shard_status == "failed" || shard_status == "offline") {
@@ -1489,13 +1286,11 @@ std::string KnowledgeStore::NewId(const std::string& prefix) const {
 }
 
 int KnowledgeStore::LatestEventSequence() const {
-  std::string value;
-  const auto status = db_->Get(rocksdb::ReadOptions{}, "meta:latest_event_sequence", &value);
-  if (status.IsNotFound()) {
+  const auto value = repository_->GetRaw("meta:latest_event_sequence");
+  if (!value.has_value()) {
     return 0;
   }
-  CheckStatus(status, "read latest event sequence");
-  return value.empty() ? 0 : std::stoi(value);
+  return value->empty() ? 0 : std::stoi(*value);
 }
 
 int KnowledgeStore::LastCheckpointSequence(
@@ -1503,7 +1298,7 @@ int KnowledgeStore::LastCheckpointSequence(
     const std::string& capsule_id) const {
   int latest = 0;
   for (const auto& [key, checkpoint] :
-       ScanJson(db_.get(), "replica_checkpoints:" + plane_id + ":" + capsule_id + ":")) {
+       repository_->ScanJson("replica_checkpoints:" + plane_id + ":" + capsule_id + ":")) {
     if (checkpoint.value("status", std::string{}) != "completed") {
       continue;
     }
@@ -1530,18 +1325,18 @@ int KnowledgeStore::AppendEvent(
       {"created_by", "naim-knowledged"},
   };
   rocksdb::WriteBatch batch;
-  batch.Put(EventKey(sequence), event.dump());
+  batch.Put(KnowledgeStoreKeys::EventKey(sequence), event.dump());
   batch.Put("meta:latest_event_sequence", std::to_string(sequence));
-  CheckStatus(db_->Write(rocksdb::WriteOptions{}, &batch), "append knowledge event");
+  repository_->Write(batch, "append knowledge event");
   return sequence;
 }
 
 void KnowledgeStore::PersistReviewItem(const naim::knowledge::ReviewItem& item) {
-  auto item_json = naim::knowledge::ToJson(item);
+  auto item_json = naim::knowledge::KnowledgeJsonCodec::ToJson(item);
   if (!item_json.contains("status")) {
     item_json["status"] = item.status.empty() ? "pending" : item.status;
   }
-  PutJson(db_.get(), "review_items:" + item.review_id, item_json);
+  repository_->PutJson("review_items:" + item.review_id, item_json);
   AppendEvent(
       "review.queued",
       {item.knowledge_id},
@@ -1559,7 +1354,7 @@ bool KnowledgeStore::ScopeAllowed(
     return true;
   }
   for (const auto& scope : requested_scope_ids) {
-    if (JsonArrayContainsString(record_scope_ids, scope)) {
+    if (KnowledgeTextProcessor::JsonArrayContainsString(record_scope_ids, scope)) {
       return true;
     }
   }
