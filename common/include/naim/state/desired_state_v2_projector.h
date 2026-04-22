@@ -30,6 +30,7 @@ class DesiredStateV2Projector final {
   void ProjectApp();
   void ProjectSkills();
   void ProjectBrowsing();
+  void ProjectKnowledge();
   void ProjectResources();
 
   bool ShouldEmitTopology() const;

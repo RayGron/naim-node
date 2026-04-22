@@ -6,6 +6,9 @@ set(NAIM_CUDA_NVCC_JOBS "2" CACHE STRING
 option(NAIM_CONTROLLER_BUILD_LLAMA_QUANTIZE
        "Build llama-quantize before naim-controller for local model conversion tooling"
        OFF)
+option(NAIM_ENABLE_LLAMA_RUNTIME
+       "Configure llama.cpp, CUDA, and inference runtime targets"
+       ON)
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
 set(NAIM_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
 set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
@@ -70,7 +73,6 @@ function(naim_enable_strict_warnings target_name)
   endif()
 endfunction()
 
-include(FetchContent)
 include(cmake/NaimCEF.cmake)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -82,147 +84,152 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
-set(NAIM_LLAMA_CPP_GIT_TAG "7c7d6ce5c7caad3714ad1cd37ef057dfe0f317d0" CACHE STRING
-    "Pinned ggml-org/llama.cpp revision used for naim runtime binaries")
-set(NAIM_LLAMA_CPP_SOURCE_DIR "" CACHE PATH
-    "Optional local llama.cpp source directory override for naim runtime binaries")
+if(NAIM_ENABLE_LLAMA_RUNTIME)
+  include(FetchContent)
 
-if(DEFINED BUILD_SHARED_LIBS)
-  set(_naim_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
-  set(_naim_restore_build_shared_libs ON)
-else()
-  set(_naim_restore_build_shared_libs OFF)
-endif()
+  set(NAIM_LLAMA_CPP_GIT_TAG "7c7d6ce5c7caad3714ad1cd37ef057dfe0f317d0" CACHE STRING
+      "Pinned ggml-org/llama.cpp revision used for naim runtime binaries")
+  set(NAIM_LLAMA_CPP_SOURCE_DIR "" CACHE PATH
+      "Optional local llama.cpp source directory override for naim runtime binaries")
 
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static llama.cpp for naim runtime binaries" FORCE)
-set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TOOLS ON CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SERVER ON CACHE BOOL "" FORCE)
-set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
-set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
-# llama.cpp needs Blackwell FP4/MXFP4 kernels to be compiled for the
-# architecture-specific 12Xa targets. CMake's native CUDA detection reports
-# RTX PRO 6000 Blackwell as plain sm_120, which makes ptxas reject those
-# kernels. Keep native detection opt-in and let llama.cpp choose its supported
-# explicit CUDA architecture list by default. For host-specific images, set
-# NAIM_CUDA_ARCHITECTURES explicitly, for example 120a-real on hpc1.
-set(NAIM_CUDA_ARCHITECTURES "" CACHE STRING
-    "Explicit CUDA architectures for ggml-cuda builds; empty lets llama.cpp choose defaults")
-option(NAIM_CUDA_NATIVE "Prefer native CUDA architectures for ggml-cuda builds" OFF)
-if(NAIM_CUDA_ARCHITECTURES)
-  set(NAIM_CUDA_NATIVE OFF CACHE BOOL "" FORCE)
-  set(CMAKE_CUDA_ARCHITECTURES
-      "${NAIM_CUDA_ARCHITECTURES}"
-      CACHE STRING "Explicit CUDA architectures for naim ggml-cuda builds" FORCE)
-endif()
-set(GGML_NATIVE ${NAIM_CUDA_NATIVE} CACHE BOOL "" FORCE)
-set(GGML_RPC ON CACHE BOOL "" FORCE)
-
-if(NOT DEFINED CUDAToolkit_ROOT OR "${CUDAToolkit_ROOT}" STREQUAL "")
-  set(_naim_cuda_root_candidates
-      "$ENV{CUDA_TOOLKIT_ROOT_DIR}"
-      "$ENV{CUDA_HOME}"
-      "$ENV{CUDA_PATH}"
-      "/usr/local/cuda-13.1"
-      "/usr/local/cuda"
-      "/usr/local/cuda-13.2"
-      "/usr/local/cuda-13.0"
-      "/usr/local/cuda-12.9"
-      "/usr/local/cuda-12.8"
-      "/usr/local/cuda-12.7"
-      "/usr/local/cuda-12.6"
-      "/usr/local/cuda-12.5"
-      "/usr/local/cuda-12.4"
-      "/usr/local/cuda-12.3"
-      "/usr/local/cuda-12.2"
-      "/usr/local/cuda-12.1"
-      "/usr/local/cuda-12.0"
-      "/usr/lib/nvidia-cuda-toolkit")
-
-  find_program(_naim_nvcc_executable NAMES nvcc)
-  if(_naim_nvcc_executable)
-    get_filename_component(_naim_nvcc_bin_dir "${_naim_nvcc_executable}" DIRECTORY)
-    get_filename_component(_naim_nvcc_root_from_path "${_naim_nvcc_bin_dir}" DIRECTORY)
-    list(PREPEND _naim_cuda_root_candidates "${_naim_nvcc_root_from_path}")
-  endif()
-
-  foreach(_naim_cuda_root IN LISTS _naim_cuda_root_candidates)
-    if(_naim_cuda_root AND EXISTS "${_naim_cuda_root}/include/cuda_runtime.h")
-      set(CUDAToolkit_ROOT "${_naim_cuda_root}" CACHE PATH "Detected CUDA toolkit root")
-      if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "${_naim_cuda_root}/bin/nvcc")
-        set(CMAKE_CUDA_COMPILER
-            "${_naim_cuda_root}/bin/nvcc"
-            CACHE FILEPATH "Detected CUDA compiler")
-      endif()
-      message(STATUS "Using detected CUDA toolkit: ${CUDAToolkit_ROOT}")
-      break()
-    endif()
-  endforeach()
-
-  unset(_naim_cuda_root_candidates)
-  unset(_naim_nvcc_executable CACHE)
-  unset(_naim_nvcc_bin_dir)
-  unset(_naim_nvcc_root_from_path)
-  unset(_naim_cuda_root)
-endif()
-
-set(_naim_cuda_available OFF)
-if(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/include/cuda_runtime.h")
-  set(_naim_cuda_available ON)
-elseif(DEFINED CMAKE_CUDA_COMPILER)
-  get_filename_component(_naim_cuda_bin_dir "${CMAKE_CUDA_COMPILER}" DIRECTORY)
-  get_filename_component(_naim_cuda_root_from_compiler "${_naim_cuda_bin_dir}" DIRECTORY)
-  if(EXISTS "${_naim_cuda_root_from_compiler}/include/cuda_runtime.h")
-    set(_naim_cuda_available ON)
-  endif()
-endif()
-if(NOT _naim_cuda_available)
-  message(FATAL_ERROR
-    "CUDA toolkit is required for naim-node builds. "
-    "Provide CUDAToolkit_ROOT or CMAKE_CUDA_COMPILER so GGML_CUDA can be enabled.")
-endif()
-set(GGML_CUDA ON CACHE BOOL "" FORCE)
-message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
-message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
-
-if(NAIM_LLAMA_CPP_SOURCE_DIR AND EXISTS "${NAIM_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
-  FetchContent_Declare(
-    llama_cpp
-    SOURCE_DIR "${NAIM_LLAMA_CPP_SOURCE_DIR}"
-  )
-else()
-  FetchContent_Declare(
-    llama_cpp
-    GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
-    GIT_TAG ${NAIM_LLAMA_CPP_GIT_TAG}
-    GIT_SHALLOW TRUE
-    GIT_PROGRESS TRUE
-  )
-endif()
-FetchContent_MakeAvailable(llama_cpp)
-
-if(TARGET ggml-cuda AND CMAKE_GENERATOR STREQUAL "Ninja")
-  if(NAIM_CUDA_NVCC_JOBS MATCHES "^[1-9][0-9]*$")
-    set_property(GLOBAL APPEND PROPERTY JOB_POOLS "naim_cuda_pool=${NAIM_CUDA_NVCC_JOBS}")
-    set_property(TARGET ggml-cuda PROPERTY JOB_POOL_COMPILE naim_cuda_pool)
-    message(STATUS "Using ggml-cuda compile pool size: ${NAIM_CUDA_NVCC_JOBS}")
+  if(DEFINED BUILD_SHARED_LIBS)
+    set(_naim_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
+    set(_naim_restore_build_shared_libs ON)
   else()
-    message(WARNING
-      "NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' is not a positive integer; "
-      "ggml-cuda will use the default global compile pool")
+    set(_naim_restore_build_shared_libs OFF)
   endif()
-endif()
 
-if(_naim_restore_build_shared_libs)
-  set(BUILD_SHARED_LIBS "${_naim_saved_build_shared_libs}" CACHE BOOL "Build shared libs" FORCE)
-else()
-  unset(BUILD_SHARED_LIBS CACHE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static llama.cpp for naim runtime binaries" FORCE)
+  set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(LLAMA_BUILD_SERVER ON CACHE BOOL "" FORCE)
+  set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
+  set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
+  # llama.cpp needs Blackwell FP4/MXFP4 kernels to be compiled for the
+  # architecture-specific 12Xa targets. CMake's native CUDA detection reports
+  # RTX PRO 6000 Blackwell as plain sm_120, which makes ptxas reject those
+  # kernels. Keep native detection opt-in and let llama.cpp choose its supported
+  # explicit CUDA architecture list by default. For host-specific images, set
+  # NAIM_CUDA_ARCHITECTURES explicitly, for example 120a-real on hpc1.
+  set(NAIM_CUDA_ARCHITECTURES "" CACHE STRING
+      "Explicit CUDA architectures for ggml-cuda builds; empty lets llama.cpp choose defaults")
+  option(NAIM_CUDA_NATIVE "Prefer native CUDA architectures for ggml-cuda builds" OFF)
+  if(NAIM_CUDA_ARCHITECTURES)
+    set(NAIM_CUDA_NATIVE OFF CACHE BOOL "" FORCE)
+    set(CMAKE_CUDA_ARCHITECTURES
+        "${NAIM_CUDA_ARCHITECTURES}"
+        CACHE STRING "Explicit CUDA architectures for naim ggml-cuda builds" FORCE)
+  endif()
+  set(GGML_NATIVE ${NAIM_CUDA_NATIVE} CACHE BOOL "" FORCE)
+  set(GGML_RPC ON CACHE BOOL "" FORCE)
+
+  if(NOT DEFINED CUDAToolkit_ROOT OR "${CUDAToolkit_ROOT}" STREQUAL "")
+    set(_naim_cuda_root_candidates
+        "$ENV{CUDA_TOOLKIT_ROOT_DIR}"
+        "$ENV{CUDA_HOME}"
+        "$ENV{CUDA_PATH}"
+        "/usr/local/cuda-13.1"
+        "/usr/local/cuda"
+        "/usr/local/cuda-13.2"
+        "/usr/local/cuda-13.0"
+        "/usr/local/cuda-12.9"
+        "/usr/local/cuda-12.8"
+        "/usr/local/cuda-12.7"
+        "/usr/local/cuda-12.6"
+        "/usr/local/cuda-12.5"
+        "/usr/local/cuda-12.4"
+        "/usr/local/cuda-12.3"
+        "/usr/local/cuda-12.2"
+        "/usr/local/cuda-12.1"
+        "/usr/local/cuda-12.0"
+        "/usr/lib/nvidia-cuda-toolkit")
+
+    find_program(_naim_nvcc_executable NAMES nvcc)
+    if(_naim_nvcc_executable)
+      get_filename_component(_naim_nvcc_bin_dir "${_naim_nvcc_executable}" DIRECTORY)
+      get_filename_component(_naim_nvcc_root_from_path "${_naim_nvcc_bin_dir}" DIRECTORY)
+      list(PREPEND _naim_cuda_root_candidates "${_naim_nvcc_root_from_path}")
+    endif()
+
+    foreach(_naim_cuda_root IN LISTS _naim_cuda_root_candidates)
+      if(_naim_cuda_root AND EXISTS "${_naim_cuda_root}/include/cuda_runtime.h")
+        set(CUDAToolkit_ROOT "${_naim_cuda_root}" CACHE PATH "Detected CUDA toolkit root")
+        if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "${_naim_cuda_root}/bin/nvcc")
+          set(CMAKE_CUDA_COMPILER
+              "${_naim_cuda_root}/bin/nvcc"
+              CACHE FILEPATH "Detected CUDA compiler")
+        endif()
+        message(STATUS "Using detected CUDA toolkit: ${CUDAToolkit_ROOT}")
+        break()
+      endif()
+    endforeach()
+
+    unset(_naim_cuda_root_candidates)
+    unset(_naim_nvcc_executable CACHE)
+    unset(_naim_nvcc_bin_dir)
+    unset(_naim_nvcc_root_from_path)
+    unset(_naim_cuda_root)
+  endif()
+
+  set(_naim_cuda_available OFF)
+  if(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/include/cuda_runtime.h")
+    set(_naim_cuda_available ON)
+  elseif(DEFINED CMAKE_CUDA_COMPILER)
+    get_filename_component(_naim_cuda_bin_dir "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+    get_filename_component(_naim_cuda_root_from_compiler "${_naim_cuda_bin_dir}" DIRECTORY)
+    if(EXISTS "${_naim_cuda_root_from_compiler}/include/cuda_runtime.h")
+      set(_naim_cuda_available ON)
+    endif()
+  endif()
+  if(NOT _naim_cuda_available)
+    message(FATAL_ERROR
+      "CUDA toolkit is required for naim-node inference runtime builds. "
+      "Provide CUDAToolkit_ROOT or CMAKE_CUDA_COMPILER so GGML_CUDA can be enabled.")
+  endif()
+  set(GGML_CUDA ON CACHE BOOL "" FORCE)
+  message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
+  message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
+
+  if(NAIM_LLAMA_CPP_SOURCE_DIR AND EXISTS "${NAIM_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
+    FetchContent_Declare(
+      llama_cpp
+      SOURCE_DIR "${NAIM_LLAMA_CPP_SOURCE_DIR}"
+    )
+  else()
+    FetchContent_Declare(
+      llama_cpp
+      GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+      GIT_TAG ${NAIM_LLAMA_CPP_GIT_TAG}
+      GIT_SHALLOW TRUE
+      GIT_PROGRESS TRUE
+    )
+  endif()
+  FetchContent_MakeAvailable(llama_cpp)
+
+  if(TARGET ggml-cuda AND CMAKE_GENERATOR STREQUAL "Ninja")
+    if(NAIM_CUDA_NVCC_JOBS MATCHES "^[1-9][0-9]*$")
+      set_property(GLOBAL APPEND PROPERTY JOB_POOLS "naim_cuda_pool=${NAIM_CUDA_NVCC_JOBS}")
+      set_property(TARGET ggml-cuda PROPERTY JOB_POOL_COMPILE naim_cuda_pool)
+      message(STATUS "Using ggml-cuda compile pool size: ${NAIM_CUDA_NVCC_JOBS}")
+    else()
+      message(WARNING
+        "NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' is not a positive integer; "
+        "ggml-cuda will use the default global compile pool")
+    endif()
+  endif()
+
+  if(_naim_restore_build_shared_libs)
+    set(BUILD_SHARED_LIBS "${_naim_saved_build_shared_libs}" CACHE BOOL "Build shared libs" FORCE)
+  else()
+    unset(BUILD_SHARED_LIBS CACHE)
+  endif()
 endif()
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(RocksDB CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 naim_configure_cef_support()
@@ -234,6 +241,8 @@ add_library(
   common/src/state/demo_state.cpp
   common/src/planning/execution_plan.cpp
   common/src/importing/import_bundle.cpp
+  common/src/knowledge/knowledge_interfaces.cpp
+  common/src/knowledge/knowledge_types.cpp
   common/src/runtime/infer_runtime_config.cpp
   common/src/runtime/model_adapter.cpp
   common/src/planning/planner.cpp
@@ -279,6 +288,32 @@ target_link_libraries(
     unofficial::sqlite3::sqlite3
 )
 naim_enable_strict_warnings(naim-common)
+
+add_executable(
+  naim-knowledge-contract-tests
+  common/src/knowledge/knowledge_contract_tests.cpp
+)
+target_include_directories(naim-knowledge-contract-tests PRIVATE common/include)
+target_link_libraries(naim-knowledge-contract-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-knowledge-contract-tests)
+
+add_executable(
+  naim-knowledge-store-tests
+  runtime/knowledge/src/knowledge_store_keys.cpp
+  runtime/knowledge/src/knowledge_text_processor.cpp
+  runtime/knowledge/src/rocksdb_json_repository.cpp
+  runtime/knowledge/src/knowledge_store.cpp
+  runtime/knowledge/src/knowledge_store_tests.cpp
+)
+target_include_directories(
+  naim-knowledge-store-tests PRIVATE common/include controller/include runtime/knowledge/include)
+target_link_libraries(
+  naim-knowledge-store-tests
+  PRIVATE
+    naim-common
+    RocksDB::rocksdb
+)
+naim_enable_strict_warnings(naim-knowledge-store-tests)
 
 add_executable(
   naim-model-adapter-tests
@@ -401,6 +436,7 @@ add_executable(
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
   controller/src/interaction/interaction_service.cpp
+  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
@@ -732,6 +768,7 @@ add_executable(
   controller/src/interaction/interaction_replica_group_summary_builder.cpp
   controller/src/interaction/interaction_runtime_text_support.cpp
   controller/src/interaction/interaction_service.cpp
+  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/interaction/interaction_stream_http_error_response_builder.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service_tests.cpp
@@ -784,6 +821,7 @@ add_executable(
   controller/src/infra/controller_runtime_support_service.cpp
   controller/src/interaction/interaction_continuation_payload_builder.cpp
   controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_hostd_runtime_relay_service.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_model_identity_builder.cpp
   controller/src/interaction/interaction_payload_builder.cpp
@@ -1044,6 +1082,7 @@ add_executable(
   hostd/src/app/hostd_bootstrap_transfer_support.cpp
   hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_compose_runtime_support.cpp
+  hostd/src/app/hostd_container_name_support.cpp
   hostd/src/app/hostd_controller_transport_support.cpp
   hostd/src/app/hostd_desired_state_apply_plan_support.cpp
   hostd/src/app/hostd_desired_state_apply_support.cpp
@@ -1054,10 +1093,12 @@ add_executable(
   hostd/src/app/hostd_local_runtime_state_support.cpp
   hostd/src/app/hostd_local_state_path_support.cpp
   hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_model_artifact_request_support.cpp
   hostd/src/app/hostd_observed_state_snapshot_builder.cpp
   hostd/src/app/hostd_post_deploy_support.cpp
   hostd/src/app/hostd_reporting_support.cpp
   hostd/src/app/hostd_repo_root_support.cpp
+  hostd/src/app/hostd_runtime_http_proxy.cpp
   hostd/src/app/hostd_runtime_telemetry_support.cpp
   hostd/src/app/hostd_system_telemetry_collector.cpp
   hostd/src/app/hostd_desired_state_apply_support_tests.cpp
@@ -1141,8 +1182,10 @@ add_executable(
   controller/src/app/controller_component_factory_support.cpp
   controller/src/app/controller_composition_support.cpp
   controller/src/app/controller_http_service_support.cpp
+  controller/src/app/controller_listener_policy.cpp
   controller/src/app/controller_plane_support.cpp
   controller/src/app/controller_read_model_support.cpp
+  controller/src/app/controller_route_summary_builder.cpp
   controller/src/app/controller_serve_support.cpp
   controller/src/app/controller_language_support.cpp
   controller/src/app/controller_request_context.cpp
@@ -1180,6 +1223,7 @@ add_executable(
   controller/src/interaction/interaction_contract_responder.cpp
   controller/src/interaction/interaction_conversation_service.cpp
   controller/src/interaction/interaction_http_service.cpp
+  controller/src/interaction/interaction_hostd_runtime_relay_service.cpp
   controller/src/interaction/interaction_http_executor_factory.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_model_identity_builder.cpp
@@ -1192,11 +1236,15 @@ add_executable(
   controller/src/interaction/interaction_sse_frame_builder.cpp
   controller/src/interaction/interaction_stream_http_error_response_builder.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service.cpp
+  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/interaction/interaction_text_post_processor.cpp
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
   controller/src/interaction/interaction_runtime_support_service.cpp
   controller/src/interaction/interaction_service.cpp
+  controller/src/knowledge/knowledge_vault_http_service.cpp
+  controller/src/knowledge/knowledge_vault_service.cpp
+  controller/src/knowledge/knowledge_vault_service_repository.cpp
   controller/src/model/model_library_http_service.cpp
   controller/src/model/model_library_http_support.cpp
   controller/src/model/model_conversion_service.cpp
@@ -1275,6 +1323,7 @@ add_executable(
   hostd/src/app/hostd_bootstrap_transfer_support.cpp
   hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_compose_runtime_support.cpp
+  hostd/src/app/hostd_container_name_support.cpp
   hostd/src/app/hostd_controller_transport_support.cpp
   hostd/src/app/hostd_desired_state_apply_plan_support.cpp
   hostd/src/app/hostd_desired_state_apply_support.cpp
@@ -1285,10 +1334,12 @@ add_executable(
   hostd/src/app/hostd_local_runtime_state_support.cpp
   hostd/src/app/hostd_local_state_path_support.cpp
   hostd/src/app/hostd_local_state_repository.cpp
+  hostd/src/app/hostd_model_artifact_request_support.cpp
   hostd/src/app/hostd_observed_state_snapshot_builder.cpp
   hostd/src/app/hostd_post_deploy_support.cpp
   hostd/src/app/hostd_reporting_support.cpp
   hostd/src/app/hostd_repo_root_support.cpp
+  hostd/src/app/hostd_runtime_http_proxy.cpp
   hostd/src/app/hostd_runtime_telemetry_support.cpp
   hostd/src/app/hostd_system_telemetry_collector.cpp
   hostd/src/backend/hostd_backend_factory.cpp
@@ -1401,6 +1452,34 @@ if(NOT WIN32)
       unofficial::sqlite3::sqlite3
   )
   naim_enable_strict_warnings(naim-skillsd)
+
+  add_executable(
+    naim-knowledged
+    controller/src/http/controller_http_server_support.cpp
+    controller/src/http/controller_http_transport.cpp
+    controller/src/infra/controller_network_manager.cpp
+    runtime/knowledge/src/knowledge_runtime_config_loader.cpp
+    runtime/knowledge/src/knowledge_server.cpp
+    runtime/knowledge/src/knowledge_server_signal_handler.cpp
+    runtime/knowledge/src/knowledge_store_keys.cpp
+    runtime/knowledge/src/knowledge_store.cpp
+    runtime/knowledge/src/knowledge_text_processor.cpp
+    runtime/knowledge/src/rocksdb_json_repository.cpp
+    runtime/knowledge/src/main.cpp
+  )
+  target_include_directories(
+    naim-knowledged PRIVATE common/include controller/include runtime/knowledge/include)
+  target_link_libraries(
+    naim-knowledged
+    PRIVATE
+      naim-common
+      RocksDB::rocksdb
+      Threads::Threads
+  )
+  if(WIN32)
+    target_link_libraries(naim-knowledged PRIVATE ws2_32)
+  endif()
+  naim_enable_strict_warnings(naim-knowledged)
 
   add_executable(
     naim-inferctl

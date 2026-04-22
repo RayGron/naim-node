@@ -7,6 +7,7 @@
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_sse_frame_builder.h"
+#include "knowledge/knowledge_vault_service.h"
 #include "skills/plane_skills_service.h"
 
 using nlohmann::json;
@@ -14,6 +15,56 @@ using naim::controller::InteractionConversationService;
 using naim::controller::InteractionRequestContext;
 using naim::controller::PlaneInteractionResolution;
 using naim::controller::ResolvedInteractionPolicy;
+
+namespace {
+
+constexpr const char* kKnowledgeSystemInstructionPayloadKey =
+    "__naim_knowledge_system_instruction";
+constexpr const char* kKnowledgeContextPayloadKey = "__naim_knowledge_context";
+
+std::string LatestUserQuery(const nlohmann::json& payload) {
+  if (!payload.contains("messages") || !payload.at("messages").is_array()) {
+    return {};
+  }
+  for (auto it = payload.at("messages").rbegin(); it != payload.at("messages").rend(); ++it) {
+    if (!it->is_object() || it->value("role", std::string{}) != "user") {
+      continue;
+    }
+    if (!it->contains("content")) {
+      continue;
+    }
+    if (it->at("content").is_string()) {
+      return it->at("content").get<std::string>();
+    }
+    return it->at("content").dump();
+  }
+  return {};
+}
+
+std::string BuildKnowledgeInstruction(const nlohmann::json& context_payload) {
+  const auto context = context_payload.value("context", nlohmann::json::array());
+  if (!context.is_array() || context.empty()) {
+    return {};
+  }
+  std::string instruction =
+      "Knowledge Base context: use the following canonical knowledge snippets when "
+      "they are relevant. Preserve provenance and do not invent facts outside this context.";
+  int index = 1;
+  for (const auto& item : context) {
+    if (!item.is_object()) {
+      continue;
+    }
+    instruction += "\n\n[" + std::to_string(index) + "] ";
+    instruction += item.value("title", item.value("knowledge_id", std::string("knowledge")));
+    instruction += "\nknowledge_id: " + item.value("knowledge_id", std::string{});
+    instruction += "\nblock_id: " + item.value("block_id", std::string{});
+    instruction += "\ntext: " + item.value("text", std::string{});
+    ++index;
+  }
+  return instruction;
+}
+
+}  // namespace
 
 InteractionHttpService::InteractionHttpService(InteractionHttpSupport support)
     : support_(std::move(support)) {}
@@ -51,13 +102,62 @@ InteractionHttpService::ResolveRequestBrowsing(
 }
 
 std::optional<naim::controller::InteractionValidationError>
+InteractionHttpService::ResolveRequestKnowledge(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    naim::controller::InteractionRequestContext* request_context) const {
+  if (!request_context || !resolution.desired_state.knowledge.has_value() ||
+      !resolution.desired_state.knowledge->enabled) {
+    return std::nullopt;
+  }
+
+  const auto& knowledge = *resolution.desired_state.knowledge;
+  nlohmann::json body = {
+      {"plane_id", resolution.desired_state.plane_name},
+      {"query", LatestUserQuery(request_context->payload)},
+      {"request_id", request_context->request_id},
+      {"token_budget", knowledge.context_policy.token_budget},
+      {"include_graph", knowledge.context_policy.include_graph},
+      {"max_graph_depth", knowledge.context_policy.max_graph_depth},
+      {"selected_knowledge_ids", knowledge.selected_knowledge_ids},
+  };
+  HttpRequest proxy_request;
+  proxy_request.method = "POST";
+  proxy_request.path = "/api/v1/knowledge-vault/context";
+  proxy_request.headers["Content-Type"] = "application/json";
+  proxy_request.body = body.dump();
+  const HttpResponse response =
+      naim::controller::KnowledgeVaultService().ProxyServiceRequest(
+          resolution.db_path,
+          proxy_request,
+          "/v1/context");
+  const auto parsed = nlohmann::json::parse(response.body, nullptr, false);
+  if (response.status_code < 200 || response.status_code >= 300 || parsed.is_discarded()) {
+    request_context->payload["__naim_knowledge_warning"] = nlohmann::json{
+        {"status_code", response.status_code},
+        {"message", parsed.is_discarded() ? response.body
+                                          : parsed.value("message", std::string("knowledge context unavailable"))},
+    };
+    return std::nullopt;
+  }
+  request_context->payload[kKnowledgeContextPayloadKey] = parsed;
+  const std::string instruction = BuildKnowledgeInstruction(parsed);
+  if (!instruction.empty()) {
+    request_context->payload[kKnowledgeSystemInstructionPayloadKey] = instruction;
+  }
+  return std::nullopt;
+}
+
+std::optional<naim::controller::InteractionValidationError>
 InteractionHttpService::ResolveRequestContext(
     const naim::controller::PlaneInteractionResolution& resolution,
     naim::controller::InteractionRequestContext* request_context) const {
   if (const auto error = ResolveRequestSkills(resolution, request_context)) {
     return error;
   }
-  return ResolveRequestBrowsing(resolution, request_context);
+  if (const auto error = ResolveRequestBrowsing(resolution, request_context)) {
+    return error;
+  }
+  return ResolveRequestKnowledge(resolution, request_context);
 }
 
 HttpResponse InteractionHttpService::BuildSessionResponse(

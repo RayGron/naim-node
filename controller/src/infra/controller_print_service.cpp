@@ -471,8 +471,14 @@ void ControllerPrintService::PrintHostAssignments(
     return;
   }
   for (const auto& assignment : assignments) {
-    const auto desired_node_state =
-        naim::DeserializeDesiredStateJson(assignment.desired_state_json);
+    std::size_t instance_count = 0;
+    try {
+      const auto desired_node_state =
+          naim::DeserializeDesiredStateJson(assignment.desired_state_json);
+      instance_count = desired_node_state.instances.size();
+    } catch (const std::exception&) {
+      instance_count = 0;
+    }
     std::cout << "  - id=" << assignment.id
               << " node=" << assignment.node_name
               << " plane=" << assignment.plane_name
@@ -480,7 +486,7 @@ void ControllerPrintService::PrintHostAssignments(
               << " attempts=" << assignment.attempt_count << "/" << assignment.max_attempts
               << " type=" << assignment.assignment_type
               << " status=" << naim::ToString(assignment.status)
-              << " instances=" << desired_node_state.instances.size()
+              << " instances=" << instance_count
               << " artifacts_root=" << assignment.artifacts_root << "\n";
     if (!assignment.status_message.empty()) {
       std::cout << "    message=" << assignment.status_message << "\n";

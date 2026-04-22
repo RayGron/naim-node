@@ -7,6 +7,7 @@
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_replica_group_summary_builder.h"
 #include "interaction/interaction_runtime_text_support.h"
+#include "interaction/interaction_target_relay_policy.h"
 #include "interaction/interaction_text_post_processor.h"
 #include "interaction/interaction_upstream_event_parser.h"
 #include <algorithm>
@@ -1733,6 +1734,12 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       resolution.target = parse_interaction_target_(
           resolution.runtime_status->gateway_listen,
           desired_state->gateway.listen_port);
+      InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
+          store,
+          db_path,
+          primary_node,
+          plane_name,
+          &resolution.target);
     }
   }
 
@@ -1821,6 +1828,12 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
         desired_state->gateway.listen_host + ":" +
             std::to_string(desired_state->gateway.listen_port),
         desired_state->gateway.listen_port);
+    InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
+        store,
+        db_path,
+        primary_node,
+        plane_name,
+        &resolution.target);
   }
 
   if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {

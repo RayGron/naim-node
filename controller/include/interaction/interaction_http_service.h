@@ -34,6 +34,10 @@ class InteractionHttpService {
       const naim::controller::PlaneInteractionResolution& resolution,
       naim::controller::InteractionRequestContext* request_context) const;
 
+  std::optional<naim::controller::InteractionValidationError> ResolveRequestKnowledge(
+      const naim::controller::PlaneInteractionResolution& resolution,
+      naim::controller::InteractionRequestContext* request_context) const;
+
   std::optional<naim::controller::InteractionValidationError> ResolveRequestContext(
       const naim::controller::PlaneInteractionResolution& resolution,
       naim::controller::InteractionRequestContext* request_context) const;

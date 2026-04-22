@@ -7,6 +7,7 @@
 #include "bundle/bundle_http_service.h"
 #include "http/controller_http_route_handler.h"
 #include "host/hostd_http_service.h"
+#include "knowledge/knowledge_vault_http_service.h"
 #include "model/model_library_http_service.h"
 #include "plane/plane_http_service.h"
 #include "read_model/read_model_http_service.h"
@@ -61,6 +62,18 @@ class ModelLibraryHttpRouteHandler final : public IControllerHttpRouteHandler {
 
  private:
   ModelLibraryHttpService& service_;
+};
+
+class KnowledgeVaultHttpRouteHandler final : public IControllerHttpRouteHandler {
+ public:
+  explicit KnowledgeVaultHttpRouteHandler(KnowledgeVaultHttpService& service);
+  std::optional<HttpResponse> TryHandle(
+      const std::string& db_path,
+      const std::string& default_artifacts_root,
+      const HttpRequest& request) const override;
+
+ private:
+  KnowledgeVaultHttpService& service_;
 };
 
 class PlaneHttpRouteHandler final : public IControllerHttpRouteHandler {

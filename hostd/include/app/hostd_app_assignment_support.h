@@ -12,6 +12,7 @@
 #include "app/hostd_bootstrap_transfer_support.h"
 #include "app/hostd_command_support.h"
 #include "app/hostd_compose_runtime_support.h"
+#include "app/hostd_container_name_support.h"
 #include "app/hostd_desired_state_apply_plan_support.h"
 #include "app/hostd_desired_state_apply_support.h"
 #include "app/hostd_desired_state_display_support.h"
@@ -21,8 +22,10 @@
 #include "app/hostd_local_runtime_state_support.h"
 #include "app/hostd_local_state_path_support.h"
 #include "app/hostd_local_state_repository.h"
+#include "app/hostd_model_artifact_request_support.h"
 #include "app/hostd_post_deploy_support.h"
 #include "app/hostd_reporting_support.h"
+#include "app/hostd_runtime_http_proxy.h"
 #include "backend/hostd_backend.h"
 #include "cli/hostd_command_line.h"
 #include "naim/state/models.h"
@@ -93,6 +96,27 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
       const std::string& node_name,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const override;
+  void ExecuteRuntimeHttpProxy(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const override;
+  void ApplyKnowledgeVaultService(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      const std::string& storage_root,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const override;
+  void StopKnowledgeVaultService(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const override;
+  void ExecuteKnowledgeVaultHttpProxy(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const override;
   void ShowDemoOps(
       const std::string& node_name,
       const std::string& storage_root,
@@ -130,6 +154,9 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
   HostdDesiredStateApplyPlanSupport apply_plan_support_;
   HostdPostDeploySupport post_deploy_support_;
   HostdReportingSupport reporting_support_;
+  HostdRuntimeHttpProxy runtime_http_proxy_;
+  HostdModelArtifactRequestSupport model_artifact_request_support_;
+  HostdContainerNameSupport container_name_support_;
   HostdBootstrapTransferSupport model_library_transfer_support_;
   HostdBootstrapModelSupportFactory bootstrap_model_support_factory_;
   HostdBootstrapModelSupport bootstrap_model_support_;

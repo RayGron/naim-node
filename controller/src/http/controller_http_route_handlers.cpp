@@ -39,6 +39,17 @@ std::optional<HttpResponse> ModelLibraryHttpRouteHandler::TryHandle(
   return service_.HandleRequest(db_path, request);
 }
 
+KnowledgeVaultHttpRouteHandler::KnowledgeVaultHttpRouteHandler(
+    KnowledgeVaultHttpService& service)
+    : service_(service) {}
+
+std::optional<HttpResponse> KnowledgeVaultHttpRouteHandler::TryHandle(
+    const std::string& db_path,
+    const std::string&,
+    const HttpRequest& request) const {
+  return service_.HandleRequest(db_path, request);
+}
+
 PlaneHttpRouteHandler::PlaneHttpRouteHandler(PlaneHttpService& service) : service_(service) {}
 
 std::optional<HttpResponse> PlaneHttpRouteHandler::TryHandle(

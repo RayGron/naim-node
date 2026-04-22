@@ -204,6 +204,26 @@ json StateJsonSettingsCodecs::ToJson(const BrowsingSettings& browsing) {
   return result;
 }
 
+json StateJsonSettingsCodecs::ToJson(
+    const KnowledgeContextPolicySettings& policy) {
+  return json{
+      {"include_graph", policy.include_graph},
+      {"max_graph_depth", policy.max_graph_depth},
+      {"token_budget", policy.token_budget},
+  };
+}
+
+json StateJsonSettingsCodecs::ToJson(const KnowledgeSettings& knowledge) {
+  json result = {
+      {"enabled", knowledge.enabled},
+      {"service_id", knowledge.service_id},
+      {"selection_mode", knowledge.selection_mode},
+      {"selected_knowledge_ids", knowledge.selected_knowledge_ids},
+      {"context_policy", ToJson(knowledge.context_policy)},
+  };
+  return result;
+}
+
 json StateJsonSettingsCodecs::ToJson(const ExternalAppHostConfig& app_host) {
   json result = {
       {"address", app_host.address},
@@ -381,6 +401,32 @@ BrowsingSettings StateJsonSettingsCodecs::BrowsingSettingsFromJson(
     browsing.policy = std::move(policy);
   }
   return browsing;
+}
+
+KnowledgeSettings StateJsonSettingsCodecs::KnowledgeSettingsFromJson(
+    const json& value) {
+  KnowledgeSettings knowledge;
+  knowledge.enabled = value.value("enabled", knowledge.enabled);
+  knowledge.service_id = value.value("service_id", knowledge.service_id);
+  knowledge.selection_mode = value.value("selection_mode", knowledge.selection_mode);
+  if (value.contains("selected_knowledge_ids") &&
+      value.at("selected_knowledge_ids").is_array()) {
+    for (const auto& item : value.at("selected_knowledge_ids")) {
+      if (item.is_string()) {
+        knowledge.selected_knowledge_ids.push_back(item.get<std::string>());
+      }
+    }
+  }
+  if (value.contains("context_policy") && value.at("context_policy").is_object()) {
+    const auto& policy = value.at("context_policy");
+    knowledge.context_policy.include_graph =
+        policy.value("include_graph", knowledge.context_policy.include_graph);
+    knowledge.context_policy.max_graph_depth =
+        policy.value("max_graph_depth", knowledge.context_policy.max_graph_depth);
+    knowledge.context_policy.token_budget =
+        policy.value("token_budget", knowledge.context_policy.token_budget);
+  }
+  return knowledge;
 }
 
 ExternalAppHostConfig StateJsonSettingsCodecs::ExternalAppHostConfigFromJson(

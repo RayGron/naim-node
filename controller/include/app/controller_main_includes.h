@@ -66,6 +66,7 @@
 #include "http/controller_http_types.h"
 #include "host/hostd_http_service.h"
 #include "interaction/interaction_http_service.h"
+#include "knowledge/knowledge_vault_http_service.h"
 #include "interaction/interaction_runtime_support_service.h"
 #include "model/model_library_http_service.h"
 #include "model/model_library_service.h"

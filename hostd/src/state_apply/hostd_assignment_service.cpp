@@ -224,6 +224,63 @@ void HostdAssignmentService::ApplyNextAssignment(
               std::to_string(assignment->max_attempts));
       return;
     }
+    if (assignment->assignment_type == "runtime-http-proxy") {
+      support_.ExecuteRuntimeHttpProxy(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "executed runtime HTTP proxy request on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      return;
+    }
+    if (assignment->assignment_type == "knowledge-vault-apply") {
+      support_.ApplyKnowledgeVaultService(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          storage_root,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "applied knowledge vault service on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      return;
+    }
+    if (assignment->assignment_type == "knowledge-vault-stop") {
+      support_.StopKnowledgeVaultService(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "stopped knowledge vault service on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      return;
+    }
+    if (assignment->assignment_type == "knowledge-vault-http-proxy") {
+      support_.ExecuteKnowledgeVaultHttpProxy(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "executed knowledge vault HTTP proxy request on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      return;
+    }
 
     if (assignment->assignment_type != "apply-node-state" &&
         assignment->assignment_type != "drain-node-state" &&

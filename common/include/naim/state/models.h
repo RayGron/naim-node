@@ -300,6 +300,20 @@ struct BrowsingSettings {
   std::optional<BrowsingPolicySettings> policy;
 };
 
+struct KnowledgeContextPolicySettings {
+  bool include_graph = true;
+  int max_graph_depth = 1;
+  int token_budget = 12000;
+};
+
+struct KnowledgeSettings {
+  bool enabled = false;
+  std::string service_id = "kv_default";
+  std::string selection_mode = "latest";
+  std::vector<std::string> selected_knowledge_ids;
+  KnowledgeContextPolicySettings context_policy;
+};
+
 struct TurboQuantFeatureSpec {
   bool enabled = false;
   std::optional<std::string> cache_type_k;
@@ -328,6 +342,7 @@ struct DesiredState {
   std::optional<InteractionSettings> interaction;
   std::optional<SkillsSettings> skills;
   std::optional<BrowsingSettings> browsing;
+  std::optional<KnowledgeSettings> knowledge;
   std::optional<TurboQuantFeatureSpec> turboquant;
   std::optional<ExternalAppHostConfig> app_host;
   InferenceRuntimeSettings inference;

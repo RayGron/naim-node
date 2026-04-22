@@ -15,6 +15,15 @@
 
 namespace naim::controller {
 
+namespace {
+
+constexpr const char* kKnowledgeSystemInstructionPayloadKey =
+    "__naim_knowledge_system_instruction";
+constexpr const char* kKnowledgeContextPayloadKey = "__naim_knowledge_context";
+constexpr const char* kKnowledgeWarningPayloadKey = "__naim_knowledge_warning";
+
+}  // namespace
+
 std::string BuildInteractionUpstreamBodyPayload(
     const PlaneInteractionResolution& resolution,
     nlohmann::json payload,
@@ -64,6 +73,14 @@ std::string BuildInteractionUpstreamBodyPayload(
             .get<std::string>();
     if (!browsing_instruction.empty()) {
       system_instruction_parts.push_back(browsing_instruction);
+    }
+  }
+  if (payload.contains(kKnowledgeSystemInstructionPayloadKey) &&
+      payload.at(kKnowledgeSystemInstructionPayloadKey).is_string()) {
+    const std::string knowledge_instruction =
+        payload.at(kKnowledgeSystemInstructionPayloadKey).get<std::string>();
+    if (!knowledge_instruction.empty()) {
+      system_instruction_parts.push_back(knowledge_instruction);
     }
   }
   if (resolved_policy.repository_analysis &&
@@ -167,6 +184,9 @@ std::string BuildInteractionUpstreamBodyPayload(
   payload.erase(InteractionBrowsingService::kWebGatewayContextPayloadKey);
   payload.erase(InteractionBrowsingService::kWebGatewayPolicyPayloadKey);
   payload.erase(InteractionBrowsingService::kWebGatewayReviewPayloadKey);
+  payload.erase(kKnowledgeSystemInstructionPayloadKey);
+  payload.erase(kKnowledgeContextPayloadKey);
+  payload.erase(kKnowledgeWarningPayloadKey);
   payload["chat_template_kwargs"]["enable_thinking"] = thinking_enabled;
   const InteractionModelIdentityBuilder model_identity_builder;
   naim::runtime::ModelAdapter::AdaptInteractionPayload(
