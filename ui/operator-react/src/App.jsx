@@ -39,6 +39,12 @@ import {
   isBuiltinSkillsFactoryGroupPath,
   sortSkillsFactoryItems,
 } from "./skillsFactory.js";
+import { KnowledgeCubeGraph } from "./KnowledgeCubeGraph.jsx";
+import {
+  buildKnowledgeGraphRequest,
+  normalizeKnowledgeResults,
+  summarizeKnowledgeGraph,
+} from "./knowledgeVault.js";
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
@@ -1857,7 +1863,7 @@ function App() {
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
   const [selectedPage, setSelectedPage] = useState(
-    ["dashboard", "planes", "models", "skills-factory", "access"].includes(initialPage)
+    ["dashboard", "planes", "models", "knowledge-vault", "skills-factory", "access"].includes(initialPage)
       ? initialPage
       : "dashboard",
   );
@@ -1895,6 +1901,13 @@ function App() {
   const [events, setEvents] = useState([]);
   const [interactionStatus, setInteractionStatus] = useState(null);
   const [knowledgeVaultStatus, setKnowledgeVaultStatus] = useState(null);
+  const [knowledgeVaultGraph, setKnowledgeVaultGraph] = useState({
+    nodes: [],
+    edges: [],
+    warnings: [],
+  });
+  const [knowledgeVaultGraphBusy, setKnowledgeVaultGraphBusy] = useState(false);
+  const [knowledgeVaultGraphError, setKnowledgeVaultGraphError] = useState("");
   const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [], nodes: [] });
   const [skillsFactory, setSkillsFactory] = useState({
     items: [],
@@ -1996,6 +2009,9 @@ function App() {
     setEvents([]);
     setInteractionStatus(null);
     setKnowledgeVaultStatus(null);
+    setKnowledgeVaultGraph({ nodes: [], edges: [], warnings: [] });
+    setKnowledgeVaultGraphBusy(false);
+    setKnowledgeVaultGraphError("");
     setModelLibrary({ items: [], roots: [], jobs: [], nodes: [] });
     setModelsTab("library");
     setSkillsFactory({
@@ -2155,6 +2171,51 @@ function App() {
         return;
       }
       throw error;
+    }
+  }
+
+  async function refreshKnowledgeVaultGraph() {
+    setKnowledgeVaultGraphBusy(true);
+    setKnowledgeVaultGraphError("");
+    try {
+      const searchPayload = await fetchJson(knowledgeVaultPath("search"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: "",
+          list_all: true,
+          limit: 100,
+        }),
+      });
+      const results = normalizeKnowledgeResults(searchPayload?.results);
+      const graphRequest = buildKnowledgeGraphRequest(results, [], 100);
+      if (graphRequest.knowledge_ids.length === 0) {
+        setKnowledgeVaultGraph({ nodes: [], edges: [], warnings: [] });
+        return;
+      }
+      const graphPayload = await fetchJson(knowledgeVaultPath("graph-neighborhood"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(graphRequest),
+      });
+      setKnowledgeVaultGraph({
+        nodes: Array.isArray(graphPayload?.nodes) ? graphPayload.nodes : [],
+        edges: Array.isArray(graphPayload?.edges) ? graphPayload.edges : [],
+        warnings: Array.isArray(graphPayload?.warnings) ? graphPayload.warnings : [],
+      });
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setKnowledgeVaultGraphError(error.message || String(error));
+      setKnowledgeVaultGraph({ nodes: [], edges: [], warnings: [] });
+    } finally {
+      setKnowledgeVaultGraphBusy(false);
     }
   }
 
@@ -3276,6 +3337,17 @@ function App() {
     return () => clearInterval(timer);
   }, [authState.authenticated, selectedPlane, selectedPage]);
 
+  useEffect(() => {
+    if (!authState.authenticated || selectedPage !== "knowledge-vault") {
+      return undefined;
+    }
+    refreshKnowledgeVaultGraph();
+    const timer = setInterval(() => {
+      refreshKnowledgeVaultGraph();
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [authState.authenticated, selectedPage]);
+
   const hasActiveModelJobsForPolling = Array.isArray(modelLibrary.jobs)
     ? modelLibrary.jobs.some((job) => {
         const status = String(job?.status || "").toLowerCase();
@@ -3628,6 +3700,19 @@ function App() {
   const modelsNavMeta = activeModelJobs > 0
     ? `${activeModelJobs} download job${activeModelJobs === 1 ? "" : "s"}`
     : `${activeModelCount} discovered model${activeModelCount === 1 ? "" : "s"}`;
+  const knowledgeGraphSummary = summarizeKnowledgeGraph(knowledgeVaultGraph);
+  const knowledgeVaultStatusText = String(knowledgeVaultStatus?.status || "inactive");
+  const knowledgeVaultStatusLower = knowledgeVaultStatusText.toLowerCase();
+  const knowledgeVaultNavClass = knowledgeVaultGraphError
+    ? "is-critical"
+    : knowledgeVaultGraphBusy
+      ? "is-warning"
+      : ["active", "ready", "running", "healthy"].includes(knowledgeVaultStatusLower)
+        ? "is-healthy"
+        : "is-booting";
+  const knowledgeVaultNavMeta = knowledgeVaultStatus?.node_name
+    ? `node ${knowledgeVaultStatus.node_name}`
+    : `${knowledgeGraphSummary.nodeCount} record${knowledgeGraphSummary.nodeCount === 1 ? "" : "s"}`;
   function handleModelLibraryScroll(event) {
     const node = event.currentTarget;
     if (!hasMoreModelItems) {
@@ -5405,6 +5490,73 @@ function App() {
     });
   }
 
+  function renderKnowledgeVaultPage() {
+    return (
+      <section className="panel page-panel knowledge-vault-page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Knowledge Vault</div>
+            <h2>Canonical Knowledge Vault</h2>
+          </div>
+          <div className="toolbar">
+            <span className={`tag ${knowledgeVaultNavClass}`}>
+              {statusDot(knowledgeVaultNavClass)}
+              <span>{knowledgeVaultStatusText}</span>
+            </span>
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={refreshKnowledgeVaultGraph}
+              disabled={knowledgeVaultGraphBusy}
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {knowledgeVaultGraphError ? (
+          <div className="error-banner">{knowledgeVaultGraphError}</div>
+        ) : null}
+
+        <div className="knowledge-vault-overview-grid">
+          <article className="summary-card">
+            <span>Active molecules</span>
+            <strong>{knowledgeGraphSummary.nodeCount}</strong>
+          </article>
+          <article className="summary-card">
+            <span>Relations</span>
+            <strong>{knowledgeGraphSummary.edgeCount}</strong>
+          </article>
+          <article className="summary-card">
+            <span>Service</span>
+            <strong>{knowledgeVaultStatusText}</strong>
+          </article>
+          <article className="summary-card">
+            <span>Node</span>
+            <strong>{knowledgeVaultStatus?.node_name || "unassigned"}</strong>
+          </article>
+        </div>
+
+        <div className="knowledge-vault-graph-panel">
+          <KnowledgeCubeGraph graph={knowledgeVaultGraph} variant="lattice" />
+          {knowledgeVaultGraphBusy ? (
+            <div className="knowledge-vault-graph-overlay">
+              <span>Loading</span>
+            </div>
+          ) : null}
+          {!knowledgeVaultGraphBusy && knowledgeGraphSummary.nodeCount === 0 ? (
+            <div className="knowledge-vault-graph-overlay">
+              <EmptyState
+                title="No active molecules"
+                detail="No canonical knowledge records are available."
+              />
+            </div>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
+
   function renderModelsLibrary() {
     const detectedSourceFormat = detectModelSourceFormat(modelDownloadForm.sourceUrls);
     const renderLibraryCatalog = () => (
@@ -6895,6 +7047,20 @@ function App() {
               </span>
             </button>
             <button
+              className={`side-menu-item ${selectedPage === "knowledge-vault" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("knowledge-vault")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Knowledge Vault</span>
+                <span className="side-menu-meta">{knowledgeVaultNavMeta}</span>
+              </div>
+              <span className={`tag ${knowledgeVaultNavClass}`}>
+                {statusDot(knowledgeVaultNavClass)}
+                <span>{knowledgeGraphSummary.nodeCount} items</span>
+              </span>
+            </button>
+            <button
               className={`side-menu-item ${selectedPage === "skills-factory" ? "is-active" : ""}`}
               type="button"
               onClick={() => setSelectedPage("skills-factory")}
@@ -6930,6 +7096,8 @@ function App() {
           renderPlanesRegistry()
         ) : selectedPage === "models" ? (
           renderModelsLibrary()
+        ) : selectedPage === "knowledge-vault" ? (
+          renderKnowledgeVaultPage()
         ) : selectedPage === "skills-factory" ? (
           renderSkillsFactoryPage()
         ) : selectedPage === "access" ? (
