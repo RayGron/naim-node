@@ -77,6 +77,48 @@ image_ref() {
   printf '%s/%s/%s:%s' "${registry}" "${project}" "${image}" "${tag}"
 }
 
+latest_image_ref() {
+  local image="$1"
+  printf '%s/%s/%s:latest' "${registry}" "${project}" "${image}"
+}
+
+delete_remote_latest_tag() {
+  local image="$1"
+  local username="${NAIM_REGISTRY_USERNAME:-}"
+  local password_file="${NAIM_REGISTRY_PASSWORD_FILE:-}"
+  if [[ -z "${username}" || -z "${password_file}" || ! -f "${password_file}" ]]; then
+    return 0
+  fi
+
+  python3 - "${registry}" "${project}" "${image}" "${username}" "${password_file}" <<'PY'
+import base64
+import ssl
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+registry, project, image, username, password_file = sys.argv[1:6]
+password = open(password_file, encoding="utf-8").read().strip()
+auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+base = f"https://{registry}/api/v2.0"
+repository = urllib.parse.quote(image, safe="")
+tag = urllib.parse.quote("latest", safe="")
+request = urllib.request.Request(
+    f"{base}/projects/{project}/repositories/{repository}/artifacts/latest/tags/{tag}",
+    headers={"Authorization": "Basic " + auth},
+    method="DELETE",
+)
+try:
+    with urllib.request.urlopen(request, context=ssl._create_unverified_context(), timeout=30):
+        pass
+except urllib.error.HTTPError as error:
+    if error.code not in (404,):
+        detail = error.read().decode("utf-8", "replace")
+        raise SystemExit(f"failed to delete remote latest tag for {image}: HTTP {error.code} {detail}")
+PY
+}
+
 base_ref="$(image_ref base-runtime)"
 infer_ref="$(image_ref infer-runtime)"
 worker_ref="$(image_ref worker-runtime)"
@@ -131,13 +173,11 @@ for image in "${image_names[@]}"; do
     repo_digest="${ref}"
   fi
   json_entries+=("$(printf '    \"%s\": \"%s\"' "${image}" "${repo_digest}")")
-  if [[ "${image}" == "knowledge-runtime" ]]; then
-    latest_ref="$(image_ref "${image}")"
-    latest_ref="${latest_ref%:*}:latest"
-    echo "pushing ${latest_ref}"
-    docker tag "${ref}" "${latest_ref}"
-    docker push "${latest_ref}"
-  fi
+  latest_ref="$(latest_image_ref "${image}")"
+  echo "moving ${latest_ref} to ${ref}"
+  delete_remote_latest_tag "${image}"
+  docker tag "${ref}" "${latest_ref}"
+  docker push "${latest_ref}"
 done
 
 {
