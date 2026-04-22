@@ -11,6 +11,9 @@ if [[ -n "${VCPKG_ROOT:-}" ]]; then
 fi
 candidates+=(
   "${repo_dir}/.tools/vcpkg"
+  "/mnt/shared-storage/naim/vcpkg"
+  "/opt/vcpkg"
+  "/usr/local/vcpkg"
   "/mnt/e/dev/tools/vcpkg"
   "${HOME}/vcpkg"
 )
