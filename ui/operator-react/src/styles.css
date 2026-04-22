@@ -183,18 +183,27 @@ body {
   margin: 12px 0 0;
 }
 
+.hero-copy {
+  padding-top: 44px;
+}
+
 .hero-meta {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 2;
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: flex-start;
+  width: min(390px, calc(100% - 36px));
 }
 
 .hero-status-card {
-  width: min(100%, 390px);
+  width: 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   padding: 10px 12px;
   background: rgba(5, 15, 32, 0.46);
@@ -2359,6 +2368,16 @@ body {
   .hero,
   .panel {
     padding: 16px;
+  }
+
+  .hero-copy {
+    padding-top: 78px;
+  }
+
+  .hero-meta {
+    top: 12px;
+    left: 12px;
+    width: calc(100% - 24px);
   }
 
   .model-library-list {
