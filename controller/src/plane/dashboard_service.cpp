@@ -1,6 +1,7 @@
 #include "plane/dashboard_service.h"
 
 #include "browsing/plane_browsing_service.h"
+#include "app/controller_time_support.h"
 #include "http/controller_http_transport.h"
 #include "infra/controller_runtime_support_service.h"
 #include "plane/plane_dashboard_skills_summary_service.h"
@@ -39,6 +40,8 @@ struct NodeDemandSummary {
   int desired_disk_count = 0;
   std::set<std::string> plane_names;
 };
+
+constexpr int kPeerLinkFreshSeconds = 120;
 
 json BuildPeerLinksPayload(const std::vector<naim::HostPeerLinkRecord>& links) {
   std::map<std::pair<std::string, std::string>, naim::HostPeerLinkRecord> by_direction;
@@ -710,6 +713,8 @@ nlohmann::json DashboardService::BuildPayload(
                                            : json(nullptr)},
   };
   payload["self_services"] = BuildSelfServicesPayload(store, stale_after_seconds);
+  store.DeleteStaleHostPeerLinks(
+      ControllerTimeSupport::SqlTimestampAfterSeconds(-kPeerLinkFreshSeconds));
   payload["peer_links"] = BuildPeerLinksPayload(store.LoadHostPeerLinks());
   if (!view.desired_state.has_value()) {
     payload["plane"] = nullptr;

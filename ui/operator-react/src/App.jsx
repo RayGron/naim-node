@@ -42,9 +42,23 @@ import {
 
 const REFRESH_DEBOUNCE_MS = 350;
 const AUTO_REFRESH_MS = 5000;
+const FLEET_REFRESH_MS = 2000;
 const MODEL_LIBRARY_ACTIVE_POLL_MS = 1000;
 const MODEL_LIBRARY_BACKGROUND_POLL_MS = 10000;
 const EVENT_LIMIT = 24;
+const REFRESH_EVENT_NAMES = [
+  "host-observation.reported",
+  "host-registry.provisioned",
+  "host-registry.registered",
+  "host-registry.revoked",
+  "host-registry.rotated-key",
+  "host-registry.reset-onboarding",
+  "host-registry.session-opened",
+  "host-registry.storage-role-updated",
+  "host-assignment.applied",
+  "host-assignment.failed",
+  "model-library.downloaded",
+];
 const MODEL_LIBRARY_PAGE_SIZE = 24;
 const MODEL_LIBRARY_JOB_PAGE_SIZE = 8;
 const METRIC_HISTORY_MAX_POINTS = 72;
@@ -1797,6 +1811,43 @@ function nodeStatusLabel(runtimeLaunchReady, runtimePhase, health) {
   return health || "unknown";
 }
 
+function nodeConnectivityStatus(host) {
+  const registry = host?.registry || host || {};
+  const runtimeStatus = host?.runtime_status || null;
+  const runtimeAvailable = runtimeStatus?.available === true;
+  const runtimePhase = runtimeStatus?.phase || "";
+  const health = String(host?.status || "").toLowerCase();
+  const sessionState = String(registry?.session_state || "").toLowerCase();
+  const registrationState = String(registry?.registration_state || "").toLowerCase();
+  const onboardingState = String(registry?.onboarding_state || "").toLowerCase();
+
+  if (runtimeAvailable) {
+    return { indicatorClass: "is-healthy", label: "ready" };
+  }
+  if (runtimePhase === "starting" || runtimePhase === "stopping" || runtimePhase === "pending") {
+    return {
+      indicatorClass: runtimeIndicatorClass(false, health),
+      label: runtimePhase,
+    };
+  }
+  if (health === "stale" || health === "failed" || health === "error") {
+    return { indicatorClass: "is-critical", label: health };
+  }
+  if (sessionState === "connected") {
+    return { indicatorClass: "is-healthy", label: "connected" };
+  }
+  if (sessionState === "disconnected") {
+    return { indicatorClass: "is-warning", label: "disconnected" };
+  }
+  if (onboardingState === "pending" || registrationState === "provisioned") {
+    return { indicatorClass: "is-booting", label: "onboarding" };
+  }
+  return {
+    indicatorClass: hostObservationStatusClass(health),
+    label: health || sessionState || registrationState || "unknown",
+  };
+}
+
 function App() {
   const initialPlane = new URLSearchParams(window.location.search).get("plane") || "";
   const initialPage = new URLSearchParams(window.location.search).get("page") || "dashboard";
@@ -3218,11 +3269,12 @@ function App() {
     if (!authState.authenticated) {
       return undefined;
     }
+    const refreshDelay = selectedPage === "dashboard" ? FLEET_REFRESH_MS : AUTO_REFRESH_MS;
     const timer = setInterval(() => {
       refreshAll(selectedPlane);
-    }, AUTO_REFRESH_MS);
+    }, refreshDelay);
     return () => clearInterval(timer);
-  }, [authState.authenticated, selectedPlane]);
+  }, [authState.authenticated, selectedPlane, selectedPage]);
 
   const hasActiveModelJobsForPolling = Array.isArray(modelLibrary.jobs)
     ? modelLibrary.jobs.some((job) => {
@@ -3249,7 +3301,7 @@ function App() {
   }, [authState.authenticated, hasActiveModelJobsForPolling, selectedPage]);
 
   useEffect(() => {
-    if (!authState.authenticated || !selectedPlane) {
+    if (!authState.authenticated) {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
@@ -3260,7 +3312,6 @@ function App() {
 
     const source = new EventSource(
       queryPath("/api/v1/events/stream", {
-        plane: selectedPlane,
         limit: EVENT_LIMIT,
       }),
     );
@@ -3273,12 +3324,19 @@ function App() {
     source.onerror = () => {
       setStreamHealthy(false);
     };
-    source.onmessage = (event) => {
+    const handleRefreshEvent = (event) => {
       setLastEventName(event.type || "message");
       scheduleRefresh(selectedPlane);
     };
+    source.onmessage = handleRefreshEvent;
+    for (const eventName of REFRESH_EVENT_NAMES) {
+      source.addEventListener(eventName, handleRefreshEvent);
+    }
 
     return () => {
+      for (const eventName of REFRESH_EVENT_NAMES) {
+        source.removeEventListener(eventName, handleRefreshEvent);
+      }
       source.close();
       if (eventSourceRef.current === source) {
         eventSourceRef.current = null;
@@ -4303,9 +4361,7 @@ function App() {
         {items.map((host) => {
           const cpu = host?.cpu_telemetry?.summary || {};
           const gpu = host?.gpu_telemetry?.summary || {};
-          const runtimeAvailable = host?.runtime_status?.available === true;
-          const runtimePhase = host?.runtime_status?.phase || "pending";
-          const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
+          const connectivity = nodeConnectivityStatus(host);
           const registry = host?.registry || null;
           const storageCapacity = registry?.capacity_summary || {};
           const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
@@ -4325,9 +4381,9 @@ function App() {
               >
                 <div className="card-row">
                   <strong>{host?.node_name || "unknown-host"}</strong>
-                  <div className={`pill ${indicatorClass}`}>
-                    {statusDot(indicatorClass)}
-                    <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+                  <div className={`pill ${connectivity.indicatorClass}`}>
+                    {statusDot(connectivity.indicatorClass)}
+                    <span>{connectivity.label}</span>
                   </div>
                 </div>
                 {renderNodeRoleBadges(host)}
@@ -4355,9 +4411,7 @@ function App() {
     const cpu = host?.cpu_telemetry?.summary || {};
     const gpu = host?.gpu_telemetry?.summary || {};
     const capacity = registry?.capacity_summary || {};
-    const runtimeAvailable = host?.runtime_status?.available === true;
-    const runtimePhase = host?.runtime_status?.phase || "pending";
-    const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
+    const connectivity = nodeConnectivityStatus(host);
     const storageSelected = isStorageRoleSelected(host);
     const storageEligible = isStorageRoleEligible(host);
     const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
@@ -4382,9 +4436,9 @@ function App() {
               <h2>{host?.node_name || "unknown-host"}</h2>
               {renderNodeRoleBadges(host)}
             </div>
-            <div className={`pill ${indicatorClass}`}>
-              {statusDot(indicatorClass)}
-              <span>{nodeStatusLabel(runtimeAvailable, runtimePhase, host?.status)}</span>
+            <div className={`pill ${connectivity.indicatorClass}`}>
+              {statusDot(connectivity.indicatorClass)}
+              <span>{connectivity.label}</span>
             </div>
           </div>
           <div className="metric-grid">
@@ -6752,10 +6806,10 @@ function App() {
     return renderAuthShell();
   }
 
-  const streamLabel = streamHealthy ? "Events live" : selectedPlane ? "Events reconnecting" : "Events off";
+  const streamLabel = streamHealthy ? "Events live" : "Events reconnecting";
   const streamTitle = selectedPlane
-    ? `Controller event stream for ${selectedPlane}`
-    : "Controller event stream opens after a plane is selected.";
+    ? `Global controller event stream; refreshing fleet and selected plane ${selectedPlane}.`
+    : "Global controller event stream; refreshing fleet data.";
   const lastRefreshTitle = `Last refresh: ${formatTimestamp(lastRefreshAt)}`;
   const lastEventTitle = `Last event: ${lastEventName || "none"}`;
 

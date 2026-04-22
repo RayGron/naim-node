@@ -8,6 +8,7 @@
 
 #include "naim/runtime/runtime_status.h"
 #include "naim/state/sqlite_store.h"
+#include "app/controller_time_support.h"
 #include "host/host_registry_service.h"
 
 namespace fs = std::filesystem;
@@ -205,6 +206,49 @@ void TestDerivesIneligibleRole() {
       "ineligible node should not be storage-role eligible");
 }
 
+void TestHostRegistryPrunesExpiredLanPeers() {
+  const std::string db_path = MakeTempDbPath("registry-prunes-expired-lan-peers");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  SeedHost(store, "hpc1", "/srv/hpc1");
+  SeedHost(store, "storage1", "/srv/storage1");
+  const std::string now = naim::controller::ControllerTimeSupport::UtcNowSqlTimestamp();
+
+  naim::HostPeerLinkRecord active_link;
+  active_link.observer_node_name = "hpc1";
+  active_link.peer_node_name = "storage1";
+  active_link.peer_endpoint = "http://192.168.88.252:29999";
+  active_link.seen_udp = true;
+  active_link.tcp_reachable = true;
+  active_link.last_seen_at = now;
+  active_link.last_probe_at = now;
+  store.UpsertHostPeerLink(active_link);
+
+  naim::HostPeerLinkRecord expired_link;
+  expired_link.observer_node_name = "hpc1";
+  expired_link.peer_node_name = "sandbox-old";
+  expired_link.peer_endpoint = "http://192.168.88.40:29999";
+  expired_link.seen_udp = true;
+  expired_link.tcp_reachable = true;
+  expired_link.last_seen_at = "2000-01-01 00:00:00";
+  expired_link.last_probe_at = "2000-01-01 00:00:00";
+  store.UpsertHostPeerLink(expired_link);
+
+  const naim::controller::HostRegistryService service(db_path, TestEventSink());
+  const json payload = service.BuildPayload("hpc1");
+  const auto& lan_peers = payload.at("items").at(0).at("lan_peers");
+  Expect(lan_peers.size() == 1, "host registry should expose only fresh LAN peers");
+  Expect(
+      lan_peers.at(0).at("peer_node_name").get<std::string>() == "storage1",
+      "host registry should keep the fresh storage peer");
+  Expect(
+      store.LoadHostPeerLinks(
+               std::optional<std::string>("hpc1"),
+               std::optional<std::string>("sandbox-old"))
+          .empty(),
+      "expired LAN peer should be pruned from the store");
+}
+
 void TestResetOnboardingIssuesNewKeyAndClearsIdentity() {
   const std::string db_path = MakeTempDbPath("reset-onboarding");
   naim::ControllerStore store(db_path);
@@ -365,6 +409,7 @@ int main() {
   TestDerivesStorageRole();
   TestDerivesWorkerRole();
   TestDerivesIneligibleRole();
+  TestHostRegistryPrunesExpiredLanPeers();
   TestSetHostStorageRole();
   TestResetOnboardingIssuesNewKeyAndClearsIdentity();
   TestResetOnboardingRejectsConnectedHost();

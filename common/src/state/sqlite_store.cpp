@@ -729,6 +729,17 @@ void ControllerStore::UpsertHostPeerLink(const HostPeerLinkRecord& link) {
   statement.StepDone();
 }
 
+int ControllerStore::DeleteStaleHostPeerLinks(const std::string& cutoff_timestamp) {
+  SqliteStatement statement(
+      AsSqlite(db_),
+      "DELETE FROM host_peer_links "
+      "WHERE (last_seen_at = '' OR last_seen_at < ?1) "
+      "AND (last_probe_at = '' OR last_probe_at < ?1);");
+  statement.BindText(1, cutoff_timestamp);
+  statement.StepDone();
+  return sqlite3_changes(AsSqlite(db_));
+}
+
 std::vector<HostPeerLinkRecord> ControllerStore::LoadHostPeerLinks(
     const std::optional<std::string>& observer_node_name,
     const std::optional<std::string>& peer_node_name) const {

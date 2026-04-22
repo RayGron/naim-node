@@ -875,6 +875,8 @@ HttpResponse HostdHttpService::HandlePeerLinks(
   try {
     HostdRequestContext context(support_, db_path);
     const auto node_name = FindQueryStringValue(request, "node");
+    context.store().DeleteStaleHostPeerLinks(
+        support_.sql_timestamp_after_seconds(-kPeerLinkFreshSeconds));
     const auto links = context.store().LoadHostPeerLinks(node_name, std::nullopt);
     json payload = BuildPeerLinksPayload(support_, links);
     payload["service"] = "naim-controller";

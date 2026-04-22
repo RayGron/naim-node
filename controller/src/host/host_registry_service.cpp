@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "app/controller_time_support.h"
 #include "naim/security/crypto_utils.h"
 #include "naim/runtime/runtime_status.h"
 
@@ -16,6 +17,8 @@ namespace naim::controller {
 namespace {
 
 using nlohmann::json;
+
+constexpr int kPeerLinkFreshSeconds = 120;
 
 struct HostInventorySummary {
   std::string storage_root;
@@ -131,6 +134,8 @@ json HostRegistryService::BuildPayload(
   naim::ControllerStore store(db_path_);
   store.Initialize();
   const auto observations = store.LoadHostObservations(node_name);
+  store.DeleteStaleHostPeerLinks(
+      ControllerTimeSupport::SqlTimestampAfterSeconds(-kPeerLinkFreshSeconds));
   const auto all_peer_links = store.LoadHostPeerLinks();
   std::map<std::string, std::vector<naim::HostPeerLinkRecord>> peer_links_by_node;
   for (const auto& link : all_peer_links) {

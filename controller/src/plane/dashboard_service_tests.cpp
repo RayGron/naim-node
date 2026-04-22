@@ -525,6 +525,8 @@ void TestPeerLinksIncludedWithoutDesiredPlane() {
   const auto db_path = MakeTempDbPath("peer-links-without-plane");
   naim::ControllerStore store(db_path);
   store.Initialize();
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
+  const std::string now = runtime_support_service.UtcNowSqlTimestamp();
 
   naim::HostPeerLinkRecord hpc_to_storage;
   hpc_to_storage.observer_node_name = "hpc1";
@@ -535,8 +537,8 @@ void TestPeerLinksIncludedWithoutDesiredPlane() {
   hpc_to_storage.seen_udp = true;
   hpc_to_storage.tcp_reachable = true;
   hpc_to_storage.rtt_ms = 1;
-  hpc_to_storage.last_seen_at = "2026-04-17 18:56:06";
-  hpc_to_storage.last_probe_at = "2026-04-17 18:56:06";
+  hpc_to_storage.last_seen_at = now;
+  hpc_to_storage.last_probe_at = now;
   store.UpsertHostPeerLink(hpc_to_storage);
 
   naim::HostPeerLinkRecord storage_to_hpc;
@@ -548,8 +550,8 @@ void TestPeerLinksIncludedWithoutDesiredPlane() {
   storage_to_hpc.seen_udp = true;
   storage_to_hpc.tcp_reachable = true;
   storage_to_hpc.rtt_ms = 1;
-  storage_to_hpc.last_seen_at = "2026-04-17 18:56:16";
-  storage_to_hpc.last_probe_at = "2026-04-17 18:56:16";
+  storage_to_hpc.last_seen_at = now;
+  storage_to_hpc.last_probe_at = now;
   store.UpsertHostPeerLink(storage_to_hpc);
 
   ScopedEnvVar admin_upstream("NAIM_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
@@ -563,6 +565,54 @@ void TestPeerLinksIncludedWithoutDesiredPlane() {
   Expect(summary.at("total").get<int>() == 2, "dashboard should include peer links without a desired plane");
   Expect(summary.at("direct").get<int>() == 2, "bidirectional reachable peer links should be direct");
   std::cout << "ok: peer-links-included-without-desired-plane" << '\n';
+}
+
+void TestDashboardPrunesExpiredPeerLinks() {
+  const auto db_path = MakeTempDbPath("dashboard-prunes-expired-peer-links");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  const naim::controller::ControllerRuntimeSupportService runtime_support_service;
+  const std::string now = runtime_support_service.UtcNowSqlTimestamp();
+
+  naim::HostPeerLinkRecord active_link;
+  active_link.observer_node_name = "hpc1";
+  active_link.peer_node_name = "storage1";
+  active_link.peer_endpoint = "http://192.168.88.252:29999";
+  active_link.seen_udp = true;
+  active_link.tcp_reachable = true;
+  active_link.last_seen_at = now;
+  active_link.last_probe_at = now;
+  store.UpsertHostPeerLink(active_link);
+
+  naim::HostPeerLinkRecord expired_link;
+  expired_link.observer_node_name = "sandbox-old";
+  expired_link.peer_node_name = "hpc1";
+  expired_link.peer_endpoint = "http://192.168.88.40:29999";
+  expired_link.seen_udp = true;
+  expired_link.tcp_reachable = true;
+  expired_link.last_seen_at = "2000-01-01 00:00:00";
+  expired_link.last_probe_at = "2000-01-01 00:00:00";
+  store.UpsertHostPeerLink(expired_link);
+
+  ScopedEnvVar admin_upstream("NAIM_CONTROLLER_ADMIN_UPSTREAM", std::nullopt);
+  ScopedEnvVar internal_upstream("NAIM_CONTROLLER_INTERNAL_UPSTREAM", std::nullopt);
+  ScopedEnvVar skills_factory_upstream("NAIM_SKILLS_FACTORY_UPSTREAM", std::nullopt);
+  ScopedEnvVar web_ui_root_env("NAIM_WEB_UI_ROOT", std::nullopt);
+  ScopedEnvVar hostd_node("NAIM_HOSTD_NODE_NAME", std::string("local-hostd"));
+
+  const auto payload = MakeDashboardService().BuildPayload(db_path, 300, std::nullopt);
+  const auto items = payload.at("peer_links").at("items");
+  Expect(items.size() == 1, "dashboard should remove expired peer links");
+  Expect(
+      items.at(0).at("observer_node_name").get<std::string>() == "hpc1",
+      "dashboard should keep the fresh peer link");
+  Expect(
+      store.LoadHostPeerLinks(
+               std::optional<std::string>("sandbox-old"),
+               std::nullopt)
+          .empty(),
+      "expired peer link should be pruned from the store");
+  std::cout << "ok: dashboard-prunes-expired-peer-links" << '\n';
 }
 
 void TestRuntimePayloadIncludesKvCacheBytes() {
@@ -889,6 +939,7 @@ int main() {
     TestWebUiMissingStateCritical();
     TestSkillsFactoryProbeFailureDoesNotBreakPayload();
     TestPeerLinksIncludedWithoutDesiredPlane();
+    TestDashboardPrunesExpiredPeerLinks();
     TestRuntimePayloadIncludesKvCacheBytes();
     TestPlaneScopedNodesIgnoreForeignRuntimeStatus();
     TestPlanePayloadExposesExecutionNodeTargets();

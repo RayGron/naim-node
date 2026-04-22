@@ -433,6 +433,7 @@ class ControllerStore {
   std::vector<RegisteredHostRecord> LoadRegisteredHosts(
       const std::optional<std::string>& node_name = std::nullopt) const;
   void UpsertHostPeerLink(const HostPeerLinkRecord& link);
+  int DeleteStaleHostPeerLinks(const std::string& cutoff_timestamp);
   std::vector<HostPeerLinkRecord> LoadHostPeerLinks(
       const std::optional<std::string>& observer_node_name = std::nullopt,
       const std::optional<std::string>& peer_node_name = std::nullopt) const;

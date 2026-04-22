@@ -475,6 +475,7 @@ naim_enable_strict_warnings(naim-skills-factory-tests)
 
 add_executable(
   naim-dashboard-service-tests
+  controller/src/app/controller_time_support.cpp
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/http/controller_http_transport.cpp
   controller/src/infra/controller_network_manager.cpp
@@ -555,6 +556,7 @@ naim_enable_strict_warnings(naim-auth-http-tests)
 
 add_executable(
   naim-host-registry-tests
+  controller/src/app/controller_time_support.cpp
   controller/src/host/host_registry_service.cpp
   controller/src/host/host_registry_service_tests.cpp
 )
