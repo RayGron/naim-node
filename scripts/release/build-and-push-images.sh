@@ -113,7 +113,13 @@ try:
     with urllib.request.urlopen(request, context=ssl._create_unverified_context(), timeout=30):
         pass
 except urllib.error.HTTPError as error:
-    if error.code not in (404,):
+    if error.code == 403:
+        print(
+            f"warning: registry user cannot delete old latest tag for {image}; "
+            "moving latest by push",
+            file=sys.stderr,
+        )
+    elif error.code not in (404,):
         detail = error.read().decode("utf-8", "replace")
         raise SystemExit(f"failed to delete remote latest tag for {image}: HTTP {error.code} {detail}")
 PY
