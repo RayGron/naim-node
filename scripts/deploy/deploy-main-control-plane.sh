@@ -195,7 +195,11 @@ if [[ ! -f "${main_root}/state/controller.sqlite" ]]; then
     init-db --db /naim/state/controller.sqlite
 fi
 if [[ -f "${main_root}/state/controller.sqlite" ]]; then
-  sudo chmod 0640 "${main_root}/state/controller.sqlite"
+  for state_file in "${main_root}/state/controller.sqlite"*; do
+    [[ -e "${state_file}" ]] || continue
+    sudo chown "$(id -un):$(id -gn)" "${state_file}"
+    sudo chmod 0640 "${state_file}"
+  done
 fi
 
 if [[ "${skip_pull}" != "yes" ]]; then

@@ -67,11 +67,11 @@ timeout_sec="$3"
 controller_url="http://127.0.0.1:${controller_port}"
 db_path="${main_root}/state/controller.sqlite"
 
-curl -fsS -X POST "${controller_url}/api/v1/scheduler-tick" >/dev/null || true
-curl -fsS -X POST "${controller_url}/api/v1/reconcile-rollout-actions" >/dev/null || true
-curl -fsS -X POST "${controller_url}/api/v1/reconcile-rebalance-proposals" >/dev/null || true
+curl -fsS -X POST "${controller_url}/api/v1/scheduler-tick" >/dev/null 2>&1 || true
+curl -fsS -X POST "${controller_url}/api/v1/reconcile-rollout-actions" >/dev/null 2>&1 || true
+curl -fsS -X POST "${controller_url}/api/v1/reconcile-rebalance-proposals" >/dev/null 2>&1 || true
 
-python3 - "${db_path}" "${timeout_sec}" <<'PY'
+sudo python3 - "${db_path}" "${timeout_sec}" <<'PY'
 import sqlite3
 import sys
 import time
