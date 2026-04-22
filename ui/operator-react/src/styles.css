@@ -184,7 +184,7 @@ body {
 }
 
 .hero-copy {
-  padding-top: 44px;
+  padding-top: 92px;
 }
 
 .hero-meta {
@@ -198,7 +198,7 @@ body {
   width: min(390px, calc(100% - 36px));
 }
 
-.hero-status-card {
+.meta-card.hero-status-card {
   width: 100%;
   display: flex;
   flex-wrap: wrap;
@@ -2371,7 +2371,7 @@ body {
   }
 
   .hero-copy {
-    padding-top: 78px;
+    padding-top: 122px;
   }
 
   .hero-meta {
