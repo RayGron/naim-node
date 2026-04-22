@@ -12,7 +12,20 @@ if [[ "${current_sha}" != "${NAIM_RELEASE_SHA}" ]]; then
   exit 1
 fi
 
+docker_config=""
+cleanup() {
+  if [[ -n "${docker_config}" ]]; then
+    rm -rf "${docker_config}"
+  fi
+  rm -f "${HOME}/.docker/config.json" 2>/dev/null || true
+  rmdir "${HOME}/.docker" 2>/dev/null || true
+}
+trap cleanup EXIT
+rm -f "${HOME}/.docker/config.json" 2>/dev/null || true
+
 if [[ -n "${NAIM_REGISTRY_USERNAME:-}" && -n "${NAIM_REGISTRY_PASSWORD_FILE:-}" ]]; then
+  docker_config="$(mktemp -d)"
+  export DOCKER_CONFIG="${docker_config}"
   docker login "${NAIM_REGISTRY}" \
     -u "${NAIM_REGISTRY_USERNAME}" \
     --password-stdin < "${NAIM_REGISTRY_PASSWORD_FILE}" >/dev/null
