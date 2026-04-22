@@ -82,6 +82,12 @@ sudo install -d -m 0750 -o "$(id -un)" -g "$(id -gn)" \
   "${shared_root}/runtime" \
   "${shared_root}/state" \
   "${shared_root}/storage"
+sudo chown -R "$(id -un):$(id -gn)" "${hostd_root}"
+sudo chmod 0700 "${hostd_root}" "${hostd_root}/install-state"
+if [[ -d "${hostd_root}/install-state/keys" ]]; then
+  sudo chmod 0700 "${hostd_root}/install-state/keys"
+  sudo chmod 0600 "${hostd_root}/install-state/keys/"* 2>/dev/null || true
+fi
 REMOTE
 
 echo "${log_prefix} ensuring worker can pull ${hostd_image}"
