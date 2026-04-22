@@ -436,6 +436,7 @@ add_executable(
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
   controller/src/interaction/interaction_service.cpp
+  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
@@ -767,6 +768,7 @@ add_executable(
   controller/src/interaction/interaction_replica_group_summary_builder.cpp
   controller/src/interaction/interaction_runtime_text_support.cpp
   controller/src/interaction/interaction_service.cpp
+  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/interaction/interaction_stream_http_error_response_builder.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service_tests.cpp
