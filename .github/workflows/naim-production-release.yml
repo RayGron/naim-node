@@ -23,6 +23,7 @@ env:
   NAIM_REGISTRY_USERNAME: ${{ secrets.NAIM_REGISTRY_USERNAME || vars.NAIM_REGISTRY_USERNAME || 'admin' }}
   NAIM_BUILD_TYPE: ${{ vars.NAIM_BUILD_TYPE || 'Release' }}
   NAIM_CUDA_ARCHITECTURES: ${{ vars.NAIM_CUDA_ARCHITECTURES || '' }}
+  NAIM_CUDA_NVCC_JOBS: ${{ vars.NAIM_CUDA_NVCC_JOBS || '1' }}
   NAIM_CMAKE_ARGS: ${{ vars.NAIM_CMAKE_ARGS || '' }}
   NAIM_MIGRATION_TIMEOUT_SEC: ${{ vars.NAIM_MIGRATION_TIMEOUT_SEC || '600' }}
 
@@ -61,7 +62,7 @@ jobs:
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
 
   hpc1-knowledge-vault-release-gate:
     name: 2a. hpc1 Knowledge Vault release gate

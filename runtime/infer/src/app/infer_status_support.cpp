@@ -136,7 +136,7 @@ std::optional<std::string> ValidateTurboQuantSupport(const RuntimeConfig& config
   const std::string cache_type_k = active_model.value("active_cache_type_k", std::string{});
   const std::string cache_type_v = active_model.value("active_cache_type_v", std::string{});
   const std::string llama_server =
-      ResolveExecutablePath("COMET_LLAMA_SERVER_BIN", "/runtime/infer/bin/llama-server");
+      ResolveExecutablePath("NAIM_LLAMA_SERVER_BIN", "/runtime/bin/llama-server");
   const auto help_output =
       CaptureCommandOutput(ShellQuote(llama_server) + " --help 2>&1");
   if (!help_output.has_value()) {

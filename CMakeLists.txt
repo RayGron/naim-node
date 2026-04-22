@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 option(NAIM_SKIP_VCPKG_TOOLCHAIN "Skip automatic vcpkg toolchain detection" OFF)
-set(NAIM_CUDA_NVCC_JOBS "2" CACHE STRING
+set(NAIM_CUDA_NVCC_JOBS "1" CACHE STRING
     "Maximum number of concurrent nvcc compile jobs for ggml-cuda when using Ninja")
 option(NAIM_CONTROLLER_BUILD_LLAMA_QUANTIZE
        "Build llama-quantize before naim-controller for local model conversion tooling"
