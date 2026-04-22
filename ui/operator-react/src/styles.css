@@ -184,9 +184,69 @@ body {
 }
 
 .hero-meta {
-  display: grid;
-  gap: 10px;
-  align-content: start;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+}
+
+.hero-status-card {
+  width: min(100%, 390px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(5, 15, 32, 0.46);
+  backdrop-filter: blur(10px);
+}
+
+.hero-status-card .status-chip {
+  min-height: 24px;
+  padding: 4px 8px;
+  font-size: 0.82rem;
+}
+
+.hero-status-card .status-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.hero-status-card .status-dot.is-healthy {
+  box-shadow: 0 0 0 4px rgba(76, 213, 143, 0.12);
+}
+
+.hero-status-card .status-dot.is-warning {
+  box-shadow: 0 0 0 4px rgba(255, 213, 94, 0.1);
+}
+
+.hero-status-card .status-dot.is-critical {
+  box-shadow: 0 0 0 4px rgba(255, 99, 99, 0.1);
+}
+
+.hero-status-user,
+.hero-status-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 190, 255, 0.14);
+  background: rgba(5, 15, 32, 0.38);
+  padding: 4px 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.hero-status-user span {
+  color: var(--text-muted);
+}
+
+.hero-status-time {
+  color: var(--text-muted);
 }
 
 .main-grid {

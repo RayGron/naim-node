@@ -334,6 +334,18 @@ function formatTimestamp(value) {
   ].join("/") + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+function formatTimeOfDay(value) {
+  if (!value) {
+    return "--:--";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function yesNo(value) {
   if (value === null || value === undefined) {
     return "n/a";
@@ -6740,6 +6752,13 @@ function App() {
     return renderAuthShell();
   }
 
+  const streamLabel = streamHealthy ? "Events live" : selectedPlane ? "Events reconnecting" : "Events off";
+  const streamTitle = selectedPlane
+    ? `Controller event stream for ${selectedPlane}`
+    : "Controller event stream opens after a plane is selected.";
+  const lastRefreshTitle = `Last refresh: ${formatTimestamp(lastRefreshAt)}`;
+  const lastEventTitle = `Last event: ${lastEventName || "none"}`;
+
   return (
     <div className="app-shell">
       <div className="starfield" aria-hidden="true" />
@@ -6753,27 +6772,25 @@ function App() {
           </p>
         </div>
         <div className="hero-meta">
-          <div className="meta-card">
-            <span className="meta-label">Signed in as</span>
-            <span className="meta-value">
-              {authState.user?.username || "n/a"} ({authState.user?.role || "n/a"})
+          <div className="meta-card hero-status-card">
+            <span className="hero-status-user" title="Signed in as">
+              {authState.user?.username || "n/a"}
+              <span>{authState.user?.role || "n/a"}</span>
             </span>
-          </div>
-          <div className="status-chip">
-            {statusDot(apiHealthy ? "is-healthy" : apiError ? "is-critical" : "is-booting")}
-            <span>{apiHealthy ? "API ready" : apiError ? "API error" : "API pending"}</span>
-          </div>
-          <div className="status-chip">
-            {statusDot(streamHealthy ? "is-healthy" : selectedPlane ? "is-warning" : "is-booting")}
-            <span>{streamHealthy ? "Stream live" : selectedPlane ? "Stream reconnecting" : "Stream idle"}</span>
-          </div>
-          <div className="meta-card">
-            <span className="meta-label">Last refresh</span>
-            <span className="meta-value">{formatTimestamp(lastRefreshAt)}</span>
-          </div>
-          <div className="meta-card">
-            <span className="meta-label">Last event</span>
-            <span className="meta-value">{lastEventName}</span>
+            <span className="status-chip" title={apiError || "Controller API status"}>
+              {statusDot(apiHealthy ? "is-healthy" : apiError ? "is-critical" : "is-booting")}
+              <span>{apiHealthy ? "API" : apiError ? "API error" : "API..."}</span>
+            </span>
+            <span className="status-chip" title={streamTitle}>
+              {statusDot(streamHealthy ? "is-healthy" : selectedPlane ? "is-warning" : "is-booting")}
+              <span>{streamLabel}</span>
+            </span>
+            <span className="hero-status-time" title={lastRefreshTitle}>
+              Refresh {formatTimeOfDay(lastRefreshAt)}
+            </span>
+            <span className="hero-status-time" title={lastEventTitle}>
+              Event {lastEventName || "none"}
+            </span>
           </div>
         </div>
       </header>
