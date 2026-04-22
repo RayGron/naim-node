@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
         with:
           ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
@@ -51,7 +51,7 @@ jobs:
     timeout-minutes: 180
     needs: hpc1-pull
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
         with:
           ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
@@ -69,7 +69,7 @@ jobs:
     timeout-minutes: 180
     needs: hpc1-build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
         with:
           ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
@@ -102,7 +102,7 @@ jobs:
     timeout-minutes: 10
     needs: hpc1-build-push-harbor
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
         with:
           ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
@@ -141,7 +141,7 @@ jobs:
     timeout-minutes: 60
     needs: main-register-release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
         with:
           ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
@@ -184,7 +184,7 @@ jobs:
     timeout-minutes: 10
     needs: main-redeploy-migrate
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
         with:
           ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
