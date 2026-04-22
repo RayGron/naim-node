@@ -63,11 +63,29 @@ jobs:
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
             "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
 
+  hpc1-knowledge-vault-release-gate:
+    name: 2a. hpc1 Knowledge Vault release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: hpc1-build
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Run Knowledge Vault release gate on hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' bash scripts/ci/knowledge-vault-release-gate.sh '${NAIM_BUILD_TYPE}'"
+
   hpc1-build-push-harbor:
     name: 3. hpc1 build containers and push Harbor
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    needs: hpc1-build
+    needs: hpc1-knowledge-vault-release-gate
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
