@@ -50,28 +50,60 @@ fi
 
 controller_image="$(naim_image controller)"
 web_ui_image="$(naim_image web-ui)"
+knowledge_image="$(naim_image knowledge-runtime)"
+registry_username=""
+registry_password_file_on_main=""
+if [[ "${skip_pull}" != "yes" ]]; then
+  registry_username="$(naim_registry_username)"
+  registry_password="$(naim_registry_password)"
+  if [[ -n "${registry_username}" && -n "${registry_password}" ]]; then
+    registry_password_file_on_main="/tmp/naim-registry-password-main-$$"
+    printf '%s' "${registry_password}" | ssh_main \
+      "umask 077; cat > '${registry_password_file_on_main}'"
+  fi
+  unset registry_password
+fi
 
 remote_main_bash \
   "${NAIM_MAIN_ROOT}" \
   "${controller_image}" \
   "${web_ui_image}" \
+  "${knowledge_image}" \
   "${NAIM_MAIN_CONTROLLER_LOCAL_PORT}" \
   "${NAIM_MAIN_WEB_UI_LOCAL_PORT}" \
   "${NAIM_WEBAUTHN_RP_ID}" \
   "${NAIM_WEBAUTHN_ORIGIN}" \
   "${NAIM_WEBAUTHN_RP_NAME}" \
+  "${NAIM_REGISTRY}" \
+  "${registry_username}" \
+  "${registry_password_file_on_main}" \
   "${skip_pull}" <<'REMOTE'
 set -euo pipefail
 
 main_root="$1"
 controller_image="$2"
 web_ui_image="$3"
-controller_local_port="$4"
-web_ui_local_port="$5"
-webauthn_rp_id="$6"
-webauthn_origin="$7"
-webauthn_rp_name="$8"
-skip_pull="$9"
+knowledge_image="$4"
+controller_local_port="$5"
+web_ui_local_port="$6"
+webauthn_rp_id="$7"
+webauthn_origin="$8"
+webauthn_rp_name="$9"
+registry="${10}"
+registry_username="${11}"
+registry_password_file="${12}"
+skip_pull="${13}"
+docker_config=""
+
+cleanup_main_deploy() {
+  if [[ -n "${registry_password_file}" ]]; then
+    rm -f "${registry_password_file}"
+  fi
+  if [[ -n "${docker_config}" ]]; then
+    rm -rf "${docker_config}"
+  fi
+}
+trap cleanup_main_deploy EXIT
 
 sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" "${main_root}"
 sudo install -d -m 0750 -o "$(id -un)" -g "$(id -gn)" \
@@ -107,6 +139,7 @@ services:
       NAIM_WEBAUTHN_RP_ID: "${webauthn_rp_id}"
       NAIM_WEBAUTHN_ORIGIN: "${webauthn_origin}"
       NAIM_WEBAUTHN_RP_NAME: "${webauthn_rp_name}"
+      NAIM_KNOWLEDGE_IMAGE: "${knowledge_image}"
     volumes:
       - ${main_root}/state:/naim/state
       - ${main_root}/artifacts:/naim/artifacts
@@ -162,6 +195,12 @@ if [[ -f "${main_root}/state/controller.sqlite" ]]; then
 fi
 
 if [[ "${skip_pull}" != "yes" ]]; then
+  if [[ -n "${registry_username:-}" && -f "${registry_password_file:-}" ]]; then
+    docker_config="$(mktemp -d)"
+    export DOCKER_CONFIG="${docker_config}"
+    docker login "${registry}" -u "${registry_username}" --password-stdin \
+      < "${registry_password_file}" >/dev/null
+  fi
   docker compose pull
 fi
 docker compose up -d --remove-orphans

@@ -106,6 +106,10 @@ function modelLibraryJobsPath() {
   return "/api/v1/model-library/jobs";
 }
 
+function knowledgeVaultPath(suffix = "") {
+  return suffix ? `/api/v1/knowledge-vault/${suffix}` : "/api/v1/knowledge-vault/status";
+}
+
 function hostdHostsPath(nodeName = "") {
   return queryPath("/api/v1/hostd/hosts", { node: nodeName });
 }
@@ -1827,6 +1831,7 @@ function App() {
   const [rebalancePlan, setRebalancePlan] = useState(null);
   const [events, setEvents] = useState([]);
   const [interactionStatus, setInteractionStatus] = useState(null);
+  const [knowledgeVaultStatus, setKnowledgeVaultStatus] = useState(null);
   const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [], nodes: [] });
   const [skillsFactory, setSkillsFactory] = useState({
     items: [],
@@ -1927,6 +1932,7 @@ function App() {
     setRebalancePlan(null);
     setEvents([]);
     setInteractionStatus(null);
+    setKnowledgeVaultStatus(null);
     setModelLibrary({ items: [], roots: [], jobs: [], nodes: [] });
     setModelsTab("library");
     setSkillsFactory({
@@ -2131,11 +2137,18 @@ function App() {
         }),
       );
       const hostdHostsRequest = fetchJson(hostdHostsPath());
+      const knowledgeVaultStatusRequest = fetchJson(knowledgeVaultPath());
       if (!planeName) {
-        const [dashboardPayload, globalHostObservationsPayload, hostdHostsPayload] = await Promise.all([
+        const [
+          dashboardPayload,
+          globalHostObservationsPayload,
+          hostdHostsPayload,
+          knowledgeVaultStatusPayload,
+        ] = await Promise.all([
           fetchJson(queryPath("/api/v1/dashboard", { stale_after: 30 })),
           globalHostObservationsRequest,
           hostdHostsRequest,
+          knowledgeVaultStatusRequest,
         ]);
         const globalObservationItems = hostObservationItemsFromPayload(
           globalHostObservationsPayload,
@@ -2146,6 +2159,7 @@ function App() {
         setHostObservations(null);
         setGlobalHostObservations(globalHostObservationsPayload);
         setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
+        setKnowledgeVaultStatus(knowledgeVaultStatusPayload);
         setMetricHistory((current) =>
           appendMetricHistory(
             current,
@@ -2177,6 +2191,7 @@ function App() {
         eventsPayload,
         interactionPayload,
         hostdHostsPayload,
+        knowledgeVaultStatusPayload,
       ] = await Promise.all([
         fetchJson(planePath(planeName)),
         fetchJson(planePath(planeName, "dashboard")),
@@ -2203,6 +2218,7 @@ function App() {
         ),
         fetchJson(interactionPath(planeName, "status")),
         hostdHostsRequest,
+        knowledgeVaultStatusRequest,
       ]);
 
       setPlaneDetail(planePayload);
@@ -2215,6 +2231,7 @@ function App() {
       setRebalancePlan(rebalancePayload);
       setEvents(Array.isArray(eventsPayload.events) ? eventsPayload.events : []);
       setInteractionStatus(interactionPayload);
+      setKnowledgeVaultStatus(knowledgeVaultStatusPayload);
       const globalObservationItems = hostObservationItemsFromPayload(
         globalHostObservationsPayload,
       );
@@ -2524,6 +2541,39 @@ function App() {
         }),
       });
       await Promise.all([refreshAll(selectedPlane), refreshModelLibrary()]);
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function setHostKnowledgeVault(host, enabled) {
+    const nodeName = host?.node_name;
+    if (!nodeName) {
+      return;
+    }
+    const confirmation = enabled
+      ? `Start Knowledge Vault on ${nodeName}?`
+      : `Stop Knowledge Vault on ${nodeName}?`;
+    if (!window.confirm(confirmation)) {
+      return;
+    }
+    setActionBusy(`knowledge-vault:${nodeName}`);
+    try {
+      await fetchJson(knowledgeVaultPath(enabled ? "apply" : "stop"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          service_id: "kv_default",
+          node_name: nodeName,
+        }),
+      });
+      const [statusPayload] = await Promise.all([
+        fetchJson(knowledgeVaultPath()),
+        refreshAll(selectedPlane),
+      ]);
+      setKnowledgeVaultStatus(statusPayload);
     } finally {
       setActionBusy("");
     }
@@ -3440,7 +3490,7 @@ function App() {
   const modelLibraryNodes = Array.isArray(modelLibrary.nodes) ? modelLibrary.nodes : [];
   const storageModelNodes = modelLibraryNodes.filter(
     (node) =>
-      node?.storage_role_enabled === true &&
+      node?.role_eligible === true &&
       node?.registration_state === "registered" &&
       node?.session_state === "connected" &&
       node?.storage_root,
@@ -4042,6 +4092,57 @@ function App() {
     return items;
   }
 
+  function normalizedHostRole(host) {
+    const registry = host?.registry || host || {};
+    return String(registry?.derived_role || "").toLowerCase();
+  }
+
+  function isAutoStorageRole(host) {
+    return normalizedHostRole(host) === "storage";
+  }
+
+  function isManualStorageRole(host) {
+    const registry = host?.registry || host || {};
+    return registry?.storage_role_enabled === true;
+  }
+
+  function isStorageRoleSelected(host) {
+    return isAutoStorageRole(host) || isManualStorageRole(host);
+  }
+
+  function isStorageRoleEligible(host) {
+    const registry = host?.registry || host || {};
+    const capacity = registry?.capacity_summary || {};
+    return (
+      registry?.storage_role_eligible === true ||
+      isStorageRoleSelected(host) ||
+      Boolean(capacity.storage_root || registry?.storage_root)
+    );
+  }
+
+  function isKnowledgeVaultServiceActive() {
+    const status = String(knowledgeVaultStatus?.status || "").toLowerCase();
+    return status !== "" && status !== "stopped" && status !== "deleted";
+  }
+
+  function isKnowledgeVaultSelectedForHost(host) {
+    const registry = host?.registry || host || {};
+    return (
+      isKnowledgeVaultServiceActive() &&
+      knowledgeVaultStatus?.node_name === registry?.node_name
+    );
+  }
+
+  function knowledgeVaultServiceLabel(host) {
+    if (isKnowledgeVaultSelectedForHost(host)) {
+      return `active: ${knowledgeVaultStatus?.status || "unknown"}`;
+    }
+    if (isKnowledgeVaultServiceActive()) {
+      return `assigned to ${knowledgeVaultStatus?.node_name || "another node"}`;
+    }
+    return "not assigned";
+  }
+
   function nodeRoleLabels(host) {
     const registry = host?.registry || host || {};
     const capacity = registry?.capacity_summary || {};
@@ -4049,10 +4150,7 @@ function App() {
     if (String(registry?.derived_role || "").toLowerCase() === "worker") {
       roles.push("worker");
     }
-    if (
-      registry?.storage_role_enabled === true ||
-      String(registry?.derived_role || "").toLowerCase() === "storage"
-    ) {
+    if (isStorageRoleSelected(host)) {
       roles.push("storage");
     }
     if (roles.length === 0 && Number(capacity.gpu_count || 0) > 0) {
@@ -4099,6 +4197,94 @@ function App() {
     setSelectedHostNodeName("");
   }
 
+  function renderHostServiceControls(host) {
+    const registry = host?.registry || host || {};
+    if (!registry?.node_name) {
+      return null;
+    }
+    const nodeName = registry.node_name;
+    const autoStorage = isAutoStorageRole(host);
+    const manualStorage = isManualStorageRole(host);
+    const storageSelected = isStorageRoleSelected(host);
+    const storageEligible = isStorageRoleEligible(host);
+    const storageBusy = actionBusy === `storage-role:${nodeName}`;
+    const knowledgeBusy = actionBusy === `knowledge-vault:${nodeName}`;
+    const canManageRoles = authState.user?.role === "admin";
+    const knowledgeSelected = isKnowledgeVaultSelectedForHost(host);
+    const knowledgeOwnedByOtherNode =
+      isKnowledgeVaultServiceActive() &&
+      knowledgeVaultStatus?.node_name &&
+      knowledgeVaultStatus.node_name !== nodeName;
+    const storageDetail = autoStorage
+      ? "auto-assigned"
+      : manualStorage
+        ? "manual override"
+        : storageEligible
+          ? "eligible"
+          : "not eligible";
+    const storageDisabled =
+      autoStorage ||
+      storageBusy ||
+      !canManageRoles ||
+      (!manualStorage && !storageEligible);
+    const knowledgeDisabled =
+      knowledgeBusy ||
+      !canManageRoles ||
+      !storageSelected ||
+      knowledgeOwnedByOtherNode;
+
+    return (
+      <div className="node-service-controls">
+        <label
+          className={`node-service-checkbox ${storageSelected ? "is-active" : ""}`}
+          title={
+            autoStorage
+              ? "Storage role is derived automatically from node inventory"
+              : !canManageRoles
+                ? "Admin role required"
+                : storageEligible
+                  ? "Select this node for storage-capable services"
+                  : "Host has not reported a usable storage root yet"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={storageSelected}
+            disabled={storageDisabled}
+            onChange={(event) => setHostStorageRole(registry, event.target.checked)}
+          />
+          <span>
+            <strong>Storage</strong>
+            <small>{storageBusy ? "updating" : storageDetail}</small>
+          </span>
+        </label>
+        <label
+          className={`node-service-checkbox ${knowledgeSelected ? "is-active" : ""}`}
+          title={
+            !canManageRoles
+              ? "Admin role required"
+              : !storageSelected
+                ? "Requires selected or auto-assigned storage role"
+                : knowledgeOwnedByOtherNode
+                  ? "Knowledge Vault is assigned to another node"
+                  : "Run canonical Knowledge Vault as a separate service container on this storage node"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={knowledgeSelected}
+            disabled={knowledgeDisabled}
+            onChange={(event) => setHostKnowledgeVault(registry, event.target.checked)}
+          />
+          <span>
+            <strong>Knowledge Vault</strong>
+            <small>{knowledgeBusy ? "updating" : knowledgeVaultServiceLabel(host)}</small>
+          </span>
+        </label>
+      </div>
+    );
+  }
+
   function renderHostCards(items) {
     return (
       <div className="plane-list">
@@ -4113,10 +4299,6 @@ function App() {
           const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
           const totalMemoryBytes = Number(cpu.total_memory_bytes || storageCapacity.total_memory_bytes || 0);
           const gpuDeviceCount = Number(gpu.device_count || storageCapacity.gpu_count || 0);
-          const storageEnabled = registry?.storage_role_enabled === true;
-          const storageEligible = registry?.storage_role_eligible !== false;
-          const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
-          const canManageStorageRole = authState.user?.role === "admin";
           const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
           const directLanPeers = lanPeers.filter((peer) => peer?.tcp_reachable === true);
           const storageTotalBytes = Number(storageCapacity.storage_total_bytes || 0);
@@ -4145,29 +4327,7 @@ function App() {
                 <div className="metric-row"><span>LAN peers</span><strong>{lanPeers.length > 0 ? `${directLanPeers.length}/${lanPeers.length} direct` : "n/a"}</strong></div>
                 <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at)}</strong></div>
               </div>
-              {registry ? (
-                <div className="toolbar">
-                  <button
-                    className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
-                    type="button"
-                    disabled={
-                      storageBusy ||
-                      !canManageStorageRole ||
-                      (!storageEnabled && !storageEligible)
-                    }
-                    onClick={() => setHostStorageRole(registry, !storageEnabled)}
-                    title={
-                      !canManageStorageRole
-                        ? "Admin role required"
-                        : storageEligible
-                        ? "Toggle model storage role"
-                        : "Host has not reported a usable storage root yet"
-                    }
-                  >
-                    {storageEnabled ? "Disable storage" : "Enable storage"}
-                  </button>
-                </div>
-              ) : null}
+              {registry ? renderHostServiceControls(host) : null}
             </article>
           );
         })}
@@ -4186,17 +4346,15 @@ function App() {
     const runtimeAvailable = host?.runtime_status?.available === true;
     const runtimePhase = host?.runtime_status?.phase || "pending";
     const indicatorClass = runtimeIndicatorClass(runtimeAvailable, host?.status);
-    const storageEnabled = registry?.storage_role_enabled === true;
-    const storageEligible = registry?.storage_role_eligible !== false;
-    const storageBusy = actionBusy === `storage-role:${host?.node_name}`;
-    const canManageStorageRole = authState.user?.role === "admin";
+    const storageSelected = isStorageRoleSelected(host);
+    const storageEligible = isStorageRoleEligible(host);
     const lanPeers = Array.isArray(registry?.lan_peers) ? registry.lan_peers : [];
     const gpuDeviceCount = Number(gpu.device_count || capacity.gpu_count || 0);
     const totalMemoryBytes = Number(cpu.total_memory_bytes || capacity.total_memory_bytes || 0);
     const usedMemoryBytes = Number(cpu.used_memory_bytes || 0);
     const storageTotalBytes = Number(capacity.storage_total_bytes || 0);
     const storageFreeBytes = Number(capacity.storage_free_bytes || 0);
-    const showStorageDetails = storageEnabled || storageEligible || storageTotalBytes > 0;
+    const showStorageDetails = storageSelected || storageEligible || storageTotalBytes > 0;
 
     return (
       <div className="modal-backdrop" role="presentation" onClick={closeHostOverview}>
@@ -4246,10 +4404,11 @@ function App() {
               <div className="metric-row"><span>CPU temp</span><strong>{cpu.temperature_available ? formatTemperature(cpu.max_temperature_c ?? cpu.temperature_c) : "n/a"}</strong></div>
               {showStorageDetails ? (
                 <>
-                  <div className="metric-row"><span>Storage role</span><strong>{storageEnabled ? "enabled" : "disabled"}</strong></div>
+                  <div className="metric-row"><span>Storage role</span><strong>{storageSelected ? "selected" : "available"}</strong></div>
                   <div className="metric-row"><span>Storage root</span><strong>{capacity.storage_root || "n/a"}</strong></div>
                   <div className="metric-row"><span>Storage total</span><strong>{storageTotalBytes > 0 ? compactBytes(storageTotalBytes) : "n/a"}</strong></div>
                   <div className="metric-row"><span>Storage free</span><strong>{storageFreeBytes > 0 ? compactBytes(storageFreeBytes) : "n/a"}</strong></div>
+                  <div className="metric-row"><span>Knowledge Vault</span><strong>{knowledgeVaultServiceLabel(host)}</strong></div>
                 </>
               ) : null}
             </div>
@@ -4274,20 +4433,7 @@ function App() {
             </section>
           ) : null}
           <div className="toolbar">
-            {registry?.node_name ? (
-              <button
-                className={`ghost-button compact-button ${storageEnabled ? "warning-button" : ""}`}
-                type="button"
-                disabled={
-                  storageBusy ||
-                  !canManageStorageRole ||
-                  (!storageEnabled && !storageEligible)
-                }
-                onClick={() => setHostStorageRole(registry, !storageEnabled)}
-              >
-                {storageEnabled ? "Disable storage" : "Enable storage"}
-              </button>
-            ) : null}
+            {registry?.node_name ? renderHostServiceControls(host) : null}
             <button className="ghost-button" type="button" onClick={closeHostOverview}>
               Close
             </button>

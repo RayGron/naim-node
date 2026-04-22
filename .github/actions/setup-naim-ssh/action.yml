@@ -1,0 +1,23 @@
+name: Setup NAIM SSH
+description: Install the SSH key used by NAIM production release jobs.
+
+inputs:
+  ssh-private-key:
+    description: Private key with access to hpc1 and main.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install SSH key
+      shell: bash
+      run: |
+        set -euo pipefail
+        install -m 0700 -d "${HOME}/.ssh"
+        key_path="${HOME}/.ssh/naim_ci_deploy"
+        printf '%s\n' "${{ inputs.ssh-private-key }}" > "${key_path}"
+        chmod 0600 "${key_path}"
+        {
+          echo "NAIM_CI_SSH_KEY=${key_path}"
+          echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+        } >> "${GITHUB_ENV}"

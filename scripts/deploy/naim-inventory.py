@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -187,6 +188,11 @@ def shell_export(name, value):
     return f"export {name}={shlex.quote(value)}"
 
 
+def env_override(name, value):
+    current = os.environ.get(name)
+    return current if current not in (None, "") else value
+
+
 def command_env(args):
     inventory = load_inventory(args.inventory)
     registry = inventory.get("registry") or {}
@@ -203,12 +209,24 @@ def command_env(args):
     controller_url = first_present(worker, "controller_url", default=hostd_public_url)
 
     exports = {
-        "NAIM_REGISTRY": first_present(registry, "url", "registry"),
-        "NAIM_REGISTRY_PROJECT": first_present(registry, "project"),
-        "NAIM_IMAGE_TAG": first_present(registry, "tag", "image_tag"),
-        "NAIM_REGISTRY_USERNAME": first_present(registry, "username", "user"),
-        "NAIM_REGISTRY_PASSWORD_FILE": first_present(registry, "password_file"),
-        "NAIM_REGISTRY_PASSWORD_COMMAND": first_present(registry, "password_command"),
+        "NAIM_REGISTRY": env_override(
+            "NAIM_REGISTRY", first_present(registry, "url", "registry")
+        ),
+        "NAIM_REGISTRY_PROJECT": env_override(
+            "NAIM_REGISTRY_PROJECT", first_present(registry, "project")
+        ),
+        "NAIM_IMAGE_TAG": env_override(
+            "NAIM_IMAGE_TAG", first_present(registry, "tag", "image_tag")
+        ),
+        "NAIM_REGISTRY_USERNAME": env_override(
+            "NAIM_REGISTRY_USERNAME", first_present(registry, "username", "user")
+        ),
+        "NAIM_REGISTRY_PASSWORD_FILE": env_override(
+            "NAIM_REGISTRY_PASSWORD_FILE", first_present(registry, "password_file")
+        ),
+        "NAIM_REGISTRY_PASSWORD_COMMAND": env_override(
+            "NAIM_REGISTRY_PASSWORD_COMMAND", first_present(registry, "password_command")
+        ),
         "NAIM_REGISTRY_PASSWORD_FILE_ON_CONTROL": first_present(
             registry, "password_file_on_control"
         ),

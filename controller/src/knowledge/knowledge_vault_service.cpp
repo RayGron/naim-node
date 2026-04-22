@@ -12,6 +12,16 @@
 #include "naim/state/sqlite_store.h"
 
 namespace naim::controller {
+namespace {
+
+bool IsSelectedStorageNode(const ModelLibraryNodeSummary& summary) {
+  return summary.registration_state == "registered" &&
+         summary.session_state == "connected" &&
+         !summary.storage_root.empty() &&
+         (summary.derived_role == "storage" || summary.storage_role_enabled);
+}
+
+}  // namespace
 
 nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) const {
   const KnowledgeVaultServiceRepository repository;
@@ -218,32 +228,34 @@ std::string KnowledgeVaultService::SelectStorageNode(
   const std::string requested = request.value("node_name", std::string{});
   naim::ControllerStore store(db_path);
   store.Initialize();
-  std::string first_eligible;
+  std::string first_auto_storage;
+  std::string first_manual_storage;
   for (const auto& host : store.LoadRegisteredHosts()) {
     const auto summary = ModelLibraryNodePlacement::BuildSummary(host);
-    const bool eligible =
-        summary.session_state == "connected" &&
-        ModelLibraryNodePlacement::AllowsModelPlacementRole(
-            summary.derived_role,
-            summary.storage_role_enabled,
-            false);
-    if (!eligible) {
+    if (!IsSelectedStorageNode(summary)) {
       continue;
     }
-    if (first_eligible.empty()) {
-      first_eligible = summary.node_name;
+    if (summary.derived_role == "storage" && first_auto_storage.empty()) {
+      first_auto_storage = summary.node_name;
+    }
+    if (summary.storage_role_enabled && first_manual_storage.empty()) {
+      first_manual_storage = summary.node_name;
     }
     if (!requested.empty() && requested == summary.node_name) {
       return requested;
     }
   }
   if (!requested.empty()) {
-    throw std::runtime_error("requested knowledge storage node is not connected or storage-capable");
+    throw std::runtime_error(
+        "requested knowledge storage node is not connected or selected for storage");
   }
-  if (first_eligible.empty()) {
-    throw std::runtime_error("no connected storage-capable node is available");
+  if (!first_auto_storage.empty()) {
+    return first_auto_storage;
   }
-  return first_eligible;
+  if (!first_manual_storage.empty()) {
+    return first_manual_storage;
+  }
+  throw std::runtime_error("no connected storage node is selected for Knowledge Vault");
 }
 
 std::string KnowledgeVaultService::LoadStorageRoot(
