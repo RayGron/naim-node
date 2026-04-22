@@ -1183,44 +1183,65 @@ export function PlaneEditorDialog({
           </button>
         </div>
         <p className="editor-copy">{editorCopy}</p>
-        {dialog.error ? <div className="error-banner">{dialog.error}</div> : null}
-        {formValidation.errors.length > 0 ? (
-          <div className="error-banner">
-            <strong>Form validation</strong>
-            <ul className="banner-list">
-              {formValidation.errors.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {formValidation.warnings.length > 0 ? (
-          <div className="warning-banner">
-            <strong>Warnings</strong>
-            <ul className="banner-list">
-              {formValidation.warnings.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {showFormBuilder ? (
-          <PlaneV2FormBuilder
-            dialog={dialog}
-            setDialog={setDialog}
-            languageOptions={CHAT_LANGUAGE_OPTIONS}
-            modelLibraryItems={modelLibraryItems || []}
-            hostdHosts={hostdHosts || []}
-            peerLinks={peerLinks || null}
-            skillsFactoryItems={skillsFactoryItems || []}
-            skillsFactoryGroups={skillsFactoryGroups || []}
-            onResetLtCypherDeployment={onResetLtCypherDeployment}
-          />
-        ) : null}
-        {showFormBuilder ? (
-          <details className="plane-advanced-section">
-            <summary className="plane-advanced-summary">Generated JSON</summary>
-            <div className="plane-advanced-body">
+        <div className="plane-editor-scroll">
+          {dialog.error ? <div className="error-banner">{dialog.error}</div> : null}
+          {formValidation.errors.length > 0 ? (
+            <div className="error-banner">
+              <strong>Form validation</strong>
+              <ul className="banner-list">
+                {formValidation.errors.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {formValidation.warnings.length > 0 ? (
+            <div className="warning-banner">
+              <strong>Warnings</strong>
+              <ul className="banner-list">
+                {formValidation.warnings.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {showFormBuilder ? (
+            <PlaneV2FormBuilder
+              dialog={dialog}
+              setDialog={setDialog}
+              languageOptions={CHAT_LANGUAGE_OPTIONS}
+              modelLibraryItems={modelLibraryItems || []}
+              hostdHosts={hostdHosts || []}
+              peerLinks={peerLinks || null}
+              skillsFactoryItems={skillsFactoryItems || []}
+              skillsFactoryGroups={skillsFactoryGroups || []}
+              onResetLtCypherDeployment={onResetLtCypherDeployment}
+            />
+          ) : null}
+          {showFormBuilder ? (
+            <details className="plane-advanced-section">
+              <summary className="plane-advanced-summary">Generated JSON</summary>
+              <div className="plane-advanced-body">
+                <label className="field-label" htmlFor="plane-editor-json">
+                  {desiredStateLabel}
+                </label>
+                <textarea
+                  id="plane-editor-json"
+                  className="editor-textarea"
+                  value={dialog.text}
+                  onChange={(event) =>
+                    setDialog((current) => ({
+                      ...current,
+                      text: event.target.value,
+                    }))
+                  }
+                  readOnly
+                  spellCheck="false"
+                />
+              </div>
+            </details>
+          ) : (
+            <>
               <label className="field-label" htmlFor="plane-editor-json">
                 {desiredStateLabel}
               </label>
@@ -1234,31 +1255,12 @@ export function PlaneEditorDialog({
                     text: event.target.value,
                   }))
                 }
-                readOnly
+                readOnly={readOnly || showFormBuilder}
                 spellCheck="false"
               />
-            </div>
-          </details>
-        ) : (
-          <>
-            <label className="field-label" htmlFor="plane-editor-json">
-              {desiredStateLabel}
-            </label>
-            <textarea
-              id="plane-editor-json"
-              className="editor-textarea"
-              value={dialog.text}
-              onChange={(event) =>
-                setDialog((current) => ({
-                  ...current,
-                  text: event.target.value,
-                }))
-              }
-              readOnly={readOnly || showFormBuilder}
-              spellCheck="false"
-            />
-          </>
-        )}
+            </>
+          )}
+        </div>
         <div className="toolbar">
           {readOnly ? (
             <button
