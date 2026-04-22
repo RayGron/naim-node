@@ -6,6 +6,19 @@ source "${script_dir}/build-context.sh"
 
 naim_resolve_build_context "${script_dir}" "$@"
 
+if [[ "${TARGET_OS}" == "linux" && "${REPO_DIR}" == /mnt/* ]] \
+  && grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null \
+  && [[ "${NAIM_ALLOW_WSL_MOUNT_BUILD:-}" != "1" ]]; then
+  cat >&2 <<EOF
+error: refusing to configure from a Windows-mounted WSL path: ${REPO_DIR}
+
+The llama.cpp/CUDA configure step can hang in uninterruptible p9_client_rpc I/O
+when the source tree is under /mnt/*. Clone or mirror the repository into the
+WSL Linux filesystem, or set NAIM_ALLOW_WSL_MOUNT_BUILD=1 to bypass this guard.
+EOF
+  exit 2
+fi
+
 cuda_root=""
 cuda_nvcc=""
 openmp_root=""
@@ -13,6 +26,7 @@ openmp_include_dir=""
 openmp_library=""
 : "${NAIM_CUDA_NATIVE:=OFF}"
 : "${NAIM_CUDA_ARCHITECTURES:=}"
+: "${NAIM_CUDA_NVCC_JOBS:=1}"
 
 detect_cuda_root() {
   local candidate=""
@@ -167,6 +181,10 @@ if [[ -f "${cache_path}" ]]; then
       && ! grep -Fq "NAIM_CUDA_ARCHITECTURES:UNINITIALIZED=${NAIM_CUDA_ARCHITECTURES}" "${cache_path}"; then
       needs_clean_reconfigure=1
     fi
+    if ! grep -Fq "NAIM_CUDA_NVCC_JOBS:STRING=${NAIM_CUDA_NVCC_JOBS}" "${cache_path}" \
+      && ! grep -Fq "NAIM_CUDA_NVCC_JOBS:UNINITIALIZED=${NAIM_CUDA_NVCC_JOBS}" "${cache_path}"; then
+      needs_clean_reconfigure=1
+    fi
   else
     if grep -Eq '^CUDAToolkit_ROOT:(UNINITIALIZED|PATH|STRING)=' "${cache_path}" \
       || grep -Eq '^CMAKE_CUDA_COMPILER:(FILEPATH|UNINITIALIZED|STRING)=' "${cache_path}" \
@@ -227,6 +245,7 @@ cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
 cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
 cmake_args+=("-DNAIM_CUDA_NATIVE=${NAIM_CUDA_NATIVE}")
 cmake_args+=("-DNAIM_CUDA_ARCHITECTURES=${NAIM_CUDA_ARCHITECTURES}")
+cmake_args+=("-DNAIM_CUDA_NVCC_JOBS=${NAIM_CUDA_NVCC_JOBS}")
 if [[ -n "${openmp_root}" ]]; then
   cmake_args+=(
     "-DOpenMP_ROOT=${openmp_root}"
