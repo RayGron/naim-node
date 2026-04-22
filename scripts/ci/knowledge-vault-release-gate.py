@@ -311,7 +311,10 @@ def create_backup(store_path, backup_path):
 def restore_backup(backup_path, restore_root):
     restore_root.mkdir(parents=True, exist_ok=True)
     with tarfile.open(backup_path, "r:gz") as archive:
-        archive.extractall(restore_root)
+        try:
+            archive.extractall(restore_root, filter="data")
+        except TypeError:
+            archive.extractall(restore_root)
     return restore_root / "store"
 
 
