@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' scripts/ci/hpc1-build.sh"
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
 
   hpc1-build-push-harbor:
     name: 3. hpc1 build containers and push Harbor
@@ -94,7 +94,7 @@ jobs:
             password_env=""
           fi
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_TAG='${NAIM_RELEASE_TAG}' NAIM_REGISTRY='${NAIM_REGISTRY}' NAIM_REGISTRY_PROJECT='${NAIM_REGISTRY_PROJECT}' NAIM_REGISTRY_USERNAME='${NAIM_REGISTRY_USERNAME}' ${password_env} scripts/ci/hpc1-build-push-harbor.sh"
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_TAG='${NAIM_RELEASE_TAG}' NAIM_REGISTRY='${NAIM_REGISTRY}' NAIM_REGISTRY_PROJECT='${NAIM_REGISTRY_PROJECT}' NAIM_REGISTRY_USERNAME='${NAIM_REGISTRY_USERNAME}' ${password_env} bash scripts/ci/hpc1-build-push-harbor.sh"
 
   main-register-release:
     name: 4. main register Harbor release
@@ -130,7 +130,7 @@ jobs:
           export NAIM_SSH_OPTS="${NAIM_CI_SSH_OPTS}"
           export NAIM_MAIN_SSH
           export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
-          scripts/ci/register-release-on-main.sh \
+          bash scripts/ci/register-release-on-main.sh \
             --manifest "${RUNNER_TEMP}/release-manifest.json" \
             --tag "${NAIM_RELEASE_TAG}" \
             "${inventory_args[@]}"
@@ -176,7 +176,7 @@ jobs:
           export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
           export NAIM_RELEASE_TAG
           export NAIM_MIGRATION_TIMEOUT_SEC
-          scripts/ci/redeploy-migrate-production.sh --tag "${NAIM_RELEASE_TAG}" "${inventory_args[@]}"
+          bash scripts/ci/redeploy-migrate-production.sh --tag "${NAIM_RELEASE_TAG}" "${inventory_args[@]}"
 
   migration-report:
     name: 6. migration report
@@ -214,7 +214,7 @@ jobs:
           export NAIM_HPC1_SSH_PORT
           export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
           export NAIM_RELEASE_TAG
-          scripts/ci/production-release-report.sh \
+          bash scripts/ci/production-release-report.sh \
             --tag "${NAIM_RELEASE_TAG}" \
             --manifest "${RUNNER_TEMP}/release-manifest.json" \
             --output "${RUNNER_TEMP}/migration-report.md" \
