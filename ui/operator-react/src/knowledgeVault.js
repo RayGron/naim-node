@@ -1,3 +1,5 @@
+export const KNOWLEDGE_GRAPH_LIMIT = 200;
+
 export function knowledgeIdFromItem(item) {
   return item?.knowledge_id || item?.id || item?.block_id || "";
 }
@@ -18,7 +20,7 @@ export function normalizeKnowledgeResults(items) {
   return [...byKnowledgeId.values()];
 }
 
-export function buildKnowledgeGraphRequest(items, extras = [], limit = 100) {
+export function buildKnowledgeGraphRequest(items, extras = [], limit = KNOWLEDGE_GRAPH_LIMIT) {
   const knowledgeIds = [];
   const seen = new Set();
   for (const candidate of [...(Array.isArray(items) ? items : []), ...extras]) {
@@ -36,6 +38,18 @@ export function buildKnowledgeGraphRequest(items, extras = [], limit = 100) {
     knowledge_ids: knowledgeIds,
     depth: 1,
   };
+}
+
+export function knowledgeGraphSignature(graph) {
+  return JSON.stringify({
+    nodes: Array.isArray(graph?.nodes) ? graph.nodes : [],
+    edges: Array.isArray(graph?.edges) ? graph.edges : [],
+    warnings: Array.isArray(graph?.warnings) ? graph.warnings : [],
+  });
+}
+
+export function areKnowledgeGraphsEqual(left, right) {
+  return knowledgeGraphSignature(left) === knowledgeGraphSignature(right);
 }
 
 export function summarizeKnowledgeGraph(graph) {

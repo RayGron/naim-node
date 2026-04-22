@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  areKnowledgeGraphsEqual,
   buildKnowledgeGraphRequest,
+  KNOWLEDGE_GRAPH_LIMIT,
   knowledgeTitleFromItem,
   normalizeKnowledgeResults,
   summarizeKnowledgeGraph,
@@ -33,6 +35,14 @@ describe("knowledgeVault utils", () => {
     });
   });
 
+  it("uses the 200 item Knowledge Vault graph limit by default", () => {
+    const items = Array.from({ length: KNOWLEDGE_GRAPH_LIMIT + 5 }, (_, index) => ({
+      knowledge_id: `item-${index}`,
+    }));
+
+    expect(buildKnowledgeGraphRequest(items).knowledge_ids).toHaveLength(KNOWLEDGE_GRAPH_LIMIT);
+  });
+
   it("summarizes graph payloads and falls back to stable titles", () => {
     expect(
       summarizeKnowledgeGraph({
@@ -41,5 +51,20 @@ describe("knowledgeVault utils", () => {
       }),
     ).toEqual({ nodeCount: 2, edgeCount: 1 });
     expect(knowledgeTitleFromItem({ block_id: "block-1" })).toBe("block-1");
+  });
+
+  it("compares graph payloads before replacing state", () => {
+    expect(
+      areKnowledgeGraphsEqual(
+        { nodes: [{ knowledge_id: "alpha" }], edges: [], warnings: [] },
+        { nodes: [{ knowledge_id: "alpha" }], edges: [], warnings: [] },
+      ),
+    ).toBe(true);
+    expect(
+      areKnowledgeGraphsEqual(
+        { nodes: [{ knowledge_id: "alpha" }], edges: [], warnings: [] },
+        { nodes: [{ knowledge_id: "beta" }], edges: [], warnings: [] },
+      ),
+    ).toBe(false);
   });
 });
