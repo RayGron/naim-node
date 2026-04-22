@@ -15,6 +15,7 @@
 #include "naim/planning/planner.h"
 #include "naim/planning/reconcile.h"
 #include "naim/state/state_json.h"
+#include "skills/knowledge_vault_common_skills.h"
 
 namespace naim::controller {
 
@@ -414,6 +415,7 @@ int BundleCliService::ApplyDesiredState(
       store, &effective_desired_state);
   desired_state_policy_service_.ResolveDesiredStateDynamicPlacements(
       store, &effective_desired_state);
+  EnsureKnowledgeVaultCommonSkills(store, &effective_desired_state);
   desired_state_policy_service_.ValidateDesiredStateForControllerAdmission(
       store,
       effective_desired_state);

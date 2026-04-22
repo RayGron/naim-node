@@ -1219,7 +1219,7 @@ export function PlaneEditorDialog({
             />
           ) : null}
           {showFormBuilder ? (
-            <details className="plane-advanced-section">
+            <details className="plane-advanced-section plane-generated-json-section">
               <summary className="plane-advanced-summary">Generated JSON</summary>
               <div className="plane-advanced-body">
                 <label className="field-label" htmlFor="plane-editor-json">
