@@ -13,6 +13,8 @@ class StateJsonSettingsCodecs {
   static nlohmann::json ToJson(const SkillsSettings& skills);
   static nlohmann::json ToJson(const BrowsingPolicySettings& policy);
   static nlohmann::json ToJson(const BrowsingSettings& browsing);
+  static nlohmann::json ToJson(const KnowledgeContextPolicySettings& policy);
+  static nlohmann::json ToJson(const KnowledgeSettings& knowledge);
   static nlohmann::json ToJson(const ExternalAppHostConfig& app_host);
 
   static BootstrapModelSpec BootstrapModelSpecFromJson(
@@ -21,6 +23,7 @@ class StateJsonSettingsCodecs {
       const nlohmann::json& value);
   static SkillsSettings SkillsSettingsFromJson(const nlohmann::json& value);
   static BrowsingSettings BrowsingSettingsFromJson(const nlohmann::json& value);
+  static KnowledgeSettings KnowledgeSettingsFromJson(const nlohmann::json& value);
   static ExternalAppHostConfig ExternalAppHostConfigFromJson(
       const nlohmann::json& value);
 };

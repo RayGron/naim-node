@@ -104,6 +104,52 @@ const naim::DiskSpec& FindDiskOnNode(
 int main() {
   try {
     {
+      const json knowledge_enabled{
+          {"version", 2},
+          {"plane_name", "knowledge-enabled"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-knowledge"},
+           }},
+          {"knowledge",
+           {
+               {"enabled", true},
+               {"service_id", "kv_default"},
+               {"selection_mode", "latest"},
+               {"selected_knowledge_ids", json::array({"knowledge.alpha"})},
+               {"context_policy",
+                {{"include_graph", true}, {"max_graph_depth", 1}, {"token_budget", 12000}}},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(knowledge_enabled, "knowledge-enabled");
+      Expect(state.knowledge.has_value(), "knowledge-enabled: knowledge missing");
+      Expect(
+          state.knowledge->selected_knowledge_ids == std::vector<std::string>{"knowledge.alpha"},
+          "knowledge-enabled: selected ids mismatch");
+      std::cout << "ok: knowledge-enabled" << '\n';
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "knowledge-compute"},
+              {"plane_mode", "compute"},
+              {"knowledge", {{"enabled", true}, {"selected_knowledge_ids", json::array()}}},
+              {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+              {"app", {{"enabled", false}}},
+          },
+          "knowledge-compute");
+    }
+
+    {
       const json turboquant_defaults{
           {"version", 2},
           {"plane_name", "turboquant-defaults"},

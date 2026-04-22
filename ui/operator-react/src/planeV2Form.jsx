@@ -10,6 +10,7 @@ import {
   MODEL_LIBRARY_QUANTIZATION_FILTERS,
   normalizeModelLibraryItemQuantization,
 } from "./modelLibrary.js";
+import { KnowledgeBaseSelectorModal } from "./KnowledgeBaseSelectorModal.jsx";
 
 const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 const TURBOQUANT_DEFAULT_CACHE_TYPE_K = "planar3";
@@ -69,6 +70,7 @@ const FIELD_INFO = {
   planeName: "Unique plane identifier used by the controller, runtime artifacts, and API paths.",
   skillsEnabled: "Enable a dedicated plane-scoped Skills service for storing and resolving reusable skills.",
   browsingEnabled: "Enable a dedicated plane-scoped Isolated Browsing service for brokered web search, fetch, and approval-gated browser sessions.",
+  knowledgeEnabled: "Attach selected canonical Knowledge Base records to this plane's chat context.",
   browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
   turboquantEnabled: "Enable KV-cache quantization for llama.cpp + llama_rpc planes. This requires a compatible turboquant-capable llama.cpp build.",
   turboquantCacheTypeK: "KV cache type used for K cache pages. Defaults to planar3 when TurboQuant is enabled.",
@@ -447,6 +449,9 @@ export function buildNewPlaneFormState() {
     planeName: "new-plane",
     skillsEnabled: false,
     browsingEnabled: false,
+    knowledgeEnabled: false,
+    knowledgeServiceId: "kv_default",
+    selectedKnowledgeIds: [],
     browserSessionEnabled: false,
     turboquantEnabled: false,
     turboquantCacheTypeK: TURBOQUANT_DEFAULT_CACHE_TYPE_K,
@@ -573,6 +578,11 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     planeName,
     skillsEnabled: Boolean(value?.skills?.enabled),
     browsingEnabled: Boolean(value?.browsing?.enabled),
+    knowledgeEnabled: Boolean(value?.knowledge?.enabled),
+    knowledgeServiceId: value?.knowledge?.service_id || defaults.knowledgeServiceId,
+    selectedKnowledgeIds: Array.isArray(value?.knowledge?.selected_knowledge_ids)
+      ? value.knowledge.selected_knowledge_ids.filter((item) => typeof item === "string" && item)
+      : [],
     browserSessionEnabled: Boolean(value?.browsing?.policy?.browser_session_enabled),
     turboquantEnabled: Boolean(turboquant?.enabled),
     turboquantCacheTypeK: turboquant?.cache_type_k || TURBOQUANT_DEFAULT_CACHE_TYPE_K,
@@ -883,6 +893,25 @@ export function buildDesiredStateV2FromForm(form) {
         },
       };
     }
+    if (form.knowledgeEnabled) {
+      desiredState.knowledge = {
+        enabled: true,
+        service_id: String(form.knowledgeServiceId || "kv_default").trim() || "kv_default",
+        selection_mode: "latest",
+        selected_knowledge_ids: [
+          ...new Set(
+            (Array.isArray(form.selectedKnowledgeIds) ? form.selectedKnowledgeIds : [])
+              .map((item) => String(item || "").trim())
+              .filter(Boolean),
+          ),
+        ],
+        context_policy: {
+          include_graph: true,
+          max_graph_depth: 1,
+          token_budget: 12000,
+        },
+      };
+    }
     if (form.turboquantEnabled) {
       desiredState.features = {
         turboquant: {
@@ -1181,6 +1210,10 @@ export function validatePlaneV2Form(form) {
   }
   if (!form?.browsingEnabled && form?.browserSessionEnabled) {
     warnings.push("Browser sessions are ignored until Isolated Browsing is enabled.");
+  }
+  if (form?.knowledgeEnabled &&
+      (!Array.isArray(form?.selectedKnowledgeIds) || form.selectedKnowledgeIds.length === 0)) {
+    warnings.push("Knowledge Base is enabled without selected knowledge records.");
   }
   if (form?.appEnabled && !String(form?.appStartValue || "").trim()) {
     warnings.push("App start is empty. The app container will rely on its image default command.");
@@ -1594,6 +1627,7 @@ export function PlaneV2FormBuilder({
   const validation = validatePlaneV2Form(form);
   const [ltCypherPreflight, setLtCypherPreflight] = useState(null);
   const [factorySkillFilter, setFactorySkillFilter] = useState("");
+  const [knowledgeSelectorOpen, setKnowledgeSelectorOpen] = useState(false);
   const [selectedFactoryGroupPath, setSelectedFactoryGroupPath] = useState("");
   const [expandedFactoryGroupPaths, setExpandedFactoryGroupPaths] = useState([""]);
   const topologyNodes = Array.isArray(form.topologyNodes) ? form.topologyNodes : [];
@@ -1693,6 +1727,7 @@ export function PlaneV2FormBuilder({
           planeMode: nextPlaneMode,
           skillsEnabled: nextPlaneMode === "llm" ? current.skillsEnabled : false,
           browsingEnabled: nextPlaneMode === "llm" ? current.browsingEnabled : false,
+          knowledgeEnabled: nextPlaneMode === "llm" ? current.knowledgeEnabled : false,
           browserSessionEnabled:
             nextPlaneMode === "llm" ? current.browserSessionEnabled : false,
         });
@@ -1710,8 +1745,63 @@ export function PlaneV2FormBuilder({
         if (key === "browsingEnabled" && !nextValue) {
           next.browserSessionEnabled = false;
         }
+        if (key === "knowledgeEnabled" && nextValue) {
+          window.setTimeout(() => setKnowledgeSelectorOpen(true), 0);
+        }
         return next;
       });
+  }
+
+  function toggleKnowledgeSelection(knowledgeId) {
+    if (!knowledgeId) {
+      return;
+    }
+    updatePlaneDialogForm(setDialog, (current) => {
+      const currentIds = new Set(
+        Array.isArray(current.selectedKnowledgeIds) ? current.selectedKnowledgeIds : [],
+      );
+      if (currentIds.has(knowledgeId)) {
+        currentIds.delete(knowledgeId);
+      } else {
+        currentIds.add(knowledgeId);
+      }
+      return {
+        ...current,
+        selectedKnowledgeIds: [...currentIds],
+      };
+    });
+  }
+
+  function selectKnowledgeIds(knowledgeIds) {
+    updatePlaneDialogForm(setDialog, (current) => {
+      const currentIds = new Set(
+        Array.isArray(current.selectedKnowledgeIds) ? current.selectedKnowledgeIds : [],
+      );
+      for (const knowledgeId of knowledgeIds) {
+        if (knowledgeId) {
+          currentIds.add(knowledgeId);
+        }
+      }
+      return {
+        ...current,
+        selectedKnowledgeIds: [...currentIds],
+      };
+    });
+  }
+
+  function unselectKnowledgeIds(knowledgeIds) {
+    updatePlaneDialogForm(setDialog, (current) => {
+      const currentIds = new Set(
+        Array.isArray(current.selectedKnowledgeIds) ? current.selectedKnowledgeIds : [],
+      );
+      for (const knowledgeId of knowledgeIds) {
+        currentIds.delete(knowledgeId);
+      }
+      return {
+        ...current,
+        selectedKnowledgeIds: [...currentIds],
+      };
+    });
   }
 
   function resetDerivedField(key) {
@@ -2063,6 +2153,14 @@ export function PlaneV2FormBuilder({
           onToggle={toggleFeature("browsingEnabled")}
         />
         <FeatureToggle
+          title="Knowledge Base"
+          info={FIELD_INFO.knowledgeEnabled}
+          active={form.planeMode === "llm" && form.knowledgeEnabled}
+          disabled={form.planeMode !== "llm"}
+          disabledLabel="LLM only"
+          onToggle={toggleFeature("knowledgeEnabled")}
+        />
+        <FeatureToggle
           title="TurboQuant"
           info={FIELD_INFO.turboquantEnabled}
           active={form.planeMode === "llm" && form.turboquantEnabled}
@@ -2083,6 +2181,37 @@ export function PlaneV2FormBuilder({
           onToggle={toggleFeature("protectedPlane")}
         />
       </div>
+      <KnowledgeBaseSelectorModal
+        open={knowledgeSelectorOpen}
+        selectedKnowledgeIds={form.selectedKnowledgeIds}
+        onClose={() => setKnowledgeSelectorOpen(false)}
+        onToggleKnowledge={toggleKnowledgeSelection}
+        onSelectAll={selectKnowledgeIds}
+        onUnselectAll={unselectKnowledgeIds}
+      />
+
+      {form.planeMode === "llm" && form.knowledgeEnabled ? (
+        <div className="plane-form-toggle">
+          <div className="plane-form-section-header">
+            <InfoLabel info={FIELD_INFO.knowledgeEnabled}>Knowledge Base</InfoLabel>
+            <p className="plane-form-section-copy">
+              Selected canonical knowledge records are attached by latest knowledge id.
+            </p>
+          </div>
+          <SectionActions>
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => setKnowledgeSelectorOpen(true)}
+            >
+              Select knowledge
+            </button>
+          </SectionActions>
+          <SectionMeta>
+            {(Array.isArray(form.selectedKnowledgeIds) ? form.selectedKnowledgeIds.length : 0)} selected
+          </SectionMeta>
+        </div>
+      ) : null}
 
       {form.planeMode === "llm" && form.browsingEnabled ? (
         <div className="plane-form-toggle">

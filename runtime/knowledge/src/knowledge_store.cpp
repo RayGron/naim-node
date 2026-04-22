@@ -19,6 +19,30 @@
 
 namespace naim::knowledge_runtime {
 
+namespace {
+
+bool StringSetContains(const std::set<std::string>& values, const std::string& value) {
+  return values.empty() || values.find(value) != values.end();
+}
+
+std::string BlockSearchText(const nlohmann::json& block) {
+  return KnowledgeTextProcessor::Lowercase(
+      block.value("title", std::string{}) + "\n" +
+      block.value("body", std::string{}) + "\n" +
+      block.value("knowledge_id", std::string{}) + "\n" +
+      block.value("block_id", std::string{}));
+}
+
+std::string RelationSearchText(const nlohmann::json& relation) {
+  return KnowledgeTextProcessor::Lowercase(
+      relation.value("relation_id", std::string{}) + "\n" +
+      relation.value("type", std::string{}) + "\n" +
+      relation.value("from_block_id", std::string{}) + "\n" +
+      relation.value("to_block_id", std::string{}));
+}
+
+}  // namespace
+
 KnowledgeStore::KnowledgeStore(std::filesystem::path store_path)
     : repository_(std::make_unique<RocksDbJsonRepository>(std::move(store_path))) {}
 
@@ -173,7 +197,15 @@ nlohmann::json KnowledgeStore::Neighbors(const std::string& block_id) const {
 
 nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
   const std::string query = payload.value("query", std::string{});
-  if (query.empty()) {
+  const bool list_all = payload.value("list_all", false);
+  const auto selected_knowledge_ids =
+      payload.contains("selected_knowledge_ids")
+          ? JsonStringArray(payload.at("selected_knowledge_ids"))
+          : std::vector<std::string>{};
+  const std::set<std::string> selected_filter(
+      selected_knowledge_ids.begin(),
+      selected_knowledge_ids.end());
+  if (query.empty() && !list_all && selected_filter.empty()) {
     return nlohmann::json{{"results", nlohmann::json::array()}};
   }
   std::vector<std::string> requested_scopes;
@@ -187,16 +219,40 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
   const std::string lowered_query = KnowledgeTextProcessor::Lowercase(query);
   nlohmann::json results = nlohmann::json::array();
   for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
-    const std::string haystack =
-        KnowledgeTextProcessor::Lowercase(block.value("title", std::string{}) + "\n" + block.value("body", std::string{}));
-    if (haystack.find(lowered_query) == std::string::npos) {
+    const std::string knowledge_id = block.value("knowledge_id", std::string{});
+    if (!StringSetContains(selected_filter, knowledge_id)) {
+      continue;
+    }
+    const auto neighbors = Neighbors(block.value("block_id", std::string{}))
+                               .value("neighbors", nlohmann::json::array());
+    bool matched = query.empty() || BlockSearchText(block).find(lowered_query) != std::string::npos;
+    for (const auto& relation : neighbors) {
+      if (matched) {
+        break;
+      }
+      if (RelationSearchText(relation).find(lowered_query) != std::string::npos) {
+        matched = true;
+        break;
+      }
+      const std::string from = relation.value("from_block_id", std::string{});
+      const std::string to = relation.value("to_block_id", std::string{});
+      const std::string neighbor_id =
+          from == block.value("block_id", std::string{}) ? to : from;
+      const auto neighbor = repository_->GetJson("blocks:" + neighbor_id);
+      if (neighbor.has_value() &&
+          BlockSearchText(*neighbor).find(lowered_query) != std::string::npos) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
       continue;
     }
     const auto scope_ids = block.value("scope_ids", nlohmann::json::array());
     if (!ScopeAllowed(scope_ids, requested_scopes)) {
       results.push_back(nlohmann::json{
           {"block_id", block.value("block_id", std::string{})},
-          {"knowledge_id", block.value("knowledge_id", std::string{})},
+          {"knowledge_id", knowledge_id},
           {"mode", "redacted"},
           {"redaction", nlohmann::json{{"reason", "out_of_scope"}}},
       });
@@ -204,13 +260,16 @@ nlohmann::json KnowledgeStore::Search(const nlohmann::json& payload) const {
       const std::string body = block.value("body", std::string{});
       results.push_back(nlohmann::json{
           {"block_id", block.value("block_id", std::string{})},
-          {"knowledge_id", block.value("knowledge_id", std::string{})},
+          {"knowledge_id", knowledge_id},
           {"version_id", block.value("version_id", std::string{})},
           {"title", block.value("title", std::string{})},
+          {"type", block.value("type", std::string("note"))},
+          {"scope_ids", scope_ids},
           {"summary", body.substr(0, 240)},
           {"score", 1.0},
           {"confidence", block.value("confidence", 1.0)},
           {"freshness", "current"},
+          {"relation_count", neighbors.size()},
           {"shard_id", std::string(KnowledgeStoreKeys::kDefaultShardId)},
           {"content_hash", block.value("content_hash", std::string{})},
           {"redaction", nullptr},
@@ -228,6 +287,7 @@ nlohmann::json KnowledgeStore::Context(const nlohmann::json& payload) const {
   const auto search = Search(nlohmann::json{
       {"query", request.query},
       {"scope_id", request.scope_id},
+      {"selected_knowledge_ids", payload.value("selected_knowledge_ids", nlohmann::json::array())},
       {"limit", std::max(1, std::min(20, request.token_budget / 600))},
   });
   nlohmann::json context = nlohmann::json::array();
@@ -1119,10 +1179,50 @@ nlohmann::json KnowledgeStore::MarkdownImport(const nlohmann::json& payload) {
 }
 
 nlohmann::json KnowledgeStore::GraphNeighborhood(const nlohmann::json& payload) const {
-  const std::string center = payload.value("center_id", std::string{});
+  std::vector<std::string> centers;
+  if (const std::string center = payload.value("center_id", std::string{});
+      !center.empty()) {
+    if (repository_->GetJson("blocks:" + center).has_value()) {
+      centers.push_back(center);
+    } else {
+      const auto head = ResolveHead(center).value("head", nlohmann::json(nullptr));
+      if (head.is_object() && !head.value("head_block_id", std::string{}).empty()) {
+        centers.push_back(head.value("head_block_id", std::string{}));
+      }
+    }
+  }
+  if (payload.contains("center_ids") && payload.at("center_ids").is_array()) {
+    for (const auto& item : payload.at("center_ids")) {
+      if (item.is_string() && !item.get<std::string>().empty()) {
+        centers.push_back(item.get<std::string>());
+      }
+    }
+  }
+  const auto knowledge_ids =
+      payload.contains("knowledge_ids")
+          ? JsonStringArray(payload.at("knowledge_ids"))
+          : std::vector<std::string>{};
+  for (const auto& knowledge_id : knowledge_ids) {
+    const auto head = ResolveHead(knowledge_id).value("head", nlohmann::json(nullptr));
+    if (head.is_object()) {
+      const std::string head_block_id = head.value("head_block_id", std::string{});
+      if (!head_block_id.empty()) {
+        centers.push_back(head_block_id);
+        continue;
+      }
+    }
+    for (const auto& [key, block] : repository_->ScanJson("blocks:")) {
+      if (block.value("knowledge_id", std::string{}) == knowledge_id) {
+        const std::string block_id = block.value("block_id", std::string{});
+        if (!block_id.empty()) {
+          centers.push_back(block_id);
+        }
+      }
+    }
+  }
   const int depth = std::max(1, std::min(2, payload.value("depth", 1)));
   std::set<std::string> visited;
-  std::vector<std::string> frontier{center};
+  std::vector<std::string> frontier = std::move(centers);
   nlohmann::json nodes = nlohmann::json::array();
   nlohmann::json edges = nlohmann::json::array();
   for (int current_depth = 0; current_depth < depth && !frontier.empty(); ++current_depth) {

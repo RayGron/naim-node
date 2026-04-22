@@ -81,6 +81,10 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
               ? value.at("webgateway")
               : (value.contains("browsing") && value.at("browsing").is_object() ? value.at("browsing")
                                                                                  : nlohmann::json::object())),
+      knowledge_json_(
+          value.contains("knowledge") && value.at("knowledge").is_object()
+              ? value.at("knowledge")
+              : nlohmann::json::object()),
       features_json_(
           value.contains("features") && value.at("features").is_object() ? value.at("features")
                                                                           : nlohmann::json::object()) {}
@@ -169,6 +173,33 @@ void DesiredStateV2Renderer::RenderIdentity() {
       browsing_settings.policy = std::move(policy);
     }
     state_.browsing = std::move(browsing_settings);
+  }
+  if (knowledge_json_.value("enabled", false)) {
+    KnowledgeSettings knowledge_settings;
+    knowledge_settings.enabled = true;
+    knowledge_settings.service_id =
+        knowledge_json_.value("service_id", knowledge_settings.service_id);
+    knowledge_settings.selection_mode =
+        knowledge_json_.value("selection_mode", knowledge_settings.selection_mode);
+    if (knowledge_json_.contains("selected_knowledge_ids") &&
+        knowledge_json_.at("selected_knowledge_ids").is_array()) {
+      for (const auto& item : knowledge_json_.at("selected_knowledge_ids")) {
+        if (item.is_string()) {
+          knowledge_settings.selected_knowledge_ids.push_back(item.get<std::string>());
+        }
+      }
+    }
+    if (knowledge_json_.contains("context_policy") &&
+        knowledge_json_.at("context_policy").is_object()) {
+      const auto& policy = knowledge_json_.at("context_policy");
+      knowledge_settings.context_policy.include_graph =
+          policy.value("include_graph", knowledge_settings.context_policy.include_graph);
+      knowledge_settings.context_policy.max_graph_depth =
+          policy.value("max_graph_depth", knowledge_settings.context_policy.max_graph_depth);
+      knowledge_settings.context_policy.token_budget =
+          policy.value("token_budget", knowledge_settings.context_policy.token_budget);
+    }
+    state_.knowledge = std::move(knowledge_settings);
   }
 }
 

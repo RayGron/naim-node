@@ -171,6 +171,31 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.browserSessionEnabled).toBe(true);
   });
 
+  it("round-trips knowledge base selection through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "knowledge-plane";
+    form.modelPath = "/models/qwen";
+    form.knowledgeEnabled = true;
+    form.selectedKnowledgeIds = ["knowledge.alpha", "knowledge.beta"];
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.knowledge).toEqual({
+      enabled: true,
+      service_id: "kv_default",
+      selection_mode: "latest",
+      selected_knowledge_ids: ["knowledge.alpha", "knowledge.beta"],
+      context_policy: {
+        include_graph: true,
+        max_graph_depth: 1,
+        token_budget: 12000,
+      },
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.knowledgeEnabled).toBe(true);
+    expect(reparsed.selectedKnowledgeIds).toEqual(["knowledge.alpha", "knowledge.beta"]);
+  });
+
   it("round-trips turboquant capability through desired state v2", () => {
     const form = buildNewPlaneFormState();
     form.planeName = "turboquant-plane";

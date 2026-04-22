@@ -53,6 +53,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
   ProjectApp();
   ProjectSkills();
   ProjectBrowsing();
+  ProjectKnowledge();
   ProjectResources();
   return value_;
 }
@@ -119,6 +120,28 @@ void DesiredStateV2Projector::ProjectFeatures() {
   }
   value_["features"] = {
       {"turboquant", std::move(turboquant)},
+  };
+}
+
+void DesiredStateV2Projector::ProjectKnowledge() {
+  if (!state_.knowledge.has_value() || !state_.knowledge->enabled) {
+    return;
+  }
+  const auto& knowledge = *state_.knowledge;
+  value_["knowledge"] = {
+      {"enabled", knowledge.enabled},
+      {"service_id", knowledge.service_id.empty() ? std::string("kv_default")
+                                                   : knowledge.service_id},
+      {"selection_mode",
+       knowledge.selection_mode.empty() ? std::string("latest")
+                                        : knowledge.selection_mode},
+      {"selected_knowledge_ids", knowledge.selected_knowledge_ids},
+      {"context_policy",
+       {
+           {"include_graph", knowledge.context_policy.include_graph},
+           {"max_graph_depth", knowledge.context_policy.max_graph_depth},
+           {"token_budget", knowledge.context_policy.token_budget},
+       }},
   };
 }
 

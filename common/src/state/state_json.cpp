@@ -210,6 +210,9 @@ json DesiredStateToJson(const DesiredState& state) {
   if (state.browsing.has_value()) {
     result["webgateway"] = SettingsCodecs::ToJson(*state.browsing);
   }
+  if (state.knowledge.has_value()) {
+    result["knowledge"] = SettingsCodecs::ToJson(*state.knowledge);
+  }
   if (state.turboquant.has_value()) {
     result["features"] = {
         {"turboquant", ToJson(*state.turboquant)},
@@ -272,6 +275,9 @@ DesiredState DesiredStateFromJson(const json& value) {
                  : nullptr);
   if (browsing_block != nullptr) {
     state.browsing = SettingsCodecs::BrowsingSettingsFromJson(*browsing_block);
+  }
+  if (value.contains("knowledge") && value.at("knowledge").is_object()) {
+    state.knowledge = SettingsCodecs::KnowledgeSettingsFromJson(value.at("knowledge"));
   }
   if (value.contains("features") && value.at("features").is_object()) {
     const auto& features = value.at("features");

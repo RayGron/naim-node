@@ -114,6 +114,19 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
           name + ": browsing.policy.max_fetch_bytes mismatch");
     }
   }
+  if (rendered.knowledge.has_value()) {
+    Expect(rerendered.knowledge.has_value(), name + ": knowledge missing after rerender");
+    Expect(rerendered.knowledge->enabled == rendered.knowledge->enabled,
+           name + ": knowledge.enabled mismatch");
+    Expect(rerendered.knowledge->service_id == rendered.knowledge->service_id,
+           name + ": knowledge.service_id mismatch");
+    Expect(rerendered.knowledge->selection_mode == rendered.knowledge->selection_mode,
+           name + ": knowledge.selection_mode mismatch");
+    Expect(
+        rerendered.knowledge->selected_knowledge_ids ==
+            rendered.knowledge->selected_knowledge_ids,
+        name + ": knowledge.selected_knowledge_ids mismatch");
+  }
   if (rendered.turboquant.has_value()) {
     Expect(rerendered.turboquant.has_value(), name + ": turboquant missing after rerender");
     Expect(rerendered.turboquant->enabled == rendered.turboquant->enabled,
@@ -168,6 +181,15 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
               source.at("skills").at("factory_skill_ids"),
           name + ": skills.factory_skill_ids mismatch");
     }
+  }
+  if (source.contains("knowledge")) {
+    Expect(projected.contains("knowledge"), name + ": knowledge block missing after projection");
+    Expect(projected.at("knowledge").value("enabled", false) ==
+               source.at("knowledge").value("enabled", false),
+           name + ": knowledge.enabled projection mismatch");
+    Expect(projected.at("knowledge").at("selected_knowledge_ids") ==
+               source.at("knowledge").at("selected_knowledge_ids"),
+           name + ": knowledge.selected_knowledge_ids mismatch");
   }
   const auto* webgateway_source =
       source.contains("webgateway")
@@ -280,6 +302,33 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "turboquant-enabled");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "knowledge-enabled"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-knowledge"},
+             }},
+            {"knowledge",
+             {
+                 {"enabled", true},
+                 {"service_id", "kv_default"},
+                 {"selection_mode", "latest"},
+                 {"selected_knowledge_ids", json::array({"knowledge.alpha", "knowledge.beta"})},
+                 {"context_policy",
+                  {{"include_graph", true}, {"max_graph_depth", 1}, {"token_budget", 12000}}},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "knowledge-enabled");
 
     ExpectRoundTrip(
         json{

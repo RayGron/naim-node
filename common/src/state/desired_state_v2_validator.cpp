@@ -162,6 +162,66 @@ void DesiredStateV2Validator::ValidateModel() const {
 }
 
 void DesiredStateV2Validator::ValidateFeatures() const {
+  if (value_.contains("knowledge")) {
+    if (!value_.at("knowledge").is_object()) {
+      throw std::runtime_error("desired-state v2 knowledge must be an object");
+    }
+    const auto& knowledge = value_.at("knowledge");
+    if (knowledge.contains("enabled") && !knowledge.at("enabled").is_boolean()) {
+      throw std::runtime_error("desired-state v2 knowledge.enabled must be a boolean");
+    }
+    if (knowledge.contains("service_id") && !knowledge.at("service_id").is_string()) {
+      throw std::runtime_error("desired-state v2 knowledge.service_id must be a string");
+    }
+    if (knowledge.contains("selection_mode") &&
+        !knowledge.at("selection_mode").is_string()) {
+      throw std::runtime_error("desired-state v2 knowledge.selection_mode must be a string");
+    }
+    if (knowledge.value("selection_mode", std::string("latest")) != "latest") {
+      throw std::runtime_error("desired-state v2 knowledge.selection_mode supports latest only");
+    }
+    if (knowledge.contains("selected_knowledge_ids") &&
+        !knowledge.at("selected_knowledge_ids").is_array()) {
+      throw std::runtime_error(
+          "desired-state v2 knowledge.selected_knowledge_ids must be an array");
+    }
+    if (knowledge.contains("selected_knowledge_ids")) {
+      for (const auto& item : knowledge.at("selected_knowledge_ids")) {
+        if (!item.is_string()) {
+          throw std::runtime_error(
+              "desired-state v2 knowledge.selected_knowledge_ids entries must be strings");
+        }
+      }
+    }
+    if (knowledge.contains("context_policy") &&
+        !knowledge.at("context_policy").is_object()) {
+      throw std::runtime_error("desired-state v2 knowledge.context_policy must be an object");
+    }
+    if (knowledge.contains("context_policy")) {
+      const auto& policy = knowledge.at("context_policy");
+      if (policy.contains("include_graph") && !policy.at("include_graph").is_boolean()) {
+        throw std::runtime_error(
+            "desired-state v2 knowledge.context_policy.include_graph must be a boolean");
+      }
+      if (policy.contains("max_graph_depth") &&
+          (!policy.at("max_graph_depth").is_number_integer() ||
+           policy.at("max_graph_depth").get<int>() < 0 ||
+           policy.at("max_graph_depth").get<int>() > 2)) {
+        throw std::runtime_error(
+            "desired-state v2 knowledge.context_policy.max_graph_depth must be 0..2");
+      }
+      if (policy.contains("token_budget") &&
+          (!policy.at("token_budget").is_number_integer() ||
+           policy.at("token_budget").get<int>() <= 0)) {
+        throw std::runtime_error(
+            "desired-state v2 knowledge.context_policy.token_budget must be positive");
+      }
+    }
+    if (knowledge.value("enabled", false) &&
+        value_.value("plane_mode", std::string("llm")) != "llm") {
+      throw std::runtime_error("desired-state v2 knowledge requires plane_mode=llm");
+    }
+  }
   if (!value_.contains("features")) {
     return;
   }
