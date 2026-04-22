@@ -6316,67 +6316,160 @@ function App() {
           </article>
         </div>
         <div className="panel-grid skills-factory-page-grid">
-          <section className="subpanel">
-            <div className="subpanel-header">
-              <div>
-                <div className="section-label">Groups</div>
-                <h3>Browse tree</h3>
+          <div className="skills-factory-side-stack">
+            <section className="subpanel">
+              <div className="subpanel-header">
+                <div>
+                  <div className="section-label">Groups</div>
+                  <h3>Browse tree</h3>
+                </div>
               </div>
-            </div>
-            <div className="toolbar">
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={skillsFactory.busy}
-                onClick={createFactoryGroup}
-              >
-                New group
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
-                onClick={renameFactoryGroup}
-              >
-                Rename group
-              </button>
-              <button
-                className="ghost-button danger-button"
-                type="button"
-                disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
-                onClick={deleteFactoryGroup}
-              >
-                Delete group
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={!skillsFactory.selectedGroupPath}
-                onClick={() =>
-                  setSkillsFactory((current) => ({ ...current, selectedGroupPath: "" }))
-                }
-              >
-                Show all skills
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => setExpandedGroupPaths(availableTreePaths)}
-              >
-                Expand all
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => setExpandedGroupPaths([""])}
-              >
-                Collapse tree
-              </button>
-            </div>
-            <div className="skills-factory-group-tree">
-              {renderGroupNode(groupTree)}
-            </div>
-          </section>
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={skillsFactory.busy}
+                  onClick={createFactoryGroup}
+                >
+                  New group
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
+                  onClick={renameFactoryGroup}
+                >
+                  Rename group
+                </button>
+                <button
+                  className="ghost-button danger-button"
+                  type="button"
+                  disabled={skillsFactory.busy || !skillsFactory.selectedGroupPath || selectedBuiltinGroup}
+                  onClick={deleteFactoryGroup}
+                >
+                  Delete group
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={!skillsFactory.selectedGroupPath}
+                  onClick={() =>
+                    setSkillsFactory((current) => ({ ...current, selectedGroupPath: "" }))
+                  }
+                >
+                  Show all skills
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setExpandedGroupPaths(availableTreePaths)}
+                >
+                  Expand all
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setExpandedGroupPaths([""])}
+                >
+                  Collapse tree
+                </button>
+              </div>
+              <div className="skills-factory-group-tree">
+                {renderGroupNode(groupTree)}
+              </div>
+            </section>
+            <section className="subpanel skills-factory-editor-panel">
+              <div className="subpanel-header">
+                <h3>{editing ? "Edit / rename factory skill" : "Create factory skill"}</h3>
+              </div>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <span className="field-label-title">Name</span>
+                  <input
+                    className="text-input"
+                    value={form.name}
+                    onChange={(event) => updateFactorySkillFormField("name", event.target.value)}
+                  />
+                </label>
+                <label className="field-label">
+                  <span className="field-label-title">Id</span>
+                  <input className="text-input" value={form.id} readOnly />
+                </label>
+                <label className="field-label">
+                  <span className="field-label-title">Group path</span>
+                  <input
+                    className="text-input"
+                    value={form.groupPath}
+                    onChange={(event) => updateFactorySkillFormField("groupPath", event.target.value)}
+                    placeholder="code-agent/debugging"
+                  />
+                </label>
+              </div>
+              <div className="plane-form-section-meta">
+                Use slash-separated groups. Skill ids stay stable; rename and regroup through this
+                form.
+              </div>
+              <label className="field-label plane-checkbox">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.internal)}
+                  onChange={(event) => updateFactorySkillFormField("internal", event.target.checked)}
+                />
+                <span>
+                  Mark as internal support-layer skill
+                </span>
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Description</span>
+                <textarea
+                  className="editor-textarea"
+                  rows={4}
+                  value={form.description}
+                  onChange={(event) => updateFactorySkillFormField("description", event.target.value)}
+                />
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Content</span>
+                <textarea
+                  className="editor-textarea"
+                  rows={12}
+                  value={form.content}
+                  onChange={(event) => updateFactorySkillFormField("content", event.target.value)}
+                />
+              </label>
+              <label className="field-label">
+                <span className="field-label-title">Match terms</span>
+                <textarea
+                  className="editor-textarea plane-form-textarea match-terms-textarea"
+                  rows={6}
+                  value={form.matchTermsText}
+                  onChange={(event) => updateFactorySkillFormField("matchTermsText", event.target.value)}
+                  placeholder={"One term per line\nlogin\nlogout\naccess cookie"}
+                />
+              </label>
+              <div className="plane-form-section-meta">
+                These terms drive contextual skill matching. One term per line.
+              </div>
+              <div className="toolbar">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={skillsFactory.busy}
+                  onClick={saveFactorySkillForm}
+                >
+                  {editing ? "Save skill" : "Create skill"}
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={skillsFactory.busy}
+                  onClick={startCreateFactorySkill}
+                >
+                  {editing ? "Cancel edit" : "Reset form"}
+                </button>
+              </div>
+            </section>
+          </div>
           <section className="subpanel">
             <div className="subpanel-header">
               <div>
@@ -6474,97 +6567,6 @@ function App() {
                   </article>
                 ))
               )}
-            </div>
-          </section>
-          <section className="subpanel skills-factory-editor-panel">
-            <div className="subpanel-header">
-              <h3>{editing ? "Edit / rename factory skill" : "Create factory skill"}</h3>
-            </div>
-            <div className="plane-form-grid">
-              <label className="field-label">
-                <span className="field-label-title">Name</span>
-                <input
-                  className="text-input"
-                  value={form.name}
-                  onChange={(event) => updateFactorySkillFormField("name", event.target.value)}
-                />
-              </label>
-              <label className="field-label">
-                <span className="field-label-title">Id</span>
-                <input className="text-input" value={form.id} readOnly />
-              </label>
-              <label className="field-label">
-                <span className="field-label-title">Group path</span>
-                <input
-                  className="text-input"
-                  value={form.groupPath}
-                  onChange={(event) => updateFactorySkillFormField("groupPath", event.target.value)}
-                  placeholder="code-agent/debugging"
-                />
-              </label>
-            </div>
-            <div className="plane-form-section-meta">
-              Use slash-separated groups. Skill ids stay stable; rename and regroup through this
-              form.
-            </div>
-            <label className="field-label plane-checkbox">
-              <input
-                type="checkbox"
-                checked={Boolean(form.internal)}
-                onChange={(event) => updateFactorySkillFormField("internal", event.target.checked)}
-              />
-              <span>
-                Mark as internal support-layer skill
-              </span>
-            </label>
-            <label className="field-label">
-              <span className="field-label-title">Description</span>
-              <textarea
-                className="editor-textarea"
-                rows={4}
-                value={form.description}
-                onChange={(event) => updateFactorySkillFormField("description", event.target.value)}
-              />
-            </label>
-            <label className="field-label">
-              <span className="field-label-title">Content</span>
-              <textarea
-                className="editor-textarea"
-                rows={12}
-                value={form.content}
-                onChange={(event) => updateFactorySkillFormField("content", event.target.value)}
-              />
-            </label>
-            <label className="field-label">
-              <span className="field-label-title">Match terms</span>
-              <textarea
-                className="editor-textarea plane-form-textarea match-terms-textarea"
-                rows={6}
-                value={form.matchTermsText}
-                onChange={(event) => updateFactorySkillFormField("matchTermsText", event.target.value)}
-                placeholder={"One term per line\nlogin\nlogout\naccess cookie"}
-              />
-            </label>
-            <div className="plane-form-section-meta">
-              These terms drive contextual skill matching. One term per line.
-            </div>
-            <div className="toolbar">
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={skillsFactory.busy}
-                onClick={saveFactorySkillForm}
-              >
-                {editing ? "Save skill" : "Create skill"}
-              </button>
-              <button
-                className="ghost-button"
-                type="button"
-                disabled={skillsFactory.busy}
-                onClick={startCreateFactorySkill}
-              >
-                {editing ? "Cancel edit" : "Reset form"}
-              </button>
             </div>
           </section>
         </div>
