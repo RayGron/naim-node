@@ -80,7 +80,7 @@ release_tag="$2"
 manifest_b64="$3"
 
 release_dir="${main_root}/releases"
-install -d -m 0750 "${release_dir}"
+sudo install -d -m 0750 -o "$(id -un)" -g "$(id -gn)" "${release_dir}"
 manifest_path="${release_dir}/${release_tag}.json"
 printf '%s' "${manifest_b64}" | base64 -d > "${manifest_path}"
 chmod 0640 "${manifest_path}"
