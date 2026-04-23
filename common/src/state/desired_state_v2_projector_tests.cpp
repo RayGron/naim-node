@@ -213,6 +213,13 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
                source.at("knowledge").at("selected_knowledge_ids"),
            name + ": knowledge.selected_knowledge_ids mismatch");
   }
+  if (source.contains("interaction")) {
+    Expect(projected.contains("interaction"), name + ": interaction block missing after projection");
+    if (source.at("interaction").contains("image")) {
+      Expect(projected.at("interaction").at("image") == source.at("interaction").at("image"),
+             name + ": interaction.image mismatch");
+    }
+  }
   const auto* webgateway_source =
       source.contains("webgateway")
           ? &source.at("webgateway")
@@ -374,6 +381,30 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "combined-features");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "interaction-image-override"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-interaction-image"},
+             }},
+            {"interaction",
+             {
+                 {"image",
+                  "chainzano.com/naim/interaction-runtime@sha256:feedface"},
+                 {"thinking_enabled", false},
+             }},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "interaction-image-override");
 
     ExpectRoundTrip(
         json{

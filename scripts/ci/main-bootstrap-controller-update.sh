@@ -114,6 +114,11 @@ knowledge = images.get("knowledge-runtime", "")
 print("controller_image=" + shlex.quote(controller))
 print("web_ui_image=" + shlex.quote(web_ui))
 print("knowledge_image=" + shlex.quote(knowledge))
+print("infer_image=" + shlex.quote(images.get("infer-runtime", "")))
+print("worker_image=" + shlex.quote(images.get("worker-runtime", "")))
+print("skills_image=" + shlex.quote(images.get("skills-runtime", "")))
+print("webgateway_image=" + shlex.quote(images.get("webgateway-runtime", "")))
+print("interaction_image=" + shlex.quote(images.get("interaction-runtime", "")))
 PY
 )"
 
@@ -321,4 +326,206 @@ raise SystemExit(
     + json.dumps(last, sort_keys=True)
 )
 PY
+
+plane_refresh_root="$(mktemp -d)"
+plane_refresh_plan="${plane_refresh_root}/planes.tsv"
+python3 - "${db_path}" "${manifest_path}" "${plane_refresh_root}" > "${plane_refresh_plan}" <<'PY'
+import json
+import pathlib
+import sqlite3
+import sys
+
+db_path, manifest_path, output_root = sys.argv[1:4]
+output_dir = pathlib.Path(output_root)
+output_dir.mkdir(parents=True, exist_ok=True)
+
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+images = manifest.get("images") or {}
+registry_prefix = f"{manifest.get('registry', '').strip()}/{manifest.get('project', '').strip()}/"
+
+managed_images = {
+    ("infer", "image"): images.get("infer-runtime", ""),
+    ("worker", "image"): images.get("worker-runtime", ""),
+    ("skills", "image"): images.get("skills-runtime", ""),
+    ("webgateway", "image"): images.get("webgateway-runtime", ""),
+    ("browsing", "image"): images.get("webgateway-runtime", ""),
+}
+interaction_image = images.get("interaction-runtime", "")
+
+def is_managed_image(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip()
+    if not normalized:
+        return True
+    return normalized.startswith("naim/") or (
+        registry_prefix.strip("/") and normalized.startswith(registry_prefix)
+    )
+
+def ensure_object(parent: dict, key: str) -> dict:
+    current = parent.get(key)
+    if isinstance(current, dict):
+        return current
+    parent[key] = {}
+    return parent[key]
+
+con = sqlite3.connect(db_path)
+con.row_factory = sqlite3.Row
+rows = con.execute(
+    "select name, state, desired_state_json from planes order by name asc"
+).fetchall()
+
+for row in rows:
+    if not row["desired_state_json"]:
+        continue
+    payload = json.loads(row["desired_state_json"])
+    changed = False
+    for (section_name, field_name), image_ref in managed_images.items():
+        if not image_ref:
+            continue
+        section = payload.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        current = section.get(field_name)
+        if current is None or is_managed_image(current):
+            if current != image_ref:
+                section[field_name] = image_ref
+                changed = True
+    if payload.get("plane_mode") == "llm" and interaction_image:
+        interaction = ensure_object(payload, "interaction")
+        current = interaction.get("image")
+        if current is None or is_managed_image(current):
+            if current != interaction_image:
+                interaction["image"] = interaction_image
+                changed = True
+    if not changed:
+        continue
+    state_path = output_dir / f"{row['name']}.desired-state.v2.json"
+    state_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"{row['name']}\t{row['state']}\t{state_path}")
+PY
+
+if [[ -s "${plane_refresh_plan}" ]]; then
+  while IFS=$'\t' read -r plane_name plane_state state_path; do
+    [[ -n "${plane_name}" ]] || continue
+    docker run --rm \
+      -v "${main_root}/state:/naim/state" \
+      -v "${main_root}/artifacts:/naim/artifacts" \
+      -v "${plane_refresh_root}:${plane_refresh_root}:ro" \
+      "${controller_image}" \
+      apply-state-file \
+        --state "${state_path}" \
+        --db /naim/state/controller.sqlite \
+        --artifacts-root /naim/artifacts >/dev/null
+    if [[ "${plane_state}" == "running" ]]; then
+      docker run --rm \
+        -v "${main_root}/state:/naim/state" \
+        "${controller_image}" \
+        stop-plane \
+          --plane "${plane_name}" \
+          --db /naim/state/controller.sqlite >/dev/null
+      docker run --rm \
+        -v "${main_root}/state:/naim/state" \
+        "${controller_image}" \
+        start-plane \
+          --plane "${plane_name}" \
+          --db /naim/state/controller.sqlite >/dev/null
+    fi
+  done < "${plane_refresh_plan}"
+
+  python3 - "${db_path}" "${timeout_sec}" "${plane_refresh_plan}" <<'PY'
+import json
+import sqlite3
+import sys
+import time
+
+db_path, timeout_text, plan_path = sys.argv[1:4]
+targets = []
+with open(plan_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        plane_name, plane_state, _ = line.split("\t", 2)
+        targets.append((plane_name, plane_state))
+
+deadline = time.time() + int(timeout_text)
+last = {}
+while time.time() < deadline:
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    pending = 0
+    failed = 0
+    planes = {}
+    assignments = {}
+    for plane_name, plane_state in targets:
+        plane = con.execute(
+            "select generation, applied_generation, state from planes where name = ?",
+            (plane_name,),
+        ).fetchone()
+        latest_assignment = con.execute(
+            "select id, status, status_message, updated_at from host_assignments "
+            "where plane_name = ? order by id desc limit 1",
+            (plane_name,),
+        ).fetchone()
+        pending += con.execute(
+            "select count(*) as count from host_assignments "
+            "where plane_name = ? and status in ('pending','claimed')",
+            (plane_name,),
+        ).fetchone()["count"]
+        if latest_assignment is not None and latest_assignment["status"] == "failed":
+            failed += 1
+        planes[plane_name] = None if plane is None else {
+            "generation": plane["generation"],
+            "applied_generation": plane["applied_generation"],
+            "state": plane["state"],
+            "target_state": plane_state,
+        }
+        assignments[plane_name] = None if latest_assignment is None else {
+            "id": latest_assignment["id"],
+            "status": latest_assignment["status"],
+            "status_message": latest_assignment["status_message"],
+            "updated_at": latest_assignment["updated_at"],
+        }
+    con.close()
+
+    ready = True
+    for plane_name, plane_state in targets:
+        plane = planes.get(plane_name)
+        if plane is None:
+            ready = False
+            break
+        if plane["generation"] != plane["applied_generation"]:
+            ready = False
+            break
+        if plane_state == "running" and plane["state"] != "running":
+            ready = False
+            break
+    last = {
+        "pending_plane_assignments": pending,
+        "failed_plane_assignments": failed,
+        "planes": planes,
+        "assignments": assignments,
+    }
+    print("plane runtime refresh poll:", json.dumps(last, sort_keys=True), flush=True)
+    if failed > 0:
+      raise SystemExit(
+          "plane runtime refresh observed failed assignments; last="
+          + json.dumps(last, sort_keys=True)
+      )
+    if pending == 0 and ready:
+      raise SystemExit(0)
+    time.sleep(5)
+
+raise SystemExit(
+    "plane runtime refresh did not settle before timeout; last="
+    + json.dumps(last, sort_keys=True)
+)
+PY
+fi
 REMOTE

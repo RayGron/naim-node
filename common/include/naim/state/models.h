@@ -266,6 +266,7 @@ struct InteractionSettings {
     std::optional<std::string> semantic_goal;
   };
 
+  std::optional<std::string> image;
   std::optional<std::string> system_prompt;
   std::optional<std::string> analysis_system_prompt;
   bool thinking_enabled = false;
