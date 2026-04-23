@@ -19,6 +19,7 @@
 #include "app/hostd_desired_state_path_support.h"
 #include "app/hostd_disk_runtime_support.h"
 #include "app/hostd_file_support.h"
+#include "app/hostd_install_layout_support.h"
 #include "app/hostd_local_runtime_state_support.h"
 #include "app/hostd_local_state_path_support.h"
 #include "app/hostd_local_state_repository.h"
@@ -155,6 +156,7 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
   HostdLocalRuntimeStateSupport local_runtime_state_support_;
   HostdCommandSupport command_support_;
   HostdFileSupport file_support_;
+  HostdInstallLayoutSupport install_layout_support_;
   HostdComposeRuntimeSupport compose_runtime_support_;
   HostdDiskRuntimeSupport disk_runtime_support_;
   HostdDesiredStateApplyPlanSupport apply_plan_support_;

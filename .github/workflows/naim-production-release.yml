@@ -177,6 +177,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: hpc1-build-push-harbor
+    if: >-
+      always() &&
+      needs.hpc1-build-push-harbor.result == 'success'
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
@@ -206,6 +209,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: main-register-release
+    if: >-
+      always() &&
+      needs.main-register-release.result == 'success'
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
@@ -241,6 +247,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: main-bootstrap-controller-update
+    if: >-
+      always() &&
+      needs.main-bootstrap-controller-update.result == 'success'
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
