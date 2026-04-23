@@ -70,6 +70,18 @@ double ParseDoubleHeader(
   return fallback;
 }
 
+naim::controller::InteractionSegmentSummary EffectiveSegmentUsage(
+    const naim::controller::InteractionSessionResult& result) {
+  if (!result.segments.empty()) {
+    return result.segments.back();
+  }
+  naim::controller::InteractionSegmentSummary summary;
+  summary.prompt_tokens = result.total_prompt_tokens;
+  summary.completion_tokens = result.total_completion_tokens;
+  summary.total_tokens = result.total_tokens;
+  return summary;
+}
+
 }  // namespace
 
 nlohmann::json InteractionRequestValidator::ParsePayload(
@@ -212,6 +224,7 @@ InteractionRequestValidator::ValidateAndNormalizeRequest(
 
 nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
     const InteractionSessionResult& result) const {
+  const InteractionSegmentSummary effective_usage = EffectiveSegmentUsage(result);
   nlohmann::json segments = nlohmann::json::array();
   for (const auto& segment : result.segments) {
     segments.push_back(nlohmann::json{
@@ -236,6 +249,12 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
       {"continuation_count", result.continuation_count},
       {"finish_reason", result.final_finish_reason},
       {"usage",
+       nlohmann::json{
+           {"prompt_tokens", effective_usage.prompt_tokens},
+           {"completion_tokens", effective_usage.completion_tokens},
+           {"total_tokens", effective_usage.total_tokens},
+       }},
+      {"cumulative_usage",
        nlohmann::json{
            {"prompt_tokens", result.total_prompt_tokens},
            {"completion_tokens", result.total_completion_tokens},
