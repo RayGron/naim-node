@@ -16,6 +16,17 @@ namespace naim::controller {
 
 using nlohmann::json;
 
+namespace {
+
+int EffectivePromptTokens(const InteractionSessionResult& result) {
+  if (!result.segments.empty()) {
+    return result.segments.back().prompt_tokens;
+  }
+  return result.total_prompt_tokens;
+}
+
+}  // namespace
+
 std::optional<InteractionValidationError> InteractionConversationService::PrepareRequest(
     const std::string& db_path,
     const PlaneInteractionResolution& resolution,
@@ -240,7 +251,7 @@ std::optional<InteractionValidationError> InteractionConversationService::Persis
   updated.archive_codec = session.has_value() ? session->archive_codec : "";
   updated.archive_sha256 = session.has_value() ? session->archive_sha256 : "";
   updated.context_state_json = payload_builder.JsonString(context_state);
-  updated.latest_prompt_tokens = result.total_prompt_tokens;
+  updated.latest_prompt_tokens = EffectivePromptTokens(result);
   updated.estimated_context_tokens =
       payload_builder.EstimateTokensForJson(
           context->payload.value("messages", json::array()));
