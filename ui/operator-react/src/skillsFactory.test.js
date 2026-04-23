@@ -201,22 +201,22 @@ describe("planeV2Form SkillsFactory mapping", () => {
     form.planeName = "turboquant-plane";
     form.modelPath = "/models/qwen";
     form.turboquantEnabled = true;
-    form.turboquantCacheTypeK = "planar3";
-    form.turboquantCacheTypeV = "f16";
+    form.turboquantCacheTypeK = "turbo4";
+    form.turboquantCacheTypeV = "turbo4";
 
     const desiredState = buildDesiredStateV2FromForm(form);
     expect(desiredState.features).toEqual({
       turboquant: {
         enabled: true,
-        cache_type_k: "planar3",
-        cache_type_v: "f16",
+        cache_type_k: "turbo4",
+        cache_type_v: "turbo4",
       },
     });
 
     const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
     expect(reparsed.turboquantEnabled).toBe(true);
-    expect(reparsed.turboquantCacheTypeK).toBe("planar3");
-    expect(reparsed.turboquantCacheTypeV).toBe("f16");
+    expect(reparsed.turboquantCacheTypeK).toBe("turbo4");
+    expect(reparsed.turboquantCacheTypeV).toBe("turbo4");
   });
 
   it("does not serialize turboquant for compute planes", () => {

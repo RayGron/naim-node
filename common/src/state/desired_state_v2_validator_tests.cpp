@@ -170,11 +170,22 @@ int main() {
       Expect(state.turboquant.has_value(), "turboquant-defaults: turboquant missing");
       Expect(state.turboquant->enabled, "turboquant-defaults: turboquant should be enabled");
       Expect(
-          state.turboquant->cache_type_k == std::optional<std::string>("planar3"),
-          "turboquant-defaults: cache_type_k should default to planar3");
+          state.turboquant->cache_type_k == std::optional<std::string>("turbo4"),
+          "turboquant-defaults: cache_type_k should default to turbo4");
       Expect(
-          state.turboquant->cache_type_v == std::optional<std::string>("f16"),
-          "turboquant-defaults: cache_type_v should default to f16");
+          state.turboquant->cache_type_v == std::optional<std::string>("turbo4"),
+          "turboquant-defaults: cache_type_v should default to turbo4");
+      Expect(FindInstance(state, "infer-turboquant-defaults")
+                     .environment.at("NAIM_LLAMA_RUNTIME_FLAVOR") == "turboquant",
+             "turboquant-defaults: infer should use turboquant runtime flavor");
+      Expect(FindInstance(state, "worker-turboquant-defaults")
+                     .environment.at("NAIM_LLAMA_RUNTIME_FLAVOR") == "turboquant",
+             "turboquant-defaults: worker should use turboquant runtime flavor");
+      const auto runtime_config = json::parse(
+          naim::RenderInferRuntimeConfigJsonForInstance(state, "infer-turboquant-defaults"));
+      Expect(runtime_config.at("inference").at("runtime_flavor").get<std::string>() ==
+                 "turboquant",
+             "turboquant-defaults: infer runtime config should use turboquant flavor");
       std::cout << "ok: turboquant-defaults" << '\n';
     }
 
@@ -555,12 +566,18 @@ int main() {
                      .environment.at("NAIM_WORKER_BOOT_MODE") == "llama-rpc",
              "llama-rpc-backend: worker boot mode mismatch");
       Expect(FindInstance(state, "worker-llama-rpc-backend-a")
+                     .environment.at("NAIM_LLAMA_RUNTIME_FLAVOR") == "default",
+             "llama-rpc-backend: worker runtime flavor mismatch");
+      Expect(FindInstance(state, "worker-llama-rpc-backend-a")
                      .environment.at("NAIM_WORKER_RPC_PORT") ==
                  std::to_string(expected_rpc_port),
              "llama-rpc-backend: worker rpc env mismatch");
       Expect(FindInstance(state, "infer-llama-rpc-backend")
                      .environment.at("NAIM_INFER_RUNTIME_BACKEND") == "llama-rpc-head",
              "llama-rpc-backend: infer backend mismatch");
+      Expect(FindInstance(state, "infer-llama-rpc-backend")
+                     .environment.at("NAIM_LLAMA_RUNTIME_FLAVOR") == "default",
+             "llama-rpc-backend: infer runtime flavor mismatch");
       Expect(FindInstance(state, "infer-llama-rpc-backend")
                      .environment.at("NAIM_INSTANCE_SUBROLE") == "aggregator",
              "llama-rpc-backend: primary infer should be aggregator");

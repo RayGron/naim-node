@@ -36,6 +36,9 @@ class HostdComposeRuntimeSupport final {
   bool LocalRuntimeBinaryExists(
       const std::filesystem::path& repo_root,
       const std::string& image) const;
+  bool TurboQuantRuntimeBinaryExists(
+      const std::filesystem::path& repo_root,
+      const std::string& image) const;
   void EnsureLocalRuntimeBinary(
       const std::filesystem::path& repo_root,
       const std::string& image) const;

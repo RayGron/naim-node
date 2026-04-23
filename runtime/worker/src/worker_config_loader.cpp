@@ -88,6 +88,7 @@ WorkerConfig WorkerConfigLoader::Load() const {
     config.gpu_device = ResolveGpuDeviceFromNvidiaSmi();
   }
   config.boot_mode = GetEnvOr("NAIM_WORKER_BOOT_MODE", "llama-idle");
+  config.llama_runtime_flavor = GetEnvOr("NAIM_LLAMA_RUNTIME_FLAVOR", "default");
   config.distributed_backend = GetEnvOr("NAIM_DISTRIBUTED_BACKEND", "local");
   config.rpc_host = GetEnvOr("NAIM_WORKER_RPC_HOST", "0.0.0.0");
   config.rpc_port = GetEnvIntOr("NAIM_WORKER_RPC_PORT", 50052);

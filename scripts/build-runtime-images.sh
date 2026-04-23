@@ -46,6 +46,7 @@ hostd_tag="${8:-naim/hostd:dev}"
 knowledge_tag="${9:-naim/knowledge-runtime:dev}"
 
 build_dir="$("${script_dir}/print-build-dir.sh")"
+turboquant_build_dir="${NAIM_TURBOQUANT_BUILD_DIR:-${repo_root}/build-turboquant/linux/x64}"
 mkdir -p "${repo_root}/var"
 image_context="$(mktemp -d "${repo_root}/var/runtime-image-context.XXXXXX")"
 cleanup_image_context() {
@@ -54,6 +55,7 @@ cleanup_image_context() {
 trap cleanup_image_context EXIT
 
 mkdir -p "${image_context}/build/linux/x64/bin"
+mkdir -p "${image_context}/build-turboquant/linux/x64/bin"
 cp -R "${repo_root}/runtime" "${image_context}/runtime"
 mkdir -p "${image_context}/ui/operator-react/scripts"
 cp "${repo_root}/ui/operator-react/package.json" \
@@ -66,6 +68,10 @@ for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd na
 done
 cp "${build_dir}/bin/llama-server" "${image_context}/build/linux/x64/bin/llama-server"
 cp "${build_dir}/bin/rpc-server" "${image_context}/build/linux/x64/bin/rpc-server"
+cp "${turboquant_build_dir}/bin/llama-server" \
+  "${image_context}/build-turboquant/linux/x64/bin/llama-server"
+cp "${turboquant_build_dir}/bin/rpc-server" \
+  "${image_context}/build-turboquant/linux/x64/bin/rpc-server"
 
 build_web_ui_image() {
   local temp_root
@@ -167,6 +173,7 @@ fi
 
 echo "runtime images ready"
 echo "  base=${base_tag}"
+echo "  turboquant_build=${turboquant_build_dir}"
 echo "  controller=${controller_tag}"
 echo "  hostd=${hostd_tag}"
 echo "  infer=${infer_tag}"

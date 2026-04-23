@@ -13,9 +13,9 @@ import {
 import { KnowledgeBaseSelectorModal } from "./KnowledgeBaseSelectorModal.jsx";
 
 const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
-const TURBOQUANT_DEFAULT_CACHE_TYPE_K = "planar3";
-const TURBOQUANT_DEFAULT_CACHE_TYPE_V = "f16";
-const TURBOQUANT_CACHE_TYPES = ["f16", "turbo3", "turbo4", "planar3", "planar4", "iso3", "iso4"];
+const TURBOQUANT_DEFAULT_CACHE_TYPE_K = "turbo4";
+const TURBOQUANT_DEFAULT_CACHE_TYPE_V = "turbo4";
+const TURBOQUANT_CACHE_TYPES = ["f16", "turbo3", "turbo4"];
 const LT_CYPHER_PLANE_NAME = "lt-cypher-ai";
 const LT_CYPHER_HARBOR_IMAGE_PREFIX = "chainzano.com/localtrade/lt-cypher-ai:";
 const LT_CYPHER_DEFAULT_IMAGE = `${LT_CYPHER_HARBOR_IMAGE_PREFIX}<git-sha>`;
@@ -33,6 +33,11 @@ const LT_CYPHER_SKILL_IDS = [
   "lt-jex-market-forecast",
   "lt-jex-market-source-mix",
 ];
+
+function normalizeTurboQuantCacheType(value, fallback) {
+  const normalized = String(value || "").trim();
+  return TURBOQUANT_CACHE_TYPES.includes(normalized) ? normalized : fallback;
+}
 const LT_CYPHER_SYSTEM_PROMPT = `Ты — Jex AI, AI-ассистент торговой платформы LocalTrade.
 
 Правила роли:
@@ -73,8 +78,8 @@ const FIELD_INFO = {
   knowledgeEnabled: "Attach selected canonical Knowledge Base records to this plane's chat context.",
   browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
   turboquantEnabled: "Enable KV-cache quantization for llama.cpp + llama_rpc planes. This requires a compatible turboquant-capable llama.cpp build.",
-  turboquantCacheTypeK: "KV cache type used for K cache pages. Defaults to planar3 when TurboQuant is enabled.",
-  turboquantCacheTypeV: "KV cache type used for V cache pages. Defaults to f16 when TurboQuant is enabled.",
+  turboquantCacheTypeK: "KV cache type used for K cache pages. Defaults to turbo4 when TurboQuant is enabled.",
+  turboquantCacheTypeV: "KV cache type used for V cache pages. Defaults to turbo4 when TurboQuant is enabled.",
   planeMode: "Choose llm for model serving planes or compute for custom GPU workloads without chat interaction.",
   protectedPlane: "Protected planes require an explicit confirmation before destructive actions such as delete.",
   factorySkillIds: "Select global Skills Factory records that should be copied into this plane when the rollout is applied.",
@@ -585,8 +590,14 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
       : [],
     browserSessionEnabled: Boolean(value?.browsing?.policy?.browser_session_enabled),
     turboquantEnabled: Boolean(turboquant?.enabled),
-    turboquantCacheTypeK: turboquant?.cache_type_k || TURBOQUANT_DEFAULT_CACHE_TYPE_K,
-    turboquantCacheTypeV: turboquant?.cache_type_v || TURBOQUANT_DEFAULT_CACHE_TYPE_V,
+    turboquantCacheTypeK: normalizeTurboQuantCacheType(
+      turboquant?.cache_type_k,
+      TURBOQUANT_DEFAULT_CACHE_TYPE_K,
+    ),
+    turboquantCacheTypeV: normalizeTurboQuantCacheType(
+      turboquant?.cache_type_v,
+      TURBOQUANT_DEFAULT_CACHE_TYPE_V,
+    ),
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
     factorySkillIds: Array.isArray(value?.skills?.factory_skill_ids)
@@ -916,8 +927,14 @@ export function buildDesiredStateV2FromForm(form) {
       desiredState.features = {
         turboquant: {
           enabled: true,
-          cache_type_k: String(form.turboquantCacheTypeK || TURBOQUANT_DEFAULT_CACHE_TYPE_K),
-          cache_type_v: String(form.turboquantCacheTypeV || TURBOQUANT_DEFAULT_CACHE_TYPE_V),
+          cache_type_k: normalizeTurboQuantCacheType(
+            form.turboquantCacheTypeK,
+            TURBOQUANT_DEFAULT_CACHE_TYPE_K,
+          ),
+          cache_type_v: normalizeTurboQuantCacheType(
+            form.turboquantCacheTypeV,
+            TURBOQUANT_DEFAULT_CACHE_TYPE_V,
+          ),
         },
       };
     }

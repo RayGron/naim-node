@@ -640,8 +640,8 @@ void TestRuntimePayloadIncludesKvCacheBytes() {
   runtime_status.launch_ready = true;
   runtime_status.kv_cache_bytes = 3ULL * 1024ULL * 1024ULL * 1024ULL;
   runtime_status.turboquant_enabled = true;
-  runtime_status.active_cache_type_k = "planar3";
-  runtime_status.active_cache_type_v = "f16";
+  runtime_status.active_cache_type_k = "turbo4";
+  runtime_status.active_cache_type_v = "turbo4";
   observation.runtime_status_json = naim::SerializeRuntimeStatusJson(runtime_status);
 
   std::map<std::string, naim::NodeInventory> dashboard_nodes;
@@ -701,9 +701,9 @@ void TestRuntimePayloadIncludesKvCacheBytes() {
       "runtime payload should expose aggregated kv_cache_bytes");
   Expect(runtime_payload.at("turboquant_enabled").get<bool>(),
          "runtime payload should expose turboquant_enabled");
-  Expect(runtime_payload.at("active_cache_type_k").get<std::string>() == "planar3",
+  Expect(runtime_payload.at("active_cache_type_k").get<std::string>() == "turbo4",
          "runtime payload should expose active_cache_type_k");
-  Expect(runtime_payload.at("active_cache_type_v").get<std::string>() == "f16",
+  Expect(runtime_payload.at("active_cache_type_v").get<std::string>() == "turbo4",
          "runtime payload should expose active_cache_type_v");
 
   std::cout << "ok: runtime-payload-includes-kv-cache-bytes" << '\n';

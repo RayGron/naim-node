@@ -6,13 +6,15 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /runtime/bin/turboquant
 
 COPY runtime/infer /runtime/infer
 COPY build/linux/x64/naim-inferctl /runtime/bin/naim-inferctl
 COPY build/linux/x64/bin/llama-server /runtime/bin/llama-server
+COPY build-turboquant/linux/x64/bin/llama-server /runtime/bin/turboquant/llama-server
 
-RUN chmod +x /runtime/infer/entrypoint.sh /runtime/infer/inferctl.sh /runtime/bin/naim-inferctl /runtime/bin/llama-server \
+RUN chmod +x /runtime/infer/entrypoint.sh /runtime/infer/inferctl.sh /runtime/bin/naim-inferctl /runtime/bin/llama-server /runtime/bin/turboquant/llama-server \
     && ldconfig
 
 WORKDIR /runtime

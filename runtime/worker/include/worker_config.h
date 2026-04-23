@@ -16,6 +16,7 @@ struct WorkerConfig {
   std::string model_path;
   std::string gpu_device;
   std::string boot_mode = "llama-idle";
+  std::string llama_runtime_flavor = "default";
   std::string distributed_backend = "local";
   std::string rpc_host = "0.0.0.0";
   std::string rpc_endpoint;
