@@ -498,6 +498,7 @@ export function buildNewPlaneFormState() {
     modelSha256: "",
     systemPrompt:
       "You are a helpful AI assistant. Reply clearly, concisely, and follow the user's instructions.",
+    interactionImage: "",
     thinkingEnabled: false,
     defaultResponseLanguage: "ru",
     followUserLanguage: true,
@@ -650,6 +651,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     modelTargetFilename: value?.model?.target_filename || "",
     modelSha256: value?.model?.sha256 || "",
     systemPrompt: value?.interaction?.system_prompt || defaults.systemPrompt,
+    interactionImage: value?.interaction?.image || "",
     thinkingEnabled:
       value?.interaction?.thinking_enabled ?? defaults.thinkingEnabled,
     defaultResponseLanguage:
@@ -905,6 +907,9 @@ export function buildDesiredStateV2FromForm(form) {
       supported_response_languages: DEFAULT_SUPPORTED_RESPONSE_LANGUAGES,
       follow_user_language: Boolean(form.followUserLanguage),
     };
+    if (String(form.interactionImage || "").trim()) {
+      desiredState.interaction.image = String(form.interactionImage || "").trim();
+    }
     desiredState.infer = {
       replicas: parseNumber(form.inferReplicas, 1),
     };

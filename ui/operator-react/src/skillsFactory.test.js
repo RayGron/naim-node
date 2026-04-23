@@ -242,6 +242,32 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.contextCompressionMemoryPriority).toBe("balanced");
   });
 
+  it("preserves interaction runtime image through desired state v2 round-trip", () => {
+    const desiredState = {
+      ...buildDesiredStateV2FromForm(buildNewPlaneFormState()),
+      plane_name: "interaction-image-plane",
+      model: {
+        source: { type: "library", ref: "Qwen/Qwen3.6-35B-A3B" },
+        materialization: { mode: "prepare_on_worker" },
+        served_model_name: "interaction-image-plane",
+      },
+      interaction: {
+        image: "chainzano.com/naim/interaction-runtime@sha256:feedface",
+        system_prompt: "Preserve interaction image",
+        thinking_enabled: false,
+        default_response_language: "ru",
+        supported_response_languages: ["en", "de", "uk", "ru"],
+        follow_user_language: true,
+      },
+    };
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    const rebuilt = buildDesiredStateV2FromForm(reparsed);
+    expect(rebuilt.interaction.image).toBe(
+      "chainzano.com/naim/interaction-runtime@sha256:feedface",
+    );
+  });
+
   it("round-trips multiple feature toggles through desired state v2", () => {
     const form = buildNewPlaneFormState();
     form.planeName = "combined-feature-plane";
