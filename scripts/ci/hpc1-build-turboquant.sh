@@ -9,9 +9,11 @@ source "${script_dir}/hpc1-build-common.sh"
 current_sha="$(naim_ci_require_release_sha)"
 naim_ci_prepare_repo
 
-naim_ci_ensure_writable_dir build
+naim_ci_ensure_writable_dir build-turboquant
+naim_ci_ensure_writable_dir var/turboquant
+naim_ci_prepare_shared_vcpkg_cache "$(pwd)"
 
 export NAIM_BUILD_TYPE
-"$(pwd)/scripts/build-target.sh" "${NAIM_BUILD_TYPE}"
+bash "$(pwd)/scripts/build-turboquant-runtime.sh" linux x64 "${NAIM_BUILD_TYPE}"
 
-echo "hpc1 build completed for ${current_sha}"
+echo "hpc1 turboquant build completed for ${current_sha}"

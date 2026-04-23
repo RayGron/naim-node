@@ -47,11 +47,38 @@ jobs:
             "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_BRANCH='${NAIM_RELEASE_BRANCH}' bash -s" \
             < scripts/ci/hpc1-pull-main.sh
 
+  detect-release-scope:
+    name: 1a. detect release scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: hpc1-pull
+    outputs:
+      turboquant_required: ${{ steps.scope.outputs.turboquant_required }}
+      turboquant_reason: ${{ steps.scope.outputs.turboquant_reason }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - id: scope
+        name: Detect TurboQuant-sensitive changes
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          NAIM_RELEASE_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          bash scripts/ci/detect-release-scope.sh
+
   hpc1-build:
     name: 2. hpc1 build
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    needs: hpc1-pull
+    needs:
+      - hpc1-pull
+      - detect-release-scope
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
@@ -64,6 +91,27 @@ jobs:
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
             "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build.sh"
+
+  hpc1-build-turboquant:
+    name: 2b. hpc1 TurboQuant build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs:
+      - hpc1-build
+      - detect-release-scope
+    if: needs.detect-release-scope.outputs.turboquant_required == 'true'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-naim-ssh
+        with:
+          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Build TurboQuant runtime on hpc1
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
+          ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_BUILD_TYPE='${NAIM_BUILD_TYPE}' NAIM_CUDA_ARCHITECTURES='${NAIM_CUDA_ARCHITECTURES}' NAIM_CUDA_NVCC_JOBS='${NAIM_CUDA_NVCC_JOBS}' NAIM_CMAKE_ARGS='${NAIM_CMAKE_ARGS}' bash scripts/ci/hpc1-build-turboquant.sh"
 
   hpc1-knowledge-vault-release-gate:
     name: 2a. hpc1 Knowledge Vault release gate
@@ -87,7 +135,15 @@ jobs:
     name: 3. hpc1 build containers and push Harbor
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    needs: hpc1-knowledge-vault-release-gate
+    needs:
+      - detect-release-scope
+      - hpc1-knowledge-vault-release-gate
+      - hpc1-build-turboquant
+    if: >-
+      always() &&
+      needs.detect-release-scope.result == 'success' &&
+      needs.hpc1-knowledge-vault-release-gate.result == 'success' &&
+      (needs.hpc1-build-turboquant.result == 'success' || needs.hpc1-build-turboquant.result == 'skipped')
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
