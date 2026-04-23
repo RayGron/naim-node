@@ -90,7 +90,7 @@ void TestBuildsSessionPayloads() {
   session.owner_kind = "user";
   session.owner_user_id = 7;
   session.context_state_json =
-      R"({"browsing_mode":"enabled","applied_skill_ids":["skill-a"]})";
+      R"({"browsing_mode":"enabled","applied_skill_ids":["skill-a"],"context_compression":{"enabled":true,"mode":"auto","target":"dialog_and_knowledge","warnings":["trimmed"],"compression_ratio":0.5}})";
   session.created_at = "2026-04-09 10:00:00";
   session.updated_at = "2026-04-09 10:01:00";
   session.last_used_at = "2026-04-09 10:01:00";
@@ -100,6 +100,16 @@ void TestBuildsSessionPayloads() {
          "session summary should expose browsing mode");
   Expect(summary_payload.at("applied_skill_ids").size() == 1,
          "session summary should expose applied skill ids");
+  Expect(summary_payload.at("context_compression_enabled").get<bool>(),
+         "session summary should expose context compression flag");
+  Expect(summary_payload.at("compression_mode").get<std::string>() == "auto",
+         "session summary should expose compression mode");
+  Expect(summary_payload.at("compression_target").get<std::string>() == "dialog_and_knowledge",
+         "session summary should expose compression target");
+  Expect(summary_payload.at("compression_warning_count").get<int>() == 1,
+         "session summary should expose warning count");
+  Expect(summary_payload.at("last_compression_ratio").get<double>() == 0.5,
+         "session summary should expose compression ratio");
 
   const std::vector<naim::InteractionMessageRecord> messages{
       naim::InteractionMessageRecord{

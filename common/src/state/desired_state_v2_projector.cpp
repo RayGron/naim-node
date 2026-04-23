@@ -106,21 +106,31 @@ void DesiredStateV2Projector::ProjectPlacement() {
 }
 
 void DesiredStateV2Projector::ProjectFeatures() {
-  if (!state_.turboquant.has_value()) {
+  if (!state_.turboquant.has_value() && !state_.context_compression.has_value()) {
     return;
   }
-  nlohmann::json turboquant = {
-      {"enabled", state_.turboquant->enabled},
-  };
-  if (state_.turboquant->cache_type_k.has_value()) {
-    turboquant["cache_type_k"] = *state_.turboquant->cache_type_k;
+  nlohmann::json features = nlohmann::json::object();
+  if (state_.turboquant.has_value()) {
+    nlohmann::json turboquant = {
+        {"enabled", state_.turboquant->enabled},
+    };
+    if (state_.turboquant->cache_type_k.has_value()) {
+      turboquant["cache_type_k"] = *state_.turboquant->cache_type_k;
+    }
+    if (state_.turboquant->cache_type_v.has_value()) {
+      turboquant["cache_type_v"] = *state_.turboquant->cache_type_v;
+    }
+    features["turboquant"] = std::move(turboquant);
   }
-  if (state_.turboquant->cache_type_v.has_value()) {
-    turboquant["cache_type_v"] = *state_.turboquant->cache_type_v;
+  if (state_.context_compression.has_value()) {
+    features["context_compression"] = {
+        {"enabled", state_.context_compression->enabled},
+        {"mode", state_.context_compression->mode},
+        {"target", state_.context_compression->target},
+        {"memory_priority", state_.context_compression->memory_priority},
+    };
   }
-  value_["features"] = {
-      {"turboquant", std::move(turboquant)},
-  };
+  value_["features"] = std::move(features);
 }
 
 void DesiredStateV2Projector::ProjectKnowledge() {

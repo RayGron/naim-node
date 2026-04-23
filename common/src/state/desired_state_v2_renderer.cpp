@@ -234,23 +234,39 @@ void DesiredStateV2Renderer::RenderPlacement() {
 }
 
 void DesiredStateV2Renderer::RenderFeatures() {
-  if (!features_json_.contains("turboquant") ||
-      !features_json_.at("turboquant").is_object()) {
-    return;
+  if (features_json_.contains("turboquant") &&
+      features_json_.at("turboquant").is_object()) {
+    const auto& turboquant_json = features_json_.at("turboquant");
+    if (turboquant_json.value("enabled", false)) {
+      TurboQuantFeatureSpec turboquant;
+      turboquant.enabled = true;
+      turboquant.cache_type_k = turboquant_json.value(
+          "cache_type_k",
+          std::string(kTurboQuantDefaultCacheTypeK));
+      turboquant.cache_type_v = turboquant_json.value(
+          "cache_type_v",
+          std::string(kTurboQuantDefaultCacheTypeV));
+      state_.turboquant = std::move(turboquant);
+    }
   }
-  const auto& turboquant_json = features_json_.at("turboquant");
-  if (!turboquant_json.value("enabled", false)) {
-    return;
+  if (features_json_.contains("context_compression") &&
+      features_json_.at("context_compression").is_object()) {
+    const auto& context_compression_json = features_json_.at("context_compression");
+    if (context_compression_json.value("enabled", false)) {
+      ContextCompressionFeatureSpec context_compression;
+      context_compression.enabled = true;
+      context_compression.mode = context_compression_json.value(
+          "mode",
+          context_compression.mode);
+      context_compression.target = context_compression_json.value(
+          "target",
+          context_compression.target);
+      context_compression.memory_priority = context_compression_json.value(
+          "memory_priority",
+          context_compression.memory_priority);
+      state_.context_compression = std::move(context_compression);
+    }
   }
-  TurboQuantFeatureSpec turboquant;
-  turboquant.enabled = true;
-  turboquant.cache_type_k = turboquant_json.value(
-      "cache_type_k",
-      std::string(kTurboQuantDefaultCacheTypeK));
-  turboquant.cache_type_v = turboquant_json.value(
-      "cache_type_v",
-      std::string(kTurboQuantDefaultCacheTypeV));
-  state_.turboquant = std::move(turboquant);
 }
 
 void DesiredStateV2Renderer::RenderHooks() {

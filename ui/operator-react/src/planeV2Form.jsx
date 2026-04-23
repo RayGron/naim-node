@@ -16,6 +16,9 @@ const DEFAULT_SUPPORTED_RESPONSE_LANGUAGES = ["en", "de", "uk", "ru"];
 const TURBOQUANT_DEFAULT_CACHE_TYPE_K = "turbo4";
 const TURBOQUANT_DEFAULT_CACHE_TYPE_V = "turbo4";
 const TURBOQUANT_CACHE_TYPES = ["f16", "turbo3", "turbo4"];
+const CONTEXT_COMPRESSION_DEFAULT_MODE = "auto";
+const CONTEXT_COMPRESSION_DEFAULT_TARGET = "dialog_and_knowledge";
+const CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY = "balanced";
 const LT_CYPHER_PLANE_NAME = "lt-cypher-ai";
 const LT_CYPHER_HARBOR_IMAGE_PREFIX = "chainzano.com/localtrade/lt-cypher-ai:";
 const LT_CYPHER_DEFAULT_IMAGE = `${LT_CYPHER_HARBOR_IMAGE_PREFIX}<git-sha>`;
@@ -76,6 +79,10 @@ const FIELD_INFO = {
   skillsEnabled: "Enable a dedicated plane-scoped Skills service for storing and resolving reusable skills.",
   browsingEnabled: "Enable a dedicated plane-scoped Isolated Browsing service for brokered web search, fetch, and approval-gated browser sessions.",
   knowledgeEnabled: "Attach selected canonical Knowledge Base records to this plane's chat context.",
+  contextCompressionEnabled: "Enable controller-side prompt compaction for dialog history and Knowledge Base context before the request reaches infer.",
+  contextCompressionMode: "Context Compression mode. V1 supports auto only.",
+  contextCompressionTarget: "Prompt segments compressed by Context Compression. V1 supports dialog and knowledge together only.",
+  contextCompressionMemoryPriority: "Budget policy used by Context Compression. V1 supports balanced only.",
   browserSessionEnabled: "Allow approval-gated browser session APIs for this plane. Search and sanitized fetch stay enabled when Isolated Browsing is on.",
   turboquantEnabled: "Enable KV-cache quantization for llama.cpp + llama_rpc planes. This requires a compatible turboquant-capable llama.cpp build.",
   turboquantCacheTypeK: "KV cache type used for K cache pages. Defaults to turbo4 when TurboQuant is enabled.",
@@ -461,6 +468,10 @@ export function buildNewPlaneFormState() {
     turboquantEnabled: false,
     turboquantCacheTypeK: TURBOQUANT_DEFAULT_CACHE_TYPE_K,
     turboquantCacheTypeV: TURBOQUANT_DEFAULT_CACHE_TYPE_V,
+    contextCompressionEnabled: false,
+    contextCompressionMode: CONTEXT_COMPRESSION_DEFAULT_MODE,
+    contextCompressionTarget: CONTEXT_COMPRESSION_DEFAULT_TARGET,
+    contextCompressionMemoryPriority: CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY,
     planeMode: "llm",
     protectedPlane: false,
     factorySkillIds: [],
@@ -572,6 +583,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const workerStorage = worker?.storage || {};
   const appHost = value?.placement?.app_host || {};
   const turboquant = value?.features?.turboquant || {};
+  const contextCompression = value?.features?.context_compression || {};
   const planeName = value?.plane_name || defaults.planeName;
   const servedModelName = value?.model?.served_model_name || deriveServedModelName(planeName);
   const serverName = network.server_name || deriveServerName(planeName);
@@ -598,6 +610,14 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
       turboquant?.cache_type_v,
       TURBOQUANT_DEFAULT_CACHE_TYPE_V,
     ),
+    contextCompressionEnabled: Boolean(contextCompression?.enabled),
+    contextCompressionMode:
+      contextCompression?.mode || CONTEXT_COMPRESSION_DEFAULT_MODE,
+    contextCompressionTarget:
+      contextCompression?.target || CONTEXT_COMPRESSION_DEFAULT_TARGET,
+    contextCompressionMemoryPriority:
+      contextCompression?.memory_priority ||
+      CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY,
     planeMode: value?.plane_mode || defaults.planeMode,
     protectedPlane: Boolean(value?.protected),
     factorySkillIds: Array.isArray(value?.skills?.factory_skill_ids)
@@ -923,20 +943,30 @@ export function buildDesiredStateV2FromForm(form) {
         },
       };
     }
+    const features = {};
     if (form.turboquantEnabled) {
-      desiredState.features = {
-        turboquant: {
-          enabled: true,
-          cache_type_k: normalizeTurboQuantCacheType(
-            form.turboquantCacheTypeK,
-            TURBOQUANT_DEFAULT_CACHE_TYPE_K,
-          ),
-          cache_type_v: normalizeTurboQuantCacheType(
-            form.turboquantCacheTypeV,
-            TURBOQUANT_DEFAULT_CACHE_TYPE_V,
-          ),
-        },
+      features.turboquant = {
+        enabled: true,
+        cache_type_k: normalizeTurboQuantCacheType(
+          form.turboquantCacheTypeK,
+          TURBOQUANT_DEFAULT_CACHE_TYPE_K,
+        ),
+        cache_type_v: normalizeTurboQuantCacheType(
+          form.turboquantCacheTypeV,
+          TURBOQUANT_DEFAULT_CACHE_TYPE_V,
+        ),
       };
+    }
+    if (form.contextCompressionEnabled) {
+      features.context_compression = {
+        enabled: true,
+        mode: CONTEXT_COMPRESSION_DEFAULT_MODE,
+        target: CONTEXT_COMPRESSION_DEFAULT_TARGET,
+        memory_priority: CONTEXT_COMPRESSION_DEFAULT_MEMORY_PRIORITY,
+      };
+    }
+    if (Object.keys(features).length > 0) {
+      desiredState.features = features;
     }
   }
 
@@ -2178,6 +2208,14 @@ export function PlaneV2FormBuilder({
           onToggle={toggleFeature("knowledgeEnabled")}
         />
         <FeatureToggle
+          title="Context Compression"
+          info={FIELD_INFO.contextCompressionEnabled}
+          active={form.planeMode === "llm" && form.contextCompressionEnabled}
+          disabled={form.planeMode !== "llm"}
+          disabledLabel="LLM only"
+          onToggle={toggleFeature("contextCompressionEnabled")}
+        />
+        <FeatureToggle
           title="TurboQuant"
           info={FIELD_INFO.turboquantEnabled}
           active={form.planeMode === "llm" && form.turboquantEnabled}
@@ -2293,6 +2331,51 @@ export function PlaneV2FormBuilder({
                   </option>
                 ))}
               </select>
+            </label>
+          </div>
+        </div>
+      ) : null}
+
+      {form.planeMode === "llm" && form.contextCompressionEnabled ? (
+        <div className="plane-form-toggle">
+          <div className="plane-form-section-header">
+            <InfoLabel info={FIELD_INFO.contextCompressionEnabled}>
+              Context Compression
+            </InfoLabel>
+            <p className="plane-form-section-copy">
+              Controller-side prompt compaction for dialog history and Knowledge Base context
+              before the request reaches infer.
+            </p>
+          </div>
+          <div className="plane-form-grid">
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.contextCompressionMode}>Mode</InfoLabel>
+              <input
+                className="text-input"
+                value={form.contextCompressionMode}
+                onChange={bindText("contextCompressionMode")}
+                readOnly
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.contextCompressionTarget}>Target</InfoLabel>
+              <input
+                className="text-input"
+                value={form.contextCompressionTarget}
+                onChange={bindText("contextCompressionTarget")}
+                readOnly
+              />
+            </label>
+            <label className="field-label">
+              <InfoLabel info={FIELD_INFO.contextCompressionMemoryPriority}>
+                Memory priority
+              </InfoLabel>
+              <input
+                className="text-input"
+                value={form.contextCompressionMemoryPriority}
+                onChange={bindText("contextCompressionMemoryPriority")}
+                readOnly
+              />
             </label>
           </div>
         </div>

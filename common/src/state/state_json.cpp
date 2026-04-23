@@ -141,6 +141,15 @@ json ToJson(const TurboQuantFeatureSpec& turboquant) {
   return result;
 }
 
+json ToJson(const ContextCompressionFeatureSpec& context_compression) {
+  return {
+      {"enabled", context_compression.enabled},
+      {"mode", context_compression.mode},
+      {"target", context_compression.target},
+      {"memory_priority", context_compression.memory_priority},
+  };
+}
+
 json DesiredStateToJson(const DesiredState& state) {
   json result = {
       {"plane_name", state.plane_name},
@@ -213,10 +222,15 @@ json DesiredStateToJson(const DesiredState& state) {
   if (state.knowledge.has_value()) {
     result["knowledge"] = SettingsCodecs::ToJson(*state.knowledge);
   }
-  if (state.turboquant.has_value()) {
-    result["features"] = {
-        {"turboquant", ToJson(*state.turboquant)},
-    };
+  if (state.turboquant.has_value() || state.context_compression.has_value()) {
+    json features = json::object();
+    if (state.turboquant.has_value()) {
+      features["turboquant"] = ToJson(*state.turboquant);
+    }
+    if (state.context_compression.has_value()) {
+      features["context_compression"] = ToJson(*state.context_compression);
+    }
+    result["features"] = std::move(features);
   }
   if (state.app_host.has_value()) {
     result["app_host"] = SettingsCodecs::ToJson(*state.app_host);
@@ -294,6 +308,24 @@ DesiredState DesiredStateFromJson(const json& value) {
         turboquant.cache_type_v = turboquant_json.at("cache_type_v").get<std::string>();
       }
       state.turboquant = std::move(turboquant);
+    }
+    if (features.contains("context_compression") &&
+        features.at("context_compression").is_object()) {
+      ContextCompressionFeatureSpec context_compression;
+      const auto& context_compression_json = features.at("context_compression");
+      context_compression.enabled = context_compression_json.value(
+          "enabled",
+          context_compression.enabled);
+      context_compression.mode = context_compression_json.value(
+          "mode",
+          context_compression.mode);
+      context_compression.target = context_compression_json.value(
+          "target",
+          context_compression.target);
+      context_compression.memory_priority = context_compression_json.value(
+          "memory_priority",
+          context_compression.memory_priority);
+      state.context_compression = std::move(context_compression);
     }
   }
   if (value.contains("app_host") && value.at("app_host").is_object()) {
@@ -508,6 +540,7 @@ DesiredState SliceDesiredStateForNode(
   result.skills = state.skills;
   result.browsing = state.browsing;
   result.turboquant = state.turboquant;
+  result.context_compression = state.context_compression;
   result.app_host = state.app_host;
   result.inference = state.inference;
   result.worker_group = state.worker_group;

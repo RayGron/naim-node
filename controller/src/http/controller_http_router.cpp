@@ -4,6 +4,7 @@
 
 #include "infra/controller_action.h"
 #include "http/controller_http_server_support.h"
+#include "interaction/interaction_context_compression_service.h"
 #include "interaction/interaction_conversation_service.h"
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_request_identity_support.h"
@@ -582,6 +583,7 @@ HttpResponse ControllerHttpRouter::HandlePlaneInteractionRequest(
             validation_error->retryable,
             validation_error->details);
       }
+      InteractionContextCompressionService().Apply(resolution, &request_context);
       try {
         const auto result =
             interaction_service_.ExecuteSession(resolution, request_context);

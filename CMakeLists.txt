@@ -684,6 +684,18 @@ target_link_libraries(
 naim_enable_strict_warnings(naim-interaction-conversation-payload-builder-tests)
 
 add_executable(
+  naim-interaction-context-compression-service-tests
+  controller/src/interaction/interaction_context_compression_service.cpp
+  controller/src/interaction/interaction_conversation_payload_builder.cpp
+  controller/src/interaction/interaction_context_compression_service_tests.cpp
+)
+target_include_directories(
+  naim-interaction-context-compression-service-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  naim-interaction-context-compression-service-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-interaction-context-compression-service-tests)
+
+add_executable(
   naim-interaction-conversation-record-builder-tests
   controller/src/interaction/interaction_conversation_payload_builder.cpp
   controller/src/interaction/interaction_conversation_record_builder.cpp
@@ -759,6 +771,7 @@ add_executable(
   controller/src/http/controller_http_transport.cpp
   controller/src/infra/controller_network_manager.cpp
   controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_context_compression_service.cpp
   controller/src/interaction/interaction_conversation_archive_service.cpp
   controller/src/interaction/interaction_conversation_payload_builder.cpp
   controller/src/interaction/interaction_conversation_record_builder.cpp
@@ -1248,6 +1261,7 @@ add_executable(
   controller/src/interaction/interaction_conversation_payload_builder.cpp
   controller/src/interaction/interaction_conversation_record_builder.cpp
   controller/src/interaction/interaction_completion_policy_support.cpp
+  controller/src/interaction/interaction_context_compression_service.cpp
   controller/src/interaction/interaction_contract_responder.cpp
   controller/src/interaction/interaction_conversation_service.cpp
   controller/src/interaction/interaction_http_service.cpp

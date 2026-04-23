@@ -235,7 +235,14 @@ std::optional<InteractionValidationError> InteractionConversationService::Persis
   updated.estimated_context_tokens =
       payload_builder.EstimateTokensForJson(
           context->payload.value("messages", json::array()));
-  updated.compression_state = summary_records.empty() ? "none" : "compressed";
+  const json compression = context_state.value("context_compression", json::object());
+  if (compression.is_object()) {
+    updated.compression_state = compression.value(
+        "status",
+        summary_records.empty() ? std::string("none") : std::string("compressed"));
+  } else {
+    updated.compression_state = summary_records.empty() ? "none" : "compressed";
+  }
   updated.version = session.has_value() ? session->version + 1 : 1;
   updated.created_at = session.has_value() ? session->created_at : now;
   updated.updated_at = now;

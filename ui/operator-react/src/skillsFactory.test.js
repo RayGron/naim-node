@@ -219,10 +219,65 @@ describe("planeV2Form SkillsFactory mapping", () => {
     expect(reparsed.turboquantCacheTypeV).toBe("turbo4");
   });
 
+  it("round-trips context compression capability through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "compression-plane";
+    form.modelPath = "/models/qwen";
+    form.contextCompressionEnabled = true;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features).toEqual({
+      context_compression: {
+        enabled: true,
+        mode: "auto",
+        target: "dialog_and_knowledge",
+        memory_priority: "balanced",
+      },
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.contextCompressionEnabled).toBe(true);
+    expect(reparsed.contextCompressionMode).toBe("auto");
+    expect(reparsed.contextCompressionTarget).toBe("dialog_and_knowledge");
+    expect(reparsed.contextCompressionMemoryPriority).toBe("balanced");
+  });
+
+  it("round-trips multiple feature toggles through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "combined-feature-plane";
+    form.modelPath = "/models/qwen";
+    form.contextCompressionEnabled = true;
+    form.turboquantEnabled = true;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features).toEqual({
+      context_compression: {
+        enabled: true,
+        mode: "auto",
+        target: "dialog_and_knowledge",
+        memory_priority: "balanced",
+      },
+      turboquant: {
+        enabled: true,
+        cache_type_k: "turbo4",
+        cache_type_v: "turbo4",
+      },
+    });
+  });
+
   it("does not serialize turboquant for compute planes", () => {
     const form = buildNewPlaneFormState();
     form.planeMode = "compute";
     form.turboquantEnabled = true;
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.features).toBeUndefined();
+  });
+
+  it("does not serialize context compression for compute planes", () => {
+    const form = buildNewPlaneFormState();
+    form.planeMode = "compute";
+    form.contextCompressionEnabled = true;
 
     const desiredState = buildDesiredStateV2FromForm(form);
     expect(desiredState.features).toBeUndefined();
@@ -409,6 +464,7 @@ describe("PlaneEditorDialog", () => {
 
     expect(html).toContain("New plane");
     expect(html).toContain("Isolated Browsing");
+    expect(html).toContain("Context Compression");
     expect(html).toContain("TurboQuant");
     expect(html).toContain("Generated JSON");
     expect(html).not.toContain("Runtime engine");
