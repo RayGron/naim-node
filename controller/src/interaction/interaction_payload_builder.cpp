@@ -176,6 +176,7 @@ std::string BuildInteractionUpstreamBodyPayload(
   payload.erase("response_format");
   payload.erase("session_id");
   payload.erase("skill_ids");
+  payload.erase("__naim_policy_user_message");
   payload.erase(PlaneSkillsService::kSystemInstructionPayloadKey);
   payload.erase(PlaneSkillsService::kAppliedSkillsPayloadKey);
   payload.erase(PlaneSkillsService::kSkillsSessionIdPayloadKey);

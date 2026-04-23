@@ -8,6 +8,10 @@ namespace naim::controller {
 
 std::string InteractionRequestHeuristics::LastUserMessageContent(
     const nlohmann::json& payload) const {
+  if (payload.contains("__naim_policy_user_message") &&
+      payload.at("__naim_policy_user_message").is_string()) {
+    return payload.at("__naim_policy_user_message").get<std::string>();
+  }
   if (!payload.contains("messages") || !payload.at("messages").is_array()) {
     return "";
   }
