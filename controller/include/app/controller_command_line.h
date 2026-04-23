@@ -40,6 +40,7 @@ class ControllerCommandLine {
   std::optional<std::string> public_key() const;
   std::optional<std::string> public_key_base64() const;
   std::optional<std::string> state_file() const;
+  std::optional<std::string> manifest() const;
 
  private:
   std::optional<std::string> FindOptionValue(const char* name) const;

@@ -637,6 +637,117 @@ void HostdAppAssignmentSupport::ExecuteKnowledgeVaultHttpProxy(
           {"body", response.body}});
 }
 
+void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
+    const nlohmann::json& payload,
+    const std::string& node_name,
+    const std::optional<std::string>& host_private_key_path,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (backend == nullptr || !assignment_id.has_value()) {
+    throw std::runtime_error("hostd-self-update requires a controller assignment");
+  }
+  if (!host_private_key_path.has_value() || host_private_key_path->empty()) {
+    throw std::runtime_error("hostd-self-update requires --host-private-key");
+  }
+
+  const std::string release_tag = payload.value("release_tag", std::string{});
+  const std::string hostd_image = payload.value("hostd_image", std::string{});
+  if (release_tag.empty() || hostd_image.empty()) {
+    throw std::runtime_error("hostd-self-update payload must contain release_tag and hostd_image");
+  }
+
+  const std::filesystem::path key_path(*host_private_key_path);
+  const std::filesystem::path hostd_root = key_path.parent_path().parent_path();
+  if (hostd_root.empty()) {
+    throw std::runtime_error("failed to derive hostd root from host private key path");
+  }
+  const std::filesystem::path compose_file =
+      payload.contains("compose_file_path") && payload.at("compose_file_path").is_string()
+          ? std::filesystem::path(payload.at("compose_file_path").get<std::string>())
+          : hostd_root / "docker-compose.yml";
+  if (!std::filesystem::exists(compose_file)) {
+    throw std::runtime_error("hostd-self-update compose file does not exist: " +
+                             compose_file.string());
+  }
+
+  const std::filesystem::path registry_config_dir =
+      payload.contains("registry_config_dir") && payload.at("registry_config_dir").is_string()
+          ? std::filesystem::path(payload.at("registry_config_dir").get<std::string>())
+          : hostd_root / "install-state" / "registry-docker";
+  const std::filesystem::path update_script =
+      hostd_root / "install-state" / "hostd-self-update.sh";
+  const std::filesystem::path update_log =
+      hostd_root / "logs" / ("hostd-self-update-" + release_tag + ".log");
+
+  std::string script = "#!/usr/bin/env bash\n"
+                       "set -euo pipefail\n";
+  if (std::filesystem::exists(registry_config_dir / "config.json")) {
+    script += "export DOCKER_CONFIG=" +
+              command_support_.ShellQuote(registry_config_dir.string()) + "\n";
+  }
+  script += "python3 - " + command_support_.ShellQuote(compose_file.string()) + " " +
+            command_support_.ShellQuote(hostd_image) + " <<'PY'\n"
+            "import pathlib\n"
+            "import sys\n"
+            "\n"
+            "compose_path = pathlib.Path(sys.argv[1])\n"
+            "target_image = sys.argv[2]\n"
+            "text = compose_path.read_text(encoding='utf-8')\n"
+            "lines = text.splitlines()\n"
+            "in_service = False\n"
+            "service_indent = None\n"
+            "updated = False\n"
+            "for index, line in enumerate(lines):\n"
+            "    stripped = line.lstrip()\n"
+            "    indent = len(line) - len(stripped)\n"
+            "    if stripped == 'naim-hostd:':\n"
+            "        in_service = True\n"
+            "        service_indent = indent\n"
+            "        continue\n"
+            "    if in_service and stripped and not stripped.startswith('#') and indent <= service_indent:\n"
+            "        in_service = False\n"
+            "    if in_service and stripped.startswith('image:'):\n"
+            "        lines[index] = ' ' * indent + 'image: ' + target_image\n"
+            "        updated = True\n"
+            "        break\n"
+            "if not updated:\n"
+            "    raise SystemExit('failed to locate naim-hostd image line in compose file')\n"
+            "compose_path.write_text('\\n'.join(lines) + '\\n', encoding='utf-8')\n"
+            "PY\n"
+            "sleep 2\n"
+            "docker compose -f " + command_support_.ShellQuote(compose_file.string()) +
+            " pull naim-hostd\n"
+            "docker compose -f " + command_support_.ShellQuote(compose_file.string()) +
+            " up -d --remove-orphans naim-hostd\n";
+
+  file_support_.WriteTextFile(update_script.string(), script);
+  if (!command_support_.RunCommandOk(
+          "chmod 0700 " + command_support_.ShellQuote(update_script.string()))) {
+    throw std::runtime_error("failed to chmod hostd self-update script");
+  }
+
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "scheduled"},
+          {"title", "Hostd self-update scheduled"},
+          {"detail", "Hostd queued its own container refresh via docker compose."},
+          {"percent", 90},
+          {"node_name", node_name},
+          {"release_tag", release_tag},
+          {"hostd_image", hostd_image},
+          {"compose_file_path", compose_file.string()},
+          {"script_path", update_script.string()},
+          {"log_path", update_log.string()}});
+
+  const std::string launch_command =
+      "nohup bash " + command_support_.ShellQuote(update_script.string()) + " >" +
+      command_support_.ShellQuote(update_log.string()) + " 2>&1 < /dev/null &";
+  if (!command_support_.RunCommandOk(launch_command)) {
+    throw std::runtime_error("failed to launch hostd self-update background job");
+  }
+}
+
 void HostdAppAssignmentSupport::ShowDemoOps(
     const std::string& node_name,
     const std::string& storage_root,

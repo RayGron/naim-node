@@ -54,6 +54,14 @@ class HostRegistryService : public IHostRegistryService {
       bool enabled,
       const std::optional<std::string>& status_message) const override;
 
+  nlohmann::json StartManagedReleaseRolloutPayload(
+      const std::string& manifest_path,
+      const std::optional<std::string>& status_message) const;
+
+  int StartManagedReleaseRollout(
+      const std::string& manifest_path,
+      const std::optional<std::string>& status_message) const override;
+
  private:
   std::string db_path_;
   HostRegistryEventSink event_sink_;

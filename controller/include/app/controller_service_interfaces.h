@@ -122,6 +122,9 @@ class IHostRegistryService {
       const std::string& node_name,
       bool enabled,
       const std::optional<std::string>& status_message) const = 0;
+  virtual int StartManagedReleaseRollout(
+      const std::string& manifest_path,
+      const std::optional<std::string>& status_message) const = 0;
 };
 
 class IPlaneService {
