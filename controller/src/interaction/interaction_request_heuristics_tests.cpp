@@ -28,6 +28,25 @@ void TestExtractsLastUserMessage() {
   std::cout << "ok: interaction-heuristics-last-user-message" << '\n';
 }
 
+void TestPrefersRawPolicyUserMessage() {
+  const naim::controller::InteractionRequestHeuristics heuristics;
+  const nlohmann::json payload = {
+      {"__naim_policy_user_message", "Who are you?"},
+      {"messages",
+       nlohmann::json::array(
+           {nlohmann::json{{"role", "system"}, {"content", "sys"}},
+            nlohmann::json{
+                {"role", "user"},
+                {"content",
+                 "Who are you?\n\nResponse language requirement: Reply in English. "
+                 "Ignore the language of the user's message and follow only this interface language setting."}}})},
+  };
+  Expect(
+      heuristics.LastUserMessageContent(payload) == "Who are you?",
+      "heuristics should prefer the raw policy user message over enriched user content");
+  std::cout << "ok: interaction-heuristics-raw-policy-user-message" << '\n';
+}
+
 void TestDetectsLongFormRequest() {
   const naim::controller::InteractionRequestHeuristics heuristics;
   Expect(
@@ -67,6 +86,7 @@ void TestCanonicalizesResponseMode() {
 int main() {
   try {
     TestExtractsLastUserMessage();
+    TestPrefersRawPolicyUserMessage();
     TestDetectsLongFormRequest();
     TestDetectsRepositoryAnalysisRequest();
     TestCanonicalizesResponseMode();
