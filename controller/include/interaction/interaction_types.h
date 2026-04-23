@@ -90,6 +90,11 @@ struct StreamedInteractionSegmentResult {
   InteractionSegmentSummary summary;
   std::string model;
   std::string cleaned_text;
+  bool context_compression_enabled = false;
+  std::string context_compression_status = "none";
+  int dialog_estimate_before = 0;
+  int dialog_estimate_after = 0;
+  double context_compression_ratio = 1.0;
 };
 
 struct InteractionSessionResult {
@@ -106,6 +111,11 @@ struct InteractionSessionResult {
   std::string stop_reason;
   std::string final_finish_reason = "stop";
   bool marker_seen = false;
+  bool context_compression_enabled = false;
+  std::string context_compression_status = "none";
+  int dialog_estimate_before = 0;
+  int dialog_estimate_after = 0;
+  double context_compression_ratio = 1.0;
 };
 
 struct InteractionRequestContext {
@@ -167,6 +177,7 @@ struct InteractionStreamResolutionResult {
 
 struct InteractionStreamingUpstreamConnection {
   bool chunked_transfer = false;
+  std::map<std::string, std::string> headers;
   std::string initial_body;
   std::function<std::string()> read_next_chunk;
   std::function<void()> close;

@@ -22,6 +22,56 @@
 
 namespace naim::controller {
 
+namespace {
+
+std::optional<std::string> FindHeaderValue(
+    const std::map<std::string, std::string>& headers,
+    const std::string& key) {
+  const auto it = headers.find(key);
+  if (it == headers.end() || it->second.empty()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+bool ParseBoolHeader(
+    const std::map<std::string, std::string>& headers,
+    const std::string& key,
+    bool fallback) {
+  if (const auto value = FindHeaderValue(headers, key); value.has_value()) {
+    return *value == "true" || *value == "1";
+  }
+  return fallback;
+}
+
+int ParseIntHeader(
+    const std::map<std::string, std::string>& headers,
+    const std::string& key,
+    int fallback) {
+  if (const auto value = FindHeaderValue(headers, key); value.has_value()) {
+    try {
+      return std::stoi(*value);
+    } catch (const std::exception&) {
+    }
+  }
+  return fallback;
+}
+
+double ParseDoubleHeader(
+    const std::map<std::string, std::string>& headers,
+    const std::string& key,
+    double fallback) {
+  if (const auto value = FindHeaderValue(headers, key); value.has_value()) {
+    try {
+      return std::stod(*value);
+    } catch (const std::exception&) {
+    }
+  }
+  return fallback;
+}
+
+}  // namespace
+
 nlohmann::json InteractionRequestValidator::ParsePayload(
     const std::string& body) const {
   return body.empty() ? nlohmann::json::object() : nlohmann::json::parse(body);
@@ -680,6 +730,18 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
             .count());
     result.final_finish_reason = summary.finish_reason;
     result.marker_seen = result.marker_seen || marker_seen_in_segment;
+    result.context_compression_enabled = ParseBoolHeader(
+        upstream.headers, "x-naim-context-compression-enabled", false);
+    result.context_compression_status = FindHeaderValue(
+                                            upstream.headers,
+                                            "x-naim-context-compression-status")
+                                            .value_or("none");
+    result.dialog_estimate_before = ParseIntHeader(
+        upstream.headers, "x-naim-dialog-estimate-before", 0);
+    result.dialog_estimate_after = ParseIntHeader(
+        upstream.headers, "x-naim-dialog-estimate-after", 0);
+    result.context_compression_ratio = ParseDoubleHeader(
+        upstream.headers, "x-naim-context-compression-ratio", 1.0);
 
     if (result.marker_seen &&
         session_reached_target_length_(policy, result.total_completion_tokens)) {
@@ -1082,6 +1144,11 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
               .count());
       session.final_finish_reason = segment.summary.finish_reason;
       session.marker_seen = session.marker_seen || segment.summary.marker_seen;
+      session.context_compression_enabled = segment.context_compression_enabled;
+      session.context_compression_status = segment.context_compression_status;
+      session.dialog_estimate_before = segment.dialog_estimate_before;
+      session.dialog_estimate_after = segment.dialog_estimate_after;
+      session.context_compression_ratio = segment.context_compression_ratio;
 
       if (!send_event(
               "segment_complete",
@@ -1344,8 +1411,24 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
     if (fallback.status_code != 200 || fallback.body.empty()) {
       return std::nullopt;
     }
-    return flush_fallback_response(
-        nlohmann::json::parse(fallback.body), assign_only);
+    auto fallback_result =
+        flush_fallback_response(nlohmann::json::parse(fallback.body), assign_only);
+    if (!fallback_result.has_value()) {
+      return std::nullopt;
+    }
+    fallback_result->context_compression_enabled = ParseBoolHeader(
+        fallback.headers, "x-naim-context-compression-enabled", false);
+    fallback_result->context_compression_status = FindHeaderValue(
+                                                      fallback.headers,
+                                                      "x-naim-context-compression-status")
+                                                      .value_or("none");
+    fallback_result->dialog_estimate_before = ParseIntHeader(
+        fallback.headers, "x-naim-dialog-estimate-before", 0);
+    fallback_result->dialog_estimate_after = ParseIntHeader(
+        fallback.headers, "x-naim-dialog-estimate-after", 0);
+    fallback_result->context_compression_ratio = ParseDoubleHeader(
+        fallback.headers, "x-naim-context-compression-ratio", 1.0);
+    return fallback_result;
   };
 
   try {
@@ -1359,6 +1442,18 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
                 true,
                 resolved_policy,
                 request_context.structured_output_json));
+    result.context_compression_enabled = ParseBoolHeader(
+        stream.headers, "x-naim-context-compression-enabled", false);
+    result.context_compression_status = FindHeaderValue(
+                                            stream.headers,
+                                            "x-naim-context-compression-status")
+                                            .value_or("none");
+    result.dialog_estimate_before = ParseIntHeader(
+        stream.headers, "x-naim-dialog-estimate-before", 0);
+    result.dialog_estimate_after = ParseIntHeader(
+        stream.headers, "x-naim-dialog-estimate-after", 0);
+    result.context_compression_ratio = ParseDoubleHeader(
+        stream.headers, "x-naim-context-compression-ratio", 1.0);
     const auto close_stream = [&]() {
       if (stream.close) {
         stream.close();

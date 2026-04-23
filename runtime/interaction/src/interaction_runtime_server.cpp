@@ -1,6 +1,7 @@
 #include "interaction/interaction_runtime_server.h"
 
 #include <array>
+#include <cctype>
 #include <csignal>
 #include <fstream>
 #include <map>
@@ -29,6 +30,13 @@ void SignalHandler(int) {
   }
 }
 
+std::string LowercaseCopy(std::string value) {
+  for (char& ch : value) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return value;
+}
+
 bool RequestWantsStream(const HttpRequest& request) {
   if (request.path == "/v1/chat/completions/stream") {
     return true;
@@ -48,6 +56,16 @@ bool RequestWantsStream(const HttpRequest& request) {
   } catch (const std::exception&) {
   }
   return false;
+}
+
+std::optional<std::string> FindRequestHeader(
+    const HttpRequest& request,
+    const std::string& key) {
+  const auto it = request.headers.find(LowercaseCopy(key));
+  if (it == request.headers.end() || it->second.empty()) {
+    return std::nullopt;
+  }
+  return it->second;
 }
 
 std::map<std::string, std::string> BuildCompressionHeaders(
@@ -257,6 +275,11 @@ HttpResponse InteractionRuntimeServer::HandlePost(const HttpRequest& request) {
 }
 
 HttpResponse InteractionRuntimeServer::ExecuteNonStream(const HttpRequest& request) {
+  if (ShouldProxyRawRequestThroughController(request)) {
+    return ProxyRawRequestThroughController(
+        request,
+        "/api/v1/planes/" + config_.plane_name + "/interaction/chat/completions");
+  }
   auto execution = BuildRuntimeExecution(request);
   naim::controller::InteractionContextCompressionService().Apply(
       execution.resolution,
@@ -282,6 +305,13 @@ HttpResponse InteractionRuntimeServer::ExecuteNonStream(const HttpRequest& reque
 void InteractionRuntimeServer::ExecuteStream(
     naim::platform::SocketHandle client_fd,
     const HttpRequest& request) {
+  if (ShouldProxyRawRequestThroughController(request)) {
+    ProxyRawStreamThroughController(
+        client_fd,
+        request,
+        "/api/v1/planes/" + config_.plane_name + "/interaction/chat/completions/stream");
+    return;
+  }
   auto execution = BuildRuntimeExecution(request);
   execution.force_stream = true;
   naim::controller::InteractionContextCompressionService().Apply(
@@ -300,6 +330,81 @@ void InteractionRuntimeServer::ExecuteStream(
   if (!naim::controller::ControllerNetworkManager::SendSseHeaders(
           client_fd,
           BuildCompressionHeaders(execution.request_context))) {
+    upstream.close();
+    naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+    return;
+  }
+  if (!upstream.initial_body.empty() &&
+      !naim::controller::ControllerNetworkManager::SendAll(client_fd, upstream.initial_body)) {
+    upstream.close();
+    naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+    return;
+  }
+  while (true) {
+    const std::string chunk = upstream.read_next_chunk();
+    if (chunk.empty()) {
+      break;
+    }
+    if (!naim::controller::ControllerNetworkManager::SendAll(client_fd, chunk)) {
+      break;
+    }
+  }
+  upstream.close();
+  naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
+}
+
+bool InteractionRuntimeServer::ShouldProxyRawRequestThroughController(
+    const HttpRequest& request) const {
+  if (TryBuildWrappedRuntimeExecution(request.body).has_value()) {
+    return false;
+  }
+  return FindRequestHeader(request, "x-naim-session-token").has_value();
+}
+
+HttpResponse InteractionRuntimeServer::ProxyRawRequestThroughController(
+    const HttpRequest& request,
+    const std::string& controller_path) const {
+  std::vector<std::pair<std::string, std::string>> headers{
+      {"Accept", "application/json"},
+      {"Content-Type", "application/json"},
+  };
+  if (const auto token = FindRequestHeader(request, "x-naim-session-token");
+      token.has_value()) {
+    headers.emplace_back("X-Naim-Session-Token", *token);
+  }
+  if (const auto request_id = FindRequestHeader(request, "x-naim-request-id");
+      request_id.has_value()) {
+    headers.emplace_back("X-Naim-Request-Id", *request_id);
+  }
+  return SendControllerHttpRequest(
+      ParseControllerEndpointTarget(config_.controller_url),
+      "POST",
+      controller_path,
+      request.body,
+      headers);
+}
+
+void InteractionRuntimeServer::ProxyRawStreamThroughController(
+    naim::platform::SocketHandle client_fd,
+    const HttpRequest& request,
+    const std::string& controller_path) const {
+  std::vector<std::pair<std::string, std::string>> headers{
+      {"Accept", "text/event-stream"},
+      {"Content-Type", "application/json"},
+  };
+  const std::string request_id =
+      FindRequestHeader(request, "x-naim-request-id").value_or("interaction-runtime");
+  if (const auto token = FindRequestHeader(request, "x-naim-session-token");
+      token.has_value()) {
+    headers.emplace_back("X-Naim-Session-Token", *token);
+  }
+  auto upstream = OpenInteractionStreamRequest(
+      ParseControllerEndpointTarget(config_.controller_url),
+      request_id,
+      request.body,
+      controller_path,
+      headers);
+  if (!naim::controller::ControllerNetworkManager::SendSseHeaders(client_fd, {})) {
     upstream.close();
     naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
     return;

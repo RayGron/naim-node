@@ -200,6 +200,15 @@ std::optional<InteractionValidationError> InteractionConversationService::Persis
                                    .is_object()
                            ? context->payload.at(kInteractionSessionContextStatePayloadKey)
                            : context->session_context_state;
+  context_state["context_compression"] = json{
+      {"enabled", result.context_compression_enabled},
+      {"status", result.context_compression_status},
+      {"dialog_estimate_before", result.dialog_estimate_before},
+      {"dialog_estimate_after", result.dialog_estimate_after},
+      {"compression_ratio", result.context_compression_ratio},
+      {"compressor_id", "context-compression-v1"},
+      {"policy_version", "v1"},
+  };
   json applied_skill_ids = json::array();
   if (context->payload.contains(PlaneSkillsService::kAppliedSkillsPayloadKey) &&
       context->payload.at(PlaneSkillsService::kAppliedSkillsPayloadKey).is_array()) {

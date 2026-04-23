@@ -142,6 +142,7 @@ bool InteractionTextPostProcessor::StartsWithReasoningPreamble(
 std::string InteractionTextPostProcessor::SanitizeInteractionText(
     std::string text) const {
   text = RemoveThinkBlocks(std::move(text));
+  text = RemoveCompletionMarkers(text, "[[TASK_COMPLETE]]", nullptr);
   text = TrimCopy(text);
   if (StartsWithReasoningPreamble(text)) {
     const auto paragraphs = SplitParagraphs(text);

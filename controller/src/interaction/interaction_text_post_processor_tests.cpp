@@ -46,6 +46,14 @@ void TestRemovesCompletionMarkers() {
   std::cout << "ok: interaction-text-removes-markers" << '\n';
 }
 
+void TestSanitizesBareCompletionMarker() {
+  const naim::controller::InteractionTextPostProcessor processor;
+  Expect(
+      processor.SanitizeInteractionText("[[TASK_COMPLETE]]").empty(),
+      "processor should strip a bare completion marker from visible text");
+  std::cout << "ok: interaction-text-sanitizes-bare-marker" << '\n';
+}
+
 void TestConsumesSplitCompletionMarker() {
   const naim::controller::InteractionTextPostProcessor processor;
   naim::controller::CompletionMarkerFilterState state;
@@ -80,6 +88,7 @@ int main() {
     TestSanitizesReasoningAndThinkBlocks();
     TestSanitizesModelReasoningPreambleLeak();
     TestRemovesCompletionMarkers();
+    TestSanitizesBareCompletionMarker();
     TestConsumesSplitCompletionMarker();
     TestUtf8SafeSuffixAvoidsBrokenPrefix();
     return 0;

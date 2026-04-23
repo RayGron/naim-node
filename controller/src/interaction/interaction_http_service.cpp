@@ -64,6 +64,21 @@ std::string BuildKnowledgeInstruction(const nlohmann::json& context_payload) {
   return instruction;
 }
 
+std::map<std::string, std::string> BuildCompressionHeaders(
+    const naim::controller::InteractionSessionResult& result) {
+  return {
+      {"x-naim-context-compression-enabled",
+       result.context_compression_enabled ? "true" : "false"},
+      {"x-naim-context-compression-status", result.context_compression_status},
+      {"x-naim-dialog-estimate-before",
+       std::to_string(result.dialog_estimate_before)},
+      {"x-naim-dialog-estimate-after",
+       std::to_string(result.dialog_estimate_after)},
+      {"x-naim-context-compression-ratio",
+       std::to_string(result.context_compression_ratio)},
+  };
+}
+
 }  // namespace
 
 InteractionHttpService::InteractionHttpService(InteractionHttpSupport support)
@@ -172,11 +187,16 @@ HttpResponse InteractionHttpService::BuildSessionResponse(
       &reviewed_result);
   const auto response_spec =
       presenter.BuildResponseSpec(resolution, request_context, reviewed_result);
+  auto headers =
+      naim::controller::InteractionRequestContractSupport{}
+          .BuildInteractionResponseHeaders(request_context.request_id);
+  for (const auto& [name, value] : BuildCompressionHeaders(reviewed_result)) {
+    headers[name] = value;
+  }
   return support_.BuildJsonResponse(
       response_spec.status_code,
       response_spec.payload,
-      naim::controller::InteractionRequestContractSupport{}
-          .BuildInteractionResponseHeaders(request_context.request_id));
+      headers);
 }
 
 HttpResponse InteractionHttpService::ProxyJson(

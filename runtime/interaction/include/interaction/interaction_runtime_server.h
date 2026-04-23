@@ -51,6 +51,14 @@ class InteractionRuntimeServer final {
   HttpResponse HandlePost(const HttpRequest& request);
   HttpResponse ExecuteNonStream(const HttpRequest& request);
   void ExecuteStream(naim::platform::SocketHandle client_fd, const HttpRequest& request);
+  bool ShouldProxyRawRequestThroughController(const HttpRequest& request) const;
+  HttpResponse ProxyRawRequestThroughController(
+      const HttpRequest& request,
+      const std::string& controller_path) const;
+  void ProxyRawStreamThroughController(
+      naim::platform::SocketHandle client_fd,
+      const HttpRequest& request,
+      const std::string& controller_path) const;
   RuntimeExecution BuildRuntimeExecution(const HttpRequest& request) const;
   std::optional<RuntimeExecution> TryBuildWrappedRuntimeExecution(
       const std::string& body) const;
