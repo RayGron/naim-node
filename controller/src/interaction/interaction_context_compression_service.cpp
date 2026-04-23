@@ -20,6 +20,9 @@ constexpr const char* kKnowledgeContextPayloadKey = "__naim_knowledge_context";
 constexpr int kDialogRecentTailCount = 6;
 constexpr int kSummaryExcerptBytes = 200;
 constexpr int kKnowledgeExcerptBytes = 800;
+constexpr std::size_t kDialogSummaryItemCount = 8;
+constexpr std::size_t kDialogMinimumTailCount = 1;
+constexpr int kDialogTailBudgetFloor = 192;
 
 std::string TrimCopy(const std::string& value) {
   const auto begin = value.find_first_not_of(" \t\r\n");
@@ -117,6 +120,24 @@ json BuildDialogSummaryMessage(
   return json{{"role", "system"}, {"content", summary.str()}};
 }
 
+json BuildCompressedDialogMessages(
+    const std::vector<json>& system_messages,
+    const std::vector<json>& older_messages,
+    const std::vector<json>& recent_messages) {
+  json compressed_messages = json::array();
+  for (const auto& message : system_messages) {
+    compressed_messages.push_back(message);
+  }
+  compressed_messages.push_back(
+      BuildDialogSummaryMessage(
+          older_messages,
+          std::min<std::size_t>(kDialogSummaryItemCount, older_messages.size())));
+  for (const auto& message : recent_messages) {
+    compressed_messages.push_back(message);
+  }
+  return compressed_messages;
+}
+
 std::string BuildKnowledgeInstruction(const json& context_payload) {
   const auto context = context_payload.value("context", json::array());
   if (!context.is_array() || context.empty()) {
@@ -197,29 +218,67 @@ void InteractionContextCompressionService::Apply(
     const int dialog_soft_limit =
         std::max(256, (resolution.desired_state.inference.max_model_len * 55) / 100);
     if (dialog_estimate_before > dialog_soft_limit &&
-        non_system_messages.size() > static_cast<std::size_t>(kDialogRecentTailCount)) {
-      const std::size_t older_count =
-          non_system_messages.size() - static_cast<std::size_t>(kDialogRecentTailCount);
-      std::vector<json> older_messages(
-          non_system_messages.begin(),
-          non_system_messages.begin() + static_cast<std::ptrdiff_t>(older_count));
-      std::vector<json> recent_messages(
-          non_system_messages.end() - static_cast<std::ptrdiff_t>(kDialogRecentTailCount),
-          non_system_messages.end());
+        non_system_messages.size() > kDialogMinimumTailCount) {
+      const std::size_t preferred_tail_count =
+          std::min<std::size_t>(non_system_messages.size(),
+                                static_cast<std::size_t>(kDialogRecentTailCount));
+      const int dialog_tail_budget = std::max(
+          kDialogTailBudgetFloor,
+          std::max(256, resolution.desired_state.inference.max_model_len / 4));
+      json best_messages = messages;
+      int best_estimate = dialog_estimate_before;
+      bool have_candidate = false;
 
-      json compressed_messages = json::array();
-      for (const auto& message : system_messages) {
-        compressed_messages.push_back(message);
-      }
-      compressed_messages.push_back(BuildDialogSummaryMessage(older_messages, 10));
-      for (const auto& message : recent_messages) {
-        compressed_messages.push_back(message);
+      for (std::size_t tail_count = preferred_tail_count;; --tail_count) {
+        if (non_system_messages.size() <= tail_count) {
+          if (tail_count == kDialogMinimumTailCount) {
+            break;
+          }
+          continue;
+        }
+        const std::size_t older_count = non_system_messages.size() - tail_count;
+        std::vector<json> older_messages(
+            non_system_messages.begin(),
+            non_system_messages.begin() + static_cast<std::ptrdiff_t>(older_count));
+        std::vector<json> recent_messages(
+            non_system_messages.end() - static_cast<std::ptrdiff_t>(tail_count),
+            non_system_messages.end());
+
+        json compressed_messages = BuildCompressedDialogMessages(
+            system_messages,
+            older_messages,
+            recent_messages);
+        const int compressed_estimate =
+            payload_builder.EstimateTokensForJson(compressed_messages);
+        json recent_only_messages = json::array();
+        for (const auto& message : recent_messages) {
+          recent_only_messages.push_back(message);
+        }
+        const int recent_estimate =
+            payload_builder.EstimateTokensForJson(recent_only_messages);
+        if (!have_candidate || compressed_estimate < best_estimate ||
+            (compressed_estimate == best_estimate &&
+             recent_estimate <= dialog_tail_budget)) {
+          best_messages = std::move(compressed_messages);
+          best_estimate = compressed_estimate;
+          have_candidate = true;
+        }
+        if (compressed_estimate <= dialog_soft_limit &&
+            recent_estimate <= dialog_tail_budget) {
+          break;
+        }
+        if (tail_count == kDialogMinimumTailCount) {
+          break;
+        }
       }
 
-      const int compressed_estimate = payload_builder.EstimateTokensForJson(compressed_messages);
-      if (compressed_estimate < dialog_estimate_before) {
-        messages = std::move(compressed_messages);
+      if (have_candidate && best_estimate < dialog_estimate_before) {
+        messages = std::move(best_messages);
         dialog_compressed = true;
+        if (best_estimate > dialog_soft_limit) {
+          compression_state["warnings"].push_back(
+              "dialog context remained above soft budget after compression");
+        }
       } else {
         json fallback_messages = json::array();
         for (const auto& message : system_messages) {
@@ -227,7 +286,7 @@ void InteractionContextCompressionService::Apply(
         }
         for (auto it = non_system_messages.end() - static_cast<std::ptrdiff_t>(std::min<std::size_t>(
                  non_system_messages.size(),
-                 4));
+                 2));
              it != non_system_messages.end();
              ++it) {
           fallback_messages.push_back(*it);

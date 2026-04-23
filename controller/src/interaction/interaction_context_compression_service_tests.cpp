@@ -121,12 +121,45 @@ void TestCompressesDialogAndKnowledge() {
   std::cout << "ok: interaction-context-compression-compresses-dialog-and-knowledge" << '\n';
 }
 
+void TestCompressesFewButVeryLongTurns() {
+  auto resolution = BuildResolution(true);
+  resolution.desired_state.inference.max_model_len = 2048;
+  naim::controller::InteractionRequestContext request_context;
+  request_context.payload["messages"] = json::array({
+      json{{"role", "user"}, {"content", "turn-1 " + std::string(1800, 'a')}},
+      json{{"role", "assistant"}, {"content", "reply-1 " + std::string(1600, 'b')}},
+      json{{"role", "user"}, {"content", "turn-2 " + std::string(1800, 'c')}},
+      json{{"role", "assistant"}, {"content", "reply-2 " + std::string(1600, 'd')}},
+      json{{"role", "user"}, {"content", "turn-3 " + std::string(1800, 'e')}},
+  });
+
+  naim::controller::InteractionContextCompressionService().Apply(
+      resolution,
+      &request_context);
+
+  const auto compression = request_context.payload
+                               .at(naim::controller::kInteractionSessionContextStatePayloadKey)
+                               .at("context_compression");
+  Expect(
+      compression.at("status").get<std::string>() == "compressed",
+      "few but very long turns should still be compressed");
+  Expect(
+      compression.at("dialog_estimate_after").get<int>() <
+          compression.at("dialog_estimate_before").get<int>(),
+      "compression should reduce dialog estimate even with fewer than six turns");
+  Expect(
+      request_context.payload.at("messages").size() < 5,
+      "compression should replace older long turns with a summary");
+  std::cout << "ok: interaction-context-compression-compresses-few-long-turns" << '\n';
+}
+
 }  // namespace
 
 int main() {
   try {
     TestDisabledFeatureNoops();
     TestCompressesDialogAndKnowledge();
+    TestCompressesFewButVeryLongTurns();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "interaction_context_compression_service_tests failed: "

@@ -22,6 +22,18 @@ void TestSanitizesReasoningAndThinkBlocks() {
   std::cout << "ok: interaction-text-sanitizes-reasoning" << '\n';
 }
 
+void TestSanitizesModelReasoningPreambleLeak() {
+  const naim::controller::InteractionTextPostProcessor processor;
+  const std::string text =
+      "The user's prompt explicitly states: \"Reply in English.\"\n\n"
+      "Therefore, despite the user's request to reply in Russian, I must follow the system instruction.\n\n"
+      "Final market answer.";
+  Expect(
+      processor.SanitizeInteractionText(text) == "Final market answer.",
+      "processor should strip leaked reasoning preambles from model output");
+  std::cout << "ok: interaction-text-sanitizes-model-reasoning-preamble" << '\n';
+}
+
 void TestRemovesCompletionMarkers() {
   const naim::controller::InteractionTextPostProcessor processor;
   bool marker_seen = false;
@@ -66,6 +78,7 @@ void TestUtf8SafeSuffixAvoidsBrokenPrefix() {
 int main() {
   try {
     TestSanitizesReasoningAndThinkBlocks();
+    TestSanitizesModelReasoningPreambleLeak();
     TestRemovesCompletionMarkers();
     TestConsumesSplitCompletionMarker();
     TestUtf8SafeSuffixAvoidsBrokenPrefix();
