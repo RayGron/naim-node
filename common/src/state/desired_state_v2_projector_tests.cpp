@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -405,6 +406,36 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "interaction-image-override");
+
+    {
+      const auto rendered = naim::DesiredStateV2Renderer::Render(
+          json{
+              {"version", 2},
+              {"plane_name", "interaction-shared-disk"},
+              {"plane_mode", "llm"},
+              {"model",
+               {
+                   {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                   {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                   {"served_model_name", "qwen-interaction-shared"},
+               }},
+              {"runtime",
+               {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+              {"infer", {{"replicas", 1}}},
+              {"app", {{"enabled", false}}},
+          });
+      const auto interaction_it = std::find_if(
+          rendered.instances.begin(),
+          rendered.instances.end(),
+          [](const naim::InstanceSpec& instance) {
+            return instance.role == naim::InstanceRole::Interaction;
+          });
+      Expect(interaction_it != rendered.instances.end(),
+             "interaction-shared-disk: interaction instance missing");
+      Expect(interaction_it->shared_disk_name == rendered.plane_shared_disk_name,
+             "interaction-shared-disk: interaction instance must mount plane shared disk");
+      std::cout << "ok-roundtrip: interaction-shared-disk\n";
+    }
 
     ExpectRoundTrip(
         json{

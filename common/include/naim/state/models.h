@@ -43,7 +43,8 @@ inline bool IsNodeLocalDiskKind(DiskKind kind) {
 inline bool InstanceNeedsSharedDiskMount(InstanceRole role) {
   return role == InstanceRole::Infer ||
          role == InstanceRole::Worker ||
-         role == InstanceRole::App;
+         role == InstanceRole::App ||
+         role == InstanceRole::Interaction;
 }
 
 inline bool InstanceNeedsPrivateDisk(InstanceRole role) {
