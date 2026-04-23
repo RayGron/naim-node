@@ -117,6 +117,12 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
       const std::string& node_name,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const override;
+  void ExecuteHostSelfUpdate(
+      const nlohmann::json& payload,
+      const std::string& node_name,
+      const std::optional<std::string>& host_private_key_path,
+      HostdBackend* backend,
+      const std::optional<int>& assignment_id) const override;
   void ShowDemoOps(
       const std::string& node_name,
       const std::string& storage_root,

@@ -281,6 +281,37 @@ void HostdAssignmentService::ApplyNextAssignment(
               std::to_string(assignment->max_attempts));
       return;
     }
+    if (assignment->assignment_type == "hostd-self-update") {
+      support_.ExecuteHostSelfUpdate(
+          nlohmann::json::parse(assignment->desired_state_json),
+          node_name,
+          host_private_key_path,
+          backend.get(),
+          assignment->id);
+      backend->TransitionClaimedHostAssignment(
+          assignment->id,
+          naim::HostAssignmentStatus::Applied,
+          "scheduled hostd self-update on attempt " +
+              std::to_string(assignment->attempt_count) + "/" +
+              std::to_string(assignment->max_attempts));
+      support_.AppendHostdEvent(
+          *backend,
+          "host-assignment",
+          "hostd-self-update-scheduled",
+          "scheduled hostd self-update on node " + node_name,
+          nlohmann::json{
+              {"assignment_type", assignment->assignment_type},
+              {"attempt_count", assignment->attempt_count},
+              {"max_attempts", assignment->max_attempts},
+          },
+          assignment->plane_name,
+          node_name,
+          "",
+          assignment->id,
+          std::nullopt,
+          "info");
+      return;
+    }
 
     if (assignment->assignment_type != "apply-node-state" &&
         assignment->assignment_type != "drain-node-state" &&

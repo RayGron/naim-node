@@ -192,27 +192,17 @@ jobs:
             "cat $(printf '%q' "${manifest_remote}")" > "${RUNNER_TEMP}/release-manifest.json"
       - name: Register release on main
         shell: bash
-        env:
-          NAIM_PRODUCTION_INVENTORY: ${{ secrets.NAIM_PRODUCTION_INVENTORY }}
         run: |
           set -euo pipefail
-          if [[ -z "${NAIM_PRODUCTION_INVENTORY}" ]]; then
-            echo "NAIM_PRODUCTION_INVENTORY secret is required so all production servers are deployed." >&2
-            exit 1
-          fi
-          inventory_path="${RUNNER_TEMP}/production.inventory.yml"
-          printf '%s\n' "${NAIM_PRODUCTION_INVENTORY}" > "${inventory_path}"
-          inventory_args=(--inventory "${inventory_path}")
           export NAIM_SSH_OPTS="${NAIM_CI_SSH_OPTS}"
           export NAIM_MAIN_SSH
           export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
           bash scripts/ci/register-release-on-main.sh \
             --manifest "${RUNNER_TEMP}/release-manifest.json" \
-            --tag "${NAIM_RELEASE_TAG}" \
-            "${inventory_args[@]}"
+            --tag "${NAIM_RELEASE_TAG}"
 
-  main-redeploy-migrate:
-    name: 5. main redeploy active containers and migrate
+  main-controller-release-rollout:
+    name: 5. main controller release rollout
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: main-register-release
@@ -221,20 +211,12 @@ jobs:
       - uses: ./.github/actions/setup-naim-ssh
         with:
           ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
-      - name: Redeploy and wait for migration
+      - name: Signal controller and wait for connected node rollout
         shell: bash
         env:
-          NAIM_PRODUCTION_INVENTORY: ${{ secrets.NAIM_PRODUCTION_INVENTORY }}
           NAIM_REGISTRY_PASSWORD: ${{ secrets.NAIM_REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ -z "${NAIM_PRODUCTION_INVENTORY}" ]]; then
-            echo "NAIM_PRODUCTION_INVENTORY secret is required so all production servers are deployed." >&2
-            exit 1
-          fi
-          inventory_path="${RUNNER_TEMP}/production.inventory.yml"
-          printf '%s\n' "${NAIM_PRODUCTION_INVENTORY}" > "${inventory_path}"
-          inventory_args=(--inventory "${inventory_path}")
           password_file=""
           if [[ -n "${NAIM_REGISTRY_PASSWORD}" ]]; then
             password_file="${RUNNER_TEMP}/registry-password"
@@ -252,13 +234,13 @@ jobs:
           export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
           export NAIM_RELEASE_TAG
           export NAIM_MIGRATION_TIMEOUT_SEC
-          bash scripts/ci/redeploy-migrate-production.sh --tag "${NAIM_RELEASE_TAG}" "${inventory_args[@]}"
+          bash scripts/ci/controller-release-rollout.sh --tag "${NAIM_RELEASE_TAG}"
 
   migration-report:
     name: 6. migration report
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: main-redeploy-migrate
+    needs: main-controller-release-rollout
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh
@@ -273,26 +255,13 @@ jobs:
             "cat $(printf '%q' "${manifest_remote}")" > "${RUNNER_TEMP}/release-manifest.json"
       - name: Write short migration report
         shell: bash
-        env:
-          NAIM_PRODUCTION_INVENTORY: ${{ secrets.NAIM_PRODUCTION_INVENTORY }}
         run: |
           set -euo pipefail
-          if [[ -z "${NAIM_PRODUCTION_INVENTORY}" ]]; then
-            echo "NAIM_PRODUCTION_INVENTORY secret is required so all production servers are reported." >&2
-            exit 1
-          fi
-          inventory_path="${RUNNER_TEMP}/production.inventory.yml"
-          printf '%s\n' "${NAIM_PRODUCTION_INVENTORY}" > "${inventory_path}"
-          inventory_args=(--inventory "${inventory_path}")
           export NAIM_SSH_OPTS="${NAIM_CI_SSH_OPTS}"
           export NAIM_MAIN_SSH
-          export NAIM_HPC1_SSH
-          export NAIM_HPC1_SSH_PORT
-          export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
           export NAIM_RELEASE_TAG
-          bash scripts/ci/production-release-report.sh \
+          bash scripts/ci/fetch-main-release-report.sh \
             --tag "${NAIM_RELEASE_TAG}" \
             --manifest "${RUNNER_TEMP}/release-manifest.json" \
-            --output "${RUNNER_TEMP}/migration-report.md" \
-            "${inventory_args[@]}"
+            --output "${RUNNER_TEMP}/migration-report.md"
           cat "${RUNNER_TEMP}/migration-report.md" >> "${GITHUB_STEP_SUMMARY}"

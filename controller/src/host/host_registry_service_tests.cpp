@@ -1,4 +1,5 @@
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -403,6 +404,59 @@ void TestResetOnboardingRejectsActiveAssignments() {
   Expect(threw, "reset should reject active host assignments");
 }
 
+void TestNotifyConnectedHostsOfRelease() {
+  const std::string db_path = MakeTempDbPath("notify-connected-hosts-of-release");
+  const fs::path manifest_path =
+      fs::temp_directory_path() / "naim-host-registry-tests" / "notify-release-manifest.json";
+  fs::create_directories(manifest_path.parent_path());
+  {
+    std::ofstream out(manifest_path);
+    out << R"({
+  "registry": "chainzano.com",
+  "project": "naim",
+  "tag": "abc123",
+  "images": {
+    "hostd": "chainzano.com/naim/hostd@sha256:deadbeef"
+  }
+})";
+  }
+
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  SeedHost(store, "connected-a", "/srv/connected-a");
+  SeedHost(store, "connected-b", "/srv/connected-b");
+  naim::RegisteredHostRecord disconnected;
+  disconnected.node_name = "disconnected-c";
+  disconnected.registration_state = "registered";
+  disconnected.onboarding_state = "completed";
+  disconnected.session_state = "disconnected";
+  store.UpsertRegisteredHost(disconnected);
+
+  const naim::controller::HostRegistryService service(db_path, TestEventSink());
+  const json payload =
+      service.NotifyConnectedHostsOfReleasePayload(manifest_path.string(), std::nullopt);
+
+  Expect(payload.at("release_tag").get<std::string>() == "abc123", "release tag mismatch");
+  Expect(payload.at("targeted_count").get<int>() == 2, "expected two connected hosts");
+
+  const auto connected_a_assignments =
+      store.LoadHostAssignments("connected-a", naim::HostAssignmentStatus::Pending);
+  Expect(connected_a_assignments.size() == 1, "connected host should receive one assignment");
+  Expect(
+      connected_a_assignments.front().assignment_type == "hostd-self-update",
+      "assignment type mismatch");
+  const json connected_a_payload =
+      json::parse(connected_a_assignments.front().desired_state_json);
+  Expect(
+      connected_a_payload.at("hostd_image").get<std::string>() ==
+          "chainzano.com/naim/hostd@sha256:deadbeef",
+      "hostd image mismatch");
+
+  const auto disconnected_assignments =
+      store.LoadHostAssignments("disconnected-c", naim::HostAssignmentStatus::Pending);
+  Expect(disconnected_assignments.empty(), "disconnected host should not receive rollout");
+}
+
 }  // namespace
 
 int main() {
@@ -414,6 +468,7 @@ int main() {
   TestResetOnboardingIssuesNewKeyAndClearsIdentity();
   TestResetOnboardingRejectsConnectedHost();
   TestResetOnboardingRejectsActiveAssignments();
+  TestNotifyConnectedHostsOfRelease();
   std::cout << "host registry service tests passed\n";
   return 0;
 }

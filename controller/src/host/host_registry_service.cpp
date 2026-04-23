@@ -1,5 +1,7 @@
 #include "host/host_registry_service.h"
 
+#include <filesystem>
+#include <fstream>
 #include <cctype>
 #include <cstdint>
 #include <iostream>
@@ -19,6 +21,8 @@ namespace {
 using nlohmann::json;
 
 constexpr int kPeerLinkFreshSeconds = 120;
+constexpr std::string_view kHostdReleasePlaneName = "system:hostd-release";
+constexpr std::string_view kHostdSelfUpdateAssignmentType = "hostd-self-update";
 
 struct HostInventorySummary {
   std::string storage_root;
@@ -120,6 +124,28 @@ bool IsStorageRoleEligible(
   return !inventory.storage_root.empty() &&
          inventory.storage_total_bytes > kStorageRoleMinDiskBytes &&
          (derived_role == "storage" || derived_role == "worker");
+}
+
+json LoadReleaseManifest(const std::string& manifest_path) {
+  std::ifstream input(manifest_path);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open release manifest '" + manifest_path + "'");
+  }
+  const json manifest = json::parse(input, nullptr, true, true);
+  if (!manifest.is_object()) {
+    throw std::runtime_error("release manifest must be a JSON object");
+  }
+  if (!manifest.contains("tag") || !manifest.at("tag").is_string()) {
+    throw std::runtime_error("release manifest is missing string field 'tag'");
+  }
+  if (!manifest.contains("images") || !manifest.at("images").is_object()) {
+    throw std::runtime_error("release manifest is missing object field 'images'");
+  }
+  const auto& images = manifest.at("images");
+  if (!images.contains("hostd") || !images.at("hostd").is_string()) {
+    throw std::runtime_error("release manifest is missing string field 'images.hostd'");
+  }
+  return manifest;
 }
 
 }  // namespace
@@ -486,6 +512,82 @@ int HostRegistryService::SetHostStorageRole(
     bool enabled,
     const std::optional<std::string>& status_message) const {
   std::cout << SetHostStorageRolePayload(node_name, enabled, status_message).dump(2) << "\n";
+  return 0;
+}
+
+nlohmann::json HostRegistryService::NotifyConnectedHostsOfReleasePayload(
+    const std::string& manifest_path,
+    const std::optional<std::string>& status_message) const {
+  const json manifest = LoadReleaseManifest(manifest_path);
+  const std::string release_tag = manifest.at("tag").get<std::string>();
+  const std::string hostd_image = manifest.at("images").at("hostd").get<std::string>();
+  const std::string now = ControllerTimeSupport::UtcNowSqlTimestamp();
+
+  naim::ControllerStore store(db_path_);
+  store.Initialize();
+
+  std::vector<naim::HostAssignment> assignments;
+  json targeted_nodes = json::array();
+  for (const auto& host : store.LoadRegisteredHosts(std::nullopt)) {
+    if (host.registration_state != "registered" || host.session_state != "connected") {
+      continue;
+    }
+    naim::HostAssignment assignment;
+    assignment.node_name = host.node_name;
+    assignment.plane_name = std::string(kHostdReleasePlaneName);
+    assignment.desired_generation = 0;
+    assignment.max_attempts = 3;
+    assignment.assignment_type = std::string(kHostdSelfUpdateAssignmentType);
+    assignment.desired_state_json = json{
+        {"release_tag", release_tag},
+        {"hostd_image", hostd_image},
+        {"notify_at", now},
+        {"source_manifest_path", manifest_path},
+    }.dump();
+    assignment.status = naim::HostAssignmentStatus::Pending;
+    assignment.status_message = "queued hostd self-update for release " + release_tag;
+    assignments.push_back(std::move(assignment));
+    targeted_nodes.push_back(host.node_name);
+  }
+
+  if (!assignments.empty()) {
+    store.EnqueueHostAssignments(
+        assignments,
+        "superseded by hostd release " + release_tag);
+  }
+  store.AppendEvent(naim::EventRecord{
+      0,
+      std::string(kHostdReleasePlaneName),
+      "",
+      "",
+      std::nullopt,
+      std::nullopt,
+      "release",
+      "hostd-rollout-enqueued",
+      "info",
+      status_message.value_or("controller queued hostd rollout for release " + release_tag),
+      json{
+          {"release_tag", release_tag},
+          {"hostd_image", hostd_image},
+          {"targeted_nodes", targeted_nodes},
+      }.dump(),
+      "",
+  });
+
+  return json{
+      {"service", "naim-controller"},
+      {"release_tag", release_tag},
+      {"hostd_image", hostd_image},
+      {"notify_at", now},
+      {"targeted_nodes", targeted_nodes},
+      {"targeted_count", assignments.size()},
+  };
+}
+
+int HostRegistryService::NotifyConnectedHostsOfRelease(
+    const std::string& manifest_path,
+    const std::optional<std::string>& status_message) const {
+  std::cout << NotifyConnectedHostsOfReleasePayload(manifest_path, status_message).dump(2) << "\n";
   return 0;
 }
 

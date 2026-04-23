@@ -272,6 +272,16 @@ std::optional<int> ControllerCli::TryRun() const {
         *assignment_id);
   }
 
+  if (command == "notify-release") {
+    const auto manifest_path = command_line_.manifest();
+    if (!manifest_path.has_value()) {
+      return MissingRequired("--manifest");
+    }
+    return host_registry_service_.NotifyConnectedHostsOfRelease(
+        *manifest_path,
+        command_line_.message());
+  }
+
   if (command == "import-bundle") {
     const auto bundle_dir = command_line_.bundle();
     if (!bundle_dir.has_value()) {
