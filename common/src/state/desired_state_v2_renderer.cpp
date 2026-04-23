@@ -381,6 +381,9 @@ void DesiredStateV2Renderer::RenderInteraction() {
 
   InteractionSettings interaction;
   const auto& interaction_json = value_.at("interaction");
+  if (interaction_json.contains("image") && interaction_json.at("image").is_string()) {
+    interaction.image = interaction_json.at("image").get<std::string>();
+  }
   if (interaction_json.contains("system_prompt") && interaction_json.at("system_prompt").is_string()) {
     interaction.system_prompt = interaction_json.at("system_prompt").get<std::string>();
   }
