@@ -358,7 +358,7 @@ bool InteractionRuntimeServer::ShouldProxyRawRequestThroughController(
   if (TryBuildWrappedRuntimeExecution(request.body).has_value()) {
     return false;
   }
-  return FindRequestHeader(request, "x-naim-session-token").has_value();
+  return !config_.controller_url.empty();
 }
 
 HttpResponse InteractionRuntimeServer::ProxyRawRequestThroughController(
