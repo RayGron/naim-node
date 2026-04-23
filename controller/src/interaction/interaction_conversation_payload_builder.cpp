@@ -158,6 +158,22 @@ json InteractionConversationPayloadBuilder::BuildSessionSummaryPayload(
        context_state.value("browsing_mode", std::string{"disabled"})},
       {"applied_skill_ids",
        context_state.value("applied_skill_ids", json::array())},
+      {"context_compression_enabled",
+       context_state.value("context_compression", json::object()).value("enabled", false)},
+      {"compression_mode",
+       context_state.value("context_compression", json::object())
+           .value("mode", std::string{})},
+      {"compression_target",
+       context_state.value("context_compression", json::object())
+           .value("target", std::string{})},
+      {"compression_warning_count",
+       static_cast<int>(
+           context_state.value("context_compression", json::object())
+               .value("warnings", json::array())
+               .size())},
+      {"last_compression_ratio",
+       context_state.value("context_compression", json::object())
+           .value("compression_ratio", 1.0)},
   };
 }
 
@@ -291,6 +307,12 @@ json InteractionConversationPayloadBuilder::BuildSummaryJson(
     applied_skill_ids = context_state.at("applied_skill_ids");
   }
 
+  json compression = json::object();
+  if (context_state.contains("context_compression") &&
+      context_state.at("context_compression").is_object()) {
+    compression = context_state.at("context_compression");
+  }
+
   return json{
       {"session_goal", session_goal},
       {"stable_facts", stable_facts},
@@ -300,6 +322,11 @@ json InteractionConversationPayloadBuilder::BuildSummaryJson(
       {"open_threads", open_threads},
       {"browsing_mode", context_state.value("browsing_mode", std::string{"disabled"})},
       {"applied_skill_ids", applied_skill_ids},
+      {"compressor_id", compression.value("compressor_id", std::string{})},
+      {"policy_version", compression.value("policy_version", std::string{})},
+      {"dialog_estimate_before", compression.value("dialog_estimate_before", 0)},
+      {"dialog_estimate_after", compression.value("dialog_estimate_after", 0)},
+      {"compression_ratio", compression.value("compression_ratio", 1.0)},
       {"turn_range",
        json{{"start", turn_range_start}, {"end", turn_range_end}}},
   };

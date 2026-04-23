@@ -228,6 +228,85 @@ int main() {
     }
 
     {
+      const json context_compression_defaults{
+          {"version", 2},
+          {"plane_name", "context-compression-defaults"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-context-compression"},
+           }},
+          {"features", {{"context_compression", {{"enabled", true}}}}},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"app", {{"enabled", false}}},
+      };
+      const auto state = RenderValid(
+          context_compression_defaults,
+          "context-compression-defaults");
+      Expect(
+          state.context_compression.has_value(),
+          "context-compression-defaults: context_compression missing");
+      Expect(
+          state.context_compression->enabled,
+          "context-compression-defaults: feature should be enabled");
+      Expect(
+          state.context_compression->mode == "auto",
+          "context-compression-defaults: mode should default to auto");
+      Expect(
+          state.context_compression->target == "dialog_and_knowledge",
+          "context-compression-defaults: target should default to dialog_and_knowledge");
+      Expect(
+          state.context_compression->memory_priority == "balanced",
+          "context-compression-defaults: memory_priority should default to balanced");
+      std::cout << "ok: context-compression-defaults" << '\n';
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "context-compression-invalid-mode"},
+              {"plane_mode", "llm"},
+              {"model",
+               {
+                   {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                   {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                   {"served_model_name", "qwen-invalid-mode"},
+               }},
+              {"features",
+               {{"context_compression",
+                 {{"enabled", true},
+                  {"mode", "manual"},
+                  {"target", "dialog_and_knowledge"},
+                  {"memory_priority", "balanced"}}}}},
+              {"runtime",
+               {{"engine", "llama.cpp"},
+                {"distributed_backend", "llama_rpc"},
+                {"workers", 1}}},
+              {"infer", {{"replicas", 1}}},
+              {"app", {{"enabled", false}}},
+          },
+          "context-compression-invalid-mode");
+    }
+
+    {
+      ExpectInvalid(
+          json{
+              {"version", 2},
+              {"plane_name", "context-compression-compute"},
+              {"plane_mode", "compute"},
+              {"features", {{"context_compression", {{"enabled", true}}}}},
+              {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+              {"app", {{"enabled", false}}},
+          },
+          "context-compression-compute");
+    }
+
+    {
       const json state_file_v2{
           {"version", 2},
           {"plane_name", "thinking-flag"},

@@ -320,6 +320,13 @@ struct TurboQuantFeatureSpec {
   std::optional<std::string> cache_type_v;
 };
 
+struct ContextCompressionFeatureSpec {
+  bool enabled = false;
+  std::string mode = "auto";
+  std::string target = "dialog_and_knowledge";
+  std::string memory_priority = "balanced";
+};
+
 using WebGatewayPolicySettings = BrowsingPolicySettings;
 using WebGatewaySettings = BrowsingSettings;
 
@@ -344,6 +351,7 @@ struct DesiredState {
   std::optional<BrowsingSettings> browsing;
   std::optional<KnowledgeSettings> knowledge;
   std::optional<TurboQuantFeatureSpec> turboquant;
+  std::optional<ContextCompressionFeatureSpec> context_compression;
   std::optional<ExternalAppHostConfig> app_host;
   InferenceRuntimeSettings inference;
   WorkerGroupSpec worker_group;

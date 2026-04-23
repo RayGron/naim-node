@@ -223,51 +223,97 @@ void DesiredStateV2Validator::ValidateFeatures() const {
   }
   RequireObject("features");
   const auto& features = value_.at("features");
-  if (!features.contains("turboquant")) {
-    return;
-  }
-  if (!features.at("turboquant").is_object()) {
-    throw std::runtime_error("desired-state v2 features.turboquant must be an object");
-  }
-  const auto& turboquant = features.at("turboquant");
-  const bool enabled = turboquant.value("enabled", false);
-  if (turboquant.contains("cache_type_k") && !turboquant.at("cache_type_k").is_string() &&
-      !turboquant.at("cache_type_k").is_null()) {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant.cache_type_k must be a string");
-  }
-  if (turboquant.contains("cache_type_v") && !turboquant.at("cache_type_v").is_string() &&
-      !turboquant.at("cache_type_v").is_null()) {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant.cache_type_v must be a string");
-  }
-  if (!enabled) {
-    return;
-  }
   const std::string plane_mode = value_.value("plane_mode", std::string("llm"));
-  const auto& runtime = value_.at("runtime");
-  const std::string engine = runtime.value("engine", std::string{});
-  const std::string distributed_backend =
-      runtime.value("distributed_backend", engine == "llama.cpp" ? std::string("llama_rpc")
-                                                                  : std::string("local"));
-  if (plane_mode != "llm" || engine != "llama.cpp" || distributed_backend != "llama_rpc") {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant requires plane_mode=llm with "
-        "runtime.engine=llama.cpp and runtime.distributed_backend=llama_rpc");
+  if (features.contains("turboquant")) {
+    if (!features.at("turboquant").is_object()) {
+      throw std::runtime_error("desired-state v2 features.turboquant must be an object");
+    }
+    const auto& turboquant = features.at("turboquant");
+    const bool enabled = turboquant.value("enabled", false);
+    if (turboquant.contains("cache_type_k") && !turboquant.at("cache_type_k").is_string() &&
+        !turboquant.at("cache_type_k").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.turboquant.cache_type_k must be a string");
+    }
+    if (turboquant.contains("cache_type_v") && !turboquant.at("cache_type_v").is_string() &&
+        !turboquant.at("cache_type_v").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.turboquant.cache_type_v must be a string");
+    }
+    if (enabled) {
+      const auto& runtime = value_.at("runtime");
+      const std::string engine = runtime.value("engine", std::string{});
+      const std::string distributed_backend =
+          runtime.value("distributed_backend", engine == "llama.cpp" ? std::string("llama_rpc")
+                                                                      : std::string("local"));
+      if (plane_mode != "llm" || engine != "llama.cpp" || distributed_backend != "llama_rpc") {
+        throw std::runtime_error(
+            "desired-state v2 features.turboquant requires plane_mode=llm with "
+            "runtime.engine=llama.cpp and runtime.distributed_backend=llama_rpc");
+      }
+      const std::string cache_type_k = turboquant.value(
+          "cache_type_k",
+          std::string(kTurboQuantDefaultCacheTypeK));
+      const std::string cache_type_v = turboquant.value(
+          "cache_type_v",
+          std::string(kTurboQuantDefaultCacheTypeV));
+      if (!IsSupportedTurboQuantCacheType(cache_type_k)) {
+        throw std::runtime_error(
+            "desired-state v2 features.turboquant.cache_type_k has unsupported value");
+      }
+      if (!IsSupportedTurboQuantCacheType(cache_type_v)) {
+        throw std::runtime_error(
+            "desired-state v2 features.turboquant.cache_type_v has unsupported value");
+      }
+    }
   }
-  const std::string cache_type_k = turboquant.value(
-      "cache_type_k",
-      std::string(kTurboQuantDefaultCacheTypeK));
-  const std::string cache_type_v = turboquant.value(
-      "cache_type_v",
-      std::string(kTurboQuantDefaultCacheTypeV));
-  if (!IsSupportedTurboQuantCacheType(cache_type_k)) {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant.cache_type_k has unsupported value");
-  }
-  if (!IsSupportedTurboQuantCacheType(cache_type_v)) {
-    throw std::runtime_error(
-        "desired-state v2 features.turboquant.cache_type_v has unsupported value");
+  if (features.contains("context_compression")) {
+    if (!features.at("context_compression").is_object()) {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression must be an object");
+    }
+    const auto& context_compression = features.at("context_compression");
+    const bool enabled = context_compression.value("enabled", false);
+    if (context_compression.contains("mode") &&
+        !context_compression.at("mode").is_string() &&
+        !context_compression.at("mode").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.mode must be a string");
+    }
+    if (context_compression.contains("target") &&
+        !context_compression.at("target").is_string() &&
+        !context_compression.at("target").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.target must be a string");
+    }
+    if (context_compression.contains("memory_priority") &&
+        !context_compression.at("memory_priority").is_string() &&
+        !context_compression.at("memory_priority").is_null()) {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.memory_priority must be a string");
+    }
+    if (enabled && plane_mode != "llm") {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression requires plane_mode=llm");
+    }
+    const std::string mode =
+        context_compression.value("mode", std::string("auto"));
+    const std::string target =
+        context_compression.value("target", std::string("dialog_and_knowledge"));
+    const std::string memory_priority =
+        context_compression.value("memory_priority", std::string("balanced"));
+    if (mode != "auto") {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.mode supports auto only");
+    }
+    if (target != "dialog_and_knowledge") {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.target supports dialog_and_knowledge only");
+    }
+    if (memory_priority != "balanced") {
+      throw std::runtime_error(
+          "desired-state v2 features.context_compression.memory_priority supports balanced only");
+    }
   }
 }
 

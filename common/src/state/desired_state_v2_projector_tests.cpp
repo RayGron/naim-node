@@ -136,6 +136,20 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
     Expect(rerendered.turboquant->cache_type_v == rendered.turboquant->cache_type_v,
            name + ": turboquant.cache_type_v mismatch");
   }
+  if (rendered.context_compression.has_value()) {
+    Expect(rerendered.context_compression.has_value(),
+           name + ": context_compression missing after rerender");
+    Expect(rerendered.context_compression->enabled == rendered.context_compression->enabled,
+           name + ": context_compression.enabled mismatch");
+    Expect(rerendered.context_compression->mode == rendered.context_compression->mode,
+           name + ": context_compression.mode mismatch");
+    Expect(rerendered.context_compression->target == rendered.context_compression->target,
+           name + ": context_compression.target mismatch");
+    Expect(
+        rerendered.context_compression->memory_priority ==
+            rendered.context_compression->memory_priority,
+        name + ": context_compression.memory_priority mismatch");
+  }
   if (source.contains("features") && source.at("features").contains("turboquant")) {
     Expect(projected.contains("features"), name + ": features block missing after projection");
     Expect(projected.at("features").contains("turboquant"),
@@ -153,6 +167,14 @@ void ExpectRoundTrip(const json& source, const std::string& name) {
       Expect(projected_turboquant.at("cache_type_v") == source_turboquant.at("cache_type_v"),
              name + ": turboquant.cache_type_v mismatch");
     }
+  }
+  if (source.contains("features") && source.at("features").contains("context_compression")) {
+    Expect(projected.contains("features"), name + ": features block missing after projection");
+    Expect(projected.at("features").contains("context_compression"),
+           name + ": context_compression block missing after projection");
+    Expect(projected.at("features").at("context_compression") ==
+               source.at("features").at("context_compression"),
+           name + ": context_compression projection mismatch");
   }
   if (source.contains("skills")) {
     Expect(projected.contains("skills"), name + ": skills block missing after projection");
@@ -302,6 +324,56 @@ int main() {
             {"app", {{"enabled", false}}},
         },
         "turboquant-enabled");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "context-compression-enabled"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-context-compression"},
+             }},
+            {"features",
+             {{"context_compression",
+               {{"enabled", true},
+                {"mode", "auto"},
+                {"target", "dialog_and_knowledge"},
+                {"memory_priority", "balanced"}}}}},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "context-compression-enabled");
+
+    ExpectRoundTrip(
+        json{
+            {"version", 2},
+            {"plane_name", "combined-features"},
+            {"plane_mode", "llm"},
+            {"model",
+             {
+                 {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+                 {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+                 {"served_model_name", "qwen-combined"},
+             }},
+            {"features",
+             {{"context_compression",
+               {{"enabled", true},
+                {"mode", "auto"},
+                {"target", "dialog_and_knowledge"},
+                {"memory_priority", "balanced"}}},
+              {"turboquant",
+               {{"enabled", true}, {"cache_type_k", "turbo4"}, {"cache_type_v", "turbo4"}}}}},
+            {"runtime",
+             {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+            {"infer", {{"replicas", 1}}},
+            {"app", {{"enabled", false}}},
+        },
+        "combined-features");
 
     ExpectRoundTrip(
         json{

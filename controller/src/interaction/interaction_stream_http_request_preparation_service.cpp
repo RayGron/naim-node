@@ -3,6 +3,7 @@
 #include "app/controller_composition_support.h"
 #include "auth/auth_support_service.h"
 #include "interaction/interaction_completion_policy_support.h"
+#include "interaction/interaction_context_compression_service.h"
 #include "interaction/interaction_conversation_service.h"
 #include "interaction/interaction_request_contract_support.h"
 #include "interaction/interaction_stream_http_error_response_builder.h"
@@ -108,6 +109,7 @@ InteractionStreamHttpRequestPreparationService::Prepare(
           std::nullopt,
       };
     }
+    InteractionContextCompressionService().Apply(setup.resolution, &setup.request_context);
   } catch (const nlohmann::json::exception& error) {
     return InteractionStreamHttpRequestPreparationResult{
         error_response_builder.Build(
