@@ -37,6 +37,6 @@ ensure_writable_dir var/turboquant
 
 export NAIM_BUILD_TYPE
 "$(pwd)/scripts/build-target.sh" "${NAIM_BUILD_TYPE}"
-"$(pwd)/scripts/build-turboquant-runtime.sh" linux x64 "${NAIM_BUILD_TYPE}"
+bash "$(pwd)/scripts/build-turboquant-runtime.sh" linux x64 "${NAIM_BUILD_TYPE}"
 
 echo "hpc1 build completed for ${current_sha}"
