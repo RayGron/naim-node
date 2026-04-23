@@ -35,6 +35,14 @@ ensure_writable_dir build
 ensure_writable_dir build-turboquant
 ensure_writable_dir var/turboquant
 
+vcpkg_root="$("$(pwd)/scripts/find-vcpkg.sh" --root)"
+for relative_path in buildtrees packages installed; do
+  candidate_path="${vcpkg_root}/${relative_path}"
+  if [[ -e "${candidate_path}" ]]; then
+    ensure_writable_dir "$(realpath -e "${candidate_path}")"
+  fi
+done
+
 export NAIM_BUILD_TYPE
 "$(pwd)/scripts/build-target.sh" "${NAIM_BUILD_TYPE}"
 bash "$(pwd)/scripts/build-turboquant-runtime.sh" linux x64 "${NAIM_BUILD_TYPE}"
