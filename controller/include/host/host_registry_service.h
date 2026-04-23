@@ -54,11 +54,11 @@ class HostRegistryService : public IHostRegistryService {
       bool enabled,
       const std::optional<std::string>& status_message) const override;
 
-  nlohmann::json NotifyConnectedHostsOfReleasePayload(
+  nlohmann::json StartManagedReleaseRolloutPayload(
       const std::string& manifest_path,
       const std::optional<std::string>& status_message) const;
 
-  int NotifyConnectedHostsOfRelease(
+  int StartManagedReleaseRollout(
       const std::string& manifest_path,
       const std::optional<std::string>& status_message) const override;
 

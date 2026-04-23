@@ -47,6 +47,41 @@ std::optional<KnowledgeVaultServiceRecord> KnowledgeVaultServiceRepository::Load
   return record;
 }
 
+std::vector<KnowledgeVaultServiceRecord> KnowledgeVaultServiceRepository::LoadServices(
+    const std::string& db_path) const {
+  EnsureControllerSchema(db_path);
+  sqlite3* db = nullptr;
+  if (sqlite3_open(db_path.c_str(), &db) != SQLITE_OK) {
+    return {};
+  }
+
+  std::vector<KnowledgeVaultServiceRecord> records;
+  {
+    naim::SqliteStatement statement(
+        db,
+        "SELECT service_id, node_name, image, endpoint_host, endpoint_port, desired_state_json, "
+        "status, status_message, schema_version, index_epoch, latest_event_sequence "
+        "FROM knowledge_vault_services ORDER BY service_id;");
+    while (statement.StepRow()) {
+      KnowledgeVaultServiceRecord record;
+      record.service_id = ToText(statement.raw(), 0);
+      record.node_name = ToText(statement.raw(), 1);
+      record.image = ToText(statement.raw(), 2);
+      record.endpoint_host = ToText(statement.raw(), 3);
+      record.endpoint_port = sqlite3_column_int(statement.raw(), 4);
+      record.desired_state_json = ToText(statement.raw(), 5);
+      record.status = ToText(statement.raw(), 6);
+      record.status_message = ToText(statement.raw(), 7);
+      record.schema_version = ToText(statement.raw(), 8);
+      record.index_epoch = ToText(statement.raw(), 9);
+      record.latest_event_sequence = sqlite3_column_int(statement.raw(), 10);
+      records.push_back(std::move(record));
+    }
+  }
+  sqlite3_close(db);
+  return records;
+}
+
 void KnowledgeVaultServiceRepository::UpsertService(
     const std::string& db_path,
     const KnowledgeVaultServiceRecord& record) const {

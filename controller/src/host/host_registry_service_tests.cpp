@@ -11,6 +11,7 @@
 #include "naim/state/sqlite_store.h"
 #include "app/controller_time_support.h"
 #include "host/host_registry_service.h"
+#include "knowledge/knowledge_vault_service_repository.h"
 
 namespace fs = std::filesystem;
 using nlohmann::json;
@@ -404,8 +405,8 @@ void TestResetOnboardingRejectsActiveAssignments() {
   Expect(threw, "reset should reject active host assignments");
 }
 
-void TestNotifyConnectedHostsOfRelease() {
-  const std::string db_path = MakeTempDbPath("notify-connected-hosts-of-release");
+void TestStartManagedReleaseRollout() {
+  const std::string db_path = MakeTempDbPath("start-managed-release-rollout");
   const fs::path manifest_path =
       fs::temp_directory_path() / "naim-host-registry-tests" / "notify-release-manifest.json";
   fs::create_directories(manifest_path.parent_path());
@@ -416,7 +417,8 @@ void TestNotifyConnectedHostsOfRelease() {
   "project": "naim",
   "tag": "abc123",
   "images": {
-    "hostd": "chainzano.com/naim/hostd@sha256:deadbeef"
+    "hostd": "chainzano.com/naim/hostd@sha256:deadbeef",
+    "knowledge-runtime": "chainzano.com/naim/knowledge-runtime@sha256:cafebabe"
   }
 })";
   }
@@ -431,13 +433,37 @@ void TestNotifyConnectedHostsOfRelease() {
   disconnected.onboarding_state = "completed";
   disconnected.session_state = "disconnected";
   store.UpsertRegisteredHost(disconnected);
+  naim::controller::KnowledgeVaultServiceRepository{}.UpsertService(
+      db_path,
+      naim::controller::KnowledgeVaultServiceRecord{
+          "kv_default",
+          "connected-b",
+          "chainzano.com/naim/knowledge-runtime:latest",
+          "127.0.0.1",
+          18200,
+          json{{"service_id", "kv_default"},
+               {"node_name", "connected-b"},
+               {"image", "chainzano.com/naim/knowledge-runtime:latest"},
+               {"endpoint_host", "127.0.0.1"},
+               {"endpoint_port", 18200},
+               {"storage_root", "/srv/connected-b"}}
+              .dump(),
+          "ready",
+          "",
+          "schema-v1",
+          "epoch-1",
+          5,
+      });
 
   const naim::controller::HostRegistryService service(db_path, TestEventSink());
   const json payload =
-      service.NotifyConnectedHostsOfReleasePayload(manifest_path.string(), std::nullopt);
+      service.StartManagedReleaseRolloutPayload(manifest_path.string(), std::nullopt);
 
   Expect(payload.at("release_tag").get<std::string>() == "abc123", "release tag mismatch");
   Expect(payload.at("targeted_count").get<int>() == 2, "expected two connected hosts");
+  Expect(
+      payload.at("knowledge_vault_apply_count").get<int>() == 1,
+      "expected one knowledge vault refresh");
 
   const auto connected_a_assignments =
       store.LoadHostAssignments("connected-a", naim::HostAssignmentStatus::Pending);
@@ -455,6 +481,23 @@ void TestNotifyConnectedHostsOfRelease() {
   const auto disconnected_assignments =
       store.LoadHostAssignments("disconnected-c", naim::HostAssignmentStatus::Pending);
   Expect(disconnected_assignments.empty(), "disconnected host should not receive rollout");
+
+  const auto connected_b_assignments =
+      store.LoadHostAssignments("connected-b", naim::HostAssignmentStatus::Pending);
+  Expect(connected_b_assignments.size() == 2, "connected-b should receive hostd and knowledge");
+  bool found_knowledge_assignment = false;
+  for (const auto& assignment : connected_b_assignments) {
+    if (assignment.assignment_type != "knowledge-vault-apply") {
+      continue;
+    }
+    found_knowledge_assignment = true;
+    const json knowledge_payload = json::parse(assignment.desired_state_json);
+    Expect(
+        knowledge_payload.at("image").get<std::string>() ==
+            "chainzano.com/naim/knowledge-runtime@sha256:cafebabe",
+        "knowledge runtime image mismatch");
+  }
+  Expect(found_knowledge_assignment, "expected knowledge-vault-apply assignment");
 }
 
 }  // namespace
@@ -468,7 +511,7 @@ int main() {
   TestResetOnboardingIssuesNewKeyAndClearsIdentity();
   TestResetOnboardingRejectsConnectedHost();
   TestResetOnboardingRejectsActiveAssignments();
-  TestNotifyConnectedHostsOfRelease();
+  TestStartManagedReleaseRollout();
   std::cout << "host registry service tests passed\n";
   return 0;
 }

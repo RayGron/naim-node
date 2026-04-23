@@ -73,7 +73,7 @@ void ControllerCommandLine::PrintUsage(std::ostream& output) const {
       << "  naim-controller rotate-hostd-key --node <node-name> --public-key <base64-or-file> [--db <path>] [--message <text>]\n"
       << "  naim-controller reset-hostd-onboarding --node <node-name> [--db <path>] [--message <text>]\n"
       << "  naim-controller set-hostd-storage-role --node <node-name> --status <enabled|disabled> [--db <path>] [--message <text>]\n"
-      << "  naim-controller notify-release --manifest <path> [--db <path>] [--message <text>]\n"
+      << "  naim-controller rollout-release --manifest <path> [--db <path>] [--message <text>]\n"
       << "  naim-controller ensure-web-ui [--db <path>] [--web-ui-root <path>] [--listen-port <port>] [--controller-upstream <url>] [--compose-mode skip|exec]\n"
       << "  naim-controller show-web-ui-status [--db <path>] [--web-ui-root <path>]\n"
       << "  naim-controller stop-web-ui [--db <path>] [--web-ui-root <path>] [--compose-mode skip|exec]\n"

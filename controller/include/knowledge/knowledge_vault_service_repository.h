@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <optional>
 #include <string>
 
@@ -15,6 +17,8 @@ class KnowledgeVaultServiceRepository final {
   std::optional<KnowledgeVaultServiceRecord> LoadService(
       const std::string& db_path,
       const std::string& service_id) const;
+  std::vector<KnowledgeVaultServiceRecord> LoadServices(
+      const std::string& db_path) const;
   void UpsertService(
       const std::string& db_path,
       const KnowledgeVaultServiceRecord& record) const;

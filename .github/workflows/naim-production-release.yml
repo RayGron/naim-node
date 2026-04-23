@@ -201,8 +201,8 @@ jobs:
             --manifest "${RUNNER_TEMP}/release-manifest.json" \
             --tag "${NAIM_RELEASE_TAG}"
 
-  main-controller-release-rollout:
-    name: 5. main controller release rollout
+  main-bootstrap-controller-update:
+    name: 5. main bootstrap controller update
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: main-register-release
@@ -211,7 +211,7 @@ jobs:
       - uses: ./.github/actions/setup-naim-ssh
         with:
           ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
-      - name: Signal controller and wait for connected node rollout
+      - name: Bootstrap main controller update and managed rollout
         shell: bash
         env:
           NAIM_REGISTRY_PASSWORD: ${{ secrets.NAIM_REGISTRY_PASSWORD }}
@@ -234,13 +234,13 @@ jobs:
           export NAIM_IMAGE_TAG="${NAIM_RELEASE_TAG}"
           export NAIM_RELEASE_TAG
           export NAIM_MIGRATION_TIMEOUT_SEC
-          bash scripts/ci/controller-release-rollout.sh --tag "${NAIM_RELEASE_TAG}"
+          bash scripts/ci/main-bootstrap-controller-update.sh --tag "${NAIM_RELEASE_TAG}"
 
   migration-report:
     name: 6. migration report
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: main-controller-release-rollout
+    needs: main-bootstrap-controller-update
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-naim-ssh

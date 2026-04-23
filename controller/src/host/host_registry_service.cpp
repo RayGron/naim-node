@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "app/controller_time_support.h"
+#include "knowledge/knowledge_vault_service_repository.h"
 #include "naim/security/crypto_utils.h"
 #include "naim/runtime/runtime_status.h"
 
@@ -23,6 +24,7 @@ using nlohmann::json;
 constexpr int kPeerLinkFreshSeconds = 120;
 constexpr std::string_view kHostdReleasePlaneName = "system:hostd-release";
 constexpr std::string_view kHostdSelfUpdateAssignmentType = "hostd-self-update";
+constexpr std::string_view kKnowledgeVaultApplyAssignmentType = "knowledge-vault-apply";
 
 struct HostInventorySummary {
   std::string storage_root;
@@ -146,6 +148,14 @@ json LoadReleaseManifest(const std::string& manifest_path) {
     throw std::runtime_error("release manifest is missing string field 'images.hostd'");
   }
   return manifest;
+}
+
+json ParseAssignmentJsonObject(const std::string& serialized) {
+  if (serialized.empty()) {
+    return json::object();
+  }
+  const auto parsed = json::parse(serialized, nullptr, false);
+  return parsed.is_object() ? parsed : json::object();
 }
 
 }  // namespace
@@ -515,12 +525,17 @@ int HostRegistryService::SetHostStorageRole(
   return 0;
 }
 
-nlohmann::json HostRegistryService::NotifyConnectedHostsOfReleasePayload(
+nlohmann::json HostRegistryService::StartManagedReleaseRolloutPayload(
     const std::string& manifest_path,
     const std::optional<std::string>& status_message) const {
   const json manifest = LoadReleaseManifest(manifest_path);
   const std::string release_tag = manifest.at("tag").get<std::string>();
   const std::string hostd_image = manifest.at("images").at("hostd").get<std::string>();
+  const auto knowledge_image_it = manifest.at("images").find("knowledge-runtime");
+  const std::optional<std::string> knowledge_image =
+      (knowledge_image_it != manifest.at("images").end() && knowledge_image_it->is_string())
+          ? std::make_optional(knowledge_image_it->get<std::string>())
+          : std::nullopt;
   const std::string now = ControllerTimeSupport::UtcNowSqlTimestamp();
 
   naim::ControllerStore store(db_path_);
@@ -528,6 +543,7 @@ nlohmann::json HostRegistryService::NotifyConnectedHostsOfReleasePayload(
 
   std::vector<naim::HostAssignment> assignments;
   json targeted_nodes = json::array();
+  json knowledge_vault_services = json::array();
   for (const auto& host : store.LoadRegisteredHosts(std::nullopt)) {
     if (host.registration_state != "registered" || host.session_state != "connected") {
       continue;
@@ -550,10 +566,56 @@ nlohmann::json HostRegistryService::NotifyConnectedHostsOfReleasePayload(
     targeted_nodes.push_back(host.node_name);
   }
 
+  if (knowledge_image.has_value()) {
+    KnowledgeVaultServiceRepository repository;
+    for (auto record : repository.LoadServices(db_path_)) {
+      if (record.node_name.empty()) {
+        continue;
+      }
+      const auto host = store.LoadRegisteredHost(record.node_name);
+      if (!host.has_value() || host->registration_state != "registered" ||
+          host->session_state != "connected") {
+        continue;
+      }
+
+      auto desired_state = ParseAssignmentJsonObject(record.desired_state_json);
+      desired_state["service_id"] = record.service_id;
+      desired_state["node_name"] = record.node_name;
+      desired_state["image"] = *knowledge_image;
+      desired_state["endpoint_host"] = record.endpoint_host;
+      desired_state["endpoint_port"] = record.endpoint_port;
+      desired_state["release_tag"] = release_tag;
+      desired_state["source_manifest_path"] = manifest_path;
+
+      record.image = *knowledge_image;
+      record.desired_state_json = desired_state.dump();
+      record.status = "starting";
+      record.status_message = "queued knowledge vault refresh for release " + release_tag;
+      repository.UpsertService(db_path_, record);
+
+      naim::HostAssignment assignment;
+      assignment.node_name = record.node_name;
+      assignment.plane_name = "knowledge-vault:" + record.service_id;
+      assignment.desired_generation = 0;
+      assignment.max_attempts = 3;
+      assignment.assignment_type = std::string(kKnowledgeVaultApplyAssignmentType);
+      assignment.desired_state_json = record.desired_state_json;
+      assignment.status = naim::HostAssignmentStatus::Pending;
+      assignment.status_message = "queued knowledge vault refresh for release " + release_tag;
+      assignments.push_back(std::move(assignment));
+
+      knowledge_vault_services.push_back(json{
+          {"service_id", record.service_id},
+          {"node_name", record.node_name},
+          {"image", record.image},
+      });
+    }
+  }
+
   if (!assignments.empty()) {
     store.EnqueueHostAssignments(
         assignments,
-        "superseded by hostd release " + release_tag);
+        "superseded by managed release rollout " + release_tag);
   }
   store.AppendEvent(naim::EventRecord{
       0,
@@ -563,31 +625,39 @@ nlohmann::json HostRegistryService::NotifyConnectedHostsOfReleasePayload(
       std::nullopt,
       std::nullopt,
       "release",
-      "hostd-rollout-enqueued",
+      "managed-release-rollout-enqueued",
       "info",
-      status_message.value_or("controller queued hostd rollout for release " + release_tag),
+      status_message.value_or("controller queued managed release rollout for " + release_tag),
       json{
           {"release_tag", release_tag},
           {"hostd_image", hostd_image},
           {"targeted_nodes", targeted_nodes},
+          {"knowledge_vault_services", knowledge_vault_services},
       }.dump(),
       "",
   });
 
-  return json{
+  json result{
       {"service", "naim-controller"},
       {"release_tag", release_tag},
       {"hostd_image", hostd_image},
       {"notify_at", now},
       {"targeted_nodes", targeted_nodes},
-      {"targeted_count", assignments.size()},
+      {"targeted_count", targeted_nodes.size()},
+      {"managed_assignment_count", assignments.size()},
+      {"knowledge_vault_services", knowledge_vault_services},
+      {"knowledge_vault_apply_count", knowledge_vault_services.size()},
   };
+  if (knowledge_image.has_value()) {
+    result["knowledge_runtime_image"] = *knowledge_image;
+  }
+  return result;
 }
 
-int HostRegistryService::NotifyConnectedHostsOfRelease(
+int HostRegistryService::StartManagedReleaseRollout(
     const std::string& manifest_path,
     const std::optional<std::string>& status_message) const {
-  std::cout << NotifyConnectedHostsOfReleasePayload(manifest_path, status_message).dump(2) << "\n";
+  std::cout << StartManagedReleaseRolloutPayload(manifest_path, status_message).dump(2) << "\n";
   return 0;
 }
 

@@ -272,12 +272,12 @@ std::optional<int> ControllerCli::TryRun() const {
         *assignment_id);
   }
 
-  if (command == "notify-release") {
+  if (command == "rollout-release") {
     const auto manifest_path = command_line_.manifest();
     if (!manifest_path.has_value()) {
       return MissingRequired("--manifest");
     }
-    return host_registry_service_.NotifyConnectedHostsOfRelease(
+    return host_registry_service_.StartManagedReleaseRollout(
         *manifest_path,
         command_line_.message());
   }
