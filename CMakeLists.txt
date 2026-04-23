@@ -1359,6 +1359,7 @@ add_executable(
   hostd/src/app/hostd_desired_state_path_support.cpp
   hostd/src/app/hostd_disk_runtime_support.cpp
   hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_install_layout_support.cpp
   hostd/src/app/hostd_local_runtime_state_support.cpp
   hostd/src/app/hostd_local_state_path_support.cpp
   hostd/src/app/hostd_local_state_repository.cpp
