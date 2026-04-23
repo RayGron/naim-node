@@ -34,18 +34,68 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-naim-ssh
-        with:
-          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
       - name: Pull commit on hpc1
         shell: bash
         run: |
           set -euo pipefail
           repo_q="$(printf '%q' "${NAIM_HPC1_REPO_PATH}")"
           ssh ${NAIM_CI_SSH_OPTS} -p "${NAIM_HPC1_SSH_PORT}" "${NAIM_HPC1_SSH}" \
-            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_BRANCH='${NAIM_RELEASE_BRANCH}' bash -s" \
-            < scripts/ci/hpc1-pull-main.sh
+            "cd ${repo_q} && NAIM_RELEASE_SHA='${NAIM_RELEASE_SHA}' NAIM_RELEASE_BRANCH='${NAIM_RELEASE_BRANCH}' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          retry_git_fetch() {
+            local remote="$1"
+            local branch="$2"
+            local attempt=1
+            local max_attempts=5
+            local delay_sec=5
+
+            while (( attempt <= max_attempts )); do
+              if git fetch --prune "${remote}" "${branch}"; then
+                return 0
+              fi
+              if (( attempt == max_attempts )); then
+                echo "error: git fetch ${remote} ${branch} failed after ${max_attempts} attempts" >&2
+                return 1
+              fi
+              echo "warning: git fetch ${remote} ${branch} failed on attempt ${attempt}/${max_attempts}; retrying in ${delay_sec}s" >&2
+              sleep "${delay_sec}"
+              delay_sec=$(( delay_sec * 2 ))
+              attempt=$(( attempt + 1 ))
+            done
+          }
+
+          git config http.version HTTP/1.1 >/dev/null 2>&1 || true
+          retry_git_fetch origin "${NAIM_RELEASE_BRANCH}"
+
+          if git show-ref --verify --quiet "refs/heads/${NAIM_RELEASE_BRANCH}"; then
+            git checkout -f "${NAIM_RELEASE_BRANCH}"
+          else
+            git checkout -B "${NAIM_RELEASE_BRANCH}" "origin/${NAIM_RELEASE_BRANCH}"
+          fi
+
+          git reset --hard "origin/${NAIM_RELEASE_BRANCH}"
+
+          current_sha="$(git rev-parse HEAD)"
+          if [[ "${current_sha}" != "${NAIM_RELEASE_SHA}" ]]; then
+            echo "error: ${NAIM_RELEASE_BRANCH} resolved to ${current_sha}, expected ${NAIM_RELEASE_SHA}" >&2
+            exit 1
+          fi
+
+          echo "hpc1 repository is at ${current_sha}"
+          REMOTE
 
   detect-release-scope:
     name: 1a. detect release scope
@@ -80,10 +130,18 @@ jobs:
       - hpc1-pull
       - detect-release-scope
     steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-naim-ssh
-        with:
-          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
       - name: Build on hpc1
         shell: bash
         run: |
@@ -101,10 +159,18 @@ jobs:
       - detect-release-scope
     if: needs.detect-release-scope.outputs.turboquant_required == 'true'
     steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-naim-ssh
-        with:
-          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
       - name: Build TurboQuant runtime on hpc1
         shell: bash
         run: |
@@ -119,10 +185,18 @@ jobs:
     timeout-minutes: 30
     needs: hpc1-build
     steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-naim-ssh
-        with:
-          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
       - name: Run Knowledge Vault release gate on hpc1
         shell: bash
         run: |
@@ -145,10 +219,18 @@ jobs:
       needs.hpc1-knowledge-vault-release-gate.result == 'success' &&
       (needs.hpc1-build-turboquant.result == 'success' || needs.hpc1-build-turboquant.result == 'skipped')
     steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-naim-ssh
-        with:
-          ssh-private-key: ${{ secrets.NAIM_DEPLOY_SSH_KEY }}
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          key_path="${HOME}/.ssh/naim_ci_deploy"
+          printf '%s\n' "${{ secrets.NAIM_DEPLOY_SSH_KEY }}" > "${key_path}"
+          chmod 0600 "${key_path}"
+          {
+            echo "NAIM_CI_SSH_KEY=${key_path}"
+            echo "NAIM_CI_SSH_OPTS=-i ${key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
+          } >> "${GITHUB_ENV}"
       - name: Build and push images from hpc1
         shell: bash
         env:
