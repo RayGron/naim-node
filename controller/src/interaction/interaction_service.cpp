@@ -811,8 +811,7 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
       result.stop_reason = "semantic_completion_marker";
       break;
     }
-    if (can_complete_on_natural_stop_(policy, summary) &&
-        session_reached_target_length_(policy, result.total_completion_tokens)) {
+    if (can_complete_on_natural_stop_(policy, summary)) {
       result.completion_status = "completed";
       result.stop_reason = "natural_stop";
       break;
@@ -1237,8 +1236,7 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
         session.stop_reason = "semantic_completion_marker";
         break;
       }
-      if (can_complete_on_natural_stop_(policy, segment.summary) &&
-          session_reached_target_length_(policy, session.total_completion_tokens)) {
+      if (can_complete_on_natural_stop_(policy, segment.summary)) {
         session.completion_status = "completed";
         session.stop_reason = "natural_stop";
         break;
