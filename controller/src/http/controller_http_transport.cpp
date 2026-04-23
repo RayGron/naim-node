@@ -250,7 +250,9 @@ naim::controller::InteractionStreamingUpstreamConnection
 OpenInteractionStreamRequest(
     const naim::controller::ControllerEndpointTarget& target,
     const std::string& request_id,
-    const std::string& body) {
+    const std::string& body,
+    const std::string& path_and_query,
+    const std::vector<std::pair<std::string, std::string>>& headers) {
   auto fd = std::make_shared<SocketHandle>(ConnectHttpTarget(target));
   const auto close_transport = [fd]() {
     if (naim::platform::IsSocketValid(*fd)) {
@@ -260,16 +262,23 @@ OpenInteractionStreamRequest(
   };
 
   try {
-    const std::string request_path =
-        target.base_path.empty() ? "/v1/chat/completions"
-                                 : target.base_path + "/chat/completions";
+    const std::string request_path = target.base_path + path_and_query;
     std::ostringstream upstream_request;
     upstream_request << "POST " << request_path << " HTTP/1.1\r\n";
     upstream_request << "Host: " << target.host << ":" << target.port << "\r\n";
     upstream_request << "Connection: close\r\n";
     upstream_request << "Accept: text/event-stream\r\n";
     upstream_request << "X-Naim-Request-Id: " << request_id << "\r\n";
-    upstream_request << "Content-Type: application/json\r\n";
+    bool content_type_written = false;
+    for (const auto& [key, value] : headers) {
+      upstream_request << key << ": " << value << "\r\n";
+      if (LowercaseCopy(key) == "content-type") {
+        content_type_written = true;
+      }
+    }
+    if (!content_type_written) {
+      upstream_request << "Content-Type: application/json\r\n";
+    }
     upstream_request << "Content-Length: " << body.size() << "\r\n\r\n";
     upstream_request << body;
     if (!ControllerNetworkManager::SendAll(*fd, upstream_request.str())) {
@@ -317,6 +326,7 @@ OpenInteractionStreamRequest(
 
     return naim::controller::InteractionStreamingUpstreamConnection{
         chunked_transfer,
+        upstream.headers,
         std::move(upstream.body),
         [fd]() -> std::string {
           std::array<char, 8192> buffer{};

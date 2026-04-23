@@ -35,4 +35,6 @@ naim::controller::InteractionStreamingUpstreamConnection
 OpenInteractionStreamRequest(
     const naim::controller::ControllerEndpointTarget& target,
     const std::string& request_id,
-    const std::string& body);
+    const std::string& body,
+    const std::string& path_and_query = "/v1/chat/completions",
+    const std::vector<std::pair<std::string, std::string>>& headers = {});
