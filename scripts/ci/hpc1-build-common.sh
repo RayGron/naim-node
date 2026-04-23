@@ -21,13 +21,18 @@ naim_ci_prepare_repo() {
 naim_ci_ensure_writable_dir() {
   local path="$1"
   local owner=""
+  local has_foreign_entries="0"
 
   if [[ ! -d "${path}" ]]; then
     return 0
   fi
 
   owner="$(stat -c '%u' "${path}" 2>/dev/null || true)"
-  if [[ "${owner}" != "$(id -u)" ]] || [[ ! -w "${path}" ]]; then
+  if find "${path}" \( ! -uid "$(id -u)" -o ! -writable \) -print -quit 2>/dev/null | grep -q .; then
+    has_foreign_entries="1"
+  fi
+
+  if [[ "${owner}" != "$(id -u)" ]] || [[ ! -w "${path}" ]] || [[ "${has_foreign_entries}" == "1" ]]; then
     if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
       sudo chown -R "$(id -u):$(id -g)" "${path}"
     else
