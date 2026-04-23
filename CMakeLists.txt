@@ -558,6 +558,7 @@ add_executable(
   naim-host-registry-tests
   controller/src/app/controller_time_support.cpp
   controller/src/host/host_registry_service.cpp
+  controller/src/knowledge/knowledge_vault_service_repository.cpp
   controller/src/host/host_registry_service_tests.cpp
 )
 target_include_directories(
