@@ -845,6 +845,7 @@ add_executable(
   controller/src/interaction/interaction_request_identity_support.cpp
   controller/src/interaction/interaction_request_heuristics.cpp
   controller/src/interaction/interaction_replica_group_summary_builder.cpp
+  controller/src/interaction/interaction_runtime_request_codec.cpp
   controller/src/interaction/interaction_text_post_processor.cpp
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
   controller/src/interaction/interaction_http_support_tests.cpp
