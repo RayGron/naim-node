@@ -251,6 +251,9 @@ void DesiredStateV2Projector::ProjectInteraction() {
 
   const auto& interaction = *state_.interaction;
   nlohmann::json interaction_json = nlohmann::json::object();
+  if (interaction.image.has_value() && !interaction.image->empty()) {
+    interaction_json["image"] = *interaction.image;
+  }
   if (interaction.system_prompt.has_value() && !interaction.system_prompt->empty()) {
     interaction_json["system_prompt"] = *interaction.system_prompt;
   }

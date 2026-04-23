@@ -134,6 +134,9 @@ std::optional<InteractionSettings> DesiredStateSqliteCodec::DeserializeInteracti
     return std::nullopt;
   }
   InteractionSettings interaction;
+  if (value.contains("image") && !value.at("image").is_null()) {
+    interaction.image = value.at("image").get<std::string>();
+  }
   if (value.contains("system_prompt") && !value.at("system_prompt").is_null()) {
     interaction.system_prompt = value.at("system_prompt").get<std::string>();
   }

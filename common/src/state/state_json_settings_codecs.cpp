@@ -124,6 +124,9 @@ json StateJsonSettingsCodecs::ToJson(const InteractionSettings& interaction) {
       {"supported_response_languages", interaction.supported_response_languages},
       {"follow_user_language", interaction.follow_user_language},
   };
+  if (interaction.image.has_value()) {
+    result["image"] = *interaction.image;
+  }
   if (interaction.system_prompt.has_value()) {
     result["system_prompt"] = *interaction.system_prompt;
   }
@@ -302,6 +305,9 @@ BootstrapModelSpec StateJsonSettingsCodecs::BootstrapModelSpecFromJson(
 InteractionSettings StateJsonSettingsCodecs::InteractionSettingsFromJson(
     const json& value) {
   InteractionSettings interaction;
+  if (value.contains("image") && !value.at("image").is_null()) {
+    interaction.image = value.at("image").get<std::string>();
+  }
   if (value.contains("system_prompt") && !value.at("system_prompt").is_null()) {
     interaction.system_prompt = value.at("system_prompt").get<std::string>();
   }
