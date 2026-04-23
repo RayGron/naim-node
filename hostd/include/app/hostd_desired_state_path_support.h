@@ -34,6 +34,9 @@ class HostdDesiredStatePathSupport final {
   std::optional<std::string> InferRuntimeConfigPathForNode(
       const naim::DesiredState& state,
       const std::string& node_name) const;
+  std::optional<std::string> DesiredStateSnapshotPathForNode(
+      const naim::DesiredState& state,
+      const std::string& node_name) const;
   std::optional<std::string> InferRuntimeStatusPathForInstance(
       const naim::DesiredState& state,
       const naim::InstanceSpec& infer_instance) const;

@@ -105,6 +105,15 @@ nlohmann::json PlanePlacementPayloadBuilder::Build() const {
     });
   }
 
+  if (const auto interaction_node_name = FindFirstInstanceNodeName(naim::InstanceRole::Interaction);
+      interaction_node_name.has_value()) {
+    service_targets.push_back(nlohmann::json{
+        {"service", "interaction-runtime"},
+        {"target_type", "node"},
+        {"target", *interaction_node_name},
+    });
+  }
+
   payload["service_targets"] = std::move(service_targets);
   return payload;
 }

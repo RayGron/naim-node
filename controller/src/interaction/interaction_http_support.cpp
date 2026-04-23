@@ -2,6 +2,7 @@
 
 #include "app/controller_composition_support.h"
 #include "interaction/interaction_payload_builder.h"
+#include "interaction/interaction_runtime_request_codec.h"
 #include "skills/plane_skills_service.h"
 
 using nlohmann::json;
@@ -32,6 +33,23 @@ std::string InteractionHttpSupport::BuildInteractionUpstreamBody(
     bool structured_output_json) const {
   return naim::controller::BuildInteractionUpstreamBodyPayload(
       resolution, std::move(payload), force_stream, resolved_policy, structured_output_json);
+}
+
+std::string InteractionHttpSupport::BuildInteractionRuntimeRequestBody(
+    const naim::controller::PlaneInteractionResolution& resolution,
+    json payload,
+    bool force_stream,
+    const naim::controller::ResolvedInteractionPolicy& resolved_policy,
+    bool structured_output_json) const {
+  return naim::controller::InteractionRuntimeRequestCodec{}.Serialize(
+      naim::controller::InteractionRuntimeExecutionRequest{
+          resolution.desired_state,
+          resolution.status_payload,
+          std::move(payload),
+          resolved_policy,
+          structured_output_json,
+          force_stream,
+      });
 }
 
 std::optional<std::string> InteractionHttpSupport::FindInferInstanceName(
@@ -68,6 +86,13 @@ InteractionHttpSupport::ParseInteractionTarget(
   return interaction_runtime_support_service_.ParseInteractionTarget(
       gateway_listen,
       fallback_port);
+}
+
+std::optional<naim::controller::ControllerEndpointTarget>
+InteractionHttpSupport::ResolvePlaneLocalInteractionTarget(
+    const naim::DesiredState& desired_state) const {
+  return interaction_runtime_support_service_.ResolvePlaneLocalInteractionTarget(
+      desired_state);
 }
 
 int InteractionHttpSupport::CountReadyWorkerMembers(

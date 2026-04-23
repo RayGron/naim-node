@@ -35,6 +35,9 @@ InteractionPlaneResolver InteractionHttpExecutorFactory::MakePlaneResolver() con
       [&](const std::string& gateway_listen, int fallback_port) {
         return support_.ParseInteractionTarget(gateway_listen, fallback_port);
       },
+      [&](const naim::DesiredState& desired_state) {
+        return support_.ResolvePlaneLocalInteractionTarget(desired_state);
+      },
       [&](naim::ControllerStore& store,
           const naim::DesiredState& desired_state) {
         return support_.CountReadyWorkerMembers(store, desired_state);
@@ -57,7 +60,7 @@ InteractionSessionExecutor InteractionHttpExecutorFactory::MakeSessionExecutor()
           bool force_stream,
           const ResolvedInteractionPolicy& resolved_policy,
           bool structured_output_json) {
-        return support_.BuildInteractionUpstreamBody(
+        return support_.BuildInteractionRuntimeRequestBody(
             resolution,
             std::move(payload),
             force_stream,
@@ -128,7 +131,7 @@ InteractionHttpExecutorFactory::MakeStreamSegmentExecutor() const {
           bool force_stream,
           const ResolvedInteractionPolicy& resolved_policy,
           bool structured_output_json) {
-        return support_.BuildInteractionUpstreamBody(
+        return support_.BuildInteractionRuntimeRequestBody(
             resolution,
             std::move(payload),
             force_stream,
@@ -183,7 +186,7 @@ InteractionProxyExecutor InteractionHttpExecutorFactory::MakeProxyExecutor(
           bool force_stream,
           const ResolvedInteractionPolicy& resolved_policy,
           bool structured_output_json) {
-        return support_.BuildInteractionUpstreamBody(
+        return support_.BuildInteractionRuntimeRequestBody(
             resolution,
             std::move(payload),
             force_stream,

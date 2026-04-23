@@ -1282,6 +1282,7 @@ add_executable(
   controller/src/interaction/interaction_text_post_processor.cpp
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
+  controller/src/interaction/interaction_runtime_request_codec.cpp
   controller/src/interaction/interaction_runtime_support_service.cpp
   controller/src/interaction/interaction_service.cpp
   controller/src/knowledge/knowledge_vault_http_service.cpp
@@ -1495,6 +1496,37 @@ if(NOT WIN32)
       unofficial::sqlite3::sqlite3
   )
   naim_enable_strict_warnings(naim-skillsd)
+
+  add_executable(
+    naim-interactiond
+    controller/src/app/controller_language_support.cpp
+    controller/src/http/controller_http_server_support.cpp
+    controller/src/http/controller_http_transport.cpp
+    controller/src/infra/controller_network_manager.cpp
+    controller/src/interaction/interaction_completion_policy_support.cpp
+    controller/src/interaction/interaction_context_compression_service.cpp
+    controller/src/interaction/interaction_conversation_payload_builder.cpp
+    controller/src/interaction/interaction_model_identity_builder.cpp
+    controller/src/interaction/interaction_payload_builder.cpp
+    controller/src/interaction/interaction_request_heuristics.cpp
+    controller/src/interaction/interaction_request_contract_support.cpp
+    controller/src/interaction/interaction_runtime_request_codec.cpp
+    controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
+    runtime/interaction/src/interaction_runtime_server.cpp
+    runtime/interaction/src/main.cpp
+  )
+  target_include_directories(
+    naim-interactiond PRIVATE common/include controller/include runtime/interaction/include)
+  target_link_libraries(
+    naim-interactiond
+    PRIVATE
+      naim-common
+      Threads::Threads
+  )
+  if(WIN32)
+    target_link_libraries(naim-interactiond PRIVATE ws2_32)
+  endif()
+  naim_enable_strict_warnings(naim-interactiond)
 
   add_executable(
     naim-knowledged

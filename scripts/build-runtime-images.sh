@@ -41,9 +41,10 @@ worker_tag="${3:-naim/worker-runtime:dev}"
 web_ui_tag="${4:-naim/web-ui:dev}"
 skills_tag="${5:-naim/skills-runtime:dev}"
 webgateway_tag="${6:-naim/webgateway-runtime:dev}"
-controller_tag="${7:-naim/controller:dev}"
-hostd_tag="${8:-naim/hostd:dev}"
-knowledge_tag="${9:-naim/knowledge-runtime:dev}"
+interaction_tag="${7:-naim/interaction-runtime:dev}"
+controller_tag="${8:-naim/controller:dev}"
+hostd_tag="${9:-naim/hostd:dev}"
+knowledge_tag="${10:-naim/knowledge-runtime:dev}"
 
 build_dir="$("${script_dir}/print-build-dir.sh")"
 turboquant_build_dir="${NAIM_TURBOQUANT_BUILD_DIR:-${repo_root}/build-turboquant/linux/x64}"
@@ -63,7 +64,7 @@ cp "${repo_root}/ui/operator-react/package.json" \
   "${image_context}/ui/operator-react/"
 cp "${repo_root}/ui/operator-react/scripts/webauthn-helper.mjs" \
   "${image_context}/ui/operator-react/scripts/webauthn-helper.mjs"
-for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd naim-skillsd naim-knowledged naim-webgatewayd; do
+for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd naim-skillsd naim-knowledged naim-webgatewayd naim-interactiond; do
   cp "${build_dir}/${binary}" "${image_context}/build/linux/x64/${binary}"
 done
 cp "${build_dir}/bin/llama-server" "${image_context}/build/linux/x64/bin/llama-server"
@@ -166,6 +167,13 @@ echo "building ${webgateway_tag}"
   -t "${webgateway_tag}" \
   "${image_context}"
 
+echo "building ${interaction_tag}"
+"${docker_cmd[@]}" build \
+  -f "${image_context}/runtime/interaction/Dockerfile" \
+  --build-arg "BASE_IMAGE=${base_tag}" \
+  -t "${interaction_tag}" \
+  "${image_context}"
+
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "building ${web_ui_tag}"
   build_web_ui_image
@@ -181,6 +189,7 @@ echo "  worker=${worker_tag}"
 echo "  skills=${skills_tag}"
 echo "  knowledge=${knowledge_tag}"
 echo "  webgateway=${webgateway_tag}"
+echo "  interaction=${interaction_tag}"
 if [[ "${skip_web_ui}" != "yes" ]]; then
   echo "  web_ui=${web_ui_tag}"
 fi

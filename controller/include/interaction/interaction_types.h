@@ -65,6 +65,15 @@ struct ResolvedInteractionPolicy {
   bool long_form = false;
 };
 
+struct InteractionRuntimeExecutionRequest {
+  naim::DesiredState desired_state;
+  nlohmann::json status_payload = nlohmann::json::object();
+  nlohmann::json payload = nlohmann::json::object();
+  ResolvedInteractionPolicy resolved_policy;
+  bool structured_output_json = false;
+  bool force_stream = false;
+};
+
 struct InteractionSegmentSummary {
   int index = 0;
   int continuation_index = 0;

@@ -41,6 +41,12 @@ class InteractionHttpSupport final {
       bool force_stream,
       const naim::controller::ResolvedInteractionPolicy& resolved_policy,
       bool structured_output_json) const;
+  std::string BuildInteractionRuntimeRequestBody(
+      const naim::controller::PlaneInteractionResolution& resolution,
+      nlohmann::json payload,
+      bool force_stream,
+      const naim::controller::ResolvedInteractionPolicy& resolved_policy,
+      bool structured_output_json) const;
   std::optional<std::string> FindInferInstanceName(const naim::DesiredState& desired_state) const;
   std::vector<naim::RuntimeProcessStatus> ParseInstanceRuntimeStatuses(
       const naim::HostObservation& observation) const;
@@ -53,6 +59,8 @@ class InteractionHttpSupport final {
   std::optional<naim::controller::ControllerEndpointTarget> ParseInteractionTarget(
       const std::string& gateway_listen,
       int fallback_port) const;
+  std::optional<naim::controller::ControllerEndpointTarget> ResolvePlaneLocalInteractionTarget(
+      const naim::DesiredState& desired_state) const;
   int CountReadyWorkerMembers(
       naim::ControllerStore& store,
       const naim::DesiredState& desired_state) const;

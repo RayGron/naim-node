@@ -114,7 +114,8 @@ bool HostdLocalRuntimeStateSupport::InstanceProducesRuntimeStatus(
     const naim::InstanceSpec& instance) {
   return instance.role == naim::InstanceRole::Infer ||
          instance.role == naim::InstanceRole::Worker ||
-         instance.role == naim::InstanceRole::Skills;
+         instance.role == naim::InstanceRole::Skills ||
+         instance.role == naim::InstanceRole::Interaction;
 }
 
 }  // namespace naim::hostd

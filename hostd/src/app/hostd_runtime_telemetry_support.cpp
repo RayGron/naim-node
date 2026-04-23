@@ -193,7 +193,8 @@ std::optional<std::string> HostdRuntimeTelemetrySupport::WorkerRuntimeStatusPath
     const naim::DesiredState& state,
     const naim::InstanceSpec& instance) const {
   if (instance.role != naim::InstanceRole::Worker &&
-      instance.role != naim::InstanceRole::Skills) {
+      instance.role != naim::InstanceRole::Skills &&
+      instance.role != naim::InstanceRole::Interaction) {
     return std::nullopt;
   }
   for (const auto& disk : state.disks) {
@@ -201,12 +202,16 @@ std::optional<std::string> HostdRuntimeTelemetrySupport::WorkerRuntimeStatusPath
         (instance.role == naim::InstanceRole::Worker &&
          disk.kind == naim::DiskKind::WorkerPrivate) ||
         (instance.role == naim::InstanceRole::Skills &&
-         disk.kind == naim::DiskKind::SkillsPrivate);
+         disk.kind == naim::DiskKind::SkillsPrivate) ||
+        (instance.role == naim::InstanceRole::Interaction &&
+         disk.kind == naim::DiskKind::InteractionPrivate);
     if (matching_disk_kind && disk.owner_name == instance.name &&
         disk.node_name == instance.node_name) {
       return (fs::path(disk.host_path) /
               (instance.role == naim::InstanceRole::Skills
                    ? "skills-runtime-status.json"
+                   : instance.role == naim::InstanceRole::Interaction
+                         ? "interaction-runtime-status.json"
                    : "worker-runtime-status.json"))
           .string();
     }
