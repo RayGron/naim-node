@@ -218,14 +218,31 @@ while time.time() < deadline:
     con.row_factory = sqlite3.Row
     pending_hostd = 0
     pending_knowledge = 0
+    failed_hostd = 0
+    failed_knowledge = 0
     nodes = {}
     services = {}
+    hostd_assignments = {}
+    knowledge_assignments = {}
     for node_name in targeted_nodes:
         pending_hostd += con.execute(
             "select count(*) as count from host_assignments "
             "where plane_name = ? and node_name = ? and status in ('pending','claimed')",
             ("system:hostd-release", node_name),
         ).fetchone()["count"]
+        assignment = con.execute(
+            "select id, status, status_message, updated_at "
+            "from host_assignments where plane_name = ? and node_name = ? "
+            "order by id desc limit 1",
+            ("system:hostd-release", node_name),
+        ).fetchone()
+        hostd_assignments[node_name] = {
+            "status": None if assignment is None else assignment["status"],
+            "status_message": None if assignment is None else assignment["status_message"],
+            "updated_at": None if assignment is None else assignment["updated_at"],
+        }
+        if hostd_assignments[node_name]["status"] == "failed":
+            failed_hostd += 1
         host = con.execute(
             "select session_state, last_heartbeat_at, status_message "
             "from registered_hosts where node_name = ?",
@@ -244,6 +261,19 @@ while time.time() < deadline:
             "where plane_name = ? and status in ('pending','claimed')",
             (plane_name,),
         ).fetchone()["count"]
+        assignment = con.execute(
+            "select id, status, status_message, updated_at "
+            "from host_assignments where plane_name = ? "
+            "order by id desc limit 1",
+            (plane_name,),
+        ).fetchone()
+        knowledge_assignments[service_id] = {
+            "status": None if assignment is None else assignment["status"],
+            "status_message": None if assignment is None else assignment["status_message"],
+            "updated_at": None if assignment is None else assignment["updated_at"],
+        }
+        if knowledge_assignments[service_id]["status"] == "failed":
+            failed_knowledge += 1
         service = con.execute(
             "select status, status_message, image, updated_at "
             "from knowledge_vault_services where service_id = ?",
@@ -269,10 +299,19 @@ while time.time() < deadline:
     last = {
         "pending_hostd_assignments": pending_hostd,
         "pending_knowledge_assignments": pending_knowledge,
+        "failed_hostd_assignments": failed_hostd,
+        "failed_knowledge_assignments": failed_knowledge,
+        "hostd_assignments": hostd_assignments,
+        "knowledge_assignment_status": knowledge_assignments,
         "nodes": nodes,
         "knowledge_vault_services": services,
     }
     print("bootstrap release rollout poll:", json.dumps(last, sort_keys=True), flush=True)
+    if failed_hostd > 0 or failed_knowledge > 0:
+        raise SystemExit(
+            "bootstrap release rollout observed failed assignments; last="
+            + json.dumps(last, sort_keys=True)
+        )
     if pending_hostd == 0 and pending_knowledge == 0 and all_nodes_reconnected:
         raise SystemExit(0)
     time.sleep(5)
