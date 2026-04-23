@@ -937,6 +937,16 @@ target_link_libraries(naim-hostd-command-support-tests PRIVATE naim-common)
 naim_enable_strict_warnings(naim-hostd-command-support-tests)
 
 add_executable(
+  naim-hostd-install-layout-support-tests
+  hostd/src/app/hostd_install_layout_support.cpp
+  hostd/src/app/hostd_install_layout_support_tests.cpp
+)
+target_include_directories(
+  naim-hostd-install-layout-support-tests PRIVATE common/include hostd/include)
+target_link_libraries(naim-hostd-install-layout-support-tests PRIVATE naim-common)
+naim_enable_strict_warnings(naim-hostd-install-layout-support-tests)
+
+add_executable(
   naim-hostd-post-deploy-support-tests
   hostd/src/app/hostd_command_support.cpp
   hostd/src/app/hostd_local_state_path_support.cpp
@@ -1107,6 +1117,7 @@ add_executable(
   hostd/src/app/hostd_desired_state_path_support.cpp
   hostd/src/app/hostd_disk_runtime_support.cpp
   hostd/src/app/hostd_file_support.cpp
+  hostd/src/app/hostd_install_layout_support.cpp
   hostd/src/app/hostd_local_runtime_state_support.cpp
   hostd/src/app/hostd_local_state_path_support.cpp
   hostd/src/app/hostd_local_state_repository.cpp

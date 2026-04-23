@@ -656,8 +656,8 @@ void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
     throw std::runtime_error("hostd-self-update payload must contain release_tag and hostd_image");
   }
 
-  const std::filesystem::path key_path(*host_private_key_path);
-  const std::filesystem::path hostd_root = key_path.parent_path().parent_path();
+  const std::filesystem::path hostd_root =
+      install_layout_support_.ResolveHostdRootFromPrivateKeyPath(*host_private_key_path);
   if (hostd_root.empty()) {
     throw std::runtime_error("failed to derive hostd root from host private key path");
   }
