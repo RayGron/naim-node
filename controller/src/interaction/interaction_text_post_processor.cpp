@@ -131,7 +131,12 @@ bool InteractionTextPostProcessor::StartsWithReasoningPreamble(
   return lowered.rfind("thinking process:", 0) == 0 ||
          lowered.rfind("reasoning:", 0) == 0 ||
          lowered.rfind("analysis:", 0) == 0 ||
-         lowered.rfind("chain of thought:", 0) == 0;
+         lowered.rfind("chain of thought:", 0) == 0 ||
+         lowered.rfind("the user's prompt explicitly states:", 0) == 0 ||
+         lowered.rfind("therefore, despite the user's request", 0) == 0 ||
+         lowered.rfind("given the user explicitly requested", 0) == 0 ||
+         lowered.rfind("i will present this", 0) == 0 ||
+         lowered.rfind("i will structure the response", 0) == 0;
 }
 
 std::string InteractionTextPostProcessor::SanitizeInteractionText(

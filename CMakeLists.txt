@@ -1512,6 +1512,7 @@ if(NOT WIN32)
     controller/src/interaction/interaction_request_heuristics.cpp
     controller/src/interaction/interaction_request_contract_support.cpp
     controller/src/interaction/interaction_runtime_request_codec.cpp
+    controller/src/interaction/interaction_text_post_processor.cpp
     controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
     runtime/interaction/src/interaction_runtime_server.cpp
     runtime/interaction/src/main.cpp

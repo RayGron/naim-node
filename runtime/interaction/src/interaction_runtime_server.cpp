@@ -3,6 +3,7 @@
 #include <array>
 #include <csignal>
 #include <fstream>
+#include <map>
 #include <stdexcept>
 #include <thread>
 
@@ -12,6 +13,7 @@
 #include "interaction/interaction_context_compression_service.h"
 #include "interaction/interaction_payload_builder.h"
 #include "interaction/interaction_runtime_request_codec.h"
+#include "interaction/interaction_text_post_processor.h"
 #include "naim/state/state_json.h"
 #include "naim/runtime/runtime_status.h"
 
@@ -46,6 +48,62 @@ bool RequestWantsStream(const HttpRequest& request) {
   } catch (const std::exception&) {
   }
   return false;
+}
+
+std::map<std::string, std::string> BuildCompressionHeaders(
+    const naim::controller::InteractionRequestContext& request_context) {
+  std::map<std::string, std::string> headers;
+  if (!request_context.payload.contains(naim::controller::kInteractionSessionContextStatePayloadKey) ||
+      !request_context.payload.at(naim::controller::kInteractionSessionContextStatePayloadKey)
+           .is_object()) {
+    return headers;
+  }
+  const auto& context_state =
+      request_context.payload.at(naim::controller::kInteractionSessionContextStatePayloadKey);
+  if (!context_state.contains("context_compression") ||
+      !context_state.at("context_compression").is_object()) {
+    return headers;
+  }
+  const auto& compression = context_state.at("context_compression");
+  headers["x-naim-context-compression-enabled"] =
+      compression.value("enabled", false) ? "true" : "false";
+  headers["x-naim-context-compression-status"] =
+      compression.value("status", std::string("none"));
+  headers["x-naim-dialog-estimate-before"] =
+      std::to_string(compression.value("dialog_estimate_before", 0));
+  headers["x-naim-dialog-estimate-after"] =
+      std::to_string(compression.value("dialog_estimate_after", 0));
+  headers["x-naim-context-compression-ratio"] =
+      std::to_string(compression.value("compression_ratio", 1.0));
+  return headers;
+}
+
+HttpResponse SanitizeJsonChatResponse(HttpResponse response) {
+  if (response.status_code < 200 || response.status_code >= 300 || response.body.empty()) {
+    return response;
+  }
+  nlohmann::json payload = nlohmann::json::parse(response.body, nullptr, false);
+  if (payload.is_discarded() || !payload.is_object()) {
+    return response;
+  }
+  const naim::controller::InteractionTextPostProcessor post_processor;
+  if (payload.contains("choices") && payload.at("choices").is_array() &&
+      !payload.at("choices").empty() && payload.at("choices").at(0).is_object()) {
+    auto& first_choice = payload.at("choices").at(0);
+    if (first_choice.contains("message") && first_choice.at("message").is_object()) {
+      auto& message = first_choice.at("message");
+      message["content"] = post_processor.ExtractInteractionText(
+          nlohmann::json{{"choices", nlohmann::json::array({first_choice})}});
+      response.body = payload.dump();
+      return response;
+    }
+    if (first_choice.contains("text") && first_choice.at("text").is_string()) {
+      first_choice["text"] = post_processor.SanitizeInteractionText(
+          first_choice.at("text").get<std::string>());
+      response.body = payload.dump();
+    }
+  }
+  return response;
 }
 
 }  // namespace
@@ -209,12 +267,16 @@ HttpResponse InteractionRuntimeServer::ExecuteNonStream(const HttpRequest& reque
       execution.force_stream,
       execution.resolved_policy,
       execution.structured_output_json);
-  return SendControllerHttpRequest(
+  HttpResponse response = SendControllerHttpRequest(
       UpstreamTarget(),
       "POST",
       "/chat/completions",
       upstream_body,
       {{"Accept", "application/json"}});
+  for (const auto& [name, value] : BuildCompressionHeaders(execution.request_context)) {
+    response.headers[name] = value;
+  }
+  return SanitizeJsonChatResponse(std::move(response));
 }
 
 void InteractionRuntimeServer::ExecuteStream(
@@ -235,7 +297,9 @@ void InteractionRuntimeServer::ExecuteStream(
       UpstreamTarget(),
       "interaction-runtime",
       upstream_body);
-  if (!naim::controller::ControllerNetworkManager::SendSseHeaders(client_fd, {})) {
+  if (!naim::controller::ControllerNetworkManager::SendSseHeaders(
+          client_fd,
+          BuildCompressionHeaders(execution.request_context))) {
     upstream.close();
     naim::controller::ControllerNetworkManager::ShutdownAndCloseSocket(client_fd);
     return;
