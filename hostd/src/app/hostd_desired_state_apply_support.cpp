@@ -4,10 +4,30 @@
 #include <iostream>
 #include <stdexcept>
 
+#include "app/hostd_file_support.h"
 #include "app/hostd_runtime_telemetry_support.h"
+#include "naim/state/state_json.h"
 #include "naim/planning/planner.h"
 
 namespace naim::hostd {
+
+namespace {
+
+void WriteDesiredStateSnapshot(
+    const HostdDesiredStatePathSupport& path_support,
+    const naim::DesiredState& desired_node_state,
+    const std::string& node_name) {
+  const auto snapshot_path =
+      path_support.DesiredStateSnapshotPathForNode(desired_node_state, node_name);
+  if (!snapshot_path.has_value()) {
+    return;
+  }
+  HostdFileSupport().WriteTextFile(
+      *snapshot_path,
+      naim::SerializeDesiredStateJson(desired_node_state));
+}
+
+}  // namespace
 
 HostdDesiredStateApplySupport::HostdDesiredStateApplySupport(
     const HostdDesiredStatePathSupport& path_support,
@@ -88,6 +108,7 @@ void HostdDesiredStateApplySupport::ApplyDesiredNodeState(
             << (compose_mode == ComposeMode::Exec ? "exec" : "skip") << "\n";
 
   ValidateDesiredNodeStateForCurrentHost(desired_node_state, compose_mode);
+  WriteDesiredStateSnapshot(path_support_, desired_node_state, node_name);
 
   auto maybe_publish_progress =
       [&](const std::string& phase,

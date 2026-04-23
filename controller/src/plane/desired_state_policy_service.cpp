@@ -178,7 +178,8 @@ bool DesiredStatePolicyService::NodeAllowsInstanceRole(
     case naim::HostExecutionMode::InferOnly:
       return role == naim::InstanceRole::Infer ||
              role == naim::InstanceRole::App ||
-             role == naim::InstanceRole::Skills;
+             role == naim::InstanceRole::Skills ||
+             role == naim::InstanceRole::Interaction;
     case naim::HostExecutionMode::WorkerOnly:
       return role == naim::InstanceRole::Worker;
     case naim::HostExecutionMode::Mixed:

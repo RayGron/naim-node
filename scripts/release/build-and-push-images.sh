@@ -132,6 +132,7 @@ web_ui_ref="$(image_ref web-ui)"
 skills_ref="$(image_ref skills-runtime)"
 knowledge_ref="$(image_ref knowledge-runtime)"
 webgateway_ref="$(image_ref webgateway-runtime)"
+interaction_ref="$(image_ref interaction-runtime)"
 controller_ref="$(image_ref controller)"
 hostd_ref="$(image_ref hostd)"
 
@@ -142,6 +143,7 @@ build_args=(
   "${web_ui_ref}"
   "${skills_ref}"
   "${webgateway_ref}"
+  "${interaction_ref}"
   "${controller_ref}"
   "${hostd_ref}"
   "${knowledge_ref}"
@@ -162,6 +164,7 @@ declare -a image_names=(
   skills-runtime
   knowledge-runtime
   webgateway-runtime
+  interaction-runtime
 )
 if [[ "${skip_web_ui}" != "yes" ]]; then
   image_names+=(web-ui)

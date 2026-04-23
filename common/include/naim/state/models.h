@@ -14,6 +14,7 @@ enum class InstanceRole {
   App,
   Skills,
   Browsing,
+  Interaction,
 };
 
 enum class DiskKind {
@@ -23,6 +24,7 @@ enum class DiskKind {
   AppPrivate,
   SkillsPrivate,
   BrowsingPrivate,
+  InteractionPrivate,
 };
 
 inline bool IsPrivateDiskKind(DiskKind kind) {
@@ -30,7 +32,8 @@ inline bool IsPrivateDiskKind(DiskKind kind) {
          kind == DiskKind::WorkerPrivate ||
          kind == DiskKind::AppPrivate ||
          kind == DiskKind::SkillsPrivate ||
-         kind == DiskKind::BrowsingPrivate;
+         kind == DiskKind::BrowsingPrivate ||
+         kind == DiskKind::InteractionPrivate;
 }
 
 inline bool IsNodeLocalDiskKind(DiskKind kind) {
@@ -47,7 +50,8 @@ inline bool InstanceNeedsPrivateDisk(InstanceRole role) {
   return role == InstanceRole::Worker ||
          role == InstanceRole::App ||
          role == InstanceRole::Skills ||
-         role == InstanceRole::Browsing;
+         role == InstanceRole::Browsing ||
+         role == InstanceRole::Interaction;
 }
 
 struct PublishedPort {

@@ -19,7 +19,13 @@ class InteractionRuntimeSupportService {
       const std::string& gateway_listen,
       int fallback_port) const;
 
+  std::optional<ControllerEndpointTarget> ResolvePlaneLocalInteractionTarget(
+      const naim::DesiredState& desired_state) const;
+
   std::optional<std::string> FindInferInstanceName(
+      const naim::DesiredState& desired_state) const;
+
+  std::optional<std::string> FindInteractionInstanceName(
       const naim::DesiredState& desired_state) const;
 
   std::vector<std::string> FindWorkerInstanceNames(

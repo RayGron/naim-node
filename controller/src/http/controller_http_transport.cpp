@@ -260,8 +260,11 @@ OpenInteractionStreamRequest(
   };
 
   try {
+    const std::string request_path =
+        target.base_path.empty() ? "/v1/chat/completions"
+                                 : target.base_path + "/chat/completions";
     std::ostringstream upstream_request;
-    upstream_request << "POST /v1/chat/completions HTTP/1.1\r\n";
+    upstream_request << "POST " << request_path << " HTTP/1.1\r\n";
     upstream_request << "Host: " << target.host << ":" << target.port << "\r\n";
     upstream_request << "Connection: close\r\n";
     upstream_request << "Accept: text/event-stream\r\n";

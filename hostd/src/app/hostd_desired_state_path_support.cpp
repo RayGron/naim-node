@@ -129,6 +129,12 @@ std::optional<std::string> HostdDesiredStatePathSupport::InferRuntimeConfigPathF
   return ControlFilePathForNode(state, node_name, "infer-runtime.json");
 }
 
+std::optional<std::string> HostdDesiredStatePathSupport::DesiredStateSnapshotPathForNode(
+    const naim::DesiredState& state,
+    const std::string& node_name) const {
+  return ControlFilePathForNode(state, node_name, "desired-state.v2.json");
+}
+
 const naim::InstanceSpec* HostdDesiredStatePathSupport::PrimaryInferInstanceForNode(
     const naim::DesiredState& state,
     const std::string& node_name) const {

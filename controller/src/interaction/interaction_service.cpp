@@ -1660,6 +1660,7 @@ InteractionPlaneResolver::InteractionPlaneResolver(
     ObservationMatchesPlaneFn observation_matches_plane,
     BuildPlaneScopedRuntimeStatusFn build_plane_scoped_runtime_status,
     ParseInteractionTargetFn parse_interaction_target,
+    ResolvePlaneLocalInteractionTargetFn resolve_plane_local_interaction_target,
     CountReadyWorkerMembersFn count_ready_worker_members,
     ProbeControllerTargetOkFn probe_controller_target_ok,
     DescribeUnsupportedControllerLocalRuntimeFn
@@ -1669,6 +1670,8 @@ InteractionPlaneResolver::InteractionPlaneResolver(
       observation_matches_plane_(std::move(observation_matches_plane)),
       build_plane_scoped_runtime_status_(std::move(build_plane_scoped_runtime_status)),
       parse_interaction_target_(std::move(parse_interaction_target)),
+      resolve_plane_local_interaction_target_(
+          std::move(resolve_plane_local_interaction_target)),
       count_ready_worker_members_(std::move(count_ready_worker_members)),
       probe_controller_target_ok_(std::move(probe_controller_target_ok)),
       describe_unsupported_controller_local_runtime_(
@@ -1689,6 +1692,8 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
   resolution.desired_state = *desired_state;
   resolution.plane_record = store.LoadPlane(plane_name);
   const std::string primary_node = desired_state->inference.primary_infer_node;
+  const auto plane_local_interaction_target =
+      resolve_plane_local_interaction_target_(*desired_state);
   bool observation_matches_plane = false;
   if (!primary_node.empty()) {
     resolution.observation = store.LoadHostObservation(primary_node);
@@ -1730,7 +1735,8 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
         resolution.runtime_status = observed_runtime;
       }
     }
-    if (resolution.runtime_status.has_value()) {
+    if (resolution.runtime_status.has_value() &&
+        !plane_local_interaction_target.has_value()) {
       resolution.target = parse_interaction_target_(
           resolution.runtime_status->gateway_listen,
           desired_state->gateway.listen_port);
@@ -1741,6 +1747,16 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
           plane_name,
           &resolution.target);
     }
+  }
+
+  if (plane_local_interaction_target.has_value()) {
+    resolution.target = plane_local_interaction_target;
+    InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
+        store,
+        db_path,
+        primary_node,
+        plane_name,
+        &resolution.target);
   }
 
   const bool llm_plane = desired_state->plane_mode == naim::PlaneMode::Llm;

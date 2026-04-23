@@ -22,12 +22,16 @@ constexpr int kDefaultWorkerPrivateDiskSizeGb = 2;
 constexpr int kDefaultAppPrivateDiskSizeGb = 8;
 constexpr int kDefaultSkillsPrivateDiskSizeGb = 1;
 constexpr int kDefaultWebGatewayPrivateDiskSizeGb = 1;
+constexpr int kDefaultInteractionPrivateDiskSizeGb = 1;
 constexpr int kSkillsContainerPort = 18120;
 constexpr int kSkillsPublishedPortBase = 24000;
 constexpr int kSkillsPublishedPortSpan = 10000;
 constexpr int kWebGatewayContainerPort = 18130;
 constexpr int kWebGatewayPublishedPortBase = 34000;
 constexpr int kWebGatewayPublishedPortSpan = 10000;
+constexpr int kInteractionContainerPort = 18110;
+constexpr int kInteractionPublishedPortBase = 44000;
+constexpr int kInteractionPublishedPortSpan = 10000;
 constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
 constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
@@ -109,6 +113,7 @@ DesiredState DesiredStateV2Renderer::RenderState() {
   RenderAppInstance();
   RenderSkillsInstance();
   RenderWebGatewayInstance();
+  RenderInteractionInstance();
   return state_;
 }
 
@@ -966,6 +971,59 @@ void DesiredStateV2Renderer::RenderWebGatewayInstance() {
   state_.disks.push_back(std::move(browsing_private_disk));
 }
 
+void DesiredStateV2Renderer::RenderInteractionInstance() {
+  if (state_.plane_mode != PlaneMode::Llm) {
+    return;
+  }
+
+  InstanceSpec interaction;
+  interaction.name = BuildInteractionInstanceName();
+  interaction.role = InstanceRole::Interaction;
+  interaction.plane_name = state_.plane_name;
+  interaction.node_name = ResolveInferNodeName();
+  interaction.image = "naim/interaction-runtime:dev";
+  interaction.command = "/runtime/bin/naim-interactiond";
+  interaction.private_disk_name = interaction.name + "-private";
+  interaction.private_disk_size_gb = kDefaultInteractionPrivateDiskSizeGb;
+  interaction.depends_on.push_back(BuildInferInstanceName());
+  interaction.environment = {
+      {"NAIM_PLANE_NAME", state_.plane_name},
+      {"NAIM_INSTANCE_NAME", interaction.name},
+      {"NAIM_INSTANCE_ROLE", "interaction"},
+      {"NAIM_NODE_NAME", interaction.node_name},
+      {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
+      {"NAIM_INTERACTION_PORT", std::to_string(kInteractionContainerPort)},
+      {"NAIM_INTERACTION_RUNTIME_STATUS_PATH", "/naim/private/interaction-runtime-status.json"},
+      {"NAIM_INTERACTION_UPSTREAM_BASE",
+       "http://" + BuildInferInstanceName() + ":" +
+           std::to_string(state_.gateway.listen_port) + "/v1"},
+      {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
+      {"NAIM_CONTROL_ROOT", state_.control_root},
+  };
+  interaction.labels = {
+      {"naim.plane", state_.plane_name},
+      {"naim.role", "interaction"},
+      {"naim.node", interaction.node_name},
+  };
+  interaction.published_ports.push_back(PublishedPort{
+      "127.0.0.1",
+      BuildInteractionHostPort(),
+      kInteractionContainerPort,
+  });
+  state_.instances.push_back(interaction);
+
+  DiskSpec interaction_private_disk;
+  interaction_private_disk.name = interaction.private_disk_name;
+  interaction_private_disk.kind = DiskKind::InteractionPrivate;
+  interaction_private_disk.plane_name = state_.plane_name;
+  interaction_private_disk.owner_name = interaction.name;
+  interaction_private_disk.node_name = interaction.node_name;
+  interaction_private_disk.host_path = BuildInstancePrivateHostPath(interaction.name);
+  interaction_private_disk.container_path = "/naim/private";
+  interaction_private_disk.size_gb = interaction.private_disk_size_gb;
+  state_.disks.push_back(std::move(interaction_private_disk));
+}
+
 bool DesiredStateV2Renderer::InferEnabled() const {
   return infer_json_.value(
       "enabled",
@@ -1207,6 +1265,10 @@ std::string DesiredStateV2Renderer::BuildWebGatewayInstanceName() const {
   return "webgateway-" + state_.plane_name;
 }
 
+std::string DesiredStateV2Renderer::BuildInteractionInstanceName() const {
+  return "interaction-" + state_.plane_name;
+}
+
 std::string DesiredStateV2Renderer::BuildPlaneSharedHostPath() const {
   return "/var/lib/naim/disks/planes/" + state_.plane_name + "/shared";
 }
@@ -1272,6 +1334,13 @@ int DesiredStateV2Renderer::BuildWebGatewayHostPort() const {
       StablePortHash(state_.plane_name + ":" + BuildWebGatewayInstanceName()) %
       kWebGatewayPublishedPortSpan;
   return kWebGatewayPublishedPortBase + static_cast<int>(offset);
+}
+
+int DesiredStateV2Renderer::BuildInteractionHostPort() const {
+  const uint32_t offset =
+      StablePortHash(state_.plane_name + ":" + BuildInteractionInstanceName()) %
+      kInteractionPublishedPortSpan;
+  return kInteractionPublishedPortBase + static_cast<int>(offset);
 }
 
 std::string DesiredStateV2Renderer::DefaultInferRuntimeBackend() const {
