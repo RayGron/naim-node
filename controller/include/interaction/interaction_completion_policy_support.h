@@ -39,6 +39,10 @@ class InteractionCompletionPolicySupport final {
   bool CanCompleteOnNaturalStop(
       const InteractionCompletionPolicy& policy,
       const InteractionSegmentSummary& summary) const;
+
+  bool ShouldTreatLengthAsNaturalStop(
+      const InteractionCompletionPolicy& policy,
+      const InteractionSegmentSummary& summary) const;
 };
 
 }  // namespace naim::controller

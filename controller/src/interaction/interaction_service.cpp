@@ -82,6 +82,44 @@ naim::controller::InteractionSegmentSummary EffectiveSegmentUsage(
   return summary;
 }
 
+std::string NormalizeContinuationText(const std::string& value) {
+  std::string normalized;
+  normalized.reserve(value.size());
+  bool previous_space = false;
+  for (unsigned char ch : value) {
+    if (std::isspace(ch) != 0) {
+      if (!previous_space) {
+        normalized.push_back(' ');
+      }
+      previous_space = true;
+      continue;
+    }
+    normalized.push_back(static_cast<char>(std::tolower(ch)));
+    previous_space = false;
+  }
+  while (!normalized.empty() && normalized.front() == ' ') {
+    normalized.erase(normalized.begin());
+  }
+  while (!normalized.empty() && normalized.back() == ' ') {
+    normalized.pop_back();
+  }
+  return normalized;
+}
+
+bool IsDuplicateContinuationSegment(
+    const std::vector<naim::controller::InteractionSegmentSummary>& segments,
+    const std::string& candidate_text) {
+  if (segments.empty()) {
+    return false;
+  }
+  const std::string candidate = NormalizeContinuationText(candidate_text);
+  if (candidate.empty()) {
+    return false;
+  }
+  const std::string previous =
+      NormalizeContinuationText(segments.back().text);
+  return !previous.empty() && previous == candidate;
+}
 }  // namespace
 
 nlohmann::json InteractionRequestValidator::ParsePayload(
@@ -737,6 +775,11 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
             segment_finished_at - segment_started_at)
             .count());
     summary.marker_seen = marker_seen_in_segment;
+    if (IsDuplicateContinuationSegment(result.segments, clean_text)) {
+      result.completion_status = "completed";
+      result.stop_reason = "duplicate_continuation_segment";
+      break;
+    }
     result.model = upstream_payload.value("model", result.model);
     result.content += clean_text;
     result.segments.push_back(summary);
@@ -772,6 +815,11 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
         session_reached_target_length_(policy, result.total_completion_tokens)) {
       result.completion_status = "completed";
       result.stop_reason = "natural_stop";
+      break;
+    }
+    if (completion_policy_support.ShouldTreatLengthAsNaturalStop(policy, summary)) {
+      result.completion_status = "completed";
+      result.stop_reason = "length_but_short_natural_stop";
       break;
     }
 
@@ -1120,6 +1168,7 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
     SendDoneFn send_done) const {
   const InteractionCompletionPolicy& policy = resolved_policy.policy;
   const nlohmann::json& original_payload = request_context.payload;
+  const InteractionCompletionPolicySupport completion_policy_support;
   InteractionSessionResult session;
   session.session_id = session_id;
   const auto session_started_at = std::chrono::steady_clock::now();
@@ -1169,6 +1218,12 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
       session.dialog_estimate_after = segment.dialog_estimate_after;
       session.context_compression_ratio = segment.context_compression_ratio;
 
+      if (IsDuplicateContinuationSegment(session.segments, segment.summary.text)) {
+        session.completion_status = "completed";
+        session.stop_reason = "duplicate_continuation_segment";
+        break;
+      }
+
       if (!send_event(
               "segment_complete",
               stream_presenter.BuildSegmentCompleteEvent(
@@ -1186,6 +1241,12 @@ InteractionSessionResult InteractionStreamSessionExecutor::Execute(
           session_reached_target_length_(policy, session.total_completion_tokens)) {
         session.completion_status = "completed";
         session.stop_reason = "natural_stop";
+        break;
+      }
+      if (completion_policy_support.ShouldTreatLengthAsNaturalStop(
+              policy, segment.summary)) {
+        session.completion_status = "completed";
+        session.stop_reason = "length_but_short_natural_stop";
         break;
       }
       if (session.total_completion_tokens >= policy.max_total_completion_tokens) {

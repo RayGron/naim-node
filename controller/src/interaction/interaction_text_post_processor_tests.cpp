@@ -81,6 +81,18 @@ void TestUtf8SafeSuffixAvoidsBrokenPrefix() {
   std::cout << "ok: interaction-text-utf8-safe-suffix" << '\n';
 }
 
+void TestCollapsesAdjacentDuplicateSentences() {
+  const naim::controller::InteractionTextPostProcessor processor;
+  const std::string text =
+      "I am Jex AI, the LocalTrade assistant.I am Jex AI, the LocalTrade assistant."
+      "I am Jex AI, the LocalTrade assistant.";
+  Expect(
+      processor.SanitizeInteractionText(text) ==
+          "I am Jex AI, the LocalTrade assistant.",
+      "processor should collapse adjacent duplicate sentences");
+  std::cout << "ok: interaction-text-collapses-duplicate-sentences" << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -91,6 +103,7 @@ int main() {
     TestSanitizesBareCompletionMarker();
     TestConsumesSplitCompletionMarker();
     TestUtf8SafeSuffixAvoidsBrokenPrefix();
+    TestCollapsesAdjacentDuplicateSentences();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "interaction_text_post_processor_tests failed: "

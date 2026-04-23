@@ -109,6 +109,22 @@ void TestNaturalStopRules() {
   Expect(
       support.CanCompleteOnNaturalStop(policy, summary),
       "non-marker policies should allow natural stop on non-empty stop segment");
+  naim::controller::InteractionCompletionPolicy fallback_policy;
+  fallback_policy.response_mode = "normal";
+  fallback_policy.max_tokens = 512;
+  naim::controller::InteractionSegmentSummary truncated_like_summary;
+  truncated_like_summary.text = "I am Jex AI.";
+  truncated_like_summary.finish_reason = "length";
+  truncated_like_summary.completion_tokens = 5;
+  Expect(
+      support.ShouldTreatLengthAsNaturalStop(
+          fallback_policy, truncated_like_summary),
+      "normal short responses should be treated as natural stop even when upstream reports length");
+  naim::controller::InteractionCompletionPolicy long_policy;
+  long_policy.response_mode = "very_long";
+  Expect(
+      !support.ShouldTreatLengthAsNaturalStop(long_policy, truncated_like_summary),
+      "long-form policies should keep continuation behavior");
   std::cout << "ok: interaction-completion-policy-natural-stop-rules" << '\n';
 }
 

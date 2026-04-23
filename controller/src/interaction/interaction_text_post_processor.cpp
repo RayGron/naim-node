@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <vector>
 #include <sstream>
 #include <stdexcept>
 
@@ -125,6 +126,122 @@ std::vector<std::string> InteractionTextPostProcessor::SplitParagraphs(
   return paragraphs;
 }
 
+std::string TrimLocal(const std::string& value) {
+  std::size_t start = 0;
+  while (start < value.size() &&
+         std::isspace(static_cast<unsigned char>(value[start])) != 0) {
+    ++start;
+  }
+  std::size_t end = value.size();
+  while (end > start &&
+         std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+    --end;
+  }
+  return value.substr(start, end - start);
+}
+
+std::vector<std::string> SplitParagraphsLocal(const std::string& value) {
+  std::vector<std::string> paragraphs;
+  std::stringstream stream(value);
+  std::string line;
+  std::string current;
+  while (std::getline(stream, line)) {
+    if (TrimLocal(line).empty()) {
+      if (!TrimLocal(current).empty()) {
+        paragraphs.push_back(TrimLocal(current));
+        current.clear();
+      }
+      continue;
+    }
+    if (!current.empty()) {
+      current += '\n';
+    }
+    current += line;
+  }
+  if (!TrimLocal(current).empty()) {
+    paragraphs.push_back(TrimLocal(current));
+  }
+  return paragraphs;
+}
+
+std::vector<std::string> SplitSentenceLikeUnits(const std::string& value) {
+  std::vector<std::string> units;
+  std::string current;
+  for (char ch : value) {
+    current.push_back(ch);
+    if (ch == '.' || ch == '!' || ch == '?' || ch == '\n') {
+      if (!current.empty()) {
+        units.push_back(current);
+        current.clear();
+      }
+    }
+  }
+  if (!current.empty()) {
+    units.push_back(current);
+  }
+  return units;
+}
+
+std::string NormalizeDedupKey(const std::string& value) {
+  std::string normalized;
+  normalized.reserve(value.size());
+  bool previous_space = false;
+  for (unsigned char ch : value) {
+    if (std::isspace(ch) != 0) {
+      if (!previous_space) {
+        normalized.push_back(' ');
+      }
+      previous_space = true;
+      continue;
+    }
+    normalized.push_back(static_cast<char>(std::tolower(ch)));
+    previous_space = false;
+  }
+  while (!normalized.empty() && normalized.front() == ' ') {
+    normalized.erase(normalized.begin());
+  }
+  while (!normalized.empty() && normalized.back() == ' ') {
+    normalized.pop_back();
+  }
+  return normalized;
+}
+
+std::string CollapseAdjacentDuplicateUnits(
+    const std::vector<std::string>& units,
+    const std::string& separator) {
+  std::string collapsed;
+  std::string previous_key;
+  for (const auto& unit : units) {
+    const std::string trimmed = TrimLocal(unit);
+    if (trimmed.empty()) {
+      continue;
+    }
+    const std::string key = NormalizeDedupKey(trimmed);
+    if (!previous_key.empty() && key == previous_key) {
+      continue;
+    }
+    if (!collapsed.empty()) {
+      collapsed += separator;
+    }
+    collapsed += trimmed;
+    previous_key = key;
+  }
+  return collapsed;
+}
+
+std::string CollapseAdjacentDuplicates(
+    const std::string& value) {
+  const auto paragraphs = SplitParagraphsLocal(value);
+  if (paragraphs.size() > 1) {
+    return CollapseAdjacentDuplicateUnits(paragraphs, "\n\n");
+  }
+  const auto sentences = SplitSentenceLikeUnits(value);
+  if (sentences.size() > 1) {
+    return CollapseAdjacentDuplicateUnits(sentences, " ");
+  }
+  return value;
+}
+
 bool InteractionTextPostProcessor::StartsWithReasoningPreamble(
     const std::string& text) const {
   const std::string lowered = LowercaseCopy(TrimCopy(text));
@@ -162,7 +279,7 @@ std::string InteractionTextPostProcessor::SanitizeInteractionText(
       return candidate;
     }
   }
-  return text;
+  return TrimCopy(CollapseAdjacentDuplicates(text));
 }
 
 std::string InteractionTextPostProcessor::Utf8SafeSuffix(

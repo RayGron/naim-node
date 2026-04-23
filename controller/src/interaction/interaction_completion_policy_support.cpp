@@ -253,4 +253,22 @@ bool InteractionCompletionPolicySupport::CanCompleteOnNaturalStop(
   return summary.finish_reason != "length" && !TrimCopy(summary.text).empty();
 }
 
+bool InteractionCompletionPolicySupport::ShouldTreatLengthAsNaturalStop(
+    const InteractionCompletionPolicy& policy,
+    const InteractionSegmentSummary& summary) const {
+  if (policy.require_completion_marker || policy.response_mode != "normal") {
+    return false;
+  }
+  if (TrimCopy(summary.text).empty()) {
+    return false;
+  }
+  if (summary.finish_reason != "length") {
+    return false;
+  }
+  if (summary.completion_tokens <= 0) {
+    return false;
+  }
+  return summary.completion_tokens < policy.max_tokens;
+}
+
 }  // namespace naim::controller
