@@ -15,18 +15,14 @@ bool FieldEnabledByDefault(const nlohmann::json& service_json, bool default_valu
   return service_json.value("enabled", default_value);
 }
 
-constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
-constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
 bool IsSupportedTurboQuantCacheType(const std::string& value) {
   static const std::set<std::string> kSupportedTypes = {
       "f16",
       "turbo3",
       "turbo4",
-      "planar3",
-      "planar4",
-      "iso3",
-      "iso4",
   };
   return kSupportedTypes.find(value) != kSupportedTypes.end();
 }

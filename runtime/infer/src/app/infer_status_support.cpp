@@ -72,12 +72,15 @@ std::vector<std::string> SplitCsv(const std::string& value) {
   return parts;
 }
 
-std::string ResolveExecutablePath(const char* env_name, const char* fallback) {
-  const char* value = std::getenv(env_name);
-  if (value != nullptr && *value != '\0') {
-    return value;
+std::string ResolveLlamaServerPath(const RuntimeConfig& config) {
+  const char* override_path = std::getenv("NAIM_LLAMA_SERVER_BIN");
+  if (override_path != nullptr && *override_path != '\0') {
+    return override_path;
   }
-  return fallback;
+  if (config.runtime_flavor == "turboquant") {
+    return "/runtime/bin/turboquant/llama-server";
+  }
+  return "/runtime/bin/llama-server";
 }
 
 bool CommandExists(const std::string& command) {
@@ -135,8 +138,7 @@ std::optional<std::string> ValidateTurboQuantSupport(const RuntimeConfig& config
   }
   const std::string cache_type_k = active_model.value("active_cache_type_k", std::string{});
   const std::string cache_type_v = active_model.value("active_cache_type_v", std::string{});
-  const std::string llama_server =
-      ResolveExecutablePath("NAIM_LLAMA_SERVER_BIN", "/runtime/bin/llama-server");
+  const std::string llama_server = ResolveLlamaServerPath(config);
   const auto help_output =
       CaptureCommandOutput(ShellQuote(llama_server) + " --help 2>&1");
   if (!help_output.has_value()) {

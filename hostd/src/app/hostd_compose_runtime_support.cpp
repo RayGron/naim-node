@@ -108,16 +108,32 @@ bool HostdComposeRuntimeSupport::LocalRuntimeBinaryExists(
     const std::filesystem::path& repo_root,
     const std::string& image) const {
   if (image == "naim/infer-runtime:dev") {
-    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-inferctl");
+    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-inferctl") &&
+           TurboQuantRuntimeBinaryExists(repo_root, image);
   }
   if (image == "naim/worker-runtime:dev") {
-    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-workerd");
+    return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-workerd") &&
+           TurboQuantRuntimeBinaryExists(repo_root, image);
   }
   if (image == "naim/skills-runtime:dev") {
     return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-skillsd");
   }
   if (image == "naim/webgateway-runtime:dev") {
     return std::filesystem::exists(repo_root / "build" / "linux" / "x64" / "naim-webgatewayd");
+  }
+  return true;
+}
+
+bool HostdComposeRuntimeSupport::TurboQuantRuntimeBinaryExists(
+    const std::filesystem::path& repo_root,
+    const std::string& image) const {
+  if (image == "naim/infer-runtime:dev") {
+    return std::filesystem::exists(
+        repo_root / "build-turboquant" / "linux" / "x64" / "bin" / "llama-server");
+  }
+  if (image == "naim/worker-runtime:dev") {
+    return std::filesystem::exists(
+        repo_root / "build-turboquant" / "linux" / "x64" / "bin" / "rpc-server");
   }
   return true;
 }
@@ -141,6 +157,22 @@ void HostdComposeRuntimeSupport::EnsureLocalRuntimeBinary(
   if (!command_support_.RunCommandOk(command)) {
     throw std::runtime_error(
         "failed to auto-build local naim binaries required for " + image);
+  }
+
+  if (!TurboQuantRuntimeBinaryExists(repo_root, image)) {
+    const std::filesystem::path turboquant_script =
+        repo_root / "scripts" / "build-turboquant-runtime.sh";
+    if (!std::filesystem::exists(turboquant_script)) {
+      throw std::runtime_error(
+          "runtime image requires turboquant binary, but build-turboquant-runtime.sh is unavailable");
+    }
+    const std::string turboquant_command =
+        "cd " + command_support_.ShellQuote(repo_root.string()) +
+        " && " + command_support_.ShellQuote(turboquant_script.string()) + " linux x64 Debug";
+    if (!command_support_.RunCommandOk(turboquant_command)) {
+      throw std::runtime_error(
+          "failed to auto-build local turboquant binaries required for " + image);
+    }
   }
 
   if (!LocalRuntimeBinaryExists(repo_root, image)) {

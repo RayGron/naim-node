@@ -22,12 +22,15 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::string ResolveExecutablePath(const char* env_name, const char* fallback) {
-  const char* value = std::getenv(env_name);
-  if (value != nullptr && *value != '\0') {
-    return value;
+std::string ResolveRpcServerPath(const naim::worker::WorkerConfig& config) {
+  const char* override_path = std::getenv("NAIM_RPC_SERVER_BIN");
+  if (override_path != nullptr && *override_path != '\0') {
+    return override_path;
   }
-  return fallback;
+  if (config.llama_runtime_flavor == "turboquant") {
+    return "/runtime/bin/turboquant/rpc-server";
+  }
+  return "/runtime/bin/rpc-server";
 }
 
 std::string ResolveRpcDevice(const naim::worker::WorkerConfig& config) {
@@ -117,7 +120,7 @@ int WorkerEngineHost::RunRpcWorker() {
 
   if (child == 0) {
     std::vector<std::string> args = {
-        ResolveExecutablePath("NAIM_RPC_SERVER_BIN", "/runtime/bin/rpc-server"),
+        ResolveRpcServerPath(config_),
         "--host",
         config_.rpc_host,
         "--port",

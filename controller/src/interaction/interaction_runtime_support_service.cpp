@@ -146,9 +146,9 @@ InteractionRuntimeSupportService::BuildPlaneScopedRuntimeStatus(
   if (desired_state.turboquant.has_value() && desired_state.turboquant->enabled) {
     runtime.turboquant_enabled = true;
     runtime.active_cache_type_k =
-        desired_state.turboquant->cache_type_k.value_or("planar3");
+        desired_state.turboquant->cache_type_k.value_or("turbo4");
     runtime.active_cache_type_v =
-        desired_state.turboquant->cache_type_v.value_or("f16");
+        desired_state.turboquant->cache_type_v.value_or("turbo4");
   }
   if (desired_state.bootstrap_model.has_value()) {
     runtime.active_model_id = desired_state.bootstrap_model->model_id;

@@ -15,6 +15,7 @@ struct RuntimeConfig {
   std::string controller_url;
   std::string primary_infer_node;
   std::string runtime_engine = "llama.cpp";
+  std::string runtime_flavor = "default";
   std::string distributed_backend = "local";
   std::string data_parallel_mode = "off";
   std::string data_parallel_lb_mode = "external";

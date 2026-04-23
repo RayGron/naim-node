@@ -104,12 +104,15 @@ std::vector<std::string> SplitCommaSeparated(std::string_view text) {
   return result;
 }
 
-std::string ResolveExecutablePath(const char* env_name, const char* fallback) {
-  const char* value = std::getenv(env_name);
-  if (value != nullptr && *value != '\0') {
-    return value;
+std::string ResolveLlamaServerPath(const RuntimeConfig& config) {
+  const char* override_path = std::getenv("NAIM_LLAMA_SERVER_BIN");
+  if (override_path != nullptr && *override_path != '\0') {
+    return override_path;
   }
-  return fallback;
+  if (config.runtime_flavor == "turboquant") {
+    return "/runtime/bin/turboquant/llama-server";
+  }
+  return "/runtime/bin/llama-server";
 }
 
 std::string Trim(std::string value) {
@@ -279,7 +282,7 @@ int LlamaRpcRuntime::Run() {
       model_identity.cached_runtime_model_path = model_path;
     }
     std::vector<std::string> args = {
-        ResolveExecutablePath("NAIM_LLAMA_SERVER_BIN", "/runtime/bin/llama-server"),
+        ResolveLlamaServerPath(config_),
         "--host",
         "127.0.0.1",
         "--port",

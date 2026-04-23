@@ -281,6 +281,8 @@ RuntimeConfig LoadRuntimeConfig(const std::string& path_str) {
       Require<std::string>(inference, "primary_infer_node", "inference");
   config.runtime_engine =
       inference.value("runtime_engine", config.runtime_engine);
+  config.runtime_flavor =
+      inference.value("runtime_flavor", config.runtime_flavor);
   config.distributed_backend =
       inference.value("distributed_backend", config.distributed_backend);
   config.data_parallel_mode =

@@ -28,8 +28,8 @@ constexpr int kSkillsPublishedPortSpan = 10000;
 constexpr int kWebGatewayContainerPort = 18130;
 constexpr int kWebGatewayPublishedPortBase = 34000;
 constexpr int kWebGatewayPublishedPortSpan = 10000;
-constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
-constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
 bool HasExplicitPrivateStorage(
     const nlohmann::json& service_json,
@@ -37,6 +37,10 @@ bool HasExplicitPrivateStorage(
   return (service_json.contains("storage") && service_json.at("storage").is_object()) ||
          (service_json.contains(legacy_volume_key) && service_json.at(legacy_volume_key).is_array() &&
           !service_json.at(legacy_volume_key).empty());
+}
+
+std::string LlamaRuntimeFlavor(const DesiredState& state) {
+  return state.turboquant.has_value() && state.turboquant->enabled ? "turboquant" : "default";
 }
 
 std::string PlacementExecutionNodeName(const nlohmann::json& placement) {
@@ -541,6 +545,7 @@ void DesiredStateV2Renderer::RenderInferInstance() {
          infer_index == 0 && infer_count > 1 ? "aggregator" : "infer"},
         {"NAIM_NODE_NAME", infer.node_name},
         {"NAIM_INFER_RUNTIME_BACKEND", DefaultInferRuntimeBackend()},
+        {"NAIM_LLAMA_RUNTIME_FLAVOR", LlamaRuntimeFlavor(state_)},
         {"NAIM_CONTROLLER_URL", "http://controller.internal:18080"},
         {"NAIM_CONTROL_ROOT", state_.control_root},
         {"NAIM_INFER_RUNTIME_CONFIG",
@@ -638,6 +643,7 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
         {"NAIM_INFER_INSTANCE_NAME", InferInstanceNameForWorker(worker_index)},
         {"NAIM_CONTROL_ROOT", state_.control_root},
         {"NAIM_DISTRIBUTED_BACKEND", state_.inference.distributed_backend},
+        {"NAIM_LLAMA_RUNTIME_FLAVOR", LlamaRuntimeFlavor(state_)},
         {"NAIM_SHARED_DISK_PATH", "/naim/shared"},
         {"NAIM_PRIVATE_DISK_PATH", "/naim/private"},
         {"NAIM_WORKER_RUNTIME_STATUS_PATH", "/naim/private/worker-runtime-status.json"},

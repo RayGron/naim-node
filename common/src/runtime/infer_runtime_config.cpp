@@ -351,6 +351,10 @@ std::string RenderInferRuntimeConfigJsonForInstance(
        {
            {"primary_infer_node", infer.node_name},
            {"runtime_engine", state.inference.runtime_engine},
+           {"runtime_flavor",
+            infer.environment.count("NAIM_LLAMA_RUNTIME_FLAVOR") == 0
+                ? std::string("default")
+                : infer.environment.at("NAIM_LLAMA_RUNTIME_FLAVOR")},
            {"data_parallel_mode", state.inference.data_parallel_mode},
            {"data_parallel_lb_mode", state.inference.data_parallel_lb_mode},
            {"api_server_count", state.inference.api_server_count},

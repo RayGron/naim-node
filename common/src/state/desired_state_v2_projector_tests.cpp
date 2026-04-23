@@ -295,7 +295,7 @@ int main() {
              }},
             {"features",
              {{"turboquant",
-               {{"enabled", true}, {"cache_type_k", "planar3"}, {"cache_type_v", "f16"}}}}},
+               {{"enabled", true}, {"cache_type_k", "turbo4"}, {"cache_type_v", "turbo4"}}}}},
             {"runtime",
              {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
             {"infer", {{"replicas", 1}}},

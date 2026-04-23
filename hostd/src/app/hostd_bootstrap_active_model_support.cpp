@@ -14,8 +14,8 @@ using nlohmann::json;
 
 namespace {
 
-constexpr std::string_view kTurboQuantDefaultCacheTypeK = "planar3";
-constexpr std::string_view kTurboQuantDefaultCacheTypeV = "f16";
+constexpr std::string_view kTurboQuantDefaultCacheTypeK = "turbo4";
+constexpr std::string_view kTurboQuantDefaultCacheTypeV = "turbo4";
 
 }  // namespace
 
