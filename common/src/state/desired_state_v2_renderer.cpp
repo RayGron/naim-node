@@ -987,6 +987,8 @@ void DesiredStateV2Renderer::RenderInteractionInstance() {
           : std::string("naim/interaction-runtime:dev");
   interaction.command = "/runtime/bin/naim-interactiond";
   interaction.private_disk_name = interaction.name + "-private";
+  interaction.shared_disk_name =
+      InstanceNeedsSharedDiskMount(interaction.role) ? state_.plane_shared_disk_name : "";
   interaction.private_disk_size_gb = kDefaultInteractionPrivateDiskSizeGb;
   interaction.depends_on.push_back(BuildInferInstanceName());
   interaction.environment = {
