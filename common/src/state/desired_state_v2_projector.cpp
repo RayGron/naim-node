@@ -61,6 +61,7 @@ nlohmann::json DesiredStateV2Projector::ProjectJson() {
 void DesiredStateV2Projector::CollectInstancesAndDisks() {
   infer_instance_ = FindInstance(InstanceRole::Infer);
   app_instance_ = FindInstance(InstanceRole::App);
+  app_instances_ = FindInstances(InstanceRole::App);
   skills_instance_ = FindInstance(InstanceRole::Skills);
   browsing_instance_ = FindInstance(InstanceRole::Browsing);
   worker_instances_ = FindWorkerInstances();
@@ -422,35 +423,73 @@ void DesiredStateV2Projector::ProjectWorker() {
 }
 
 void DesiredStateV2Projector::ProjectApp() {
-  if (app_instance_ == nullptr) {
+  if (app_instances_.empty()) {
     value_["app"] = {{"enabled", false}};
     return;
   }
 
-  nlohmann::json app = {
-      {"enabled", true},
-      {"image", app_instance_->image},
+  nlohmann::json apps = nlohmann::json::array();
+  const auto build_app_json = [&](const InstanceSpec& instance, bool primary) {
+    nlohmann::json app = {
+        {"enabled", true},
+        {"image", instance.image},
+    };
+    if (!primary) {
+      app["name"] = instance.environment.contains("NAIM_APP_NAME")
+                        ? instance.environment.at("NAIM_APP_NAME")
+                        : instance.name;
+      app["primary"] = false;
+    }
+    const auto start = ProjectorSupport::ProjectServiceStart(instance, std::string{});
+    if (!start.is_null()) {
+      app["start"] = start;
+    }
+    const auto env = ProjectorSupport::ProjectCustomEnv(instance, true);
+    if (!env.empty()) {
+      app["env"] = env;
+    }
+    const auto publish = ProjectorSupport::ProjectPublishedPorts(instance);
+    if (!publish.empty()) {
+      app["publish"] = publish;
+    }
+    if (instance.node_name != DefaultNodeName()) {
+      app["node"] = instance.node_name;
+    }
+    const auto app_disk = FindDiskByName(instance.private_disk_name);
+    const auto volumes = ProjectorSupport::ProjectAppVolumes(app_disk);
+    if (!volumes.empty()) {
+      app["volumes"] = std::move(volumes);
+    }
+    return app;
   };
-  const auto start = ProjectorSupport::ProjectServiceStart(*app_instance_, std::string{});
-  if (!start.is_null()) {
-    app["start"] = start;
+
+  const InstanceSpec* primary_app = nullptr;
+  for (const auto* instance : app_instances_) {
+    if (instance == nullptr) {
+      continue;
+    }
+    const auto it = instance->environment.find("NAIM_APP_PRIMARY");
+    if (it != instance->environment.end() && it->second == "true") {
+      primary_app = instance;
+      break;
+    }
   }
-  if (!app_instance_->environment.empty()) {
-    app["env"] = app_instance_->environment;
+  if (primary_app == nullptr) {
+    primary_app = app_instances_.front();
   }
-  const auto publish = ProjectorSupport::ProjectPublishedPorts(*app_instance_);
-  if (!publish.empty()) {
-    app["publish"] = publish;
+
+  for (const auto* instance : app_instances_) {
+    if (instance == nullptr) {
+      continue;
+    }
+    apps.push_back(build_app_json(*instance, instance == primary_app));
   }
-  if (app_instance_->node_name != DefaultNodeName()) {
-    app["node"] = app_instance_->node_name;
+
+  if (apps.size() == 1) {
+    value_["app"] = apps.front();
+    return;
   }
-  const auto app_disk = FindDiskByName(app_instance_->private_disk_name);
-  const auto volumes = ProjectorSupport::ProjectAppVolumes(app_disk);
-  if (!volumes.empty()) {
-    app["volumes"] = std::move(volumes);
-  }
-  value_["app"] = std::move(app);
+  value_["apps"] = std::move(apps);
 }
 
 void DesiredStateV2Projector::ProjectSkills() {
@@ -631,6 +670,16 @@ const InstanceSpec* DesiredStateV2Projector::FindInstance(InstanceRole role) con
     }
   }
   return nullptr;
+}
+
+std::vector<const InstanceSpec*> DesiredStateV2Projector::FindInstances(InstanceRole role) const {
+  std::vector<const InstanceSpec*> instances;
+  for (const auto& instance : state_.instances) {
+    if (instance.role == role) {
+      instances.push_back(&instance);
+    }
+  }
+  return instances;
 }
 
 std::vector<const InstanceSpec*> DesiredStateV2Projector::FindWorkerInstances() const {

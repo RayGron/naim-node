@@ -147,6 +147,7 @@ const FIELD_INFO = {
   inferStorageMountPath: "Mount path for the infer private volume inside the container.",
   inferEnv: "Extra environment variables injected into the infer container.",
   appEnabled: "Enable an application container that uses this plane as a backend.",
+  extraAppName: "Stable logical name for an additional app container in this plane.",
   appImage: "Docker image used for the app container.",
   appStartType: "How the app process is started inside the container.",
   appStartValue: "Script reference or command executed when the app container starts.",
@@ -192,6 +193,99 @@ function renderEnvText(env) {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${value}`)
     .join("\n");
+}
+
+function buildExtraAppState(overrides = {}) {
+  return {
+    name: "",
+    enabled: true,
+    image: "",
+    startType: "command",
+    startValue: "",
+    envText: "",
+    hostPort: "",
+    containerPort: 8080,
+    node: "",
+    volumeEnabled: false,
+    volumeName: "private-data",
+    volumeType: "persistent",
+    volumeSizeGb: 8,
+    volumeMountPath: "/naim/private",
+    volumeAccess: "rw",
+    ...overrides,
+  };
+}
+
+function appEntryFromDesiredState(app) {
+  const start = app?.start || {};
+  const publish =
+    Array.isArray(app?.publish) && app.publish.length > 0 ? app.publish[0] : {};
+  const volume =
+    Array.isArray(app?.volumes) && app.volumes.length > 0 ? app.volumes[0] : {};
+  return buildExtraAppState({
+    name: app?.name || "",
+    enabled: app?.enabled ?? true,
+    image: app?.image || "",
+    startType: start.type || "command",
+    startValue: start.script_ref || start.command || "",
+    envText: renderEnvText(app?.env),
+    hostPort: publish.host_port ?? "",
+    containerPort: Number(publish.container_port ?? 8080),
+    node: app?.node || "",
+    volumeEnabled: Boolean(volume?.name),
+    volumeName: volume?.name || "private-data",
+    volumeType: volume?.type || "persistent",
+    volumeSizeGb: Number(volume?.size_gb ?? 8),
+    volumeMountPath: volume?.mount_path || "/naim/private",
+    volumeAccess: volume?.access || "rw",
+  });
+}
+
+function buildDesiredStateAppFromEntry(entry, includeName = false) {
+  const rendered = {
+    enabled: entry?.enabled ?? true,
+    image: String(entry?.image || "").trim(),
+  };
+  if (includeName) {
+    rendered.name = String(entry?.name || "").trim();
+    rendered.primary = false;
+  }
+  if (String(entry?.startValue || "").trim()) {
+    rendered.start =
+      entry?.startType === "script"
+        ? { type: "script", script_ref: String(entry.startValue).trim() }
+        : { type: "command", command: String(entry.startValue).trim() };
+  }
+  const env = parseEnvText(String(entry?.envText || ""));
+  if (Object.keys(env).length > 0) {
+    rendered.env = env;
+  }
+  if (String(entry?.node || "").trim()) {
+    rendered.node = String(entry.node).trim();
+  }
+  const hostPort = Number(entry?.hostPort);
+  const containerPort = Number(entry?.containerPort);
+  if (Number.isFinite(hostPort) && hostPort > 0 && Number.isFinite(containerPort) && containerPort > 0) {
+    rendered.publish = [
+      {
+        host_ip: "127.0.0.1",
+        host_port: hostPort,
+        container_port: containerPort,
+      },
+    ];
+  }
+  if (entry?.volumeEnabled) {
+    rendered.volumes = [
+      {
+        name: String(entry?.volumeName || "").trim() || "private-data",
+        type: entry?.volumeType || "persistent",
+        size_gb: parseNumber(entry?.volumeSizeGb, 8),
+        mount_path: String(entry?.volumeMountPath || "").trim() || "/naim/private",
+        access: entry?.volumeAccess || "rw",
+      },
+    ];
+  }
+  return rendered;
 }
 
 function normalizeSearchText(value) {
@@ -253,14 +347,20 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
   const sourceQuantization = inferModelQuantization(modelItem) || "Q8_0";
   const appEnv = {
     CYPHER_ACTION_AUDIT_LOG_FILE: "/naim/private/action-audit.log",
-    CYPHER_API_BASE: "http://infer-lt-cypher-ai:18084/v1",
+    CYPHER_API_BASE: "http://interaction-lt-cypher-ai:18110/v1",
     CYPHER_CONTROLLER_SESSION_FILE: "/naim/private/controller-session-token",
-    CYPHER_MARKET_MEMORY_DB_FILE: "/naim/private/market-memory.sqlite",
+    CYPHER_MARKET_BACKGROUND_REFRESH_ENABLED: "false",
     CYPHER_PLANE_API_BASE: "http://controller.internal:18080/api/v1/planes/lt-cypher-ai",
     CYPHER_PUBLIC_BASE_PATH: "/",
     HOST: "0.0.0.0",
     LOCALTRADE_ACTIONS_ENABLED: "true",
     PORT: "8080",
+  };
+  const collectorEnv = {
+    CYPHER_CONTROLLER_SESSION_FILE: "/naim/private/controller-session-token",
+    CYPHER_MARKET_BACKGROUND_REFRESH_ENABLED: "true",
+    CYPHER_MARKET_COLLECTOR_ENABLED: "true",
+    CYPHER_PLANE_API_BASE: "http://controller.internal:18080/api/v1/planes/lt-cypher-ai",
   };
   return {
     ...form,
@@ -329,6 +429,20 @@ function applyLtCypherPresetToForm(form, modelLibraryItems) {
     appVolumeSizeGb: 8,
     appVolumeMountPath: "/naim/private",
     appVolumeAccess: "rw",
+    extraApps: [
+      buildExtraAppState({
+        name: "market-ingest",
+        enabled: true,
+        image: form.appImage?.startsWith(LT_CYPHER_HARBOR_IMAGE_PREFIX)
+          ? form.appImage
+          : LT_CYPHER_DEFAULT_IMAGE,
+        startType: "command",
+        startValue: "node market-collector.js",
+        envText: renderEnvText(collectorEnv),
+        node: "hpc1",
+        volumeEnabled: true,
+      }),
+    ],
     postDeployScript: "",
   };
 }
@@ -439,7 +553,12 @@ function deriveExecutionNodeFromDesiredStateV2(value) {
   if (workerNode) {
     return workerNode;
   }
-  const appNode = String(value?.app?.node || "").trim();
+  const primaryAppNode = String(
+    (Array.isArray(value?.apps)
+      ? (value.apps.find((item) => item?.primary) || value.apps[0])?.node
+      : value?.app?.node) || "",
+  ).trim();
+  const appNode = primaryAppNode;
   if (appNode) {
     return appNode;
   }
@@ -555,6 +674,7 @@ export function buildNewPlaneFormState() {
     appVolumeSizeGb: 8,
     appVolumeMountPath: "/naim/private",
     appVolumeAccess: "rw",
+    extraApps: [],
     placementMode: "auto",
     shareMode: "exclusive",
     gpuFraction: 1.0,
@@ -572,7 +692,17 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
   const network = value?.network || {};
   const infer = value?.infer || {};
   const worker = value?.worker || {};
-  const app = value?.app || {};
+  const rawApps = Array.isArray(value?.apps)
+    ? value.apps.filter((item) => item && typeof item === "object")
+    : (value?.app && typeof value.app === "object" ? [value.app] : []);
+  const primaryApp =
+    rawApps.find((item) => item?.primary) ||
+    rawApps[0] ||
+    {};
+  const extraApps = rawApps
+    .filter((item) => item !== primaryApp)
+    .map((item) => appEntryFromDesiredState(item));
+  const app = primaryApp;
   const workerResources = value?.resources?.worker || {};
   const appStart = app?.start || {};
   const inferStart = infer?.start || {};
@@ -719,6 +849,7 @@ export function buildPlaneFormStateFromDesiredStateV2(value) {
     appVolumeSizeGb: Number(appVolume.size_gb ?? defaults.appVolumeSizeGb),
     appVolumeMountPath: appVolume.mount_path || defaults.appVolumeMountPath,
     appVolumeAccess: appVolume.access || defaults.appVolumeAccess,
+    extraApps,
     placementMode: workerResources.placement_mode || defaults.placementMode,
     shareMode: workerResources.share_mode || defaults.shareMode,
     gpuFraction: normalizeShareModeGpuFraction(
@@ -794,9 +925,6 @@ export function buildDesiredStateV2FromForm(form) {
     },
     placement: {
       execution_node: String(form.executionNode || "").trim() || "local-hostd",
-    },
-    app: {
-      enabled: Boolean(form.appEnabled),
     },
     resources: {
       worker: {
@@ -1061,38 +1189,52 @@ export function buildDesiredStateV2FromForm(form) {
     }
   }
 
-  if (form.appEnabled) {
-    desiredState.app.image = form.appImage.trim();
-    if (form.appStartValue.trim()) {
-      desiredState.app.start =
-        form.appStartType === "script"
-          ? { type: "script", script_ref: form.appStartValue.trim() }
-          : { type: "command", command: form.appStartValue.trim() };
+  const extraApps = (Array.isArray(form.extraApps) ? form.extraApps : [])
+    .map((entry) => ({
+      ...entry,
+      name: String(entry?.name || "").trim(),
+      image: String(entry?.image || "").trim(),
+      node: String(entry?.node || "").trim(),
+    }))
+    .filter((entry) => entry.name || entry.image || entry.startValue || entry.envText || entry.node);
+
+  const primaryApp = buildDesiredStateAppFromEntry(
+    {
+      enabled: Boolean(form.appEnabled),
+      image: form.appImage,
+      startType: form.appStartType,
+      startValue: form.appStartValue,
+      envText: form.appEnvText,
+      node: form.topologyEnabled ? form.appNode : "",
+      hostPort: form.appHostPort,
+      containerPort: form.appContainerPort,
+      volumeEnabled: form.appVolumeEnabled,
+      volumeName: form.appVolumeName,
+      volumeType: form.appVolumeType,
+      volumeSizeGb: form.appVolumeSizeGb,
+      volumeMountPath: form.appVolumeMountPath,
+      volumeAccess: form.appVolumeAccess,
+    },
+    false,
+  );
+
+  if (extraApps.length > 0) {
+    desiredState.apps = [];
+    if (Boolean(form.appEnabled)) {
+      desiredState.apps.push({ ...primaryApp, primary: true });
     }
-    const appEnv = parseEnvText(form.appEnvText);
-    if (Object.keys(appEnv).length > 0) {
-      desiredState.app.env = appEnv;
+    for (const entry of extraApps) {
+      desiredState.apps.push(buildDesiredStateAppFromEntry(entry, true));
     }
-    if (form.topologyEnabled && form.appNode.trim()) {
-      desiredState.app.node = form.appNode.trim();
+    if (desiredState.apps.length === 0) {
+      desiredState.apps.push({ enabled: false, name: "primary", primary: true, image: "" });
     }
-    desiredState.app.publish = [
-      {
-        host_ip: "127.0.0.1",
-        host_port: parseNumber(form.appHostPort, 18010),
-        container_port: parseNumber(form.appContainerPort, 8080),
-      },
-    ];
-    if (form.appVolumeEnabled) {
-      desiredState.app.volumes = [
-        {
-          name: form.appVolumeName.trim() || "private-data",
-          type: form.appVolumeType,
-          size_gb: parseNumber(form.appVolumeSizeGb, 8),
-          mount_path: form.appVolumeMountPath.trim() || "/naim/private",
-          access: form.appVolumeAccess,
-        },
-      ];
+  } else {
+    desiredState.app = {
+      enabled: Boolean(form.appEnabled),
+    };
+    if (form.appEnabled) {
+      Object.assign(desiredState.app, primaryApp);
     }
   }
 
@@ -1184,6 +1326,25 @@ export function validatePlaneV2Form(form) {
   if (form?.appEnabled && !String(form?.appImage || "").trim()) {
     errors.push("App image is required when app is enabled.");
   }
+  const extraApps = Array.isArray(form?.extraApps) ? form.extraApps : [];
+  for (const entry of extraApps) {
+    if (!String(entry?.name || "").trim()) {
+      errors.push("Each additional app must have a name.");
+    }
+    if (!String(entry?.image || "").trim()) {
+      errors.push(`Additional app '${String(entry?.name || "").trim() || "unnamed"}' requires an image.`);
+    }
+  }
+  const duplicateExtraAppNames = extraApps
+    .map((entry) => String(entry?.name || "").trim())
+    .filter(Boolean)
+    .filter((name, index, values) => values.indexOf(name) !== index);
+  if (duplicateExtraAppNames.length > 0) {
+    errors.push("Additional app names must be unique.");
+  }
+  if (extraApps.length > 0 && !form?.appEnabled) {
+    warnings.push("Additional app containers are configured while the primary app is disabled.");
+  }
   if (form?.planeMode === "compute") {
     if (!String(form?.workerImage || "").trim()) {
       errors.push("Worker image is required for compute planes.");
@@ -1226,6 +1387,7 @@ export function validatePlaneV2Form(form) {
     String(form?.inferNode || "").trim(),
     String(form?.workerNode || "").trim(),
     String(form?.appNode || "").trim(),
+    ...extraApps.map((entry) => String(entry?.node || "").trim()),
     ...enabledAssignments.map((assignment) => String(assignment.node || "").trim()),
   ].filter(Boolean);
 
@@ -1269,6 +1431,13 @@ export function validatePlaneV2Form(form) {
   }
   if (form?.appEnabled && !String(form?.appStartValue || "").trim()) {
     warnings.push("App start is empty. The app container will rely on its image default command.");
+  }
+  for (const entry of extraApps) {
+    if (!String(entry?.startValue || "").trim()) {
+      warnings.push(
+        `Additional app '${String(entry?.name || "").trim() || "unnamed"}' start is empty. The container will rely on its image default command.`,
+      );
+    }
   }
 
   return { errors, warnings };
@@ -1768,6 +1937,44 @@ export function PlaneV2FormBuilder({
         }
         return next;
       });
+  }
+
+  function updateExtraApp(index, updater) {
+    updatePlaneDialogForm(setDialog, (current) => {
+      const extraApps = Array.isArray(current.extraApps) ? [...current.extraApps] : [];
+      if (index < 0 || index >= extraApps.length) {
+        return current;
+      }
+      extraApps[index] =
+        typeof updater === "function" ? updater(extraApps[index]) : { ...extraApps[index], ...updater };
+      return {
+        ...current,
+        extraApps,
+      };
+    });
+  }
+
+  function addExtraApp() {
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      extraApps: [
+        ...(Array.isArray(current.extraApps) ? current.extraApps : []),
+        buildExtraAppState({
+          name: `app-${(Array.isArray(current.extraApps) ? current.extraApps.length : 0) + 1}`,
+          node:
+            current.topologyEnabled ? current.appNode || current.inferNode || current.workerNode || "" : "",
+        }),
+      ],
+    }));
+  }
+
+  function removeExtraApp(index) {
+    updatePlaneDialogForm(setDialog, (current) => ({
+      ...current,
+      extraApps: (Array.isArray(current.extraApps) ? current.extraApps : []).filter(
+        (_, itemIndex) => itemIndex !== index,
+      ),
+    }));
   }
 
   function bindPlaneMode() {
@@ -3350,7 +3557,7 @@ export function PlaneV2FormBuilder({
         ) : null}
       </AdvancedSection>
 
-      {form.appEnabled ? (
+      {form.appEnabled || (Array.isArray(form.extraApps) && form.extraApps.length > 0) ? (
         <AdvancedSection
           title="App advanced"
           description="Keep app storage and wiring explicit because app containers are treated as opaque user workloads."
@@ -3573,6 +3780,175 @@ export function PlaneV2FormBuilder({
               </div>
             </>
           ) : null}
+
+          <div className="plane-form-section-header" style={{ marginTop: 20 }}>
+            <div className="section-label">Additional apps</div>
+            <p className="plane-form-section-copy">
+              Add extra plane-scoped app containers. External app host remains primary-app only.
+            </p>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+            <button className="ghost-button" type="button" onClick={addExtraApp}>
+              Add app
+            </button>
+          </div>
+          {(Array.isArray(form.extraApps) ? form.extraApps : []).map((entry, index) => (
+            <div key={`extra-app-${index}`} className="plane-form-section" style={{ marginTop: 12 }}>
+              <div
+                className="plane-form-grid"
+                style={{ gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) auto", alignItems: "end" }}
+              >
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.extraAppName}>App name</InfoLabel>
+                  <input
+                    className="text-input"
+                    value={entry.name}
+                    onChange={(event) =>
+                      updateExtraApp(index, { name: event.target.value })
+                    }
+                  />
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appImage}>App image</InfoLabel>
+                  <input
+                    className="text-input"
+                    value={entry.image}
+                    onChange={(event) =>
+                      updateExtraApp(index, { image: event.target.value })
+                    }
+                  />
+                </label>
+                <button className="ghost-button" type="button" onClick={() => removeExtraApp(index)}>
+                  Remove
+                </button>
+              </div>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appStartType}>App start type</InfoLabel>
+                  <select
+                    className="text-input"
+                    value={entry.startType}
+                    onChange={(event) =>
+                      updateExtraApp(index, { startType: event.target.value })
+                    }
+                  >
+                    <option value="script">script</option>
+                    <option value="command">command</option>
+                  </select>
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appStartValue}>
+                    {entry.startType === "script" ? "App script ref" : "App command"}
+                  </InfoLabel>
+                  <input
+                    className="text-input"
+                    value={entry.startValue}
+                    onChange={(event) =>
+                      updateExtraApp(index, { startValue: event.target.value })
+                    }
+                  />
+                </label>
+              </div>
+              <div className="plane-form-grid">
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appHostPort}>App host port</InfoLabel>
+                  <input
+                    className="text-input"
+                    type="number"
+                    min="0"
+                    value={entry.hostPort}
+                    onChange={(event) =>
+                      updateExtraApp(index, { hostPort: event.target.value })
+                    }
+                  />
+                </label>
+                <label className="field-label">
+                  <InfoLabel info={FIELD_INFO.appContainerPort}>App container port</InfoLabel>
+                  <input
+                    className="text-input"
+                    type="number"
+                    min="1"
+                    value={entry.containerPort}
+                    onChange={(event) =>
+                      updateExtraApp(index, { containerPort: event.target.value })
+                    }
+                  />
+                </label>
+                {form.topologyEnabled ? (
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appNode}>App node</InfoLabel>
+                    <input
+                      className="text-input"
+                      value={entry.node}
+                      onChange={(event) =>
+                        updateExtraApp(index, { node: event.target.value })
+                      }
+                    />
+                  </label>
+                ) : null}
+              </div>
+              <label className="field-label">
+                <InfoLabel info={FIELD_INFO.appEnv}>App env</InfoLabel>
+                <textarea
+                  className="editor-textarea plane-form-textarea"
+                  value={entry.envText}
+                  onChange={(event) =>
+                    updateExtraApp(index, { envText: event.target.value })
+                  }
+                />
+              </label>
+              <div className="plane-form-grid">
+                <label className="field-label plane-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(entry.volumeEnabled)}
+                    onChange={(event) =>
+                      updateExtraApp(index, { volumeEnabled: event.target.checked })
+                    }
+                  />
+                  <InfoLabel info={FIELD_INFO.appVolumeEnabled} className="field-label-inline">
+                    App volume
+                  </InfoLabel>
+                </label>
+              </div>
+              {entry.volumeEnabled ? (
+                <div className="plane-form-grid">
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appVolumeName}>App volume name</InfoLabel>
+                    <input
+                      className="text-input"
+                      value={entry.volumeName}
+                      onChange={(event) =>
+                        updateExtraApp(index, { volumeName: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appVolumeSizeGb}>App volume size GB</InfoLabel>
+                    <input
+                      className="text-input"
+                      type="number"
+                      min="1"
+                      value={entry.volumeSizeGb}
+                      onChange={(event) =>
+                        updateExtraApp(index, { volumeSizeGb: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="field-label">
+                    <InfoLabel info={FIELD_INFO.appVolumeMountPath}>App volume mount path</InfoLabel>
+                    <input
+                      className="text-input"
+                      value={entry.volumeMountPath}
+                      onChange={(event) =>
+                        updateExtraApp(index, { volumeMountPath: event.target.value })
+                      }
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </div>
+          ))}
         </AdvancedSection>
       ) : null}
 

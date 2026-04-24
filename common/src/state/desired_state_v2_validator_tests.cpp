@@ -1839,6 +1839,60 @@ int main() {
         },
         "placement-app-host-rejects-mixed-auth");
 
+    {
+      const json multi_app_plane{
+          {"version", 2},
+          {"plane_name", "multi-app-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-multi-app"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"apps",
+           json::array(
+               {{{"name", "chat"},
+                 {"primary", true},
+                 {"enabled", true},
+                 {"image", "example/app:dev"}},
+                {{"name", "market-ingest"},
+                 {"enabled", true},
+                 {"image", "example/app:dev"},
+                 {"start", {{"type", "script"}, {"value", "node market-collector.js"}}}}})},
+      };
+      const auto state = RenderValid(multi_app_plane, "multi-app-plane");
+      const auto primary = FindInstance(state, "app-multi-app-plane");
+      const auto collector = FindInstance(state, "app-market-ingest-multi-app-plane");
+      Expect(primary.role == naim::InstanceRole::App,
+             "multi-app-plane: primary app role mismatch");
+      Expect(primary.environment.at("NAIM_APP_PRIMARY") == "true",
+             "multi-app-plane: primary app should be flagged");
+      Expect(collector.environment.at("NAIM_APP_NAME") == "market-ingest",
+             "multi-app-plane: collector app env mismatch");
+      const auto projected = naim::DesiredStateV2Projector::Project(state);
+      Expect(projected.contains("apps"), "multi-app-plane: projector should emit apps");
+      Expect(projected.at("apps").size() == 2,
+             "multi-app-plane: projector should emit two apps");
+      std::cout << "ok: multi-app-plane" << '\n';
+    }
+
+    ExpectInvalid(
+        json{
+            {"version", 2},
+            {"plane_name", "duplicate-app-names"},
+            {"plane_mode", "compute"},
+            {"runtime", {{"engine", "custom"}, {"workers", 1}}},
+            {"apps",
+             json::array(
+                 {{{"name", "collector"}, {"enabled", true}, {"image", "example/app:dev"}},
+                  {{"name", "collector"}, {"enabled", true}, {"image", "example/app:dev"}}})},
+        },
+        "duplicate-app-names");
+
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "desired_state_v2_validator_tests failed: " << ex.what() << '\n';

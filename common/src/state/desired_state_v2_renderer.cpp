@@ -78,9 +78,7 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
           resources_json_.contains("worker") && resources_json_.at("worker").is_object()
               ? resources_json_.at("worker")
               : nlohmann::json::object()),
-      app_json_(
-          value.contains("app") && value.at("app").is_object() ? value.at("app")
-                                                                : nlohmann::json::object()),
+      app_json_(nlohmann::json::object()),
       skills_json_(
           value.contains("skills") && value.at("skills").is_object() ? value.at("skills")
                                                                       : nlohmann::json::object()),
@@ -95,7 +93,29 @@ DesiredStateV2Renderer::DesiredStateV2Renderer(const nlohmann::json& value)
               : nlohmann::json::object()),
       features_json_(
           value.contains("features") && value.at("features").is_object() ? value.at("features")
-                                                                          : nlohmann::json::object()) {}
+                                                                          : nlohmann::json::object()) {
+  if (value.contains("apps") && value.at("apps").is_array()) {
+    for (const auto& item : value.at("apps")) {
+      if (item.is_object()) {
+        apps_json_.push_back(item);
+      }
+    }
+  } else if (value.contains("app") && value.at("app").is_object()) {
+    apps_json_.push_back(value.at("app"));
+  }
+
+  if (!apps_json_.empty()) {
+    const auto primary_it = std::find_if(
+        apps_json_.begin(),
+        apps_json_.end(),
+        [](const nlohmann::json& app_json) {
+          return app_json.value("primary", false);
+        });
+    app_json_ = primary_it != apps_json_.end() ? *primary_it : apps_json_.front();
+  } else {
+    app_json_ = nlohmann::json::object();
+  }
+}
 
 DesiredState DesiredStateV2Renderer::RenderState() {
   RenderIdentity();
@@ -745,71 +765,88 @@ void DesiredStateV2Renderer::RenderWorkerInstances() {
 }
 
 void DesiredStateV2Renderer::RenderAppInstance() {
-  if (!value_.contains("app") || !value_.at("app").is_object() ||
-      !value_.at("app").value("enabled", true)) {
+  if (apps_json_.empty()) {
     return;
   }
 
-  InstanceSpec app;
-  app.name = BuildAppInstanceName();
-  app.role = InstanceRole::App;
-  app.plane_name = state_.plane_name;
-  app.node_name = ResolveAppNodeName();
-  app.image = app_json_.value("image", std::string{});
-  if (app_json_.contains("start") && app_json_.at("start").is_object()) {
-    const auto& start = app_json_.at("start");
-    const auto start_type = start.value("type", std::string("command"));
-    if (start_type == "script") {
-      app.command = BuildAppCommandFromScriptRef(start.value("script_ref", std::string{}));
-    } else {
-      app.command = start.value("command", std::string{});
+  for (std::size_t index = 0; index < apps_json_.size(); ++index) {
+    const auto& app_entry = apps_json_.at(index);
+    if (!app_entry.value("enabled", true)) {
+      continue;
     }
-  }
-  app.private_disk_name = app.name + "-private";
-  app.shared_disk_name = state_.plane_shared_disk_name;
-  if (!infer_names_.empty()) {
-    app.depends_on.push_back(infer_names_.front());
-  }
-  if (app_json_.contains("env") && app_json_.at("env").is_object()) {
-    app.environment = app_json_.at("env").get<std::map<std::string, std::string>>();
-  }
-  app.labels = {
-      {"naim.plane", state_.plane_name},
-      {"naim.role", "app"},
-      {"naim.node", app.node_name},
-  };
-  if (app_json_.contains("publish") && app_json_.at("publish").is_array()) {
-    for (const auto& port_json : app_json_.at("publish")) {
-      app.published_ports.push_back(PublishedPort{
-          port_json.value("host_ip", std::string("127.0.0.1")),
-          port_json.value("host_port", 0),
-          port_json.value("container_port", 0),
-      });
+
+    const bool primary = app_entry.value("primary", false) || index == 0;
+    const std::string app_name =
+        primary ? std::string("primary")
+                : app_entry.value("name", "app-" + std::to_string(index));
+
+    InstanceSpec app;
+    app.name = BuildAppInstanceName(app_name, primary);
+    app.role = InstanceRole::App;
+    app.plane_name = state_.plane_name;
+    app.node_name = ResolveAppNodeName(app_entry);
+    app.image = app_entry.value("image", std::string{});
+    if (app_entry.contains("start") && app_entry.at("start").is_object()) {
+      const auto& start = app_entry.at("start");
+      const auto start_type = start.value("type", std::string("command"));
+      if (start_type == "script") {
+        app.command = BuildAppCommandFromScriptRef(start.value("script_ref", std::string{}));
+      } else {
+        app.command = start.value("command", std::string{});
+      }
     }
-  }
-  ApplyExternalAppHostMetadata(&app, "app");
+    app.private_disk_name = app.name + "-private";
+    app.shared_disk_name = state_.plane_shared_disk_name;
+    if (!infer_names_.empty()) {
+      app.depends_on.push_back(infer_names_.front());
+    }
+    if (app_entry.contains("env") && app_entry.at("env").is_object()) {
+      app.environment = app_entry.at("env").get<std::map<std::string, std::string>>();
+    }
+    app.environment["NAIM_APP_NAME"] = app_name;
+    app.environment["NAIM_APP_PRIMARY"] = primary ? "true" : "false";
+    app.labels = {
+        {"naim.plane", state_.plane_name},
+        {"naim.role", "app"},
+        {"naim.node", app.node_name},
+        {"naim.app_name", app_name},
+        {"naim.app_primary", primary ? "true" : "false"},
+    };
+    if (app_entry.contains("publish") && app_entry.at("publish").is_array()) {
+      for (const auto& port_json : app_entry.at("publish")) {
+        app.published_ports.push_back(PublishedPort{
+            port_json.value("host_ip", std::string("127.0.0.1")),
+            port_json.value("host_port", 0),
+            port_json.value("container_port", 0),
+        });
+      }
+    }
+    if (primary) {
+      ApplyExternalAppHostMetadata(&app, "app");
+    }
 
-  const int app_private_disk_size_gb =
-      ExtractPrivateDiskSizeGb(app_json_, kDefaultAppPrivateDiskSizeGb, "volumes");
-  const std::string app_private_mount_path =
-      ExtractPrivateMountPath(app_json_, "/naim/private", "volumes");
-  if (app_json_.contains("volumes") && app_json_.at("volumes").is_array() &&
-      app_json_.at("volumes").size() > 1) {
-    throw std::runtime_error("desired-state v2 currently supports at most one app volume");
-  }
-  app.private_disk_size_gb = app_private_disk_size_gb;
-  state_.instances.push_back(app);
+    const int app_private_disk_size_gb =
+        ExtractPrivateDiskSizeGb(app_entry, kDefaultAppPrivateDiskSizeGb, "volumes");
+    const std::string app_private_mount_path =
+        ExtractPrivateMountPath(app_entry, "/naim/private", "volumes");
+    if (app_entry.contains("volumes") && app_entry.at("volumes").is_array() &&
+        app_entry.at("volumes").size() > 1) {
+      throw std::runtime_error("desired-state v2 currently supports at most one app volume");
+    }
+    app.private_disk_size_gb = app_private_disk_size_gb;
+    state_.instances.push_back(app);
 
-  DiskSpec app_private_disk;
-  app_private_disk.name = app.private_disk_name;
-  app_private_disk.kind = DiskKind::AppPrivate;
-  app_private_disk.plane_name = state_.plane_name;
-  app_private_disk.owner_name = app.name;
-  app_private_disk.node_name = app.node_name;
-  app_private_disk.host_path = BuildInstancePrivateHostPath(app.name);
-  app_private_disk.container_path = app_private_mount_path;
-  app_private_disk.size_gb = app_private_disk_size_gb;
-  state_.disks.push_back(std::move(app_private_disk));
+    DiskSpec app_private_disk;
+    app_private_disk.name = app.private_disk_name;
+    app_private_disk.kind = DiskKind::AppPrivate;
+    app_private_disk.plane_name = state_.plane_name;
+    app_private_disk.owner_name = app.name;
+    app_private_disk.node_name = app.node_name;
+    app_private_disk.host_path = BuildInstancePrivateHostPath(app.name);
+    app_private_disk.container_path = app_private_mount_path;
+    app_private_disk.size_gb = app_private_disk_size_gb;
+    state_.disks.push_back(std::move(app_private_disk));
+  }
 }
 
 void DesiredStateV2Renderer::RenderSkillsInstance() {
@@ -1109,6 +1146,14 @@ std::string DesiredStateV2Renderer::ResolveAppNodeName() const {
   return ResolveInferNodeName();
 }
 
+std::string DesiredStateV2Renderer::ResolveAppNodeName(const nlohmann::json& app_json) const {
+  if (const auto legacy_node_name = ResolveLegacyServiceNodeName(app_json, "app");
+      legacy_node_name.has_value()) {
+    return *legacy_node_name;
+  }
+  return ResolveAppNodeName();
+}
+
 std::string DesiredStateV2Renderer::ResolveWorkerNodeName(int worker_index) const {
   if (const auto assignment_node_name = ResolveLegacyWorkerAssignmentNodeName(worker_index);
       assignment_node_name.has_value()) {
@@ -1265,6 +1310,15 @@ std::string DesiredStateV2Renderer::BuildAppInstanceName() const {
   return "app-" + state_.plane_name;
 }
 
+std::string DesiredStateV2Renderer::BuildAppInstanceName(
+    const std::string& app_name,
+    bool primary) const {
+  if (primary) {
+    return BuildAppInstanceName();
+  }
+  return "app-" + state_.plane_name + "-" + NormalizeAppNameToken(app_name);
+}
+
 std::string DesiredStateV2Renderer::BuildSkillsInstanceName() const {
   return "skills-" + state_.plane_name;
 }
@@ -1299,6 +1353,31 @@ std::string DesiredStateV2Renderer::BuildAppCommandFromScriptRef(
   const std::string filename =
       slash == std::string::npos ? stripped : stripped.substr(slash + 1);
   return "/app/" + filename;
+}
+
+std::string DesiredStateV2Renderer::NormalizeAppNameToken(const std::string& value) {
+  std::string token;
+  token.reserve(value.size());
+  for (char ch : value) {
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+      token.push_back(ch);
+      continue;
+    }
+    if (ch >= 'A' && ch <= 'Z') {
+      token.push_back(static_cast<char>(ch - 'A' + 'a'));
+      continue;
+    }
+    if (ch == '-' || ch == '_') {
+      token.push_back('-');
+    }
+  }
+  while (!token.empty() && token.front() == '-') {
+    token.erase(token.begin());
+  }
+  while (!token.empty() && token.back() == '-') {
+    token.pop_back();
+  }
+  return token.empty() ? std::string("extra") : token;
 }
 
 std::string DesiredStateV2Renderer::BuildCommandFromStartSpec(

@@ -592,27 +592,70 @@ void DesiredStateV2Validator::ValidateWorkerResources() const {
 }
 
 void DesiredStateV2Validator::ValidateApp() const {
-  if (!value_.contains("app")) {
+  const bool has_legacy_app = value_.contains("app");
+  const bool has_apps = value_.contains("apps");
+  if (has_legacy_app && has_apps) {
+    throw std::runtime_error("desired-state v2 cannot mix app and apps");
+  }
+  if (!has_legacy_app && !has_apps) {
     return;
   }
-  RequireObject("app");
-  const auto& app = value_.at("app");
+
+  if (has_legacy_app) {
+    RequireObject("app");
+    ValidateSingleAppSpec(value_.at("app"), "app", false);
+    return;
+  }
+
+  if (!value_.at("apps").is_array() || value_.at("apps").empty()) {
+    throw std::runtime_error("desired-state v2 apps must be a non-empty array");
+  }
+  int primary_count = 0;
+  std::set<std::string> names;
+  for (const auto& app : value_.at("apps")) {
+    if (!app.is_object()) {
+      throw std::runtime_error("desired-state v2 apps entries must be objects");
+    }
+    ValidateSingleAppSpec(app, "apps[]", true);
+    if (app.value("primary", false)) {
+      ++primary_count;
+    }
+    const auto name = app.value("name", std::string{});
+    if (!name.empty() && !names.insert(name).second) {
+      throw std::runtime_error("desired-state v2 apps names must be unique");
+    }
+  }
+  if (primary_count > 1) {
+    throw std::runtime_error("desired-state v2 apps supports at most one primary app");
+  }
+}
+
+void DesiredStateV2Validator::ValidateSingleAppSpec(
+    const nlohmann::json& app,
+    const char* field_name,
+    bool require_name) const {
   if (!FieldEnabledByDefault(app, true)) {
     return;
   }
+  if (require_name) {
+    const auto name = app.value("name", std::string{});
+    if (name.empty()) {
+      throw std::runtime_error(std::string("desired-state v2 ") + field_name + " requires name");
+    }
+  }
   if (app.contains("node") && !app.at("node").is_string()) {
-    throw std::runtime_error("desired-state v2 app.node must be a string");
+    throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".node must be a string");
   }
   if (app.contains("node") && app.at("node").is_string()) {
     ValidateNodeRoleCompatibility(app.at("node").get<std::string>(), "app", "app");
   }
   if (app.value("image", std::string{}).empty()) {
-    throw std::runtime_error("desired-state v2 enabled app requires image");
+    throw std::runtime_error(std::string("desired-state v2 enabled ") + field_name + " requires image");
   }
   ValidateStartBlock(app, "app");
   if (app.contains("volumes")) {
     if (!app.at("volumes").is_array()) {
-      throw std::runtime_error("desired-state v2 app.volumes must be an array");
+      throw std::runtime_error(std::string("desired-state v2 ") + field_name + ".volumes must be an array");
     }
     if (app.at("volumes").size() > 1) {
       throw std::runtime_error("desired-state v2 currently supports at most one app volume");

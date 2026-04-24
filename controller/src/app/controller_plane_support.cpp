@@ -47,6 +47,7 @@ PlaneHttpService CreatePlaneHttpService(
     const PlaneRegistryService& plane_registry_service,
     const ControllerStateService& controller_state_service,
     const PlaneSkillCatalogService& plane_skill_catalog_service,
+    const KnowledgeVaultHttpService& knowledge_vault_http_service,
     const DashboardService& dashboard_service,
     int stale_after_seconds) {
   return PlaneHttpService(PlaneHttpSupport(
@@ -55,7 +56,22 @@ PlaneHttpService CreatePlaneHttpService(
       plane_registry_service,
       controller_state_service,
       dashboard_service,
-      stale_after_seconds),
+      stale_after_seconds,
+      [&knowledge_vault_http_service](
+          const std::string& db_path,
+          const HttpRequest& request,
+          const std::string&) -> std::optional<HttpResponse> {
+        HttpRequest rewritten = request;
+        constexpr const char* kPlanePrefix = "/api/v1/planes/";
+        const std::string remainder = request.path.substr(std::string(kPlanePrefix).size());
+        const auto separator = remainder.find('/');
+        if (separator == std::string::npos) {
+          return std::nullopt;
+        }
+        const std::string suffix = remainder.substr(separator);
+        rewritten.path = "/api/v1" + suffix;
+        return knowledge_vault_http_service.HandleRequest(db_path, rewritten);
+      }),
       plane_skill_catalog_service);
 }
 

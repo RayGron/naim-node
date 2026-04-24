@@ -58,18 +58,30 @@ nlohmann::json PlanePlacementPayloadBuilder::Build() const {
     });
   }
 
-  if (const auto app_node_name = FindFirstInstanceNodeName(naim::InstanceRole::App);
-      app_node_name.has_value()) {
+  const auto app_instances = FindInstances(naim::InstanceRole::App);
+  if (!app_instances.empty()) {
     const bool external_app_host =
         desired_state_.app_host.has_value() && !desired_state_.app_host->address.empty();
-    service_targets.push_back(nlohmann::json{
-        {"service", "app"},
-        {"target_type", external_app_host ? nlohmann::json("external-app-host")
-                                          : nlohmann::json("node")},
-        {"target",
-         external_app_host ? nlohmann::json(desired_state_.app_host->address)
-                           : nlohmann::json(*app_node_name)},
-    });
+    for (const auto* instance : app_instances) {
+      if (instance == nullptr) {
+        continue;
+      }
+      const auto app_name_it = instance->environment.find("NAIM_APP_NAME");
+      const std::string app_name = app_name_it == instance->environment.end()
+                                       ? instance->name
+                                       : app_name_it->second;
+      const auto primary_it = instance->environment.find("NAIM_APP_PRIMARY");
+      const bool primary = primary_it != instance->environment.end() && primary_it->second == "true";
+      service_targets.push_back(nlohmann::json{
+          {"service", primary ? nlohmann::json("app")
+                              : nlohmann::json("app:" + app_name)},
+          {"target_type", primary && external_app_host ? nlohmann::json("external-app-host")
+                                                       : nlohmann::json("node")},
+          {"target",
+           primary && external_app_host ? nlohmann::json(desired_state_.app_host->address)
+                                        : nlohmann::json(instance->node_name)},
+      });
+    }
   }
 
   if (const auto skills_node_name = FindFirstInstanceNodeName(naim::InstanceRole::Skills);
@@ -147,6 +159,17 @@ std::optional<std::string> PlanePlacementPayloadBuilder::FindFirstInstanceNodeNa
     return std::nullopt;
   }
   return instance_it->node_name;
+}
+
+std::vector<const naim::InstanceSpec*> PlanePlacementPayloadBuilder::FindInstances(
+    naim::InstanceRole role) const {
+  std::vector<const naim::InstanceSpec*> instances;
+  for (const auto& instance : desired_state_.instances) {
+    if (instance.role == role) {
+      instances.push_back(&instance);
+    }
+  }
+  return instances;
 }
 
 std::set<std::string> PlanePlacementPayloadBuilder::FindInstanceNodeNames(

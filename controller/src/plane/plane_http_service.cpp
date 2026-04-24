@@ -373,6 +373,47 @@ HttpResponse PlaneHttpService::HandlePlanePath(
     }
   }
 
+  const auto knowledge_vault_pos = remainder.find("/knowledge-vault");
+  if (knowledge_vault_pos != std::string::npos) {
+    const bool knowledge_vault_suffix_valid =
+        knowledge_vault_pos + std::string("/knowledge-vault").size() == remainder.size() ||
+        remainder.at(knowledge_vault_pos + std::string("/knowledge-vault").size()) == '/';
+    if (knowledge_vault_suffix_valid) {
+      const std::string plane_name = remainder.substr(0, knowledge_vault_pos);
+      try {
+        naim::ControllerStore store(db_path);
+        store.Initialize();
+        const auto desired_state = store.LoadDesiredState(plane_name);
+        if (!desired_state.has_value()) {
+          return support_.build_json_response(
+              404,
+              json{{"status", "not_found"},
+                   {"message", "plane '" + plane_name + "' not found"},
+                   {"path", request.path}},
+              {});
+        }
+        if (const auto proxied = support_.handle_plane_knowledge_vault_request(
+                db_path,
+                request,
+                plane_name);
+            proxied.has_value()) {
+          return *proxied;
+        }
+        return support_.build_json_response(
+            404,
+            json{{"status", "not_found"},
+                 {"message", "plane knowledge vault route not found"},
+                 {"path", request.path}},
+            {});
+      } catch (const std::exception& error) {
+        return support_.build_json_response(
+            500,
+            json{{"status", "internal_error"}, {"message", error.what()}, {"path", request.path}},
+            {});
+      }
+    }
+  }
+
   if (request.method == "DELETE" && remainder.find('/') == std::string::npos) {
     try {
       return support_.build_json_response(

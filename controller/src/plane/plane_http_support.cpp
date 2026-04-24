@@ -8,13 +8,15 @@ PlaneHttpSupport::PlaneHttpSupport(
     const naim::controller::PlaneRegistryService& plane_registry_service,
     const naim::controller::ControllerStateService& controller_state_service,
     const naim::controller::DashboardService& dashboard_service,
-    int stale_after_seconds)
+    int stale_after_seconds,
+    PlaneKnowledgeVaultRequestFn plane_knowledge_vault_request)
     : request_support_(request_support),
       plane_mutation_service_(plane_mutation_service),
       plane_registry_service_(plane_registry_service),
       controller_state_service_(controller_state_service),
       dashboard_service_(dashboard_service),
-      stale_after_seconds_(stale_after_seconds) {}
+      stale_after_seconds_(stale_after_seconds),
+      plane_knowledge_vault_request_(std::move(plane_knowledge_vault_request)) {}
 
 HttpResponse PlaneHttpSupport::build_json_response(
     int status_code,
@@ -100,4 +102,14 @@ const naim::controller::ControllerStateService* PlaneHttpSupport::controller_sta
 
 const naim::controller::DashboardService* PlaneHttpSupport::dashboard_service() const {
   return &dashboard_service_;
+}
+
+std::optional<HttpResponse> PlaneHttpSupport::handle_plane_knowledge_vault_request(
+    const std::string& db_path,
+    const HttpRequest& request,
+    const std::string& plane_name) const {
+  if (!plane_knowledge_vault_request_) {
+    return std::nullopt;
+  }
+  return plane_knowledge_vault_request_(db_path, request, plane_name);
 }

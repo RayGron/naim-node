@@ -63,12 +63,14 @@ PlaneService ControllerPlaneComponentFactory::CreatePlaneService(
 }
 
 PlaneHttpService ControllerPlaneComponentFactory::CreatePlaneHttpService() const {
+  static const KnowledgeVaultHttpService knowledge_vault_http_service;
   return plane_support::CreatePlaneHttpService(
       RequestSupport(),
       PlaneMutationServiceInstance(),
       PlaneRegistryServiceInstance(),
       ControllerStateServiceInstance(),
       PlaneSkillCatalogServiceInstance(),
+      knowledge_vault_http_service,
       DashboardServiceInstance(),
       Defaults().DefaultStaleAfterSeconds());
 }
