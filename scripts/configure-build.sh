@@ -9,14 +9,24 @@ naim_resolve_build_context "${script_dir}" "$@"
 if [[ "${TARGET_OS}" == "linux" && "${REPO_DIR}" == /mnt/* ]] \
   && grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null \
   && [[ "${NAIM_ALLOW_WSL_MOUNT_BUILD:-}" != "1" ]]; then
-  cat >&2 <<EOF
+  if [[ "${NAIM_STRICT_WSL_MOUNT_BUILD_GUARD:-}" == "1" ]]; then
+    cat >&2 <<EOF
 error: refusing to configure from a Windows-mounted WSL path: ${REPO_DIR}
 
 The llama.cpp/CUDA configure step can hang in uninterruptible p9_client_rpc I/O
 when the source tree is under /mnt/*. Clone or mirror the repository into the
 WSL Linux filesystem, or set NAIM_ALLOW_WSL_MOUNT_BUILD=1 to bypass this guard.
 EOF
-  exit 2
+    exit 2
+  fi
+  cat >&2 <<EOF
+warning: configuring from a Windows-mounted WSL path: ${REPO_DIR}
+
+The llama.cpp/CUDA configure step can be slow or hang in p9_client_rpc I/O when
+the source tree is under /mnt/*. For release builds or repeated local deploys,
+prefer a checkout inside the WSL Linux filesystem. Set
+NAIM_STRICT_WSL_MOUNT_BUILD_GUARD=1 to make this warning fatal.
+EOF
 fi
 
 cuda_root=""

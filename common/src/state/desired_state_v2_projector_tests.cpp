@@ -750,12 +750,11 @@ int main() {
                  {"primary", true},
                  {"enabled", true},
                  {"image", "example/app:dev"},
-                 {"start", {{"type", "script"}, {"value", "node server.js"}}}},
+                 {"start", {{"type", "script"}, {"script_ref", "node server.js"}}}},
                 {{"name", "market-ingest"},
                  {"enabled", true},
                  {"image", "example/app:dev"},
-                 {"start", {{"type", "script"}, {"value", "node market-collector.js"}}},
-                 {"node", "worker-node-a"}}})},
+                 {"start", {{"type", "script"}, {"script_ref", "node market-collector.js"}}}}})},
       };
       const auto rendered = naim::DesiredStateV2Renderer::Render(multi_app_plane);
       const auto projected = naim::DesiredStateV2Projector::Project(rendered);

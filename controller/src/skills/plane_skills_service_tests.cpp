@@ -1615,6 +1615,7 @@ int main() {
                  "Debug bugs by reproducing them, isolating the invariant, and validating the root cause."},
                 {"content",
                  "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path."},
+                {"match_terms", json::array({"debug", "regression", "root cause"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
@@ -1651,6 +1652,7 @@ int main() {
                 {"name", "safe-change"},
                 {"description", "Limit changes to the smallest safe patch."},
                 {"content", "Keep the patch minimal and avoid unrelated edits."},
+                {"match_terms", json::array({"safe patch", "minimal change"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
@@ -1682,6 +1684,7 @@ int main() {
                  "Build a fast repository map before non-trivial changes."},
                 {"content",
                  "Map the repository structure, entry points, and major dependencies before editing."},
+                {"match_terms", json::array({"repository map", "карта репозитория"})},
                 {"enabled", true}},
            json{{"id", "code-agent-test-first-fix"},
                 {"name", "test-first-fix"},
@@ -1689,6 +1692,7 @@ int main() {
                  "Explain a test-first bug-fix approach without starting execution unless the user explicitly asks for it."},
                 {"content",
                  "First define the failing regression test, then make the smallest safe patch."},
+                {"match_terms", json::array({"test first", "failing regression test"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -1723,6 +1727,7 @@ int main() {
                  "Explain the real deployment path and required live verification steps before executing them."},
                 {"content",
                  "Describe rollout order, rebuild requirements, restarts, pull steps, and live verification."},
+                {"match_terms", json::array({"deployment path", "live verification steps"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -1755,6 +1760,8 @@ int main() {
                  "Protect desired-state, projectors, validators, renderers, and store changes as one contract."},
                 {"content",
                  "Review desired-state schema changes together with the projector, validator, renderer, and store."},
+                {"match_terms",
+                 json::array({"desired-state schema", "projector validator renderer store"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -1808,6 +1815,7 @@ int main() {
                  "Debug bugs by reproducing them, isolating the invariant, and validating the root cause."},
                 {"content",
                  "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path."},
+                {"match_terms", json::array({"debug", "regression", "root cause"})},
                 {"enabled", false}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
@@ -1838,6 +1846,7 @@ int main() {
                  "Debug bugs by reproducing them, isolating the invariant, and validating the root cause."},
                 {"content",
                  "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path."},
+                {"match_terms", json::array({"debug", "regression", "root cause"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances = BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
@@ -1872,6 +1881,7 @@ int main() {
                  "Use for LocalTrade sign-in state, Access cookie reuse, GET /auth/me, and session validation."},
                 {"content",
                  "Check whether the active LocalTrade session is valid and whether the Access cookie is required."},
+                {"match_terms", json::array({"авторизация", "сессия", "access cookie"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-user-streams"},
                 {"name", "localtrade-user-streams"},
@@ -1879,6 +1889,7 @@ int main() {
                  "Use for LocalTrade Socket.IO rooms such as balances and user_orders."},
                 {"content",
                  "Explain protected rooms, public rooms, and Socket.IO room names."},
+                {"match_terms", json::array({"socket.io rooms", "user_orders", "balances"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-account-balances"},
                 {"name", "localtrade-account-balances"},
@@ -1886,6 +1897,7 @@ int main() {
                  "Use for LocalTrade balances, available balances, and totals."},
                 {"content",
                  "Explain balance endpoints and when login is required."},
+                {"match_terms", json::array({"balances", "балансы", "available balances"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -2017,6 +2029,8 @@ int main() {
                  "Use when the user wants to place, inspect, or cancel a LocalTrade spot order."},
                 {"content",
                  "Clarify limit order parameters, pairId, side, amount, rate, and require confirmation."},
+                {"match_terms",
+                 json::array({"лимитный ордер", "покупку btc", "подтверждение"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-market-data"},
                 {"name", "localtrade-market-data"},
@@ -2024,6 +2038,7 @@ int main() {
                  "Use for public pairs, charts, trades, and order book."},
                 {"content",
                  "Explain pairs, chart endpoints, and public market-data rooms."},
+                {"match_terms", json::array({"pairs", "charts", "order book"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -2055,6 +2070,7 @@ int main() {
                  "Use for public LocalTrade pairs, charts, trades, order book, and pairs state without account data."},
                 {"content",
                  "Prefer this skill for public pairs, public order book, public trades, and public market streams."},
+                {"match_terms", json::array({"публичные пары", "order book", "public trades"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-user-streams"},
                 {"name", "localtrade-user-streams"},
@@ -2062,6 +2078,7 @@ int main() {
                  "Use for authenticated LocalTrade Socket.IO user rooms such as balances, user_orders, and user_trades."},
                 {"content",
                  "Protected rooms require the Access cookie and are for account-specific streams."},
+                {"match_terms", json::array({"authenticated rooms", "user_orders", "balances"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-spot-order-clarification"},
                 {"name", "localtrade-spot-order-clarification"},
@@ -2069,6 +2086,7 @@ int main() {
                  "Use when the user wants to create, inspect, or cancel a LocalTrade spot order."},
                 {"content",
                  "Collect limit-order parameters and require explicit confirmation."},
+                {"match_terms", json::array({"spot order", "limit order", "confirmation"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -2100,6 +2118,7 @@ int main() {
                  "Use for LocalTrade balances, available balances, and totals."},
                 {"content",
                  "Explain balances endpoints and whether login is required."},
+                {"match_terms", json::array({"доступные балансы", "balances", "available balances"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-auth-session"},
                 {"name", "localtrade-auth-session"},
@@ -2107,6 +2126,7 @@ int main() {
                  "Use for LocalTrade sign-in state, Access cookie reuse, GET /auth/me, and session validation."},
                 {"content",
                  "Check whether the active LocalTrade session is valid and whether the Access cookie is required."},
+                {"match_terms", json::array({"login", "session", "access cookie"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -2138,6 +2158,7 @@ int main() {
                  "Use to discover, compare, and filter LocalTrade copy-trading traders by ROI, drawdown, sharpe ratio, subscribers, and PnL."},
                 {"content",
                  "Discovery is read-only and should not be confused with follow or subscribe actions."},
+                {"match_terms", json::array({"найди", "сравни", "копитрейдинг", "roi", "drawdown"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-copy-trading-actions"},
                 {"name", "localtrade-copy-trading-actions"},
@@ -2145,6 +2166,7 @@ int main() {
                  "Use to follow, unfollow, or subscribe to a LocalTrade trader and require confirmation before any write action."},
                 {"content",
                  "These are write actions and need explicit confirmation."},
+                {"match_terms", json::array({"follow", "subscribe", "подпиши"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -2176,6 +2198,7 @@ int main() {
                  "Use to follow, unfollow, or subscribe to a LocalTrade trader and require confirmation before any write action."},
                 {"content",
                  "These are write actions and need explicit confirmation."},
+                {"match_terms", json::array({"подпиши", "subscribe", "follow"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-copy-trading-discovery"},
                 {"name", "localtrade-copy-trading-discovery"},
@@ -2183,6 +2206,7 @@ int main() {
                  "Use to discover, compare, and filter LocalTrade copy-trading traders by ROI, drawdown, sharpe ratio, subscribers, and PnL."},
                 {"content",
                  "Discovery is read-only and should not be confused with follow or subscribe actions."},
+                {"match_terms", json::array({"discover", "compare", "roi", "drawdown"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -2214,6 +2238,7 @@ int main() {
                  "Use for LocalTrade sign-in state, Access cookie reuse, GET /auth/me, and logout confirmation."},
                 {"content",
                  "Check the current session, explain logout, and require confirmation before state-changing session actions."},
+                {"match_terms", json::array({"выйди", "сессии", "logout"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-copy-trading-actions"},
                 {"name", "localtrade-copy-trading-actions"},
@@ -2221,6 +2246,7 @@ int main() {
                  "Use to follow, unfollow, or subscribe to a LocalTrade trader and require confirmation before any write action."},
                 {"content",
                  "These are write actions and need explicit confirmation."},
+                {"match_terms", json::array({"follow", "subscribe", "подпиши"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -2252,6 +2278,8 @@ int main() {
                  "Use for protected LocalTrade Socket.IO user rooms such as balances, user_orders, user_trades, and authenticated private channels."},
                 {"content",
                  "Explain protected user rooms and the Access cookie requirement."},
+                {"match_terms",
+                 json::array({"пользовательские websocket-каналы", "приватных обновлений", "балансов", "ордеров"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-account-balances"},
                 {"name", "localtrade-account-balances"},
@@ -2259,6 +2287,7 @@ int main() {
                  "Use for LocalTrade balances, available balances, and totals."},
                 {"content",
                  "Explain balances endpoints and whether login is required."},
+                {"match_terms", json::array({"balances", "балансы", "available balances"})},
                 {"enabled", true}},
            json{{"id", "lt-cypher-localtrade-market-data"},
                 {"name", "localtrade-market-data"},
@@ -2266,6 +2295,7 @@ int main() {
                  "Use for public LocalTrade pairs, charts, trades, order book, and pairs state without account data."},
                 {"content",
                  "Prefer this skill for public market feeds."},
+                {"match_terms", json::array({"public pairs", "order book", "market feeds"})},
                 {"enabled", true}}}));
       auto desired_state = BuildDesiredState("catalog-plane", {});
       desired_state.instances =
@@ -2402,6 +2432,7 @@ int main() {
           "Debug bugs by reproducing them, isolating the invariant, and validating the root cause.";
       record.content =
           "When handling a bug or regression, reproduce the issue, validate the root cause, and confirm the path.";
+      record.match_terms = {"debug", "regression", "root cause"};
       store.UpsertSkillsFactorySkill(record);
 
       naim::controller::PlaneInteractionResolution resolution;
@@ -2418,12 +2449,10 @@ int main() {
                               {"content",
                                "Please debug this regression and find the root cause."}}})}});
       Expect(
-          selection.mode == "contextual" &&
-              selection.candidate_count == 1 &&
-              selection.selected_skill_ids.size() == 1 &&
-              selection.selected_skill_ids.front() == "code-agent-root-cause-debug",
-          "resolver should use controller catalog entries when runtime skillsd is remote or unreachable");
-      std::cout << "ok: contextual-resolver-uses-controller-catalog" << '\n';
+          selection.mode == "none" && selection.candidate_count == 0 &&
+              selection.selected_skill_ids.empty(),
+          "resolver should not use controller catalog entries for contextual activation");
+      std::cout << "ok: contextual-resolver-requires-plane-local-replica" << '\n';
     }
 
     {
@@ -2436,7 +2465,21 @@ int main() {
       knowledge.enabled = true;
       desired_state.knowledge = knowledge;
       naim::controller::EnsureKnowledgeVaultCommonSkills(store, &desired_state);
-      store.ReplaceDesiredState(desired_state, 1);
+      json common_skills = json::array();
+      for (const auto& definition :
+           naim::controller::KnowledgeVaultCommonSkillDefinitions()) {
+        common_skills.push_back(json{
+            {"id", definition.id},
+            {"name", definition.name},
+            {"description", definition.description},
+            {"content", definition.content},
+            {"match_terms", definition.match_terms},
+            {"enabled", true},
+        });
+      }
+      SkillRuntimeTestServer runtime(common_skills);
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", runtime.port()).instances;
 
       naim::controller::PlaneInteractionResolution resolution;
       resolution.db_path = db_path;
@@ -2607,22 +2650,70 @@ int main() {
           skills_service.ResolveInteractionSkills(resolution, &request_context);
       Expect(
           !error.has_value(),
-          "interaction skills should resolve from controller catalog when runtime endpoint is unreachable");
+          "automatic contextual skills should not fail when the plane-local replica is unreachable");
+      const auto applied = request_context.payload.at(
+          naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey);
+      Expect(
+          applied.is_array() && applied.empty(),
+          "automatic contextual skills should not fall back to the controller catalog");
+      Expect(
+          request_context.payload.at(
+              naim::controller::PlaneSkillsService::kSkillResolutionModePayloadKey)
+              .get<std::string>() == "none",
+          "automatic contextual skills should report none when no plane-owned replica candidate is available");
+      std::cout << "ok: interaction-auto-skills-do-not-fallback-to-controller-catalog" << '\n';
+    }
+
+    {
+      const std::string db_path = MakeTempDbPath();
+      fs::remove(db_path);
+      naim::ControllerStore store(db_path);
+      store.Initialize();
+      auto desired_state = BuildDesiredState(
+          "interaction-plane", {"lt-jex-market-asset-report"});
+      desired_state.instances =
+          BuildDesiredStateWithSkillsPort("127.0.0.1", 9).instances;
+      naim::SkillsFactorySkillRecord record;
+      record.id = "lt-jex-market-asset-report";
+      record.name = "asset-market-report";
+      record.description = "Use for current state reports of one tracked asset.";
+      record.content = "Use factual market data and separate venue-specific data.";
+      record.match_terms = {"ситуация по bnb", "текущий срез", "current asset report"};
+      store.UpsertSkillsFactorySkill(record);
+
+      naim::controller::PlaneSkillsService skills_service;
+      naim::controller::InteractionRequestContext request_context;
+      request_context.payload = json{
+          {"skill_ids", json::array({"lt-jex-market-asset-report"})},
+          {"messages",
+           json::array(
+               {json{{"role", "user"},
+                     {"content", "Какая сейчас ситуация по BNB? Текущий срез."}}})},
+      };
+      naim::controller::PlaneInteractionResolution resolution;
+      resolution.db_path = db_path;
+      resolution.desired_state = desired_state;
+
+      const auto error =
+          skills_service.ResolveInteractionSkills(resolution, &request_context);
+      Expect(
+          !error.has_value(),
+          "explicit skills should still resolve from controller catalog when runtime endpoint is unreachable");
       const auto applied = request_context.payload.at(
           naim::controller::PlaneSkillsService::kAppliedSkillsPayloadKey);
       Expect(
           applied.is_array() && applied.size() == 1 &&
               applied.front().at("id").get<std::string>() ==
                   "lt-jex-market-asset-report",
-          "controller catalog fallback should apply selected market skill metadata");
+          "explicit controller catalog fallback should apply requested skill metadata");
       Expect(
           ContainsLiteral(
               request_context.payload.at(
                   naim::controller::PlaneSkillsService::kSystemInstructionPayloadKey)
                   .get<std::string>(),
               "Use factual market data"),
-          "controller catalog fallback should inject skill instructions");
-      std::cout << "ok: interaction-skills-fallback-to-controller-catalog" << '\n';
+          "explicit controller catalog fallback should inject skill instructions");
+      std::cout << "ok: interaction-explicit-skills-fallback-to-controller-catalog" << '\n';
     }
 
     {

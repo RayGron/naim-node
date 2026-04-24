@@ -174,11 +174,13 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
   }
 
   lifecycle_support_->PrepareDesiredState(store, &*desired_state);
-  if (plane->state == "running") {
+  const bool stale_running_plane =
+      plane->state == "running" && plane->applied_generation < plane->generation;
+  if (plane->state == "running" && !stale_running_plane) {
     std::cout << "plane already running: " << plane_name << "\n";
     return 0;
   }
-  if (!store.UpdatePlaneState(plane_name, "running")) {
+  if (plane->state != "running" && !store.UpdatePlaneState(plane_name, "running")) {
     throw std::runtime_error("failed to update plane state for '" + plane_name + "'");
   }
 
@@ -220,7 +222,8 @@ int PlaneService::StartPlane(const std::string& plane_name) const {
           {"desired_generation", plane->generation},
       },
       plane_name);
-  std::cout << "plane started: " << plane_name
+  std::cout << (stale_running_plane ? "plane rollout queued: " : "plane started: ")
+            << plane_name
             << " desired_generation=" << plane->generation << "\n";
   return 0;
 }
