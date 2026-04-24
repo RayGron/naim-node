@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--skip-prereqs] [--skip-image-build]
+  install-single-node.sh [--build-type Debug|Release] [--listen-port <port>] [--node <name>] [--with-web-ui] [--no-cuda] [--skip-prereqs] [--skip-image-build]
 
 Builds naim-node on the current Linux host, installs controller+local-hostd as systemd services,
 and starts them.
@@ -12,6 +12,7 @@ and starts them.
 By default the installer builds CUDA runtime artifacts for the local GPU architecture only.
 Set NAIM_CUDA_NATIVE=OFF and NAIM_CUDA_ARCHITECTURES=<list> before running the installer if you
 need portable runtime images for multiple GPU generations.
+Pass --no-cuda to build CPU-only runtime binaries and skip CUDA toolkit checks.
 EOF
 }
 
@@ -24,6 +25,24 @@ node_name="local-hostd"
 with_web_ui="no"
 skip_prereqs="no"
 skip_image_build="no"
+enable_cuda="${NAIM_ENABLE_CUDA:-ON}"
+
+normalize_on_off() {
+  case "${1:-}" in
+    1|ON|On|on|TRUE|True|true|YES|Yes|yes)
+      printf 'ON\n'
+      ;;
+    0|OFF|Off|off|FALSE|False|false|NO|No|no)
+      printf 'OFF\n'
+      ;;
+    *)
+      echo "error: expected ON/OFF boolean value, got '${1:-}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+enable_cuda="$(normalize_on_off "${enable_cuda}")"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,6 +60,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-web-ui)
       with_web_ui="yes"
+      shift
+      ;;
+    --no-cuda|--cpu)
+      enable_cuda="OFF"
+      shift
+      ;;
+    --with-cuda|--cuda)
+      enable_cuda="ON"
       shift
       ;;
     --skip-prereqs)
@@ -91,6 +118,10 @@ run_as_invoking_user() {
       DOCKER_HOST="${DOCKER_HOST:-}" \
       VCPKG_ROOT="${VCPKG_ROOT:-}" \
       XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+      NAIM_ENABLE_CUDA="${NAIM_ENABLE_CUDA:-}" \
+      NAIM_CUDA_NATIVE="${NAIM_CUDA_NATIVE:-}" \
+      NAIM_CUDA_ARCHITECTURES="${NAIM_CUDA_ARCHITECTURES:-}" \
+      NAIM_CUDA_NVCC_JOBS="${NAIM_CUDA_NVCC_JOBS:-}" \
       "$@"
     return
   fi
@@ -267,9 +298,15 @@ storage_root="$(printf '%s\n' "${config_summary}" | sed -n '1p')"
 model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
 install_prereqs_if_needed
-install_cuda_toolkit_if_needed
+export NAIM_ENABLE_CUDA="${enable_cuda}"
 
-if [[ -z "${NAIM_CUDA_NATIVE:-}" && -z "${NAIM_CUDA_ARCHITECTURES:-}" ]]; then
+if [[ "${NAIM_ENABLE_CUDA}" == "ON" ]]; then
+  install_cuda_toolkit_if_needed
+else
+  echo "[install-single-node] skipping CUDA toolkit install because --no-cuda was requested"
+fi
+
+if [[ "${NAIM_ENABLE_CUDA}" == "ON" && -z "${NAIM_CUDA_NATIVE:-}" && -z "${NAIM_CUDA_ARCHITECTURES:-}" ]]; then
   export NAIM_CUDA_NATIVE=ON
 fi
 

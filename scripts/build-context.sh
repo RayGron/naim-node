@@ -21,6 +21,21 @@ naim_validate_build_type() {
   exit 1
 }
 
+naim_normalize_on_off() {
+  case "${1:-}" in
+    1|ON|On|on|TRUE|True|true|YES|Yes|yes)
+      printf 'ON\n'
+      ;;
+    0|OFF|Off|off|FALSE|False|false|NO|No|no)
+      printf 'OFF\n'
+      ;;
+    *)
+      echo "error: expected ON/OFF boolean value, got '${1:-}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
 naim_detect_host_target() {
   local script_dir="${1}"
   "${script_dir}/detect-host-target.sh"
@@ -173,7 +188,45 @@ naim_resolve_build_context() {
   shift
 
   local build_type="${NAIM_BUILD_TYPE:-Debug}"
+  local enable_cuda
   local -a target_args=()
+  local -a positional_args=()
+
+  enable_cuda="$(naim_normalize_on_off "${NAIM_ENABLE_CUDA:-ON}")"
+
+  while [[ $# -gt 0 ]]; do
+    case "${1}" in
+      --no-cuda|--cpu)
+        enable_cuda="OFF"
+        shift
+        ;;
+      --with-cuda|--cuda)
+        enable_cuda="ON"
+        shift
+        ;;
+      --)
+        shift
+        positional_args+=("$@")
+        break
+        ;;
+      -h|--help)
+        echo "usage: $0 [--no-cuda|--with-cuda] [<build-type>] | [--no-cuda|--with-cuda] [<os> <arch> [<build-type>]]" >&2
+        exit 0
+        ;;
+      -*)
+        echo "error: unknown argument '${1}'" >&2
+        echo "usage: $0 [--no-cuda|--with-cuda] [<build-type>] | [--no-cuda|--with-cuda] [<os> <arch> [<build-type>]]" >&2
+        exit 1
+        ;;
+      *)
+        positional_args+=("${1}")
+        shift
+        ;;
+    esac
+  done
+
+  set -- "${positional_args[@]}"
+  export NAIM_ENABLE_CUDA="${enable_cuda}"
 
   case $# in
     0)
@@ -182,7 +235,7 @@ naim_resolve_build_context() {
       if naim_is_build_type "${1}"; then
         build_type="${1}"
       else
-        echo "usage: $0 [<build-type>] | [<os> <arch> [<build-type>]]" >&2
+        echo "usage: $0 [--no-cuda|--with-cuda] [<build-type>] | [--no-cuda|--with-cuda] [<os> <arch> [<build-type>]]" >&2
         exit 1
       fi
       ;;
@@ -194,7 +247,7 @@ naim_resolve_build_context() {
       build_type="${3}"
       ;;
     *)
-      echo "usage: $0 [<build-type>] | [<os> <arch> [<build-type>]]" >&2
+      echo "usage: $0 [--no-cuda|--with-cuda] [<build-type>] | [--no-cuda|--with-cuda] [<os> <arch> [<build-type>]]" >&2
       exit 1
       ;;
   esac
