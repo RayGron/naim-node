@@ -229,6 +229,7 @@ endif()
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(RocksDB CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
@@ -514,6 +515,20 @@ target_link_libraries(
 naim_enable_strict_warnings(naim-plane-registry-tests)
 
 add_executable(
+  naim-webauthn-service-tests
+  controller/src/auth/webauthn_service.cpp
+  controller/src/auth/webauthn_service_tests.cpp
+)
+target_include_directories(
+  naim-webauthn-service-tests PRIVATE controller/include)
+target_link_libraries(
+  naim-webauthn-service-tests
+  PRIVATE
+    nlohmann_json::nlohmann_json
+    OpenSSL::Crypto)
+naim_enable_strict_warnings(naim-webauthn-service-tests)
+
+add_executable(
   naim-plane-observation-matcher-tests
   controller/src/observation/plane_observation_matcher.cpp
   controller/src/observation/plane_observation_matcher_tests.cpp
@@ -542,6 +557,7 @@ add_executable(
   controller/src/auth/auth_http_support.cpp
   controller/src/auth/auth_payload_service.cpp
   controller/src/auth/auth_support_service.cpp
+  controller/src/auth/webauthn_service.cpp
   controller/src/app/controller_composition_support.cpp
   controller/src/app/controller_request_context.cpp
   controller/src/app/controller_time_support.cpp
@@ -551,7 +567,7 @@ add_executable(
 target_include_directories(
   naim-auth-http-tests PRIVATE common/include controller/include)
 target_link_libraries(
-  naim-auth-http-tests PRIVATE naim-common Threads::Threads)
+  naim-auth-http-tests PRIVATE naim-common OpenSSL::Crypto Threads::Threads)
 naim_enable_strict_warnings(naim-auth-http-tests)
 
 add_executable(
@@ -767,6 +783,7 @@ add_executable(
   controller/src/app/controller_request_context.cpp
   controller/src/app/controller_time_support.cpp
   controller/src/auth/auth_support_service.cpp
+  controller/src/auth/webauthn_service.cpp
   controller/src/browsing/plane_browsing_service.cpp
   controller/src/http/controller_http_transport.cpp
   controller/src/infra/controller_network_manager.cpp
@@ -799,7 +816,10 @@ add_executable(
 target_include_directories(
   naim-interaction-stream-http-request-preparation-service-tests PRIVATE common/include controller/include)
 target_link_libraries(
-  naim-interaction-stream-http-request-preparation-service-tests PRIVATE naim-common)
+  naim-interaction-stream-http-request-preparation-service-tests
+  PRIVATE
+    naim-common
+    OpenSSL::Crypto)
 if(TARGET zstd::libzstd_shared)
   target_link_libraries(
     naim-interaction-stream-http-request-preparation-service-tests PRIVATE zstd::libzstd_shared)
@@ -1207,6 +1227,7 @@ add_executable(
   controller/src/auth/auth_http_support.cpp
   controller/src/auth/auth_payload_service.cpp
   controller/src/auth/auth_support_service.cpp
+  controller/src/auth/webauthn_service.cpp
   controller/src/host/host_assignment_reconciliation_service.cpp
   controller/src/observation/plane_observation_matcher.cpp
   controller/src/scheduler/assignment_orchestration_service.cpp
@@ -1332,7 +1353,7 @@ add_executable(
   controller/src/main.cpp
 )
 target_include_directories(naim-controller PRIVATE controller/include)
-target_link_libraries(naim-controller PRIVATE naim-common)
+target_link_libraries(naim-controller PRIVATE naim-common OpenSSL::Crypto)
 if(TARGET zstd::libzstd_shared)
   target_link_libraries(naim-controller PRIVATE zstd::libzstd_shared)
 elseif(TARGET zstd::libzstd_static)
