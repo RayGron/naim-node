@@ -70,6 +70,8 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
   }
   AppendRoutes(routes, {
       "/api/v1/planes/<plane>/skills",
+      "/api/v1/planes/<plane>/knowledge-vault/blocks",
+      "/api/v1/planes/<plane>/knowledge-vault/source-ingest",
       "/api/v1/skills-factory",
       "/api/v1/skills-factory/<skill>",
   });

@@ -25,6 +25,7 @@ PlaneHttpService CreatePlaneHttpService(
     const PlaneRegistryService& plane_registry_service,
     const ControllerStateService& controller_state_service,
     const PlaneSkillCatalogService& plane_skill_catalog_service,
+    const KnowledgeVaultHttpService& knowledge_vault_http_service,
     const DashboardService& dashboard_service,
     int stale_after_seconds);
 

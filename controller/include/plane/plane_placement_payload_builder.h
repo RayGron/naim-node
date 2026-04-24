@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <set>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -18,6 +19,7 @@ class PlanePlacementPayloadBuilder final {
  private:
   std::optional<std::string> ResolveExternalAppHostAuthMode() const;
   std::optional<std::string> FindFirstInstanceNodeName(naim::InstanceRole role) const;
+  std::vector<const naim::InstanceSpec*> FindInstances(naim::InstanceRole role) const;
   std::set<std::string> FindInstanceNodeNames(naim::InstanceRole role) const;
 
   const naim::DesiredState& desired_state_;

@@ -25,6 +25,10 @@ class DesiredStateV2Validator final {
   void ValidateWorker() const;
   void ValidateWorkerResources() const;
   void ValidateApp() const;
+  void ValidateSingleAppSpec(
+      const nlohmann::json& app,
+      const char* field_name,
+      bool require_name) const;
   void ValidateSkills() const;
   void ValidateBrowsing() const;
   void ValidateHooks() const;

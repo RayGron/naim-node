@@ -39,6 +39,7 @@ class DesiredStateV2Projector final {
   int InferReplicaCount() const;
 
   const InstanceSpec* FindInstance(InstanceRole role) const;
+  std::vector<const InstanceSpec*> FindInstances(InstanceRole role) const;
   std::vector<const InstanceSpec*> FindWorkerInstances() const;
   const DiskSpec* FindDiskByName(const std::string& name) const;
   const DiskSpec* FindSharedDisk() const;
@@ -52,6 +53,7 @@ class DesiredStateV2Projector final {
   nlohmann::json value_;
   const InstanceSpec* infer_instance_ = nullptr;
   const InstanceSpec* app_instance_ = nullptr;
+  std::vector<const InstanceSpec*> app_instances_;
   const InstanceSpec* skills_instance_ = nullptr;
   const InstanceSpec* browsing_instance_ = nullptr;
   std::vector<const InstanceSpec*> worker_instances_;

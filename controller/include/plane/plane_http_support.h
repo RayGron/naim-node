@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -17,13 +18,19 @@
 
 class PlaneHttpSupport final {
  public:
+  using PlaneKnowledgeVaultRequestFn = std::function<std::optional<HttpResponse>(
+      const std::string& db_path,
+      const HttpRequest& request,
+      const std::string& plane_name)>;
+
   PlaneHttpSupport(
       const naim::controller::ControllerRequestSupport& request_support,
       const naim::controller::PlaneMutationService& plane_mutation_service,
       const naim::controller::PlaneRegistryService& plane_registry_service,
       const naim::controller::ControllerStateService& controller_state_service,
       const naim::controller::DashboardService& dashboard_service,
-      int stale_after_seconds);
+      int stale_after_seconds,
+      PlaneKnowledgeVaultRequestFn plane_knowledge_vault_request = {});
 
   HttpResponse build_json_response(
       int status_code,
@@ -60,6 +67,10 @@ class PlaneHttpSupport final {
   const naim::controller::PlaneRegistryService* plane_registry_service() const;
   const naim::controller::ControllerStateService* controller_state_service() const;
   const naim::controller::DashboardService* dashboard_service() const;
+  std::optional<HttpResponse> handle_plane_knowledge_vault_request(
+      const std::string& db_path,
+      const HttpRequest& request,
+      const std::string& plane_name) const;
 
  private:
   const naim::controller::ControllerRequestSupport& request_support_;
@@ -68,4 +79,5 @@ class PlaneHttpSupport final {
   const naim::controller::ControllerStateService& controller_state_service_;
   const naim::controller::DashboardService& dashboard_service_;
   int stale_after_seconds_;
+  PlaneKnowledgeVaultRequestFn plane_knowledge_vault_request_;
 };

@@ -21,6 +21,22 @@
 #include "browsing/browsing_server.h"
 #undef private
 
+#include "infra/controller_request_support.h"
+#include "knowledge/knowledge_vault_http_service.h"
+#include "naim/state/desired_state_v2_renderer.h"
+#include "naim/state/desired_state_v2_validator.h"
+#include "naim/state/sqlite_store.h"
+#include "plane/controller_state_service.h"
+#include "plane/dashboard_service.h"
+#include "plane/plane_http_service.h"
+#include "plane/plane_http_support.h"
+#include "plane/plane_lifecycle_support.h"
+#include "plane/plane_mutation_service.h"
+#include "plane/plane_registry_query_support.h"
+#include "plane/plane_registry_service.h"
+#include "skills/plane_skill_catalog_service.h"
+#include "skills/plane_skill_runtime_sync_service.h"
+
 namespace {
 
 void Expect(bool condition, const std::string& message) {
@@ -62,6 +78,103 @@ std::vector<nlohmann::json> ReadAuditLog(const std::filesystem::path& audit_path
     entries.push_back(nlohmann::json::parse(line));
   }
   return entries;
+}
+
+std::string MakeTempDbPath(const std::string& name) {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("naim-plane-http-tests-" + name + "-" + std::to_string(getpid()));
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+  std::filesystem::create_directories(root);
+  return (root / "controller.sqlite").string();
+}
+
+naim::DesiredState BuildPlaneDesiredState(const std::string& plane_name) {
+  const nlohmann::json value{
+      {"version", 2},
+      {"plane_name", plane_name},
+      {"plane_mode", "llm"},
+      {"model",
+       {
+           {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+           {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+           {"served_model_name", plane_name + "-model"},
+       }},
+      {"runtime",
+       {
+           {"engine", "llama.cpp"},
+           {"distributed_backend", "llama_rpc"},
+           {"workers", 1},
+       }},
+      {"infer", {{"replicas", 1}}},
+      {"skills", {{"enabled", true}, {"factory_skill_ids", nlohmann::json::array()}}},
+      {"app", {{"enabled", false}}},
+  };
+  naim::DesiredStateV2Validator::ValidateOrThrow(value);
+  return naim::DesiredStateV2Renderer::Render(value);
+}
+
+naim::controller::PlaneMutationService MakePlaneMutationService() {
+  naim::controller::PlaneMutationService::Deps deps;
+  deps.apply_desired_state =
+      [](const std::string& db_path,
+         const naim::DesiredState& desired_state,
+         const std::string&,
+         const std::string&) {
+        naim::ControllerStore store(db_path);
+        store.Initialize();
+        store.ReplaceDesiredState(desired_state);
+        return 0;
+      };
+  deps.make_plane_service = [](const std::string&) -> naim::controller::PlaneService {
+    throw std::runtime_error("plane service should not be used in plane-http smoke tests");
+  };
+  return naim::controller::PlaneMutationService(std::move(deps));
+}
+
+naim::controller::PlaneSkillCatalogService MakePlaneSkillCatalogService() {
+  return naim::controller::PlaneSkillCatalogService(
+      MakePlaneMutationService(),
+      naim::controller::PlaneSkillRuntimeSyncService(),
+      [](const std::string&, const std::string&, const std::string& fallback_artifacts_root) {
+        return fallback_artifacts_root;
+      });
+}
+
+PlaneHttpService MakePlaneHttpServiceForKnowledgeVaultSmoke() {
+  static const naim::controller::ControllerRequestSupport request_support;
+  static const auto plane_mutation_service = MakePlaneMutationService();
+  static const auto plane_registry_service =
+      naim::controller::PlaneRegistryService({}, {});
+  static const auto controller_state_service = naim::controller::ControllerStateService();
+  static const auto dashboard_service =
+      naim::controller::DashboardService(naim::controller::DashboardService::Deps{});
+
+  return PlaneHttpService(
+      PlaneHttpSupport(
+          request_support,
+          plane_mutation_service,
+          plane_registry_service,
+          controller_state_service,
+          dashboard_service,
+          60,
+          [](const std::string& db_path,
+             const HttpRequest& request,
+             const std::string&) -> std::optional<HttpResponse> {
+            static const auto knowledge_vault_http_service =
+                naim::controller::KnowledgeVaultHttpService();
+            HttpRequest rewritten = request;
+            constexpr const char* kPlanePrefix = "/api/v1/planes/";
+            const std::string remainder =
+                request.path.substr(std::string(kPlanePrefix).size());
+            const auto separator = remainder.find('/');
+            if (separator == std::string::npos) {
+              return std::nullopt;
+            }
+            rewritten.path = "/api/v1" + remainder.substr(separator);
+            return knowledge_vault_http_service.HandleRequest(db_path, rewritten);
+          }),
+      MakePlaneSkillCatalogService());
 }
 
 void TestPolicyParsing() {
@@ -448,6 +561,48 @@ void TestWebGatewayReviewBlocksLocalAccessSuggestions() {
       "blocked WebGateway review should return the provided refusal");
 }
 
+void TestPlaneKnowledgeVaultRouteRequiresExistingPlane() {
+  const std::string db_path = MakeTempDbPath("missing-plane");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+
+  auto plane_http_service = MakePlaneHttpServiceForKnowledgeVaultSmoke();
+  HttpRequest request;
+  request.method = "GET";
+  request.path =
+      "/api/v1/planes/lt-cypher-ai/knowledge-vault/blocks/lt-cypher-ai.market.global";
+
+  const auto response = plane_http_service.HandleRequest(db_path, "/tmp", request);
+  Expect(response.has_value(), "plane knowledge vault request should be handled");
+  Expect(response->status_code == 404, "missing plane should return 404");
+  const auto payload = nlohmann::json::parse(response->body);
+  Expect(
+      payload.value("message", std::string{}).find("plane 'lt-cypher-ai' not found") !=
+          std::string::npos,
+      "missing plane response should name the plane");
+}
+
+void TestPlaneKnowledgeVaultRouteRewritesIntoKnowledgeVaultService() {
+  const std::string db_path = MakeTempDbPath("existing-plane");
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  store.ReplaceDesiredState(BuildPlaneDesiredState("lt-cypher-ai"), 1);
+
+  auto plane_http_service = MakePlaneHttpServiceForKnowledgeVaultSmoke();
+  HttpRequest request;
+  request.method = "GET";
+  request.path =
+      "/api/v1/planes/lt-cypher-ai/knowledge-vault/blocks/lt-cypher-ai.market.global";
+
+  const auto response = plane_http_service.HandleRequest(db_path, "/tmp", request);
+  Expect(response.has_value(), "plane knowledge vault request should be handled");
+  Expect(response->status_code == 404, "unconfigured knowledge vault should return 404");
+  const auto payload = nlohmann::json::parse(response->body);
+  Expect(
+      payload.value("message", std::string{}) == "knowledge vault service not configured",
+      "existing plane knowledge-vault route should rewrite into knowledge vault service");
+}
+
 }  // namespace
 
 int main() {
@@ -468,6 +623,8 @@ int main() {
     TestWebGatewayDisabledContextDefaults();
     TestWebGatewayResolveBlocksRestrictedTargets();
     TestWebGatewayReviewBlocksLocalAccessSuggestions();
+    TestPlaneKnowledgeVaultRouteRequiresExistingPlane();
+    TestPlaneKnowledgeVaultRouteRewritesIntoKnowledgeVaultService();
     std::cout << "browsing server tests passed\n";
     return 0;
   } catch (const std::exception& error) {

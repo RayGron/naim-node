@@ -730,6 +730,52 @@ int main() {
         },
         "execution-node-clean");
 
+    {
+      const json multi_app_plane{
+          {"version", 2},
+          {"plane_name", "multi-app-plane"},
+          {"plane_mode", "llm"},
+          {"model",
+           {
+               {"source", {{"type", "local"}, {"path", "/models/qwen"}}},
+               {"materialization", {{"mode", "reference"}, {"local_path", "/models/qwen"}}},
+               {"served_model_name", "qwen-multi-app"},
+           }},
+          {"runtime",
+           {{"engine", "llama.cpp"}, {"distributed_backend", "llama_rpc"}, {"workers", 1}}},
+          {"infer", {{"replicas", 1}}},
+          {"apps",
+           json::array(
+               {{{"name", "chat"},
+                 {"primary", true},
+                 {"enabled", true},
+                 {"image", "example/app:dev"},
+                 {"start", {{"type", "script"}, {"value", "node server.js"}}}},
+                {{"name", "market-ingest"},
+                 {"enabled", true},
+                 {"image", "example/app:dev"},
+                 {"start", {{"type", "script"}, {"value", "node market-collector.js"}}},
+                 {"node", "worker-node-a"}}})},
+      };
+      const auto rendered = naim::DesiredStateV2Renderer::Render(multi_app_plane);
+      const auto projected = naim::DesiredStateV2Projector::Project(rendered);
+      Expect(projected.contains("apps"), "multi-app-plane: apps should project");
+      Expect(projected.at("apps").is_array(), "multi-app-plane: apps should be array");
+      Expect(projected.at("apps").size() == 2, "multi-app-plane: expected two apps");
+      Expect(!projected.contains("app"), "multi-app-plane: legacy app should be suppressed");
+      const auto& primary_app = projected.at("apps").at(0);
+      Expect(primary_app.at("name").get<std::string>() == "chat",
+             "multi-app-plane: primary app name mismatch");
+      Expect(primary_app.value("primary", false),
+             "multi-app-plane: primary app flag mismatch");
+      const auto& collector_app = projected.at("apps").at(1);
+      Expect(collector_app.at("name").get<std::string>() == "market-ingest",
+             "multi-app-plane: collector app name mismatch");
+      Expect(!collector_app.value("primary", false),
+             "multi-app-plane: collector should not be primary");
+      ExpectRoundTrip(multi_app_plane, "multi-app-plane");
+    }
+
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "desired_state_v2_projector_tests failed: " << ex.what() << '\n';

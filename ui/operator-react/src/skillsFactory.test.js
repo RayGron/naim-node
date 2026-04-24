@@ -291,6 +291,56 @@ describe("planeV2Form SkillsFactory mapping", () => {
     });
   });
 
+  it("round-trips multiple app containers through desired state v2", () => {
+    const form = buildNewPlaneFormState();
+    form.planeName = "multi-app-plane";
+    form.modelPath = "/models/qwen";
+    form.appEnabled = true;
+    form.appImage = "example/app:dev";
+    form.appStartType = "script";
+    form.appStartValue = "node server.js";
+    form.extraApps = [
+      {
+        name: "market-ingest",
+        enabled: true,
+        image: "example/app:dev",
+        startType: "script",
+        startValue: "node market-collector.js",
+        hostPort: "",
+        containerPort: "",
+        node: "hpc1",
+        envText: "CYPHER_MARKET_COLLECTOR_ENABLED=true",
+        volumeEnabled: true,
+        volumeName: "market-ingest-data",
+        volumeSizeGb: "5",
+        volumeMountPath: "/naim/private",
+      },
+    ];
+
+    const desiredState = buildDesiredStateV2FromForm(form);
+    expect(desiredState.app).toBeUndefined();
+    expect(desiredState.apps).toHaveLength(2);
+    expect(desiredState.apps[0]).toMatchObject({
+      primary: true,
+      enabled: true,
+      image: "example/app:dev",
+    });
+    expect(desiredState.apps[1]).toMatchObject({
+      name: "market-ingest",
+      primary: false,
+      enabled: true,
+      image: "example/app:dev",
+      node: "hpc1",
+    });
+
+    const reparsed = buildPlaneFormStateFromDesiredStateV2(desiredState);
+    expect(reparsed.appEnabled).toBe(true);
+    expect(reparsed.extraApps).toHaveLength(1);
+    expect(reparsed.extraApps[0].name).toBe("market-ingest");
+    expect(reparsed.extraApps[0].startValue).toBe("node market-collector.js");
+    expect(reparsed.extraApps[0].node).toBe("hpc1");
+  });
+
   it("does not serialize turboquant for compute planes", () => {
     const form = buildNewPlaneFormState();
     form.planeMode = "compute";
