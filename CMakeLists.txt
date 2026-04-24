@@ -7,8 +7,9 @@ option(NAIM_CONTROLLER_BUILD_LLAMA_QUANTIZE
        "Build llama-quantize before naim-controller for local model conversion tooling"
        OFF)
 option(NAIM_ENABLE_LLAMA_RUNTIME
-       "Configure llama.cpp, CUDA, and inference runtime targets"
+       "Configure llama.cpp and inference runtime targets"
        ON)
+option(NAIM_ENABLE_CUDA "Build llama.cpp runtime with CUDA backend" ON)
 option(NAIM_ENABLE_CEF_BROWSING "Enable CEF-backed browsing runtime support" OFF)
 set(NAIM_CEF_ROOT "" CACHE PATH "Path to an unpacked CEF binary distribution")
 set(NAIM_CEF_DOWNLOAD_URL "" CACHE STRING "Optional URL to a CEF binary distribution archive")
@@ -107,90 +108,99 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
   set(LLAMA_BUILD_SERVER ON CACHE BOOL "" FORCE)
   set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
   set(LLAMA_USE_SYSTEM_GGML OFF CACHE BOOL "" FORCE)
-  # llama.cpp needs Blackwell FP4/MXFP4 kernels to be compiled for the
-  # architecture-specific 12Xa targets. CMake's native CUDA detection reports
-  # RTX PRO 6000 Blackwell as plain sm_120, which makes ptxas reject those
-  # kernels. Keep native detection opt-in and let llama.cpp choose its supported
-  # explicit CUDA architecture list by default. For host-specific images, set
-  # NAIM_CUDA_ARCHITECTURES explicitly, for example 120a-real on hpc1.
-  set(NAIM_CUDA_ARCHITECTURES "" CACHE STRING
-      "Explicit CUDA architectures for ggml-cuda builds; empty lets llama.cpp choose defaults")
-  option(NAIM_CUDA_NATIVE "Prefer native CUDA architectures for ggml-cuda builds" OFF)
-  if(NAIM_CUDA_ARCHITECTURES)
-    set(NAIM_CUDA_NATIVE OFF CACHE BOOL "" FORCE)
-    set(CMAKE_CUDA_ARCHITECTURES
-        "${NAIM_CUDA_ARCHITECTURES}"
-        CACHE STRING "Explicit CUDA architectures for naim ggml-cuda builds" FORCE)
-  endif()
-  set(GGML_NATIVE ${NAIM_CUDA_NATIVE} CACHE BOOL "" FORCE)
   set(GGML_RPC ON CACHE BOOL "" FORCE)
 
-  if(NOT DEFINED CUDAToolkit_ROOT OR "${CUDAToolkit_ROOT}" STREQUAL "")
-    set(_naim_cuda_root_candidates
-        "$ENV{CUDA_TOOLKIT_ROOT_DIR}"
-        "$ENV{CUDA_HOME}"
-        "$ENV{CUDA_PATH}"
-        "/usr/local/cuda-13.1"
-        "/usr/local/cuda"
-        "/usr/local/cuda-13.2"
-        "/usr/local/cuda-13.0"
-        "/usr/local/cuda-12.9"
-        "/usr/local/cuda-12.8"
-        "/usr/local/cuda-12.7"
-        "/usr/local/cuda-12.6"
-        "/usr/local/cuda-12.5"
-        "/usr/local/cuda-12.4"
-        "/usr/local/cuda-12.3"
-        "/usr/local/cuda-12.2"
-        "/usr/local/cuda-12.1"
-        "/usr/local/cuda-12.0"
-        "/usr/lib/nvidia-cuda-toolkit")
-
-    find_program(_naim_nvcc_executable NAMES nvcc)
-    if(_naim_nvcc_executable)
-      get_filename_component(_naim_nvcc_bin_dir "${_naim_nvcc_executable}" DIRECTORY)
-      get_filename_component(_naim_nvcc_root_from_path "${_naim_nvcc_bin_dir}" DIRECTORY)
-      list(PREPEND _naim_cuda_root_candidates "${_naim_nvcc_root_from_path}")
+  if(NAIM_ENABLE_CUDA)
+    # llama.cpp needs Blackwell FP4/MXFP4 kernels to be compiled for the
+    # architecture-specific 12Xa targets. CMake's native CUDA detection reports
+    # RTX PRO 6000 Blackwell as plain sm_120, which makes ptxas reject those
+    # kernels. Keep native detection opt-in and let llama.cpp choose its supported
+    # explicit CUDA architecture list by default. For host-specific images, set
+    # NAIM_CUDA_ARCHITECTURES explicitly, for example 120a-real on hpc1.
+    set(NAIM_CUDA_ARCHITECTURES "" CACHE STRING
+        "Explicit CUDA architectures for ggml-cuda builds; empty lets llama.cpp choose defaults")
+    option(NAIM_CUDA_NATIVE "Prefer native CUDA architectures for ggml-cuda builds" OFF)
+    if(NAIM_CUDA_ARCHITECTURES)
+      set(NAIM_CUDA_NATIVE OFF CACHE BOOL "" FORCE)
+      set(CMAKE_CUDA_ARCHITECTURES
+          "${NAIM_CUDA_ARCHITECTURES}"
+          CACHE STRING "Explicit CUDA architectures for naim ggml-cuda builds" FORCE)
     endif()
+    set(GGML_NATIVE ${NAIM_CUDA_NATIVE} CACHE BOOL "" FORCE)
 
-    foreach(_naim_cuda_root IN LISTS _naim_cuda_root_candidates)
-      if(_naim_cuda_root AND EXISTS "${_naim_cuda_root}/include/cuda_runtime.h")
-        set(CUDAToolkit_ROOT "${_naim_cuda_root}" CACHE PATH "Detected CUDA toolkit root")
-        if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "${_naim_cuda_root}/bin/nvcc")
-          set(CMAKE_CUDA_COMPILER
-              "${_naim_cuda_root}/bin/nvcc"
-              CACHE FILEPATH "Detected CUDA compiler")
-        endif()
-        message(STATUS "Using detected CUDA toolkit: ${CUDAToolkit_ROOT}")
-        break()
+    if(NOT DEFINED CUDAToolkit_ROOT OR "${CUDAToolkit_ROOT}" STREQUAL "")
+      set(_naim_cuda_root_candidates
+          "$ENV{CUDA_TOOLKIT_ROOT_DIR}"
+          "$ENV{CUDA_HOME}"
+          "$ENV{CUDA_PATH}"
+          "/usr/local/cuda-13.1"
+          "/usr/local/cuda"
+          "/usr/local/cuda-13.2"
+          "/usr/local/cuda-13.0"
+          "/usr/local/cuda-12.9"
+          "/usr/local/cuda-12.8"
+          "/usr/local/cuda-12.7"
+          "/usr/local/cuda-12.6"
+          "/usr/local/cuda-12.5"
+          "/usr/local/cuda-12.4"
+          "/usr/local/cuda-12.3"
+          "/usr/local/cuda-12.2"
+          "/usr/local/cuda-12.1"
+          "/usr/local/cuda-12.0"
+          "/usr/lib/nvidia-cuda-toolkit")
+
+      find_program(_naim_nvcc_executable NAMES nvcc)
+      if(_naim_nvcc_executable)
+        get_filename_component(_naim_nvcc_bin_dir "${_naim_nvcc_executable}" DIRECTORY)
+        get_filename_component(_naim_nvcc_root_from_path "${_naim_nvcc_bin_dir}" DIRECTORY)
+        list(PREPEND _naim_cuda_root_candidates "${_naim_nvcc_root_from_path}")
       endif()
-    endforeach()
 
-    unset(_naim_cuda_root_candidates)
-    unset(_naim_nvcc_executable CACHE)
-    unset(_naim_nvcc_bin_dir)
-    unset(_naim_nvcc_root_from_path)
-    unset(_naim_cuda_root)
-  endif()
+      foreach(_naim_cuda_root IN LISTS _naim_cuda_root_candidates)
+        if(_naim_cuda_root AND EXISTS "${_naim_cuda_root}/include/cuda_runtime.h")
+          set(CUDAToolkit_ROOT "${_naim_cuda_root}" CACHE PATH "Detected CUDA toolkit root")
+          if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "${_naim_cuda_root}/bin/nvcc")
+            set(CMAKE_CUDA_COMPILER
+                "${_naim_cuda_root}/bin/nvcc"
+                CACHE FILEPATH "Detected CUDA compiler")
+          endif()
+          message(STATUS "Using detected CUDA toolkit: ${CUDAToolkit_ROOT}")
+          break()
+        endif()
+      endforeach()
 
-  set(_naim_cuda_available OFF)
-  if(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/include/cuda_runtime.h")
-    set(_naim_cuda_available ON)
-  elseif(DEFINED CMAKE_CUDA_COMPILER)
-    get_filename_component(_naim_cuda_bin_dir "${CMAKE_CUDA_COMPILER}" DIRECTORY)
-    get_filename_component(_naim_cuda_root_from_compiler "${_naim_cuda_bin_dir}" DIRECTORY)
-    if(EXISTS "${_naim_cuda_root_from_compiler}/include/cuda_runtime.h")
-      set(_naim_cuda_available ON)
+      unset(_naim_cuda_root_candidates)
+      unset(_naim_nvcc_executable CACHE)
+      unset(_naim_nvcc_bin_dir)
+      unset(_naim_nvcc_root_from_path)
+      unset(_naim_cuda_root)
     endif()
+
+    set(_naim_cuda_available OFF)
+    if(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/include/cuda_runtime.h")
+      set(_naim_cuda_available ON)
+    elseif(DEFINED CMAKE_CUDA_COMPILER)
+      get_filename_component(_naim_cuda_bin_dir "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+      get_filename_component(_naim_cuda_root_from_compiler "${_naim_cuda_bin_dir}" DIRECTORY)
+      if(EXISTS "${_naim_cuda_root_from_compiler}/include/cuda_runtime.h")
+        set(_naim_cuda_available ON)
+      endif()
+    endif()
+    if(NOT _naim_cuda_available)
+      message(FATAL_ERROR
+        "CUDA toolkit is required for naim-node inference runtime builds. "
+        "Provide CUDAToolkit_ROOT or CMAKE_CUDA_COMPILER so GGML_CUDA can be enabled, "
+        "or configure with -DNAIM_ENABLE_CUDA=OFF.")
+    endif()
+    set(GGML_CUDA ON CACHE BOOL "" FORCE)
+    message(STATUS "Naim CUDA runtime: enabled")
+    message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
+    message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
+  else()
+    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    message(STATUS "Naim CUDA runtime: disabled")
   endif()
-  if(NOT _naim_cuda_available)
-    message(FATAL_ERROR
-      "CUDA toolkit is required for naim-node inference runtime builds. "
-      "Provide CUDAToolkit_ROOT or CMAKE_CUDA_COMPILER so GGML_CUDA can be enabled.")
-  endif()
-  set(GGML_CUDA ON CACHE BOOL "" FORCE)
-  message(STATUS "Naim CUDA native architectures: ${NAIM_CUDA_NATIVE}")
-  message(STATUS "Naim CUDA explicit architectures: ${NAIM_CUDA_ARCHITECTURES}")
 
   if(NAIM_LLAMA_CPP_SOURCE_DIR AND EXISTS "${NAIM_LLAMA_CPP_SOURCE_DIR}/CMakeLists.txt")
     FetchContent_Declare(
@@ -208,7 +218,7 @@ if(NAIM_ENABLE_LLAMA_RUNTIME)
   endif()
   FetchContent_MakeAvailable(llama_cpp)
 
-  if(TARGET ggml-cuda AND CMAKE_GENERATOR STREQUAL "Ninja")
+  if(NAIM_ENABLE_CUDA AND TARGET ggml-cuda AND CMAKE_GENERATOR STREQUAL "Ninja")
     if(NAIM_CUDA_NVCC_JOBS MATCHES "^[1-9][0-9]*$")
       set_property(GLOBAL APPEND PROPERTY JOB_POOLS "naim_cuda_pool=${NAIM_CUDA_NVCC_JOBS}")
       set_property(TARGET ggml-cuda PROPERTY JOB_POOL_COMPILE naim_cuda_pool)

@@ -104,8 +104,9 @@ knowledge_tag="${10:-naim/knowledge-runtime:dev}"
 
 build_dir="$("${script_dir}/print-build-dir.sh")"
 turboquant_build_dir="${NAIM_TURBOQUANT_BUILD_DIR:-${repo_root}/build-turboquant/linux/x64}"
-mkdir -p "${repo_root}/var"
-image_context="$(mktemp -d "${repo_root}/var/runtime-image-context.XXXXXX")"
+image_work_root="${NAIM_RUNTIME_IMAGE_CONTEXT_ROOT:-${build_dir}/image-contexts}"
+mkdir -p "${image_work_root}"
+image_context="$(mktemp -d "${image_work_root}/runtime-image-context.XXXXXX")"
 cleanup_image_context() {
   rm -rf "${image_context}" 2>/dev/null || sudo -n rm -rf "${image_context}" 2>/dev/null || true
 }
@@ -119,15 +120,38 @@ for binary in naim-controller naim-hostd naim-node naim-inferctl naim-workerd na
 done
 cp "${build_dir}/bin/llama-server" "${image_context}/build/linux/x64/bin/llama-server"
 cp "${build_dir}/bin/rpc-server" "${image_context}/build/linux/x64/bin/rpc-server"
-cp "${turboquant_build_dir}/bin/llama-server" \
-  "${image_context}/build-turboquant/linux/x64/bin/llama-server"
-cp "${turboquant_build_dir}/bin/rpc-server" \
-  "${image_context}/build-turboquant/linux/x64/bin/rpc-server"
+copy_turboquant_binary() {
+  local binary="$1"
+  local source_path="${turboquant_build_dir}/bin/${binary}"
+  local target_path="${image_context}/build-turboquant/linux/x64/bin/${binary}"
+
+  if [[ -x "${source_path}" ]]; then
+    cp "${source_path}" "${target_path}"
+    return
+  fi
+
+  if [[ "${NAIM_REQUIRE_TURBOQUANT:-0}" == "1" ]]; then
+    echo "error: required TurboQuant binary was not found: ${source_path}" >&2
+    echo "run scripts/build-turboquant-runtime.sh first, or unset NAIM_REQUIRE_TURBOQUANT for local images" >&2
+    exit 1
+  fi
+
+  echo "warning: TurboQuant binary not found; adding unsupported-runtime placeholder for ${binary}" >&2
+  cat > "${target_path}" <<EOF
+#!/usr/bin/env sh
+echo "TurboQuant runtime is not included in this local image. Run scripts/build-turboquant-runtime.sh and rebuild images, or use the default runtime flavor." >&2
+exit 127
+EOF
+  chmod +x "${target_path}"
+}
+
+copy_turboquant_binary llama-server
+copy_turboquant_binary rpc-server
 
 build_web_ui_image() {
   local temp_root
-  mkdir -p "${repo_root}/var"
-  temp_root="$(mktemp -d "${repo_root}/var/web-ui-image.XXXXXX")"
+  mkdir -p "${image_work_root}"
+  temp_root="$(mktemp -d "${image_work_root}/web-ui-image.XXXXXX")"
   cleanup_web_ui_image() {
     rm -rf "${temp_root}" 2>/dev/null || sudo -n rm -rf "${temp_root}" 2>/dev/null || true
   }

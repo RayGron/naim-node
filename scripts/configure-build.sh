@@ -6,6 +6,9 @@ source "${script_dir}/build-context.sh"
 
 naim_resolve_build_context "${script_dir}" "$@"
 
+naim_sync_source_mirror
+naim_prepare_source_mirror_environment
+
 if [[ "${TARGET_OS}" == "linux" && "${REPO_DIR}" == /mnt/* ]] \
   && grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null \
   && [[ "${NAIM_ALLOW_WSL_MOUNT_BUILD:-}" != "1" ]]; then
@@ -34,6 +37,7 @@ cuda_nvcc=""
 openmp_root=""
 openmp_include_dir=""
 openmp_library=""
+: "${NAIM_ENABLE_CUDA:=ON}"
 : "${NAIM_CUDA_NATIVE:=OFF}"
 : "${NAIM_CUDA_ARCHITECTURES:=}"
 : "${NAIM_CUDA_NVCC_JOBS:=1}"
@@ -118,16 +122,19 @@ detect_macos_openmp() {
   return 1
 }
 
-if detect_cuda_root; then
+if [[ "${NAIM_ENABLE_CUDA}" == "ON" ]] && detect_cuda_root; then
   export CUDA_TOOLKIT_ROOT_DIR="${cuda_root}"
   export CUDA_HOME="${cuda_root}"
   export CUDA_PATH="${cuda_root}"
   export CUDA_BIN_PATH="${cuda_root}/bin"
   export CUDACXX="${cuda_nvcc}"
-else
+elif [[ "${NAIM_ENABLE_CUDA}" == "ON" ]]; then
   echo "[cmake] CUDA toolkit is required for naim-node builds; none was found" >&2
   echo "[cmake] checked CUDA_TOOLKIT_ROOT_DIR, CUDA_HOME, CUDA_PATH, /usr/local/cuda*, and nvcc on PATH" >&2
+  echo "[cmake] pass --no-cuda or set NAIM_ENABLE_CUDA=OFF to build CPU-only runtime binaries" >&2
   exit 1
+else
+  echo "[cmake] CUDA build disabled by NAIM_ENABLE_CUDA=OFF" >&2
 fi
 
 if detect_macos_openmp; then
@@ -233,6 +240,11 @@ if [[ -f "${cache_path}" ]]; then
     && ! grep -Fq "CMAKE_MAKE_PROGRAM:STRING=${ninja_exe}" "${cache_path}"; then
     needs_clean_reconfigure=1
   fi
+  if ! grep -Fq "NAIM_ENABLE_CUDA:BOOL=${NAIM_ENABLE_CUDA}" "${cache_path}" \
+    && ! grep -Fq "NAIM_ENABLE_CUDA:UNINITIALIZED=${NAIM_ENABLE_CUDA}" "${cache_path}" \
+    && ! grep -Fq "NAIM_ENABLE_CUDA:STRING=${NAIM_ENABLE_CUDA}" "${cache_path}"; then
+    needs_clean_reconfigure=1
+  fi
 fi
 
 if [[ "${needs_clean_reconfigure}" == "1" ]]; then
@@ -251,11 +263,16 @@ cmake_args=(
   -DVCPKG_TARGET_TRIPLET="${VCPKG_TRIPLET}"
 )
 
-cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
-cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
-cmake_args+=("-DNAIM_CUDA_NATIVE=${NAIM_CUDA_NATIVE}")
-cmake_args+=("-DNAIM_CUDA_ARCHITECTURES=${NAIM_CUDA_ARCHITECTURES}")
-cmake_args+=("-DNAIM_CUDA_NVCC_JOBS=${NAIM_CUDA_NVCC_JOBS}")
+cmake_args+=("-DNAIM_ENABLE_CUDA=${NAIM_ENABLE_CUDA}")
+if [[ "${NAIM_ENABLE_CUDA}" == "ON" ]]; then
+  cmake_args+=("-DCUDAToolkit_ROOT=${cuda_root}")
+  cmake_args+=("-DCMAKE_CUDA_COMPILER=${cuda_nvcc}")
+  cmake_args+=("-DNAIM_CUDA_NATIVE=${NAIM_CUDA_NATIVE}")
+  cmake_args+=("-DNAIM_CUDA_ARCHITECTURES=${NAIM_CUDA_ARCHITECTURES}")
+  cmake_args+=("-DNAIM_CUDA_NVCC_JOBS=${NAIM_CUDA_NVCC_JOBS}")
+else
+  cmake_args+=("-DGGML_CUDA=OFF")
+fi
 if [[ -n "${openmp_root}" ]]; then
   cmake_args+=(
     "-DOpenMP_ROOT=${openmp_root}"
@@ -270,6 +287,9 @@ if [[ -n "${NAIM_CMAKE_ARGS:-}" ]]; then
   cmake_args+=("${extra_cmake_args[@]}")
 fi
 
-"${cmake_exe}" "${cmake_args[@]}"
+(
+  cd "${REPO_DIR}"
+  "${cmake_exe}" "${cmake_args[@]}"
+)
 
 echo "${BUILD_DIR}"

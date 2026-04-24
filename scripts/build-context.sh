@@ -21,9 +21,105 @@ naim_validate_build_type() {
   exit 1
 }
 
+naim_normalize_on_off() {
+  case "${1:-}" in
+    1|ON|On|on|TRUE|True|true|YES|Yes|yes)
+      printf 'ON\n'
+      ;;
+    0|OFF|Off|off|FALSE|False|false|NO|No|no)
+      printf 'OFF\n'
+      ;;
+    *)
+      echo "error: expected ON/OFF boolean value, got '${1:-}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
 naim_detect_host_target() {
   local script_dir="${1}"
   "${script_dir}/detect-host-target.sh"
+}
+
+naim_is_wsl() {
+  grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null
+}
+
+naim_is_windows_mount_path() {
+  [[ "${1:-}" == /mnt/* ]]
+}
+
+naim_default_cache_root() {
+  if [[ -n "${NAIM_CACHE_ROOT:-}" ]]; then
+    printf '%s\n' "${NAIM_CACHE_ROOT}"
+    return
+  fi
+  if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+    printf '%s\n' "${XDG_CACHE_HOME}/naim"
+    return
+  fi
+  printf '%s\n' "${HOME:-/tmp}/.cache/naim"
+}
+
+naim_repo_path_hash() {
+  printf '%s' "${1}" | sha256sum | awk '{print substr($1, 1, 16)}'
+}
+
+naim_sync_source_mirror() {
+  if [[ "${NAIM_SOURCE_MIRROR_ACTIVE:-0}" != "1" ]]; then
+    return
+  fi
+  if ! command -v rsync >/dev/null 2>&1; then
+    echo "error: rsync is required for WSL source mirror builds" >&2
+    echo "install rsync or set NAIM_WSL_SOURCE_MIRROR=off to build directly from the checkout" >&2
+    exit 1
+  fi
+
+  mkdir -p "${NAIM_SOURCE_MIRROR_DIR}"
+  echo "[build] syncing WSL source mirror" >&2
+  echo "[build]   source=${NAIM_ORIGINAL_REPO_DIR}" >&2
+  echo "[build]   mirror=${NAIM_SOURCE_MIRROR_DIR}" >&2
+
+  rsync -a --delete --delete-excluded \
+    --exclude '/.git/' \
+    --exclude '/.local/' \
+    --exclude '/build/' \
+    --exclude '/build-*/' \
+    --exclude '/dist/' \
+    --exclude '/var/' \
+    --exclude '/ui/operator-react/dist/' \
+    --exclude '/ui/operator-react/node_modules/' \
+    "${NAIM_ORIGINAL_REPO_DIR}/" \
+    "${NAIM_SOURCE_MIRROR_DIR}/"
+}
+
+naim_drop_windows_mount_path_entries() {
+  local value="${1:-}"
+  local result=""
+  local entry
+
+  IFS=':' read -r -a entries <<< "${value}"
+  for entry in "${entries[@]}"; do
+    if [[ -z "${entry}" || "${entry}" == /mnt/* ]]; then
+      continue
+    fi
+    if [[ -z "${result}" ]]; then
+      result="${entry}"
+    else
+      result="${result}:${entry}"
+    fi
+  done
+
+  printf '%s\n' "${result}"
+}
+
+naim_prepare_source_mirror_environment() {
+  if [[ "${NAIM_SOURCE_MIRROR_ACTIVE:-0}" != "1" ]]; then
+    return
+  fi
+
+  PATH="$(naim_drop_windows_mount_path_entries "${PATH:-}")"
+  export PATH
 }
 
 naim_resolve_target_context() {
@@ -56,6 +152,31 @@ naim_resolve_target_context() {
   repo_dir="$(cd -- "${script_dir}/.." && pwd)"
   local build_root="${NAIM_BUILD_ROOT:-${repo_dir}/build}"
 
+  NAIM_ORIGINAL_REPO_DIR="${repo_dir}"
+  NAIM_SOURCE_MIRROR_ACTIVE=0
+  NAIM_SOURCE_MIRROR_DIR=""
+  NAIM_SOURCE_MIRROR_WORKSPACE=""
+
+  local mirror_mode="${NAIM_WSL_SOURCE_MIRROR:-auto}"
+  if [[ "${target_os}" == "linux" ]] \
+    && [[ "${mirror_mode}" != "off" ]] \
+    && naim_is_windows_mount_path "${repo_dir}" \
+    && naim_is_wsl; then
+    local cache_root
+    local repo_hash
+    local repo_name
+
+    cache_root="${NAIM_WSL_BUILD_MIRROR_ROOT:-$(naim_default_cache_root)/wsl-build-mirror}"
+    repo_hash="$(naim_repo_path_hash "${repo_dir}")"
+    repo_name="$(basename -- "${repo_dir}")"
+
+    NAIM_SOURCE_MIRROR_ACTIVE=1
+    NAIM_SOURCE_MIRROR_WORKSPACE="${cache_root}/${repo_name}-${repo_hash}"
+    NAIM_SOURCE_MIRROR_DIR="${NAIM_SOURCE_MIRROR_WORKSPACE}/src"
+    build_root="${NAIM_BUILD_ROOT:-${NAIM_SOURCE_MIRROR_WORKSPACE}/build}"
+    repo_dir="${NAIM_SOURCE_MIRROR_DIR}"
+  fi
+
   TARGET_OS="${target_os}"
   TARGET_ARCH="${target_arch}"
   BUILD_DIR="${build_root}/${TARGET_OS}/${TARGET_ARCH}"
@@ -67,7 +188,45 @@ naim_resolve_build_context() {
   shift
 
   local build_type="${NAIM_BUILD_TYPE:-Debug}"
+  local enable_cuda
   local -a target_args=()
+  local -a positional_args=()
+
+  enable_cuda="$(naim_normalize_on_off "${NAIM_ENABLE_CUDA:-ON}")"
+
+  while [[ $# -gt 0 ]]; do
+    case "${1}" in
+      --no-cuda|--cpu)
+        enable_cuda="OFF"
+        shift
+        ;;
+      --with-cuda|--cuda)
+        enable_cuda="ON"
+        shift
+        ;;
+      --)
+        shift
+        positional_args+=("$@")
+        break
+        ;;
+      -h|--help)
+        echo "usage: $0 [--no-cuda|--with-cuda] [<build-type>] | [--no-cuda|--with-cuda] [<os> <arch> [<build-type>]]" >&2
+        exit 0
+        ;;
+      -*)
+        echo "error: unknown argument '${1}'" >&2
+        echo "usage: $0 [--no-cuda|--with-cuda] [<build-type>] | [--no-cuda|--with-cuda] [<os> <arch> [<build-type>]]" >&2
+        exit 1
+        ;;
+      *)
+        positional_args+=("${1}")
+        shift
+        ;;
+    esac
+  done
+
+  set -- "${positional_args[@]}"
+  export NAIM_ENABLE_CUDA="${enable_cuda}"
 
   case $# in
     0)
@@ -76,7 +235,7 @@ naim_resolve_build_context() {
       if naim_is_build_type "${1}"; then
         build_type="${1}"
       else
-        echo "usage: $0 [<build-type>] | [<os> <arch> [<build-type>]]" >&2
+        echo "usage: $0 [--no-cuda|--with-cuda] [<build-type>] | [--no-cuda|--with-cuda] [<os> <arch> [<build-type>]]" >&2
         exit 1
       fi
       ;;
@@ -88,7 +247,7 @@ naim_resolve_build_context() {
       build_type="${3}"
       ;;
     *)
-      echo "usage: $0 [<build-type>] | [<os> <arch> [<build-type>]]" >&2
+      echo "usage: $0 [--no-cuda|--with-cuda] [<build-type>] | [--no-cuda|--with-cuda] [<os> <arch> [<build-type>]]" >&2
       exit 1
       ;;
   esac
