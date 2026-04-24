@@ -318,6 +318,15 @@ std::optional<InteractionValidationError> PlaneSkillsService::ResolveInteraction
       [&](const std::string& fallback_error_code,
           const std::string& fallback_error_message)
       -> std::optional<InteractionValidationError> {
+    if (!request.HasExplicitSelection()) {
+      return InteractionValidationError{
+          fallback_error_code,
+          fallback_error_message,
+          fallback_error_code == "skills_not_ready",
+          json::object(),
+      };
+    }
+
     std::string catalog_error_code;
     std::string catalog_error_message;
     const auto response_payload = ResolveSkillsFromControllerCatalog(

@@ -426,7 +426,7 @@ void DesiredStateV2Renderer::RenderInteraction() {
     interaction.supported_response_languages =
         interaction_json.at("supported_response_languages").get<std::vector<std::string>>();
   } else {
-    interaction.supported_response_languages = {"en", "de", "uk", "ru"};
+    interaction.supported_response_languages = {"en", "es", "pt", "zh"};
   }
   interaction.completion_policy = DefaultCompletionPolicy();
   interaction.long_completion_policy = DefaultLongCompletionPolicy();
@@ -777,8 +777,8 @@ void DesiredStateV2Renderer::RenderAppInstance() {
 
     const bool primary = app_entry.value("primary", false) || index == 0;
     const std::string app_name =
-        primary ? std::string("primary")
-                : app_entry.value("name", "app-" + std::to_string(index));
+        app_entry.value("name", primary ? std::string("primary")
+                                        : "app-" + std::to_string(index));
 
     InstanceSpec app;
     app.name = BuildAppInstanceName(app_name, primary);

@@ -83,11 +83,23 @@ run_as_invoking_user() {
     sudo -u "${SUDO_USER}" env \
       PATH="${PATH}" \
       HOME="${user_home}" \
+      DOCKER_CONTEXT="${DOCKER_CONTEXT:-}" \
+      DOCKER_HOST="${DOCKER_HOST:-}" \
       VCPKG_ROOT="${VCPKG_ROOT:-}" \
+      XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
       "$@"
     return
   fi
   "$@"
+}
+
+docker_cli_available() {
+  if command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local windows_docker="/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe"
+  [[ -x "${windows_docker}" ]]
 }
 
 wait_for_http() {
@@ -165,15 +177,19 @@ install_prereqs_if_needed() {
     pkg-config
     sqlite3
   )
-  local docker_packages=(
-    docker.io
-    docker-compose-plugin
-  )
 
   echo "[install-single-node] installing apt prerequisites"
   run_as_root apt-get update
   run_as_root apt-get install -y "${packages[@]}"
-  run_as_root apt-get install -y "${docker_packages[@]}" || run_as_root apt-get install -y docker.io || true
+  if docker_cli_available; then
+    echo "[install-single-node] Docker CLI already exists; skipping apt Docker package installation"
+  else
+    local docker_packages=(
+      docker.io
+      docker-compose-plugin
+    )
+    run_as_root apt-get install -y "${docker_packages[@]}" || run_as_root apt-get install -y docker.io || true
+  fi
   run_as_root apt-get clean || true
 }
 
@@ -257,7 +273,7 @@ if [[ "${skip_image_build}" != "yes" ]]; then
   if [[ "${with_web_ui}" != "yes" ]]; then
     image_build_args+=(--skip-web-ui)
   fi
-  run_as_root env PATH="${PATH}" HOME="${HOME}" "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
+  run_as_invoking_user "${script_dir}/build-runtime-images.sh" "${image_build_args[@]}"
 fi
 
 build_dir="$("${script_dir}/print-build-dir.sh")"

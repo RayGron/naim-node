@@ -11,25 +11,81 @@ if [[ "${1:-}" == "--skip-web-ui" ]]; then
 fi
 
 declare -a docker_cmd
+docker_probe_output=""
+
+probe_docker() {
+  local -a candidate=("$@")
+  docker_probe_output="$("${candidate[@]}" version 2>&1)" && return 0
+  return 1
+}
+
+print_docker_probe_error() {
+  local label="$1"
+  local output="$2"
+
+  if [[ -z "${output}" ]]; then
+    return
+  fi
+
+  echo "  ${label}:" >&2
+  printf '%s\n' "${output}" | sed 's/^/    /' >&2
+}
+
+print_docker_socket_diagnostics() {
+  if [[ ! -S /var/run/docker.sock ]]; then
+    return
+  fi
+
+  echo "  docker socket:" >&2
+  ls -ln /var/run/docker.sock 2>/dev/null | sed 's/^/    /' >&2 || true
+  id 2>/dev/null | sed 's/^/    current user: /' >&2 || true
+}
 
 resolve_docker() {
-  if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
-    docker_cmd=(docker)
-    return 0
-  fi
-
-  if command -v sudo >/dev/null 2>&1 && sudo -n docker version >/dev/null 2>&1; then
-    docker_cmd=(sudo -n docker)
-    return 0
-  fi
-
+  local docker_error="docker was not found on PATH"
+  local sudo_error="sudo is unavailable or passwordless sudo is not configured"
+  local windows_error=""
   local windows_docker="/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe"
-  if [[ -x "${windows_docker}" ]] && "${windows_docker}" version >/dev/null 2>&1; then
-    docker_cmd=("${windows_docker}")
-    return 0
+
+  if command -v docker >/dev/null 2>&1; then
+    if probe_docker docker; then
+      docker_cmd=(docker)
+      return 0
+    fi
+    docker_error="${docker_probe_output}"
   fi
 
-  echo "error: no working Docker CLI found; checked 'docker', 'sudo -n docker', and '${windows_docker}'" >&2
+  if command -v sudo >/dev/null 2>&1; then
+    if probe_docker sudo -n docker; then
+      docker_cmd=(sudo -n docker)
+      return 0
+    fi
+    sudo_error="${docker_probe_output}"
+  fi
+
+  if [[ -x "${windows_docker}" ]]; then
+    if probe_docker "${windows_docker}"; then
+      docker_cmd=("${windows_docker}")
+      return 0
+    fi
+    windows_error="${docker_probe_output}"
+  else
+    windows_error="${windows_docker} was not found or is not executable"
+  fi
+
+  echo "error: no usable Docker API connection is available" >&2
+  echo "checked: docker, sudo -n docker, and ${windows_docker}" >&2
+  print_docker_probe_error "docker" "${docker_error}"
+  print_docker_probe_error "sudo -n docker" "${sudo_error}"
+  print_docker_probe_error "${windows_docker}" "${windows_error}"
+  print_docker_socket_diagnostics
+  cat >&2 <<'EOF'
+
+For WSL + Docker Desktop, make sure Docker Desktop is running and WSL integration
+is enabled for this distribution. Then verify that this exact command works:
+
+  docker version
+EOF
   return 1
 }
 

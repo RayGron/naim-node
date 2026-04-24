@@ -429,16 +429,17 @@ void DesiredStateV2Projector::ProjectApp() {
   }
 
   nlohmann::json apps = nlohmann::json::array();
+  const bool multi_app = app_instances_.size() > 1;
   const auto build_app_json = [&](const InstanceSpec& instance, bool primary) {
     nlohmann::json app = {
         {"enabled", true},
         {"image", instance.image},
     };
-    if (!primary) {
+    if (multi_app || !primary) {
       app["name"] = instance.environment.contains("NAIM_APP_NAME")
                         ? instance.environment.at("NAIM_APP_NAME")
                         : instance.name;
-      app["primary"] = false;
+      app["primary"] = primary;
     }
     const auto start = ProjectorSupport::ProjectServiceStart(instance, std::string{});
     if (!start.is_null()) {
