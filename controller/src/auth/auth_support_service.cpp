@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "auth/webauthn_service.h"
 #include "naim/security/crypto_utils.h"
 
 using nlohmann::json;
@@ -206,70 +207,6 @@ std::string RequestScheme(const HttpRequest& request) {
   return "http";
 }
 
-std::optional<std::filesystem::path> ReadProcessArgv0Path() {
-#if defined(__linux__)
-  std::ifstream input("/proc/self/cmdline", std::ios::binary);
-  if (!input) {
-    return std::nullopt;
-  }
-  std::string argv0;
-  std::getline(input, argv0, '\0');
-  if (argv0.empty()) {
-    return std::nullopt;
-  }
-  return std::filesystem::path(argv0);
-#else
-  return std::nullopt;
-#endif
-}
-
-std::filesystem::path ResolveWebAuthnHelperPath() {
-  if (const auto env = GetEnvString("NAIM_WEBAUTHN_HELPER"); env.has_value()) {
-    return std::filesystem::path(*env);
-  }
-  std::vector<std::filesystem::path> roots;
-  auto append_ancestors = [&roots](std::filesystem::path path) {
-    std::error_code error;
-    path = std::filesystem::weakly_canonical(path, error);
-    if (error || path.empty()) {
-      error.clear();
-      path = path.lexically_normal();
-    }
-    while (!path.empty()) {
-      if (std::find(roots.begin(), roots.end(), path) == roots.end()) {
-        roots.push_back(path);
-      }
-      const auto parent = path.parent_path();
-      if (parent == path) {
-        break;
-      }
-      path = parent;
-    }
-  };
-  if (const auto repo_root = GetEnvString("NAIM_REPO_ROOT"); repo_root.has_value()) {
-    append_ancestors(std::filesystem::path(*repo_root));
-  }
-  append_ancestors(std::filesystem::current_path());
-  if (const auto argv0 = ReadProcessArgv0Path(); argv0.has_value()) {
-    append_ancestors(argv0->is_absolute() ? argv0->parent_path()
-                                          : std::filesystem::current_path() / argv0->parent_path());
-  }
-  std::error_code error;
-  const std::filesystem::path proc_exe =
-      std::filesystem::read_symlink("/proc/self/exe", error);
-  if (!error && !proc_exe.empty()) {
-    append_ancestors(proc_exe.parent_path());
-  }
-  for (const auto& root : roots) {
-    const auto candidate =
-        root / "ui" / "operator-react" / "scripts" / "webauthn-helper.mjs";
-    if (std::filesystem::exists(candidate)) {
-      return candidate;
-    }
-  }
-  throw std::runtime_error("failed to locate WebAuthn helper script");
-}
-
 }  // namespace
 
 std::optional<std::pair<naim::UserRecord, naim::AuthSessionRecord>>
@@ -324,50 +261,7 @@ std::string AuthSupportService::ResolveWebAuthnRpName() const {
 json AuthSupportService::RunWebAuthnHelper(
     const std::string& action,
     const json& payload) const {
-  const std::filesystem::path temp_dir =
-      std::filesystem::temp_directory_path() /
-      ("naim-webauthn-" + SanitizeTokenForPath(naim::RandomTokenBase64(12)));
-  std::filesystem::create_directories(temp_dir);
-  const std::filesystem::path input_path = temp_dir / "input.json";
-  const std::filesystem::path output_path = temp_dir / "output.json";
-  const std::filesystem::path error_path = temp_dir / "stderr.txt";
-  try {
-    {
-      std::ofstream out(input_path);
-      out << payload.dump();
-    }
-    const std::string node_bin = GetEnvString("NAIM_NODE_BIN").value_or("node");
-    const std::string command =
-        EscapeShellArg(node_bin) + " " +
-        EscapeShellArg(ResolveWebAuthnHelperPath().string()) + " " +
-        EscapeShellArg(action) + " " +
-        EscapeShellArg(input_path.string()) + " > " +
-        EscapeShellArg(output_path.string()) + " 2> " +
-        EscapeShellArg(error_path.string());
-    if (!RunCommand(command)) {
-      std::ifstream error_input(error_path);
-      std::string error_message;
-      if (error_input.is_open()) {
-        std::ostringstream buffer;
-        buffer << error_input.rdbuf();
-        error_message = TrimCopy(buffer.str());
-      }
-      if (error_message.empty()) {
-        throw std::runtime_error("WebAuthn helper command failed");
-      }
-      throw std::runtime_error("WebAuthn helper command failed: " + error_message);
-    }
-    std::ifstream input(output_path);
-    if (!input.is_open()) {
-      throw std::runtime_error("failed to open WebAuthn helper output");
-    }
-    json result = json::parse(input, nullptr, true, true);
-    std::filesystem::remove_all(temp_dir);
-    return result;
-  } catch (...) {
-    std::filesystem::remove_all(temp_dir);
-    throw;
-  }
+  return naim::controller::auth::WebAuthnService().Run(action, payload);
 }
 
 std::string AuthSupportService::SessionCookieHeader(

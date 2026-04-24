@@ -149,6 +149,10 @@ Current manifest dependencies include:
 - `nlohmann-json`
 - `libsodium`
 
+The controller also links against OpenSSL Crypto for native C++ WebAuthn verification. On
+Debian/Ubuntu hosts, `scripts/install-single-node.sh` installs `libssl-dev` with the other local
+build prerequisites.
+
 `llama.cpp` is pulled through CMake `FetchContent` at the revision pinned in `CMakeLists.txt`.
 
 On macOS, install prerequisites first:
@@ -303,7 +307,10 @@ Current supported paths include:
 - WebAuthn registration and login
 - invite-based user registration
 
-The operator UI and controller APIs use the same auth system.
+The operator UI and controller APIs use the same auth system. The UI uses
+`@simplewebauthn/browser` for browser passkey calls only; server-side WebAuthn generation and
+verification live in the C++ controller. Local deploys should not require manual npm installation
+for authentication.
 
 ## Model Library
 
