@@ -20,11 +20,10 @@ void RocksDbJsonRepository::Open() {
   options.create_if_missing = true;
   options.IncreaseParallelism();
   options.OptimizeLevelStyleCompaction();
-  rocksdb::DB* raw = nullptr;
+
   CheckStatus(
-      rocksdb::DB::Open(options, store_path_.string(), &raw),
+      rocksdb::DB::Open(options, store_path_.string(), &db_),
       "open rocksdb knowledge store");
-  db_.reset(raw);
 }
 
 std::optional<std::string> RocksDbJsonRepository::GetRaw(const std::string& key) const {
