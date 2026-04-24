@@ -8,6 +8,10 @@ Usage:
 
 Builds naim-node on the current Linux host, installs controller+local-hostd as systemd services,
 and starts them.
+
+By default the installer builds CUDA runtime artifacts for the local GPU architecture only.
+Set NAIM_CUDA_NATIVE=OFF and NAIM_CUDA_ARCHITECTURES=<list> before running the installer if you
+need portable runtime images for multiple GPU generations.
 EOF
 }
 
@@ -175,6 +179,7 @@ install_prereqs_if_needed() {
     libssl-dev
     ninja-build
     pkg-config
+    rsync
     sqlite3
   )
 
@@ -263,6 +268,10 @@ model_cache_root="$(printf '%s\n' "${config_summary}" | sed -n '2p')"
 
 install_prereqs_if_needed
 install_cuda_toolkit_if_needed
+
+if [[ -z "${NAIM_CUDA_NATIVE:-}" && -z "${NAIM_CUDA_ARCHITECTURES:-}" ]]; then
+  export NAIM_CUDA_NATIVE=ON
+fi
 
 echo "[install-single-node] building host binaries (${build_type})"
 run_as_invoking_user "${script_dir}/build-host.sh" "${build_type}"

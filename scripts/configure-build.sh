@@ -6,6 +6,9 @@ source "${script_dir}/build-context.sh"
 
 naim_resolve_build_context "${script_dir}" "$@"
 
+naim_sync_source_mirror
+naim_prepare_source_mirror_environment
+
 if [[ "${TARGET_OS}" == "linux" && "${REPO_DIR}" == /mnt/* ]] \
   && grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null \
   && [[ "${NAIM_ALLOW_WSL_MOUNT_BUILD:-}" != "1" ]]; then
@@ -270,6 +273,9 @@ if [[ -n "${NAIM_CMAKE_ARGS:-}" ]]; then
   cmake_args+=("${extra_cmake_args[@]}")
 fi
 
-"${cmake_exe}" "${cmake_args[@]}"
+(
+  cd "${REPO_DIR}"
+  "${cmake_exe}" "${cmake_args[@]}"
+)
 
 echo "${BUILD_DIR}"
