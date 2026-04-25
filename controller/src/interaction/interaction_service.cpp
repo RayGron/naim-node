@@ -43,6 +43,14 @@ bool ParseBoolHeader(
   return fallback;
 }
 
+bool IsLoopbackRuntimeHost(const std::string& host) {
+  return host == "127.0.0.1" || host == "localhost" || host == "::1";
+}
+
+bool IsControllerLocalNode(const std::string& node_name) {
+  return node_name == "local-hostd" || node_name == "controller-local";
+}
+
 int ParseIntHeader(
     const std::map<std::string, std::string>& headers,
     const std::string& key,
@@ -738,6 +746,7 @@ InteractionSessionResult InteractionSessionExecutor::Execute(
           resolved_policy,
           request_context.structured_output_json);
       upstream = send_interaction_request_(
+          resolution,
           *resolution.target,
           request_context.request_id,
           upstream_body);
@@ -962,7 +971,7 @@ InteractionProxyResult InteractionProxyExecutor::Execute(
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
       try {
         upstream = send_proxy_request_(
-            *resolution.target, method, path, upstream_body, request_id);
+            resolution, *resolution.target, method, path, upstream_body, request_id);
         if (upstream.status_code < 500 || attempt + 1 == kMaxAttempts) {
           break;
         }
@@ -1489,6 +1498,7 @@ StreamedInteractionSegmentResult InteractionStreamSegmentExecutor::Execute(
   const auto run_non_stream_fallback = [&](bool assign_only = false)
       -> std::optional<StreamedInteractionSegmentResult> {
     const InteractionUpstreamResponse fallback = send_fallback_request_(
+        resolution,
         *resolution.target,
         request_id,
         build_interaction_upstream_body_(
@@ -2017,6 +2027,19 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
             std::to_string(desired_state->gateway.listen_port),
         desired_state->gateway.listen_port);
   }
+  if (resolution.target.has_value()) {
+    const std::string route_node =
+        resolution.runtime_status.has_value() &&
+                !resolution.runtime_status->node_name.empty()
+            ? resolution.runtime_status->node_name
+            : primary_node;
+    resolution.target->node_name = route_node;
+    if (!IsControllerLocalNode(route_node) &&
+        IsLoopbackRuntimeHost(resolution.target->host)) {
+      resolution.target->route_via_hostd_proxy = true;
+      resolution.target->route_mode = "hostd-runtime-proxy";
+    }
+  }
 
   if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {
     naim::RuntimeStatus runtime;
@@ -2436,13 +2459,19 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
        resolution.target.has_value()
            ? nlohmann::json{
                  {"protocol_id", "NAIM-RUNTIME-HTTP"},
-                 {"mode", "direct-runtime"},
-                 {"supports_sse", true},
+                 {"mode", resolution.target->route_mode.empty()
+                              ? "direct-runtime"
+                              : resolution.target->route_mode},
+                 {"supports_sse", !resolution.target->route_via_hostd_proxy},
                  {"supports_rpc", false},
-                 {"supports_keep_alive", true},
-                 {"supports_direct_routing", true},
+                 {"supports_keep_alive", !resolution.target->route_via_hostd_proxy},
+                 {"supports_direct_routing", !resolution.target->route_via_hostd_proxy},
+                 {"supports_hostd_proxy", resolution.target->route_via_hostd_proxy},
                  {"degraded", false},
                  {"target", resolution.target->raw},
+                 {"node_name", resolution.target->node_name.empty()
+                                   ? nlohmann::json(nullptr)
+                                   : nlohmann::json(resolution.target->node_name)},
              }
            : nlohmann::json{
                  {"protocol_id", "NAIM-RUNTIME-HTTP"},
@@ -2451,6 +2480,7 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
                  {"supports_rpc", false},
                  {"supports_keep_alive", true},
                  {"supports_direct_routing", false},
+                 {"supports_hostd_proxy", false},
                  {"degraded", false},
              }},
       {"runtime_status",

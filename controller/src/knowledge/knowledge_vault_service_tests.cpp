@@ -126,6 +126,9 @@ void TestReadyStatusUsesCacheWithoutExtraRequests() {
   Expect(
       status.value("schema_version", std::string{}) == "knowledge.v1",
       "ready status should include cached schema");
+  Expect(
+      status.value("transport", std::string{}) == "hostd-runtime-proxy",
+      "loopback knowledge vault endpoint should expose hostd proxy transport");
   Expect(CountAssignments(db_path) == 0, "ready status should not enqueue requests");
 }
 

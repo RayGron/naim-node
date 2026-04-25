@@ -178,8 +178,14 @@ nlohmann::json InteractionRequestContractSupport::BuildInteractionContractMetada
     const auto& target = *resolution.target;
     transport["target"] = target.raw.empty() ? nlohmann::json(nullptr)
                                              : nlohmann::json(target.raw);
-    transport["supports_direct_routing"] = true;
-    transport["mode"] = "direct-runtime";
+    transport["supports_direct_routing"] = !target.route_via_hostd_proxy;
+    transport["supports_sse"] = !target.route_via_hostd_proxy;
+    transport["supports_hostd_proxy"] = target.route_via_hostd_proxy;
+    transport["mode"] =
+        target.route_mode.empty() ? "direct-runtime" : target.route_mode;
+    if (!target.node_name.empty()) {
+      transport["node_name"] = target.node_name;
+    }
   }
   metadata["transport"] = std::move(transport);
   if (session_id.has_value()) {

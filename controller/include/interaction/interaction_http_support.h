@@ -75,6 +75,14 @@ class InteractionHttpSupport final {
       const std::string& path,
       const std::string& body,
       const std::vector<std::pair<std::string, std::string>>& headers) const;
+  HttpResponse SendRuntimeHttpRequest(
+      const naim::controller::PlaneInteractionResolution& resolution,
+      const naim::controller::ControllerEndpointTarget& target,
+      const std::string& method,
+      const std::string& path,
+      const std::string& body,
+      const std::string& request_id,
+      const std::vector<std::pair<std::string, std::string>>& headers) const;
   void SendHttpResponse(
       naim::platform::SocketHandle client_fd,
       const HttpResponse& response) const;
@@ -85,6 +93,18 @@ class InteractionHttpSupport final {
   bool SendAll(naim::platform::SocketHandle fd, const std::string& payload) const;
 
  private:
+  HttpResponse SendHostdRuntimeProxyRequest(
+      const std::string& db_path,
+      const std::string& node_name,
+      const std::string& plane_name,
+      const naim::controller::ControllerEndpointTarget& target,
+      const std::string& method,
+      const std::string& path,
+      const std::string& body,
+      const std::string& request_id,
+      const std::vector<std::pair<std::string, std::string>>& headers,
+      const std::string& policy) const;
+
   const naim::controller::ControllerRuntimeSupportService& runtime_support_service_;
   const naim::controller::DesiredStatePolicyService& desired_state_policy_service_;
   const naim::controller::InteractionRuntimeSupportService&
