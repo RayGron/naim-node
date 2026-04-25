@@ -447,7 +447,6 @@ add_executable(
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp
   controller/src/interaction/interaction_service.cpp
-  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/plane/plane_dashboard_skills_summary_service.cpp
   controller/src/skills/plane_skill_contextual_resolver_service.cpp
   controller/src/skills/plane_skill_runtime_sync_service.cpp
@@ -811,7 +810,6 @@ add_executable(
   controller/src/interaction/interaction_replica_group_summary_builder.cpp
   controller/src/interaction/interaction_runtime_text_support.cpp
   controller/src/interaction/interaction_service.cpp
-  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/interaction/interaction_stream_http_error_response_builder.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service_tests.cpp
@@ -867,7 +865,6 @@ add_executable(
   controller/src/infra/controller_runtime_support_service.cpp
   controller/src/interaction/interaction_continuation_payload_builder.cpp
   controller/src/interaction/interaction_completion_policy_support.cpp
-  controller/src/interaction/interaction_hostd_runtime_relay_service.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_model_identity_builder.cpp
   controller/src/interaction/interaction_payload_builder.cpp
@@ -915,6 +912,8 @@ naim_enable_strict_warnings(naim-interaction-utf8-payload-sanitizer-tests)
 add_executable(
   naim-knowledge-vault-service-tests
   controller/src/http/controller_http_server_support.cpp
+  controller/src/http/controller_http_transport.cpp
+  controller/src/infra/controller_network_manager.cpp
   controller/src/knowledge/knowledge_vault_http_service.cpp
   controller/src/knowledge/knowledge_vault_service.cpp
   controller/src/knowledge/knowledge_vault_service_repository.cpp
@@ -1298,7 +1297,6 @@ add_executable(
   controller/src/interaction/interaction_contract_responder.cpp
   controller/src/interaction/interaction_conversation_service.cpp
   controller/src/interaction/interaction_http_service.cpp
-  controller/src/interaction/interaction_hostd_runtime_relay_service.cpp
   controller/src/interaction/interaction_http_executor_factory.cpp
   controller/src/interaction/interaction_http_support.cpp
   controller/src/interaction/interaction_model_identity_builder.cpp
@@ -1311,7 +1309,6 @@ add_executable(
   controller/src/interaction/interaction_sse_frame_builder.cpp
   controller/src/interaction/interaction_stream_http_error_response_builder.cpp
   controller/src/interaction/interaction_stream_http_request_preparation_service.cpp
-  controller/src/interaction/interaction_target_relay_policy.cpp
   controller/src/interaction/interaction_text_post_processor.cpp
   controller/src/interaction/interaction_upstream_event_parser.cpp
   controller/src/interaction/interaction_utf8_payload_sanitizer.cpp

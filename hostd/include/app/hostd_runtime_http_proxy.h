@@ -9,7 +9,6 @@ namespace naim::hostd {
 
 enum class HostdRuntimeProxyPolicy {
   Runtime,
-  KnowledgeVault,
 };
 
 struct HostdRuntimeHttpResponse {
@@ -37,9 +36,6 @@ class HostdRuntimeHttpProxy final {
   static std::string LowercaseAscii(std::string value);
   static bool IsLoopbackRuntimeHost(const std::string& host);
   static bool IsAllowedRuntimeProxyPath(
-      const std::string& method,
-      const std::string& path);
-  static bool IsAllowedKnowledgeVaultProxyPath(
       const std::string& method,
       const std::string& path);
   static bool IsAllowedProxyPath(

@@ -19,10 +19,6 @@ struct ControllerEndpointTarget {
   std::string host;
   int port = 0;
   std::string base_path;
-  bool use_hostd_runtime_relay = false;
-  std::string relay_db_path;
-  std::string relay_node_name;
-  std::string relay_plane_name;
 };
 
 struct PlaneInteractionResolution {

@@ -1523,41 +1523,40 @@ HttpResponse HostdHttpService::HandleSessionHeartbeat(
 HttpResponse HostdHttpService::HandleNextAssignment(
     const std::string& db_path,
     const HttpRequest& request) const {
-  if (request.method != "GET" && request.method != "POST") {
+  if (request.method != "POST") {
     return support_.build_json_response(405, json{{"status", "method_not_allowed"}}, {});
   }
   try {
     HostdRequestContext context(support_, db_path);
-    std::optional<std::string> node_name = FindQueryStringValue(request, "node");
+    std::optional<std::string> node_name;
     std::optional<naim::RegisteredHostRecord> authenticated;
-    bool encrypted_request = false;
-    int wait_ms = 0;
-    std::string preferred_control_transport = "http-poll";
-    if (request.method == "POST") {
-      authenticated = context.Authenticate(request);
-      if (!authenticated.has_value()) {
-        return context.Json(
-            403,
-            json{{"status", "forbidden"},
-                 {"message", "invalid or missing host session"}});
-      }
-      auto host = *authenticated;
-      const json decrypted =
-          context.ParseEncryptedBody(request, &host, "assignments/next");
-      node_name = decrypted.contains("node_name")
-                      ? std::optional<std::string>(
-                            decrypted.value("node_name", std::string{}))
-                      : node_name;
-      wait_ms = std::clamp(decrypted.value("wait_ms", 0), 0, 30000);
-      preferred_control_transport = decrypted.value(
-          "preferred_control_transport",
-          preferred_control_transport);
-      authenticated = host;
-      encrypted_request = true;
-    } else if (const auto query_wait_ms = FindQueryStringValue(request, "wait_ms");
-               query_wait_ms.has_value()) {
-      wait_ms = std::clamp(std::stoi(*query_wait_ms), 0, 30000);
+    int wait_ms = 15000;
+    std::string preferred_control_transport = "http-long-poll";
+    authenticated = context.Authenticate(request);
+    if (!authenticated.has_value()) {
+      return context.Json(
+          403,
+          json{{"status", "forbidden"},
+               {"message", "invalid or missing host session"}});
     }
+    auto host = *authenticated;
+    const json decrypted =
+        context.ParseEncryptedBody(request, &host, "assignments/next");
+    node_name = decrypted.contains("node_name")
+                    ? std::optional<std::string>(
+                          decrypted.value("node_name", std::string{}))
+                    : node_name;
+    wait_ms = std::clamp(decrypted.value("wait_ms", wait_ms), 1000, 30000);
+    preferred_control_transport = decrypted.value(
+        "preferred_control_transport",
+        preferred_control_transport);
+    if (preferred_control_transport != "http-long-poll") {
+      return context.Json(
+          400,
+          json{{"status", "bad_request"},
+               {"message", "hostd assignment protocol requires http-long-poll"}});
+    }
+    authenticated = host;
     if (!node_name.has_value() || node_name->empty()) {
       return context.Json(
           400,
@@ -1577,7 +1576,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     const auto started_at = std::chrono::steady_clock::now();
     do {
       assignment = context.store().ClaimNextHostAssignment(*node_name);
-      if (assignment.has_value() || wait_ms <= 0) {
+      if (assignment.has_value()) {
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -1591,7 +1590,7 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     const json payload{
         {"service", "naim-controller"},
         {"node_name", *node_name},
-        {"transport_mode", wait_ms > 0 ? "http-long-poll" : "http-poll"},
+        {"transport_mode", "http-long-poll"},
         {"preferred_control_transport", preferred_control_transport},
         {"wait_ms", wait_ms},
         {"waited_ms", waited_ms},
@@ -1599,11 +1598,8 @@ HttpResponse HostdHttpService::HandleNextAssignment(
          assignment.has_value() ? BuildAssignmentPayloadItem(*assignment)
                                 : json(nullptr)},
     };
-    if (encrypted_request) {
-      auto host = *authenticated;
-      return context.EncryptedResponse(&host, "assignments/next", payload);
-    }
-    return context.Json(200, payload);
+    auto response_host = *authenticated;
+    return context.EncryptedResponse(&response_host, "assignments/next", payload);
   } catch (const std::exception& error) {
     return support_.build_json_response(
         500,

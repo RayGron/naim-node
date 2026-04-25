@@ -40,13 +40,14 @@ class KnowledgeVaultService final {
   static nlohmann::json ParseJsonBody(const HttpRequest& request);
   static std::string DefaultKnowledgeImage();
   static std::string HeaderValue(const HttpRequest& request, const std::string& key);
-  static std::string NewRequestId();
   std::string SelectStorageNode(const std::string& db_path, const nlohmann::json& request) const;
   std::string LoadStorageRoot(
       const std::string& db_path,
       const std::string& node_name) const;
-  HttpResponse SendViaHostdProxy(
+  std::string LoadNodeEndpointHost(
       const std::string& db_path,
+      const std::string& node_name) const;
+  HttpResponse SendDirectRuntime(
       const KnowledgeVaultServiceRecord& record,
       const std::string& method,
       const std::string& upstream_path,

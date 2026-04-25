@@ -63,7 +63,6 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/planes/<plane>/interaction/sessions/<session_id>",
       "/api/v1/planes/<plane>/interaction/chat/completions",
       "/api/v1/planes/<plane>/interaction/chat/completions/stream",
-      "/api/v1/planes/<plane>/interaction/ws",
   });
   if (webgateway_routes_enabled) {
     AppendRoutes(routes, {
@@ -94,7 +93,6 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/rebalance-plan",
       "/api/v1/events",
       "/api/v1/events/stream",
-      "/api/v1/ws/control",
   });
   AppendRoutes(routes, {
       "/api/v1/scheduler-tick",
@@ -122,7 +120,6 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/hostd/model-artifacts/chunks/poll",
       "/api/v1/hostd/model-artifacts/manifest/request",
       "/api/v1/hostd/model-artifacts/manifest/poll",
-      "/api/v1/hostd/control/ws",
   });
 
   return JoinRoutes(routes);

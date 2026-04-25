@@ -309,12 +309,10 @@ void HttpHostdBackend::EnsureRegistered(const std::string& node_name) {
                 nlohmann::json{
                     {"preferred_control_transport", "http-long-poll"},
                     {"supported_control_transports",
-                     nlohmann::json::array({"http-poll", "http-long-poll", "websocket"})},
+                     nlohmann::json::array({"http-long-poll"})},
                     {"supports_keep_alive", true},
                     {"supports_long_poll", true},
-                    {"supports_websocket", true},
                     {"supports_resumable_transfer", true},
-                    {"supports_udp_discovery", true},
                 }},
            }.dump()},
           {"status_message", "registered via naim-node remote hostd onboarding"},

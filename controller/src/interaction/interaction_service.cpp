@@ -7,7 +7,6 @@
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_replica_group_summary_builder.h"
 #include "interaction/interaction_runtime_text_support.h"
-#include "interaction/interaction_target_relay_policy.h"
 #include "interaction/interaction_text_post_processor.h"
 #include "interaction/interaction_upstream_event_parser.h"
 #include <algorithm>
@@ -1925,23 +1924,11 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       resolution.target = parse_interaction_target_(
           resolution.runtime_status->gateway_listen,
           desired_state->gateway.listen_port);
-      InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
-          store,
-          db_path,
-          primary_node,
-          plane_name,
-          &resolution.target);
     }
   }
 
   if (plane_local_interaction_target.has_value()) {
     resolution.target = plane_local_interaction_target;
-    InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
-        store,
-        db_path,
-        primary_node,
-        plane_name,
-        &resolution.target);
   }
 
   const bool llm_plane = desired_state->plane_mode == naim::PlaneMode::Llm;
@@ -2029,12 +2016,6 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
         desired_state->gateway.listen_host + ":" +
             std::to_string(desired_state->gateway.listen_port),
         desired_state->gateway.listen_port);
-    InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
-        store,
-        db_path,
-        primary_node,
-        plane_name,
-        &resolution.target);
   }
 
   if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {
@@ -2454,38 +2435,22 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       {"transport",
        resolution.target.has_value()
            ? nlohmann::json{
-                 {"protocol_id",
-                  resolution.target->use_hostd_runtime_relay
-                      ? "NAIM-HOSTD-SESSION"
-                      : "NAIM-RUNTIME-HTTP"},
-                 {"mode",
-                  resolution.target->use_hostd_runtime_relay
-                      ? "hostd-relay-fallback"
-                      : "direct-runtime"},
+                 {"protocol_id", "NAIM-RUNTIME-HTTP"},
+                 {"mode", "direct-runtime"},
                  {"supports_sse", true},
-                 {"supports_websocket", false},
                  {"supports_rpc", false},
                  {"supports_keep_alive", true},
-                 {"supports_direct_routing",
-                  !resolution.target->use_hostd_runtime_relay},
-                 {"requires_hostd_relay",
-                  resolution.target->use_hostd_runtime_relay},
-                 {"degraded", resolution.target->use_hostd_runtime_relay},
+                 {"supports_direct_routing", true},
+                 {"degraded", false},
                  {"target", resolution.target->raw},
-                 {"relay_node_name",
-                  resolution.target->relay_node_name.empty()
-                      ? nlohmann::json(nullptr)
-                      : nlohmann::json(resolution.target->relay_node_name)},
              }
            : nlohmann::json{
                  {"protocol_id", "NAIM-RUNTIME-HTTP"},
                  {"mode", "not_selected"},
                  {"supports_sse", true},
-                 {"supports_websocket", false},
                  {"supports_rpc", false},
                  {"supports_keep_alive", true},
                  {"supports_direct_routing", false},
-                 {"requires_hostd_relay", false},
                  {"degraded", false},
              }},
       {"runtime_status",

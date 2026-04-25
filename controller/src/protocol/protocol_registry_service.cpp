@@ -46,13 +46,8 @@ std::optional<HttpResponse> ProtocolRegistryService::HandleRequest(
 nlohmann::json ProtocolRegistryService::BuildPayload() const {
   json items = json::array();
   int direct_count = 0;
-  int relay_count = 0;
   int optional_count = 0;
   for (const auto& item : Items()) {
-    if (item.fallback.find("relay") != std::string::npos ||
-        item.transport.find("hostd") != std::string::npos) {
-      ++relay_count;
-    }
     if (item.status == "optional" || item.status == "capability-gated") {
       ++optional_count;
     }
@@ -68,7 +63,6 @@ nlohmann::json ProtocolRegistryService::BuildPayload() const {
       {"summary",
        json{{"total", Items().size()},
             {"direct", direct_count},
-            {"relay", relay_count},
             {"optional", optional_count}}},
   };
 }
@@ -101,11 +95,10 @@ std::vector<ProtocolRegistryItem> ProtocolRegistryService::Items() const {
        "client retry with idempotency key where provided",
        "request ordered by session",
        "30s first response, stream deadline from plane policy",
-       "none for hot path; diagnostic controller relay is explicit degraded mode",
+       "plane_not_ready; no controller or hostd hot-path relay",
        "direct route selected for normal chat",
        "active",
        json{{"supports_sse", true},
-            {"supports_websocket", true},
             {"supports_direct_routing", true}}},
       {"NAIM-CTRL-HTTP",
        "controller",
@@ -116,7 +109,7 @@ std::vector<ProtocolRegistryItem> ProtocolRegistryService::Items() const {
        "per-resource optimistic ordering",
        "15s",
        "operator retry",
-       "control APIs avoid hot request relay",
+       "control APIs are not a hot interaction transport",
        "active",
        json{{"supports_keep_alive", true}}},
       {"NAIM-INTERACTION-SSE",
@@ -145,18 +138,16 @@ std::vector<ProtocolRegistryItem> ProtocolRegistryService::Items() const {
        json{{"supports_sse", true}}},
       {"NAIM-HOSTD-SESSION",
        "hostd",
-       "outbound HTTP poll or long-poll with encrypted envelopes",
+       "outbound HTTP long-poll with encrypted envelopes",
        "host session token plus encrypted payload",
        "L3 control",
        "retryable; controller sequence validates replay",
        "per-host sequence",
        "30s long-poll window",
-       "short poll",
+       "reconnect long-poll",
        "NAT-safe host control",
        "active",
-       json{{"supports_long_poll", true},
-            {"supports_websocket", true},
-            {"requires_hostd_relay", false}}},
+       json{{"supports_long_poll", true}}},
       {"NAIM-RUNTIME-HTTP",
        "runtime",
        "direct HTTP JSON/SSE",
@@ -165,7 +156,7 @@ std::vector<ProtocolRegistryItem> ProtocolRegistryService::Items() const {
        "retry only before upstream accepts request",
        "request scoped",
        "30s first byte",
-       "plane_not_ready for hot path; diagnostic relay only",
+       "plane_not_ready until a direct runtime target exists",
        "controller uses direct runtime target",
        "active",
        json{{"supports_keep_alive", true},
@@ -230,30 +221,6 @@ std::vector<ProtocolRegistryItem> ProtocolRegistryService::Items() const {
        "artifact transfer is resumable and expiring",
        "active",
        json{{"supports_resumable_transfer", true}}},
-      {"NAIM-UDP-OPTIONAL",
-       "hostd",
-       "UDP beacon",
-       "none; non-authoritative hint only",
-       "L5 telemetry",
-       "lossy; never authoritative",
-       "unordered",
-       "best effort",
-       "HTTP observation / TCP probe confirmation",
-       "LAN discovery hint only",
-       "optional",
-       json{{"supports_udp_discovery", true}}},
-      {"NAIM-WS-OPTIONAL",
-       "controller",
-       "WebSocket JSON envelope",
-       "controller or host session",
-       "L1/L2 bidirectional live session",
-       "request id based",
-       "ordered frames per socket",
-       "continuous with ping/pong",
-       "HTTP/SSE",
-       "optional live control and interaction channel",
-       "capability-gated",
-       json{{"supports_websocket", true}}},
   };
 }
 

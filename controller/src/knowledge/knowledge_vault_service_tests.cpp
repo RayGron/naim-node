@@ -78,19 +78,13 @@ void SeedApplyAssignment(
   }
 }
 
-std::size_t CountProxyAssignments(const std::string& db_path) {
+std::size_t CountAssignments(const std::string& db_path) {
   naim::ControllerStore store(db_path);
   store.Initialize();
-  std::size_t count = 0;
-  for (const auto& assignment : store.LoadHostAssignments(std::nullopt, std::nullopt, std::nullopt)) {
-    if (assignment.assignment_type == "knowledge-vault-http-proxy") {
-      ++count;
-    }
-  }
-  return count;
+  return store.LoadHostAssignments(std::nullopt, std::nullopt, std::nullopt).size();
 }
 
-void TestStatusDoesNotProxyWhileApplyIsPending() {
+void TestStatusUsesApplyStateWhileApplyIsPending() {
   const std::string db_path = MakeTempDbPath("pending");
   naim::controller::KnowledgeVaultServiceRepository{}.UpsertService(
       db_path,
@@ -100,10 +94,10 @@ void TestStatusDoesNotProxyWhileApplyIsPending() {
   const auto status = naim::controller::KnowledgeVaultService{}.BuildStatus(db_path);
   Expect(status.value("status", std::string{}) == "starting", "status should remain starting");
   Expect(status.contains("apply_assignment"), "status should expose apply assignment");
-  Expect(CountProxyAssignments(db_path) == 0, "pending apply should not enqueue proxy requests");
+  Expect(CountAssignments(db_path) == 1, "pending apply should not enqueue extra requests");
 }
 
-void TestStatusReportsApplyFailureWithoutProxy() {
+void TestStatusReportsApplyFailureWithoutExtraRequests() {
   const std::string db_path = MakeTempDbPath("failed");
   naim::controller::KnowledgeVaultServiceRepository{}.UpsertService(
       db_path,
@@ -118,10 +112,10 @@ void TestStatusReportsApplyFailureWithoutProxy() {
   Expect(
       status.value("runtime_error", std::string{}).find("failed to pull") != std::string::npos,
       "failed apply should surface pull error");
-  Expect(CountProxyAssignments(db_path) == 0, "failed apply should not enqueue proxy requests");
+  Expect(CountAssignments(db_path) == 1, "failed apply should not enqueue extra requests");
 }
 
-void TestReadyStatusUsesCacheWithoutProxy() {
+void TestReadyStatusUsesCacheWithoutExtraRequests() {
   const std::string db_path = MakeTempDbPath("ready");
   naim::controller::KnowledgeVaultServiceRepository{}.UpsertService(
       db_path,
@@ -132,7 +126,7 @@ void TestReadyStatusUsesCacheWithoutProxy() {
   Expect(
       status.value("schema_version", std::string{}) == "knowledge.v1",
       "ready status should include cached schema");
-  Expect(CountProxyAssignments(db_path) == 0, "ready status should not enqueue proxy requests");
+  Expect(CountAssignments(db_path) == 0, "ready status should not enqueue requests");
 }
 
 naim::DesiredState BuildKnowledgePlaneState() {
@@ -224,9 +218,9 @@ void TestPlaneScopedSearchRequestKeepsExplicitBody() {
 }  // namespace
 
 int main() {
-  TestStatusDoesNotProxyWhileApplyIsPending();
-  TestStatusReportsApplyFailureWithoutProxy();
-  TestReadyStatusUsesCacheWithoutProxy();
+  TestStatusUsesApplyStateWhileApplyIsPending();
+  TestStatusReportsApplyFailureWithoutExtraRequests();
+  TestReadyStatusUsesCacheWithoutExtraRequests();
   TestPlaneScopedContextRequestAddsPlaneAndSelectedKnowledge();
   TestPlaneScopedGraphRequestDefaultsToSelectedKnowledge();
   TestPlaneScopedSearchRequestKeepsExplicitBody();

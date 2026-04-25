@@ -70,19 +70,17 @@ json BuildTransportCapabilities(const naim::RegisteredHostRecord& host) {
       {"preferred_control_transport",
        transport.value(
            "preferred_control_transport",
-           host.transport_mode == "out" ? std::string("http-poll")
+           host.transport_mode == "out" ? std::string("http-long-poll")
                                         : host.transport_mode)},
       {"supported_control_transports",
        transport.contains("supported_control_transports") &&
                transport.at("supported_control_transports").is_array()
            ? transport.at("supported_control_transports")
-           : json::array({"http-poll"})},
+           : json::array({"http-long-poll"})},
       {"supports_keep_alive", transport.value("supports_keep_alive", false)},
       {"supports_long_poll", transport.value("supports_long_poll", false)},
-      {"supports_websocket", transport.value("supports_websocket", false)},
       {"supports_resumable_transfer",
        transport.value("supports_resumable_transfer", false)},
-      {"supports_udp_discovery", transport.value("supports_udp_discovery", false)},
   };
 }
 

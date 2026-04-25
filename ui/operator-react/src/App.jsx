@@ -4746,7 +4746,7 @@ function App() {
       transportCapabilities.supported_control_transports,
     )
       ? transportCapabilities.supported_control_transports.join(", ")
-      : "http-poll";
+      : "http-long-poll";
 
     return (
       <div className="modal-backdrop" role="presentation" onClick={closeHostOverview}>
@@ -4776,7 +4776,7 @@ function App() {
             <div className="metric-row"><span>Role reason</span><strong>{registry?.role_reason || "n/a"}</strong></div>
             <div className="metric-row"><span>Execution</span><strong>{registry?.execution_mode || "n/a"}</strong></div>
             <div className="metric-row"><span>Transport</span><strong>{registry?.transport_mode || "n/a"}</strong></div>
-            <div className="metric-row"><span>Control</span><strong>{transportCapabilities.preferred_control_transport || "http-poll"}</strong></div>
+            <div className="metric-row"><span>Control</span><strong>{transportCapabilities.preferred_control_transport || "http-long-poll"}</strong></div>
             <div className="metric-row"><span>Supported control</span><strong>{supportedControlTransports}</strong></div>
             <div className="metric-row"><span>Resumable bulk</span><strong>{yesNo(transportCapabilities.supports_resumable_transfer)}</strong></div>
             <div className="metric-row"><span>Advertised</span><strong>{registry?.advertised_address || "n/a"}</strong></div>
@@ -7026,9 +7026,7 @@ function App() {
               </span>
               <span className="tag">{selectedTransport.protocol_id || "protocol n/a"}</span>
               {selectedTransport.supports_sse ? <span className="tag">SSE</span> : null}
-              {selectedTransport.supports_websocket ? <span className="tag">WebSocket</span> : null}
               {selectedTransport.supports_rpc ? <span className="tag">RPC</span> : null}
-              {selectedTransport.requires_hostd_relay ? <span className="tag is-warning">Relay</span> : null}
             </div>
           </section>
         ) : null}
