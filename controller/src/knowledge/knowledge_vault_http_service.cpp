@@ -74,6 +74,7 @@ std::optional<HttpResponse> KnowledgeVaultHttpService::HandleRequest(
         suffix.rfind("/replica-merges", 0) == 0 ||
         suffix.rfind("/reviews", 0) == 0 ||
         suffix.rfind("/repair", 0) == 0 ||
+        suffix.rfind("/jobs", 0) == 0 ||
         suffix.rfind("/markdown-export", 0) == 0 ||
         suffix.rfind("/markdown-import", 0) == 0 ||
         suffix.rfind("/graph-neighborhood", 0) == 0 ||

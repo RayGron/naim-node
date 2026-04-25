@@ -90,4 +90,15 @@ std::optional<HttpResponse> SchedulerHttpRouteHandler::TryHandle(
   return service_.HandleRequest(db_path, default_artifacts_root, request);
 }
 
+ProtocolRegistryHttpRouteHandler::ProtocolRegistryHttpRouteHandler(
+    ProtocolRegistryService& service)
+    : service_(service) {}
+
+std::optional<HttpResponse> ProtocolRegistryHttpRouteHandler::TryHandle(
+    const std::string&,
+    const std::string&,
+    const HttpRequest& request) const {
+  return service_.HandleRequest(request);
+}
+
 }  // namespace naim::controller

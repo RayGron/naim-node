@@ -145,6 +145,10 @@ function skillsFactoryPath(suffix = "") {
   return suffix ? `/api/v1/skills-factory/${suffix}` : "/api/v1/skills-factory";
 }
 
+function protocolsPath(suffix = "") {
+  return suffix ? `/api/v1/protocols/${suffix}` : "/api/v1/protocols";
+}
+
 function interactionPath(planeName, suffix) {
   return planePath(planeName, `interaction/${suffix}`);
 }
@@ -1924,7 +1928,7 @@ function App() {
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
   const [selectedPage, setSelectedPage] = useState(
-    ["dashboard", "planes", "models", "knowledge-vault", "skills-factory", "access"].includes(initialPage)
+    ["dashboard", "planes", "models", "knowledge-vault", "protocols", "skills-factory", "access"].includes(initialPage)
       ? initialPage
       : "dashboard",
   );
@@ -1955,6 +1959,7 @@ function App() {
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
   const [hostdHosts, setHostdHosts] = useState([]);
+  const [protocolRegistry, setProtocolRegistry] = useState({ items: [], summary: {} });
   const [selectedHostNodeName, setSelectedHostNodeName] = useState("");
   const [diskState, setDiskState] = useState(null);
   const [rolloutState, setRolloutState] = useState(null);
@@ -2460,17 +2465,23 @@ function App() {
       );
       const hostdHostsRequest = fetchJson(hostdHostsPath());
       const knowledgeVaultStatusRequest = fetchJson(knowledgeVaultPath());
+      const protocolRegistryRequest = fetchJson(protocolsPath()).catch(() => ({
+        items: [],
+        summary: {},
+      }));
       if (!planeName) {
         const [
           dashboardPayload,
           globalHostObservationsPayload,
           hostdHostsPayload,
           knowledgeVaultStatusPayload,
+          protocolRegistryPayload,
         ] = await Promise.all([
           fetchJson(queryPath("/api/v1/dashboard", { stale_after: 30 })),
           globalHostObservationsRequest,
           hostdHostsRequest,
           knowledgeVaultStatusRequest,
+          protocolRegistryRequest,
         ]);
         const globalObservationItems = hostObservationItemsFromPayload(
           globalHostObservationsPayload,
@@ -2482,6 +2493,7 @@ function App() {
         setGlobalHostObservations(globalHostObservationsPayload);
         setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
         setKnowledgeVaultStatus(knowledgeVaultStatusPayload);
+        setProtocolRegistry(protocolRegistryPayload);
         setMetricHistory((current) =>
           appendMetricHistory(
             current,
@@ -2514,6 +2526,7 @@ function App() {
         interactionPayload,
         hostdHostsPayload,
         knowledgeVaultStatusPayload,
+        protocolRegistryPayload,
       ] = await Promise.all([
         fetchJson(planePath(planeName)),
         fetchJson(planePath(planeName, "dashboard")),
@@ -2541,6 +2554,7 @@ function App() {
         fetchJson(interactionPath(planeName, "status")),
         hostdHostsRequest,
         knowledgeVaultStatusRequest,
+        protocolRegistryRequest,
       ]);
 
       setPlaneDetail(planePayload);
@@ -2548,6 +2562,7 @@ function App() {
       setHostObservations(hostObservationsPayload);
       setGlobalHostObservations(globalHostObservationsPayload);
       setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
+      setProtocolRegistry(protocolRegistryPayload);
       setDiskState(diskPayload);
       setRolloutState(rolloutPayload);
       setRebalancePlan(rebalancePayload);
@@ -4726,6 +4741,12 @@ function App() {
     const storageTotalBytes = Number(capacity.storage_total_bytes || 0);
     const storageFreeBytes = Number(capacity.storage_free_bytes || 0);
     const showStorageDetails = storageSelected || storageEligible || storageTotalBytes > 0;
+    const transportCapabilities = registry?.transport_capabilities || {};
+    const supportedControlTransports = Array.isArray(
+      transportCapabilities.supported_control_transports,
+    )
+      ? transportCapabilities.supported_control_transports.join(", ")
+      : "http-poll";
 
     return (
       <div className="modal-backdrop" role="presentation" onClick={closeHostOverview}>
@@ -4755,6 +4776,9 @@ function App() {
             <div className="metric-row"><span>Role reason</span><strong>{registry?.role_reason || "n/a"}</strong></div>
             <div className="metric-row"><span>Execution</span><strong>{registry?.execution_mode || "n/a"}</strong></div>
             <div className="metric-row"><span>Transport</span><strong>{registry?.transport_mode || "n/a"}</strong></div>
+            <div className="metric-row"><span>Control</span><strong>{transportCapabilities.preferred_control_transport || "http-poll"}</strong></div>
+            <div className="metric-row"><span>Supported control</span><strong>{supportedControlTransports}</strong></div>
+            <div className="metric-row"><span>Resumable bulk</span><strong>{yesNo(transportCapabilities.supports_resumable_transfer)}</strong></div>
             <div className="metric-row"><span>Advertised</span><strong>{registry?.advertised_address || "n/a"}</strong></div>
             <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at || registry?.last_heartbeat_at)}</strong></div>
           </div>
@@ -6971,6 +6995,87 @@ function App() {
     );
   }
 
+  function renderProtocolsPage() {
+    const items = Array.isArray(protocolRegistry.items) ? protocolRegistry.items : [];
+    const summary = protocolRegistry.summary || {};
+    const selectedTransport = interactionStatus?.naim?.transport || interactionStatus?.transport || null;
+
+    return (
+      <section className="panel page-panel protocol-registry-page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Network</div>
+            <h2>Protocol Registry</h2>
+          </div>
+          <div className="toolbar">
+            <span className="tag">{summary.total ?? items.length} protocols</span>
+            <span className="tag">Direct {summary.direct ?? 0}</span>
+            <span className="tag">Optional {summary.optional ?? 0}</span>
+          </div>
+        </div>
+
+        {selectedTransport ? (
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Selected plane transport</h3>
+              <span className="subpanel-meta">{selectedPlane || "fleet"}</span>
+            </div>
+            <div className="transport-badge-row">
+              <span className={`tag ${selectedTransport.degraded ? "is-warning" : "is-healthy"}`}>
+                {selectedTransport.mode || "unknown"}
+              </span>
+              <span className="tag">{selectedTransport.protocol_id || "protocol n/a"}</span>
+              {selectedTransport.supports_sse ? <span className="tag">SSE</span> : null}
+              {selectedTransport.supports_websocket ? <span className="tag">WebSocket</span> : null}
+              {selectedTransport.supports_rpc ? <span className="tag">RPC</span> : null}
+              {selectedTransport.requires_hostd_relay ? <span className="tag is-warning">Relay</span> : null}
+            </div>
+          </section>
+        ) : null}
+
+        <div className="protocol-registry-grid">
+          {items.length === 0 ? (
+            <EmptyState title="No protocol registry data" />
+          ) : (
+            items.map((item) => {
+              const capabilities = item.capabilities || {};
+              const capabilityLabels = Object.entries(capabilities)
+                .filter(([, value]) => value === true)
+                .map(([key]) => key.replace(/^supports_/, "").replaceAll("_", " "));
+              return (
+                <article className="list-card protocol-card" key={item.protocol_id}>
+                  <div className="card-row">
+                    <strong>{item.protocol_id}</strong>
+                    <span className={`tag ${item.status === "active" ? "is-healthy" : "is-booting"}`}>
+                      {item.status || "unknown"}
+                    </span>
+                  </div>
+                  <div className="metric-grid">
+                    <div className="metric-row"><span>Owner</span><strong>{item.owner || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Transport</span><strong>{item.transport || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Latency</span><strong>{item.latency_class || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Timeout</span><strong>{item.timeout || "n/a"}</strong></div>
+                  </div>
+                  <div className="list-detail">
+                    <div><strong>Fallback:</strong> {item.fallback || "n/a"}</div>
+                    <div><strong>SLO:</strong> {item.slo || "n/a"}</div>
+                  </div>
+                  {capabilityLabels.length > 0 ? (
+                    <div className="transport-badge-row">
+                      {capabilityLabels.map((label) => (
+                        <span className="tag" key={`${item.protocol_id}:${label}`}>{label}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })
+          )}
+        </div>
+      </section>
+    );
+  }
+
   function renderAccessPage() {
     return (
       <section className="panel page-panel">
@@ -7460,6 +7565,19 @@ function App() {
               </span>
             </button>
             <button
+              className={`side-menu-item ${selectedPage === "protocols" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("protocols")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Protocols</span>
+                <span className="side-menu-meta">Network registry and plane transport</span>
+              </div>
+              <span className="tag">
+                <span>{protocolRegistry.summary?.total ?? protocolRegistry.items?.length ?? 0} items</span>
+              </span>
+            </button>
+            <button
               className={`side-menu-item ${selectedPage === "skills-factory" ? "is-active" : ""}`}
               type="button"
               onClick={() => setSelectedPage("skills-factory")}
@@ -7497,6 +7615,8 @@ function App() {
           renderModelsLibrary()
         ) : selectedPage === "knowledge-vault" ? (
           renderKnowledgeVaultPage()
+        ) : selectedPage === "protocols" ? (
+          renderProtocolsPage()
         ) : selectedPage === "skills-factory" ? (
           renderSkillsFactoryPage()
         ) : selectedPage === "access" ? (

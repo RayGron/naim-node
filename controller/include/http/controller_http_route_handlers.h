@@ -10,6 +10,7 @@
 #include "knowledge/knowledge_vault_http_service.h"
 #include "model/model_library_http_service.h"
 #include "plane/plane_http_service.h"
+#include "protocol/protocol_registry_service.h"
 #include "read_model/read_model_http_service.h"
 #include "scheduler/scheduler_http_service.h"
 #include "skills/skills_factory_http_service.h"
@@ -122,6 +123,18 @@ class SchedulerHttpRouteHandler final : public IControllerHttpRouteHandler {
 
  private:
   SchedulerHttpService& service_;
+};
+
+class ProtocolRegistryHttpRouteHandler final : public IControllerHttpRouteHandler {
+ public:
+  explicit ProtocolRegistryHttpRouteHandler(ProtocolRegistryService& service);
+  std::optional<HttpResponse> TryHandle(
+      const std::string& db_path,
+      const std::string& default_artifacts_root,
+      const HttpRequest& request) const override;
+
+ private:
+  ProtocolRegistryService& service_;
 };
 
 }  // namespace naim::controller

@@ -44,7 +44,11 @@ std::optional<naim::HostAssignment> HttpHostdBackend::ClaimNextHostAssignment(
   EnsureSession(node_name, "claiming next assignment");
   const auto payload = SendEncryptedControllerJsonRequest(
       "/api/v1/hostd/assignments/next",
-      nlohmann::json{{"node_name", node_name}},
+      nlohmann::json{
+          {"node_name", node_name},
+          {"preferred_control_transport", "http-long-poll"},
+          {"wait_ms", 15000},
+      },
       "assignments/next");
   if (!payload.contains("assignment") || payload["assignment"].is_null()) {
     return std::nullopt;
@@ -301,6 +305,17 @@ void HttpHostdBackend::EnsureRegistered(const std::string& node_name) {
           {"capabilities_json",
            nlohmann::json{
                {"storage_root", storage_root_},
+               {"transport",
+                nlohmann::json{
+                    {"preferred_control_transport", "http-long-poll"},
+                    {"supported_control_transports",
+                     nlohmann::json::array({"http-poll", "http-long-poll", "websocket"})},
+                    {"supports_keep_alive", true},
+                    {"supports_long_poll", true},
+                    {"supports_websocket", true},
+                    {"supports_resumable_transfer", true},
+                    {"supports_udp_discovery", true},
+                }},
            }.dump()},
           {"status_message", "registered via naim-node remote hostd onboarding"},
       });

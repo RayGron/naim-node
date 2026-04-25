@@ -1,11 +1,13 @@
 #include "host/hostd_http_service.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1529,6 +1531,8 @@ HttpResponse HostdHttpService::HandleNextAssignment(
     std::optional<std::string> node_name = FindQueryStringValue(request, "node");
     std::optional<naim::RegisteredHostRecord> authenticated;
     bool encrypted_request = false;
+    int wait_ms = 0;
+    std::string preferred_control_transport = "http-poll";
     if (request.method == "POST") {
       authenticated = context.Authenticate(request);
       if (!authenticated.has_value()) {
@@ -1544,8 +1548,15 @@ HttpResponse HostdHttpService::HandleNextAssignment(
                       ? std::optional<std::string>(
                             decrypted.value("node_name", std::string{}))
                       : node_name;
+      wait_ms = std::clamp(decrypted.value("wait_ms", 0), 0, 30000);
+      preferred_control_transport = decrypted.value(
+          "preferred_control_transport",
+          preferred_control_transport);
       authenticated = host;
       encrypted_request = true;
+    } else if (const auto query_wait_ms = FindQueryStringValue(request, "wait_ms");
+               query_wait_ms.has_value()) {
+      wait_ms = std::clamp(std::stoi(*query_wait_ms), 0, 30000);
     }
     if (!node_name.has_value() || node_name->empty()) {
       return context.Json(
@@ -1562,10 +1573,28 @@ HttpResponse HostdHttpService::HandleNextAssignment(
                  {"message", "invalid or missing host session"}});
       }
     }
-    const auto assignment = context.store().ClaimNextHostAssignment(*node_name);
+    std::optional<naim::HostAssignment> assignment;
+    const auto started_at = std::chrono::steady_clock::now();
+    do {
+      assignment = context.store().ClaimNextHostAssignment(*node_name);
+      if (assignment.has_value() || wait_ms <= 0) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    } while (std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - started_at)
+                 .count() < wait_ms);
+    const auto waited_ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started_at)
+            .count());
     const json payload{
         {"service", "naim-controller"},
         {"node_name", *node_name},
+        {"transport_mode", wait_ms > 0 ? "http-long-poll" : "http-poll"},
+        {"preferred_control_transport", preferred_control_transport},
+        {"wait_ms", wait_ms},
+        {"waited_ms", waited_ms},
         {"assignment",
          assignment.has_value() ? BuildAssignmentPayloadItem(*assignment)
                                 : json(nullptr)},

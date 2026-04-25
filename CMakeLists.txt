@@ -1336,6 +1336,7 @@ add_executable(
   controller/src/plane/plane_registry_query_support.cpp
   controller/src/plane/plane_registry_service.cpp
   controller/src/plane/plane_state_presentation_support.cpp
+  controller/src/protocol/protocol_registry_service.cpp
   controller/src/read_model/read_model_cli_service.cpp
   controller/src/read_model/read_model_http_service.cpp
   controller/src/read_model/read_model_http_support.cpp

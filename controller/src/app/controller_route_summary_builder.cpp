@@ -17,6 +17,10 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/bundles/apply",
   });
   AppendRoutes(routes, {
+      "/api/v1/protocols",
+      "/api/v1/protocols/<protocol_id>",
+  });
+  AppendRoutes(routes, {
       "/api/v1/model-library",
       "/api/v1/model-library/download",
       "/api/v1/model-library/jobs/stop",
@@ -59,6 +63,7 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/planes/<plane>/interaction/sessions/<session_id>",
       "/api/v1/planes/<plane>/interaction/chat/completions",
       "/api/v1/planes/<plane>/interaction/chat/completions/stream",
+      "/api/v1/planes/<plane>/interaction/ws",
   });
   if (webgateway_routes_enabled) {
     AppendRoutes(routes, {
@@ -72,6 +77,9 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/planes/<plane>/skills",
       "/api/v1/planes/<plane>/knowledge-vault/blocks",
       "/api/v1/planes/<plane>/knowledge-vault/source-ingest",
+      "/api/v1/planes/<plane>/knowledge-vault/jobs",
+      "/api/v1/planes/<plane>/knowledge-vault/jobs/<job_id>",
+      "/api/v1/planes/<plane>/knowledge-vault/jobs/<job_id>/events",
       "/api/v1/skills-factory",
       "/api/v1/skills-factory/<skill>",
   });
@@ -86,6 +94,7 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/rebalance-plan",
       "/api/v1/events",
       "/api/v1/events/stream",
+      "/api/v1/ws/control",
   });
   AppendRoutes(routes, {
       "/api/v1/scheduler-tick",
@@ -113,6 +122,7 @@ std::string ControllerRouteSummaryBuilder::BuildControllerRoutesSummary(
       "/api/v1/hostd/model-artifacts/chunks/poll",
       "/api/v1/hostd/model-artifacts/manifest/request",
       "/api/v1/hostd/model-artifacts/manifest/poll",
+      "/api/v1/hostd/control/ws",
   });
 
   return JoinRoutes(routes);

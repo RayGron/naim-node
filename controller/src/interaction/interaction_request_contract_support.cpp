@@ -167,6 +167,33 @@ nlohmann::json InteractionRequestContractSupport::BuildInteractionContractMetada
       {"active_model_id", ResolveInteractionActiveModelId(resolution)},
       {"reason", resolution.status_payload.value("reason", std::string{})},
   };
+  nlohmann::json transport{
+      {"protocol_id", "NAIM-RUNTIME-HTTP"},
+      {"mode", "not_selected"},
+      {"supports_sse", true},
+      {"supports_websocket",
+       resolution.status_payload.value("supports_websocket", false)},
+      {"supports_direct_routing", false},
+      {"requires_hostd_relay", false},
+      {"degraded", false},
+  };
+  if (resolution.target.has_value()) {
+    const auto& target = *resolution.target;
+    transport["target"] = target.raw.empty() ? nlohmann::json(nullptr)
+                                             : nlohmann::json(target.raw);
+    transport["supports_direct_routing"] = !target.use_hostd_runtime_relay;
+    transport["requires_hostd_relay"] = target.use_hostd_runtime_relay;
+    transport["mode"] =
+        target.use_hostd_runtime_relay ? "hostd-relay-fallback" : "direct-runtime";
+    transport["degraded"] = target.use_hostd_runtime_relay;
+    if (target.use_hostd_runtime_relay) {
+      transport["protocol_id"] = "NAIM-HOSTD-SESSION";
+      transport["relay_node_name"] = target.relay_node_name;
+      transport["relay_plane_name"] = target.relay_plane_name;
+      transport["reason"] = "direct runtime target unavailable";
+    }
+  }
+  metadata["transport"] = std::move(transport);
   if (session_id.has_value()) {
     metadata["session_id"] = *session_id;
   }

@@ -279,6 +279,10 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
         {"marker_seen", segment.marker_seen},
     });
   }
+  int upstream_latency_ms = 0;
+  for (const auto& segment : result.segments) {
+    upstream_latency_ms += segment.latency_ms;
+  }
   return nlohmann::json{
       {"id", result.session_id},
       {"status", result.completion_status},
@@ -299,6 +303,14 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
            {"total_tokens", result.total_tokens},
        }},
       {"latency_ms", result.total_latency_ms},
+      {"latency_breakdown",
+       nlohmann::json{
+           {"runtime_routing_ms", 0},
+           {"upstream_generation_ms", upstream_latency_ms},
+           {"controller_overhead_ms",
+            std::max(0, result.total_latency_ms - upstream_latency_ms)},
+           {"total_ms", result.total_latency_ms},
+       }},
       {"marker_seen", result.marker_seen},
       {"segments", std::move(segments)},
   };
@@ -2439,6 +2451,43 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
                  resolution.target->host + ":" +
                  std::to_string(resolution.target->port))
            : nlohmann::json(nullptr)},
+      {"transport",
+       resolution.target.has_value()
+           ? nlohmann::json{
+                 {"protocol_id",
+                  resolution.target->use_hostd_runtime_relay
+                      ? "NAIM-HOSTD-SESSION"
+                      : "NAIM-RUNTIME-HTTP"},
+                 {"mode",
+                  resolution.target->use_hostd_runtime_relay
+                      ? "hostd-relay-fallback"
+                      : "direct-runtime"},
+                 {"supports_sse", true},
+                 {"supports_websocket", false},
+                 {"supports_rpc", false},
+                 {"supports_keep_alive", true},
+                 {"supports_direct_routing",
+                  !resolution.target->use_hostd_runtime_relay},
+                 {"requires_hostd_relay",
+                  resolution.target->use_hostd_runtime_relay},
+                 {"degraded", resolution.target->use_hostd_runtime_relay},
+                 {"target", resolution.target->raw},
+                 {"relay_node_name",
+                  resolution.target->relay_node_name.empty()
+                      ? nlohmann::json(nullptr)
+                      : nlohmann::json(resolution.target->relay_node_name)},
+             }
+           : nlohmann::json{
+                 {"protocol_id", "NAIM-RUNTIME-HTTP"},
+                 {"mode", "not_selected"},
+                 {"supports_sse", true},
+                 {"supports_websocket", false},
+                 {"supports_rpc", false},
+                 {"supports_keep_alive", true},
+                 {"supports_direct_routing", false},
+                 {"requires_hostd_relay", false},
+                 {"degraded", false},
+             }},
       {"runtime_status",
        resolution.runtime_status.has_value()
            ? nlohmann::json::parse(

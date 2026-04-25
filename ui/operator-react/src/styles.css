@@ -2231,6 +2231,30 @@ body {
   min-height: calc(100vh - 240px);
 }
 
+.protocol-registry-page-panel {
+  display: grid;
+  gap: 16px;
+  min-height: calc(100vh - 240px);
+}
+
+.protocol-registry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.protocol-card {
+  display: grid;
+  gap: 12px;
+}
+
+.transport-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
 .knowledge-vault-overview-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

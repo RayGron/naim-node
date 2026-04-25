@@ -33,6 +33,7 @@ int ServeControllerHttp(
     IAssignmentOrchestrationService& assignment_orchestration_service) {
   ControllerUiService controller_ui_service;
   ControllerHealthService controller_health_service;
+  ProtocolRegistryService protocol_registry_service;
 
   std::vector<std::unique_ptr<IControllerHttpRouteHandler>> pre_auth_handlers;
   pre_auth_handlers.push_back(std::make_unique<AuthHttpRouteHandler>(auth_http_service));
@@ -49,6 +50,8 @@ int ServeControllerHttp(
       std::make_unique<SkillsFactoryHttpRouteHandler>(skills_factory_http_service));
   post_auth_handlers.push_back(std::make_unique<ReadModelHttpRouteHandler>(read_model_http_service));
   post_auth_handlers.push_back(std::make_unique<SchedulerHttpRouteHandler>(scheduler_http_service));
+  post_auth_handlers.push_back(
+      std::make_unique<ProtocolRegistryHttpRouteHandler>(protocol_registry_service));
 
   const ControllerListenerPolicy listener_policy;
   const bool webgateway_routes_enabled =
