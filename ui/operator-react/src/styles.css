@@ -1706,6 +1706,25 @@ body {
   word-break: break-word;
 }
 
+.chat-enrichment-line {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+}
+
+.chat-enrichment-line span {
+  max-width: 100%;
+  padding: 4px 9px;
+  border: 1px solid rgba(74, 222, 128, 0.28);
+  border-radius: 999px;
+  background: rgba(12, 39, 32, 0.82);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
 .chat-composer {
   margin-top: 16px;
   display: grid;
@@ -2241,6 +2260,15 @@ body {
   border-radius: 8px;
   background: rgba(4, 15, 31, 0.58);
   overflow: hidden;
+}
+
+.plane-knowledge-grid {
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
+}
+
+.plane-knowledge-grid .knowledge-vault-graph-panel {
+  min-height: 460px;
 }
 
 .plane-editor-modal {

@@ -60,17 +60,18 @@ PlaneHttpService CreatePlaneHttpService(
       [&knowledge_vault_http_service](
           const std::string& db_path,
           const HttpRequest& request,
-          const std::string&) -> std::optional<HttpResponse> {
-        HttpRequest rewritten = request;
-        constexpr const char* kPlanePrefix = "/api/v1/planes/";
-        const std::string remainder = request.path.substr(std::string(kPlanePrefix).size());
-        const auto separator = remainder.find('/');
-        if (separator == std::string::npos) {
+          const std::string& plane_name) -> std::optional<HttpResponse> {
+        naim::ControllerStore store(db_path);
+        store.Initialize();
+        const auto desired_state = store.LoadDesiredState(plane_name);
+        if (!desired_state.has_value()) {
           return std::nullopt;
         }
-        const std::string suffix = remainder.substr(separator);
-        rewritten.path = "/api/v1" + suffix;
-        return knowledge_vault_http_service.HandleRequest(db_path, rewritten);
+        return knowledge_vault_http_service.HandlePlaneRequest(
+            db_path,
+            request,
+            *desired_state,
+            plane_name);
       }),
       plane_skill_catalog_service);
 }

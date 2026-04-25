@@ -915,6 +915,7 @@ naim_enable_strict_warnings(naim-interaction-utf8-payload-sanitizer-tests)
 add_executable(
   naim-knowledge-vault-service-tests
   controller/src/http/controller_http_server_support.cpp
+  controller/src/knowledge/knowledge_vault_http_service.cpp
   controller/src/knowledge/knowledge_vault_service.cpp
   controller/src/knowledge/knowledge_vault_service_repository.cpp
   controller/src/model/model_library_node_placement.cpp
