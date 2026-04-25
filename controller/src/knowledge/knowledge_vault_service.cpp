@@ -1,10 +1,9 @@
 #include "knowledge/knowledge_vault_service.h"
 
-#include <chrono>
 #include <cstdlib>
 #include <sstream>
 #include <stdexcept>
-#include <thread>
+#include <vector>
 
 #include "http/controller_http_server_support.h"
 #include "knowledge/knowledge_vault_service_repository.h"
@@ -74,6 +73,21 @@ bool CachedStatusIsUsable(const KnowledgeVaultServiceRecord& record) {
   return record.status == "ready" && !record.schema_version.empty();
 }
 
+std::string NormalizeEndpointHost(std::string value) {
+  if (value.rfind("http://", 0) == 0) {
+    value = value.substr(7);
+  }
+  const auto slash = value.find('/');
+  if (slash != std::string::npos) {
+    value = value.substr(0, slash);
+  }
+  const auto colon = value.rfind(':');
+  if (colon != std::string::npos) {
+    value = value.substr(0, colon);
+  }
+  return value;
+}
+
 }  // namespace
 
 nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) const {
@@ -94,7 +108,8 @@ nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) co
       {"status_message", record->status_message},
       {"node_name", record->node_name},
       {"image", record->image},
-      {"endpoint", "hostd-relay://" + record->node_name + ":" + std::to_string(record->endpoint_port)},
+      {"endpoint", "http://" + record->endpoint_host + ":" + std::to_string(record->endpoint_port)},
+      {"transport", "direct-http"},
       {"schema_version", record->schema_version.empty() ? nlohmann::json(nullptr) : nlohmann::json(record->schema_version)},
       {"index_epoch", record->index_epoch.empty() ? nlohmann::json(nullptr) : nlohmann::json(record->index_epoch)},
       {"latest_event_sequence", record->latest_event_sequence},
@@ -110,8 +125,7 @@ nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) co
   }
 
   try {
-    const auto live = SendViaHostdProxy(
-        db_path,
+    const auto live = SendDirectRuntime(
         *record,
         "GET",
         "/v1/status",
@@ -140,7 +154,10 @@ HttpResponse KnowledgeVaultService::ApplyService(
   record.node_name = SelectStorageNode(db_path, body);
   const std::string storage_root = LoadStorageRoot(db_path, record.node_name);
   record.image = body.value("image", DefaultKnowledgeImage());
-  record.endpoint_host = "127.0.0.1";
+  record.endpoint_host = body.value(
+      "endpoint_host",
+      LoadNodeEndpointHost(db_path, record.node_name));
+  record.endpoint_host = NormalizeEndpointHost(record.endpoint_host);
   record.endpoint_port = body.value("port", 18200);
   record.status = "starting";
   record.desired_state_json = nlohmann::json{
@@ -232,8 +249,7 @@ HttpResponse KnowledgeVaultService::ProxyServiceRequest(
     path += "=";
     path += ControllerHttpServerSupport::UrlEncode(value);
   }
-  return SendViaHostdProxy(
-      db_path,
+  return SendDirectRuntime(
       *record,
       request.method,
       path,
@@ -275,11 +291,6 @@ std::string KnowledgeVaultService::HeaderValue(
     const std::string& key) {
   const auto it = request.headers.find(key);
   return it == request.headers.end() ? std::string{} : it->second;
-}
-
-std::string KnowledgeVaultService::NewRequestId() {
-  const auto now = std::chrono::system_clock::now().time_since_epoch().count();
-  return "kvp_" + std::to_string(now);
 }
 
 std::string KnowledgeVaultService::SelectStorageNode(
@@ -332,70 +343,39 @@ std::string KnowledgeVaultService::LoadStorageRoot(
   return {};
 }
 
-HttpResponse KnowledgeVaultService::SendViaHostdProxy(
+std::string KnowledgeVaultService::LoadNodeEndpointHost(
     const std::string& db_path,
+    const std::string& node_name) const {
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  for (const auto& host : store.LoadRegisteredHosts()) {
+    if (host.node_name == node_name) {
+      if (!host.advertised_address.empty()) {
+        return NormalizeEndpointHost(host.advertised_address);
+      }
+      return NormalizeEndpointHost(host.node_name);
+    }
+  }
+  throw std::runtime_error("knowledge vault node endpoint host is not available");
+}
+
+HttpResponse KnowledgeVaultService::SendDirectRuntime(
     const KnowledgeVaultServiceRecord& record,
     const std::string& method,
     const std::string& upstream_path,
     const std::string& body,
     const std::map<std::string, std::string>& headers) const {
-  const std::string relay_id = NewRequestId();
-  nlohmann::json header_pairs = nlohmann::json::array();
+  std::vector<std::pair<std::string, std::string>> header_pairs;
   for (const auto& [key, value] : headers) {
-    header_pairs.push_back(nlohmann::json::array({key, value}));
+    header_pairs.emplace_back(key, value);
   }
-  const nlohmann::json payload{
-      {"relay_id", relay_id},
-      {"service_id", record.service_id},
-      {"target_host", record.endpoint_host},
-      {"target_port", record.endpoint_port},
-      {"method", method},
-      {"path", upstream_path},
-      {"body", body},
-      {"headers", header_pairs},
-  };
-  naim::HostAssignment assignment;
-  assignment.node_name = record.node_name;
-  assignment.plane_name = "knowledge-proxy:" + relay_id;
-  assignment.desired_generation = 0;
-  assignment.max_attempts = 1;
-  assignment.assignment_type = "knowledge-vault-http-proxy";
-  assignment.desired_state_json = payload.dump();
-  assignment.artifacts_root = "";
-  assignment.status = naim::HostAssignmentStatus::Pending;
-  assignment.status_message = "knowledge vault proxy request";
-
-  naim::ControllerStore store(db_path);
-  store.Initialize();
-  store.EnqueueHostAssignments({assignment});
-
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-  while (std::chrono::steady_clock::now() < deadline) {
-    const auto assignments =
-        store.LoadHostAssignments(record.node_name, std::nullopt, "knowledge-proxy:" + relay_id);
-    if (!assignments.empty()) {
-      const auto& current = assignments.back();
-      if (current.status == naim::HostAssignmentStatus::Applied) {
-        const auto progress = nlohmann::json::parse(current.progress_json, nullptr, false);
-        if (!progress.is_discarded() && progress.value("phase", std::string{}) == "response-ready") {
-          HttpResponse response;
-          response.status_code = progress.value("status_code", 502);
-          response.content_type = progress.value("content_type", std::string("application/json"));
-          response.body = progress.value("body", std::string{});
-          return response;
-        }
-      }
-      if (current.status == naim::HostAssignmentStatus::Failed) {
-        return BuildJsonResponse(
-            502,
-            nlohmann::json{{"status", "proxy_failed"}, {"message", current.status_message}});
-      }
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-  }
-  return BuildJsonResponse(
-      504,
-      nlohmann::json{{"status", "proxy_timeout"}, {"message", "knowledge vault proxy timed out"}});
+  return SendControllerHttpRequest(
+      ParseControllerEndpointTarget(
+          record.endpoint_host + ":" + std::to_string(record.endpoint_port)),
+      method,
+      upstream_path,
+      body,
+      header_pairs);
 }
 
 }  // namespace naim::controller

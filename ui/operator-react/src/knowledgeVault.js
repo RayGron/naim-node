@@ -40,6 +40,16 @@ export function buildKnowledgeGraphRequest(items, extras = [], limit = KNOWLEDGE
   };
 }
 
+export function buildPlaneKnowledgeGraphRequest(results, selectedKnowledgeIds = [], limit = KNOWLEDGE_GRAPH_LIMIT) {
+  const selected = Array.isArray(selectedKnowledgeIds)
+    ? selectedKnowledgeIds.filter((item) => typeof item === "string" && item.trim())
+    : [];
+  if (selected.length > 0) {
+    return buildKnowledgeGraphRequest([], selected, limit);
+  }
+  return buildKnowledgeGraphRequest(results, [], limit);
+}
+
 export function knowledgeGraphSignature(graph) {
   return JSON.stringify({
     nodes: Array.isArray(graph?.nodes) ? graph.nodes : [],

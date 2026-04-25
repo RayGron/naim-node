@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   areKnowledgeGraphsEqual,
   buildKnowledgeGraphRequest,
+  buildPlaneKnowledgeGraphRequest,
   KNOWLEDGE_GRAPH_LIMIT,
   knowledgeTitleFromItem,
   normalizeKnowledgeResults,
@@ -41,6 +42,19 @@ describe("knowledgeVault utils", () => {
     }));
 
     expect(buildKnowledgeGraphRequest(items).knowledge_ids).toHaveLength(KNOWLEDGE_GRAPH_LIMIT);
+  });
+
+  it("uses selected plane knowledge ids before search results", () => {
+    expect(
+      buildPlaneKnowledgeGraphRequest(
+        [{ knowledge_id: "search-alpha" }],
+        ["selected-alpha", "selected-beta"],
+        4,
+      ),
+    ).toEqual({
+      knowledge_ids: ["selected-alpha", "selected-beta"],
+      depth: 1,
+    });
   });
 
   it("summarizes graph payloads and falls back to stable titles", () => {

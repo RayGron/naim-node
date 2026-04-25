@@ -97,11 +97,6 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
       const std::string& node_name,
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const override;
-  void ExecuteRuntimeHttpProxy(
-      const nlohmann::json& payload,
-      const std::string& node_name,
-      HostdBackend* backend,
-      const std::optional<int>& assignment_id) const override;
   void ApplyKnowledgeVaultService(
       const nlohmann::json& payload,
       const std::string& node_name,
@@ -109,11 +104,6 @@ class HostdAppAssignmentSupport final : public IHostdAssignmentSupport {
       HostdBackend* backend,
       const std::optional<int>& assignment_id) const override;
   void StopKnowledgeVaultService(
-      const nlohmann::json& payload,
-      const std::string& node_name,
-      HostdBackend* backend,
-      const std::optional<int>& assignment_id) const override;
-  void ExecuteKnowledgeVaultHttpProxy(
       const nlohmann::json& payload,
       const std::string& node_name,
       HostdBackend* backend,

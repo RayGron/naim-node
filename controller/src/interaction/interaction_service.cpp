@@ -7,7 +7,6 @@
 #include "interaction/interaction_request_identity_support.h"
 #include "interaction/interaction_replica_group_summary_builder.h"
 #include "interaction/interaction_runtime_text_support.h"
-#include "interaction/interaction_target_relay_policy.h"
 #include "interaction/interaction_text_post_processor.h"
 #include "interaction/interaction_upstream_event_parser.h"
 #include <algorithm>
@@ -279,6 +278,10 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
         {"marker_seen", segment.marker_seen},
     });
   }
+  int upstream_latency_ms = 0;
+  for (const auto& segment : result.segments) {
+    upstream_latency_ms += segment.latency_ms;
+  }
   return nlohmann::json{
       {"id", result.session_id},
       {"status", result.completion_status},
@@ -299,6 +302,14 @@ nlohmann::json InteractionSessionPresenter::BuildSessionPayload(
            {"total_tokens", result.total_tokens},
        }},
       {"latency_ms", result.total_latency_ms},
+      {"latency_breakdown",
+       nlohmann::json{
+           {"runtime_routing_ms", 0},
+           {"upstream_generation_ms", upstream_latency_ms},
+           {"controller_overhead_ms",
+            std::max(0, result.total_latency_ms - upstream_latency_ms)},
+           {"total_ms", result.total_latency_ms},
+       }},
       {"marker_seen", result.marker_seen},
       {"segments", std::move(segments)},
   };
@@ -1913,23 +1924,11 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
       resolution.target = parse_interaction_target_(
           resolution.runtime_status->gateway_listen,
           desired_state->gateway.listen_port);
-      InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
-          store,
-          db_path,
-          primary_node,
-          plane_name,
-          &resolution.target);
     }
   }
 
   if (plane_local_interaction_target.has_value()) {
     resolution.target = plane_local_interaction_target;
-    InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
-        store,
-        db_path,
-        primary_node,
-        plane_name,
-        &resolution.target);
   }
 
   const bool llm_plane = desired_state->plane_mode == naim::PlaneMode::Llm;
@@ -2017,12 +2016,6 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
         desired_state->gateway.listen_host + ":" +
             std::to_string(desired_state->gateway.listen_port),
         desired_state->gateway.listen_port);
-    InteractionTargetRelayPolicy{}.EnableHostdRuntimeRelayForRemoteLoopback(
-        store,
-        db_path,
-        primary_node,
-        plane_name,
-        &resolution.target);
   }
 
   if (!resolution.runtime_status.has_value() && resolution.target.has_value()) {
@@ -2439,6 +2432,27 @@ PlaneInteractionResolution InteractionPlaneResolver::Resolve(
                  resolution.target->host + ":" +
                  std::to_string(resolution.target->port))
            : nlohmann::json(nullptr)},
+      {"transport",
+       resolution.target.has_value()
+           ? nlohmann::json{
+                 {"protocol_id", "NAIM-RUNTIME-HTTP"},
+                 {"mode", "direct-runtime"},
+                 {"supports_sse", true},
+                 {"supports_rpc", false},
+                 {"supports_keep_alive", true},
+                 {"supports_direct_routing", true},
+                 {"degraded", false},
+                 {"target", resolution.target->raw},
+             }
+           : nlohmann::json{
+                 {"protocol_id", "NAIM-RUNTIME-HTTP"},
+                 {"mode", "not_selected"},
+                 {"supports_sse", true},
+                 {"supports_rpc", false},
+                 {"supports_keep_alive", true},
+                 {"supports_direct_routing", false},
+                 {"degraded", false},
+             }},
       {"runtime_status",
        resolution.runtime_status.has_value()
            ? nlohmann::json::parse(

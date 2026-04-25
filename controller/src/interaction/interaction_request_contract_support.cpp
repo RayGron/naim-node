@@ -167,6 +167,21 @@ nlohmann::json InteractionRequestContractSupport::BuildInteractionContractMetada
       {"active_model_id", ResolveInteractionActiveModelId(resolution)},
       {"reason", resolution.status_payload.value("reason", std::string{})},
   };
+  nlohmann::json transport{
+      {"protocol_id", "NAIM-RUNTIME-HTTP"},
+      {"mode", "not_selected"},
+      {"supports_sse", true},
+      {"supports_direct_routing", false},
+      {"degraded", false},
+  };
+  if (resolution.target.has_value()) {
+    const auto& target = *resolution.target;
+    transport["target"] = target.raw.empty() ? nlohmann::json(nullptr)
+                                             : nlohmann::json(target.raw);
+    transport["supports_direct_routing"] = true;
+    transport["mode"] = "direct-runtime";
+  }
+  metadata["transport"] = std::move(transport);
   if (session_id.has_value()) {
     metadata["session_id"] = *session_id;
   }

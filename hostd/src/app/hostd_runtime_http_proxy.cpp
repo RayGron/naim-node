@@ -173,64 +173,17 @@ bool HostdRuntimeHttpProxy::IsAllowedRuntimeProxyPath(
   return false;
 }
 
-bool HostdRuntimeHttpProxy::IsAllowedKnowledgeVaultProxyPath(
-    const std::string& method,
-    const std::string& path) {
-  const std::string route = path.substr(0, path.find('?'));
-  if (method == "GET" && route == "/health") {
-    return true;
-  }
-  if (method == "GET" && route == "/v1/status") {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/blocks/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/heads/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && route.rfind("/v1/capsules/", 0) == 0) {
-    return true;
-  }
-  if (method == "GET" && (route == "/v1/reviews" || route == "/v1/catalog")) {
-    return true;
-  }
-  if (method == "GET" && route == "/v1/replica-merges/status") {
-    return true;
-  }
-  if (method == "POST" &&
-      (route == "/v1/blocks" || route == "/v1/relations" || route == "/v1/search" ||
-       route == "/v1/context" || route == "/v1/query-route" ||
-       route == "/v1/source-ingest" || route == "/v1/capsules" ||
-       route == "/v1/overlays" || route == "/v1/replica-merges/trigger" ||
-       route == "/v1/replica-merges/schedule" || route == "/v1/replica-merges/run-due" ||
-       route == "/v1/replica-merges/reconcile-daily" || route == "/v1/repair" ||
-       route == "/v1/markdown-export" || route == "/v1/markdown-import" ||
-       route == "/v1/graph-neighborhood" || route == "/v1/catalog")) {
-    return true;
-  }
-  if (method == "PUT" &&
-      (route.rfind("/v1/heads/", 0) == 0 || route.rfind("/v1/reviews/", 0) == 0)) {
-    return true;
-  }
-  return false;
-}
-
 bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     HostdRuntimeProxyPolicy policy,
     const std::string& method,
     const std::string& path) {
-  if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
-    return IsAllowedKnowledgeVaultProxyPath(method, path);
-  }
+  (void)policy;
   return IsAllowedRuntimeProxyPath(method, path);
 }
 
 std::string HostdRuntimeHttpProxy::PolicyLabel(HostdRuntimeProxyPolicy policy) {
-  if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
-    return "knowledge-vault-http-proxy";
-  }
-  return "runtime-http-proxy";
+  (void)policy;
+  return "runtime-direct-http";
 }
 
 HostdRuntimeHttpResponse HostdRuntimeHttpProxy::ParseHttpResponse(

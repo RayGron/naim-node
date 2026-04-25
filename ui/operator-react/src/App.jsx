@@ -42,6 +42,7 @@ import {
 import { KnowledgeCubeGraph } from "./KnowledgeCubeGraph.jsx";
 import {
   areKnowledgeGraphsEqual,
+  buildPlaneKnowledgeGraphRequest,
   buildKnowledgeGraphRequest,
   KNOWLEDGE_GRAPH_LIMIT,
   normalizeKnowledgeResults,
@@ -72,9 +73,9 @@ const MODEL_LIBRARY_JOB_PAGE_SIZE = 8;
 const METRIC_HISTORY_MAX_POINTS = 72;
 const CHAT_LANGUAGE_OPTIONS = [
   { value: "en", label: "English" },
-  { value: "de", label: "Deutsch" },
-  { value: "uk", label: "Українська" },
-  { value: "ru", label: "Русский" },
+  { value: "es", label: "Español" },
+  { value: "pt", label: "Português" },
+  { value: "zh", label: "中文" },
 ];
 
 class HttpError extends Error {
@@ -132,12 +133,20 @@ function knowledgeVaultPath(suffix = "") {
   return suffix ? `/api/v1/knowledge-vault/${suffix}` : "/api/v1/knowledge-vault/status";
 }
 
+function planeKnowledgeVaultPath(planeName, suffix = "") {
+  return planePath(planeName, `knowledge-vault/${suffix}`);
+}
+
 function hostdHostsPath(nodeName = "") {
   return queryPath("/api/v1/hostd/hosts", { node: nodeName });
 }
 
 function skillsFactoryPath(suffix = "") {
   return suffix ? `/api/v1/skills-factory/${suffix}` : "/api/v1/skills-factory";
+}
+
+function protocolsPath(suffix = "") {
+  return suffix ? `/api/v1/protocols/${suffix}` : "/api/v1/protocols";
 }
 
 function interactionPath(planeName, suffix) {
@@ -905,6 +914,58 @@ function browsingTraceCompact(browsing) {
     .map((item) => item?.compact || "")
     .filter(Boolean)
     .join(" · ");
+}
+
+function selectedKnowledgeIdsFromDesiredState(desiredState) {
+  return Array.isArray(desiredState?.knowledge?.selected_knowledge_ids)
+    ? desiredState.knowledge.selected_knowledge_ids.filter((item) => typeof item === "string" && item.trim())
+    : [];
+}
+
+function knowledgeContextPolicyFromDesiredState(desiredState) {
+  return desiredState?.knowledge?.context_policy || {};
+}
+
+function compactSkillList(items) {
+  const skills = Array.isArray(items) ? items : [];
+  return skills
+    .map((item) => item?.name || item?.id || item?.skill_id || "")
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(", ");
+}
+
+function buildChatEnrichmentMeta(payload = {}, session = {}, previous = null) {
+  const appliedSkills = payload.applied_skills || session.applied_skills || previous?.appliedSkills || [];
+  const autoAppliedSkills =
+    payload.auto_applied_skills || session.auto_applied_skills || previous?.autoAppliedSkills || [];
+  const knowledge =
+    payload.knowledge ||
+    payload.knowledge_context ||
+    session.knowledge ||
+    session.knowledge_context ||
+    previous?.knowledge ||
+    null;
+  const compression =
+    payload.compression ||
+    payload.compression_state ||
+    session.compression ||
+    session.compression_state ||
+    previous?.compression ||
+    null;
+  const hasPayload =
+    (Array.isArray(appliedSkills) && appliedSkills.length > 0) ||
+    (Array.isArray(autoAppliedSkills) && autoAppliedSkills.length > 0) ||
+    Boolean(knowledge) ||
+    Boolean(compression);
+  return hasPayload
+    ? {
+        appliedSkills,
+        autoAppliedSkills,
+        knowledge,
+        compression,
+      }
+    : previous;
 }
 
 function observedStateForObservation(observation) {
@@ -1867,7 +1928,7 @@ function App() {
   const [planes, setPlanes] = useState([]);
   const [selectedPlane, setSelectedPlane] = useState(initialPlane);
   const [selectedPage, setSelectedPage] = useState(
-    ["dashboard", "planes", "models", "knowledge-vault", "skills-factory", "access"].includes(initialPage)
+    ["dashboard", "planes", "models", "knowledge-vault", "protocols", "skills-factory", "access"].includes(initialPage)
       ? initialPage
       : "dashboard",
   );
@@ -1898,6 +1959,7 @@ function App() {
   const [hostObservations, setHostObservations] = useState(null);
   const [globalHostObservations, setGlobalHostObservations] = useState(null);
   const [hostdHosts, setHostdHosts] = useState([]);
+  const [protocolRegistry, setProtocolRegistry] = useState({ items: [], summary: {} });
   const [selectedHostNodeName, setSelectedHostNodeName] = useState("");
   const [diskState, setDiskState] = useState(null);
   const [rolloutState, setRolloutState] = useState(null);
@@ -1912,6 +1974,16 @@ function App() {
   });
   const [knowledgeVaultGraphBusy, setKnowledgeVaultGraphBusy] = useState(false);
   const [knowledgeVaultGraphError, setKnowledgeVaultGraphError] = useState("");
+  const [planeKnowledge, setPlaneKnowledge] = useState({
+    results: [],
+    graph: { nodes: [], edges: [], warnings: [] },
+    busy: false,
+    error: "",
+    resolverPrompt: "",
+    resolverResult: null,
+    resolverBusy: false,
+    resolverError: "",
+  });
   const [modelLibrary, setModelLibrary] = useState({ items: [], roots: [], jobs: [], nodes: [] });
   const [skillsFactory, setSkillsFactory] = useState({
     items: [],
@@ -1928,7 +2000,7 @@ function App() {
   const [selectedTab, setSelectedTab] = useState("status");
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
-  const [chatLanguage, setChatLanguage] = useState("ru");
+  const [chatLanguage, setChatLanguage] = useState("en");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState("");
   const [metricHistory, setMetricHistory] = useState({});
@@ -2016,6 +2088,16 @@ function App() {
     setKnowledgeVaultGraph({ nodes: [], edges: [], warnings: [] });
     setKnowledgeVaultGraphBusy(false);
     setKnowledgeVaultGraphError("");
+    setPlaneKnowledge({
+      results: [],
+      graph: { nodes: [], edges: [], warnings: [] },
+      busy: false,
+      error: "",
+      resolverPrompt: "",
+      resolverResult: null,
+      resolverBusy: false,
+      resolverError: "",
+    });
     setModelLibrary({ items: [], roots: [], jobs: [], nodes: [] });
     setModelsTab("library");
     setSkillsFactory({
@@ -2232,6 +2314,114 @@ function App() {
     }
   }
 
+  async function refreshPlaneKnowledge() {
+    if (!selectedPlane) {
+      return;
+    }
+    setPlaneKnowledge((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const searchPayload = await fetchJson(planeKnowledgeVaultPath(selectedPlane, "search"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: "",
+          list_all: true,
+          limit: KNOWLEDGE_GRAPH_LIMIT,
+        }),
+      });
+      const results = normalizeKnowledgeResults(searchPayload?.results);
+      const selectedKnowledgeIds = selectedKnowledgeIdsFromDesiredState(desiredStateV2 || desiredState);
+      const graphRequest = buildPlaneKnowledgeGraphRequest(
+        results,
+        selectedKnowledgeIds,
+        KNOWLEDGE_GRAPH_LIMIT,
+      );
+      let graph = { nodes: [], edges: [], warnings: [] };
+      if (graphRequest.knowledge_ids.length > 0) {
+        const graphPayload = await fetchJson(
+          planeKnowledgeVaultPath(selectedPlane, "graph-neighborhood"),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(graphRequest),
+          },
+        );
+        graph = {
+          nodes: Array.isArray(graphPayload?.nodes) ? graphPayload.nodes : [],
+          edges: Array.isArray(graphPayload?.edges) ? graphPayload.edges : [],
+          warnings: Array.isArray(graphPayload?.warnings) ? graphPayload.warnings : [],
+        };
+      }
+      setPlaneKnowledge((current) => ({
+        ...current,
+        results,
+        graph,
+        busy: false,
+        error: "",
+      }));
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setPlaneKnowledge((current) => ({
+        ...current,
+        results: [],
+        graph: { nodes: [], edges: [], warnings: [] },
+        busy: false,
+        error: error.message || String(error),
+      }));
+    }
+  }
+
+  async function resolvePlaneEnrichment() {
+    if (!selectedPlane || !planeKnowledge.resolverPrompt.trim()) {
+      return;
+    }
+    setPlaneKnowledge((current) => ({
+      ...current,
+      resolverBusy: true,
+      resolverError: "",
+      resolverResult: null,
+    }));
+    try {
+      const payload = await fetchJson(skillsPath(selectedPlane, "resolve-context"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content: planeKnowledge.resolverPrompt.trim(),
+            },
+          ],
+        }),
+      });
+      setPlaneKnowledge((current) => ({
+        ...current,
+        resolverBusy: false,
+        resolverResult: payload,
+        resolverError: "",
+      }));
+    } catch (error) {
+      if (error?.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      setPlaneKnowledge((current) => ({
+        ...current,
+        resolverBusy: false,
+        resolverError: error.message || String(error),
+      }));
+    }
+  }
+
   async function refreshSkillsFactory() {
     try {
       const payload = await fetchJson(skillsFactoryPath());
@@ -2275,17 +2465,23 @@ function App() {
       );
       const hostdHostsRequest = fetchJson(hostdHostsPath());
       const knowledgeVaultStatusRequest = fetchJson(knowledgeVaultPath());
+      const protocolRegistryRequest = fetchJson(protocolsPath()).catch(() => ({
+        items: [],
+        summary: {},
+      }));
       if (!planeName) {
         const [
           dashboardPayload,
           globalHostObservationsPayload,
           hostdHostsPayload,
           knowledgeVaultStatusPayload,
+          protocolRegistryPayload,
         ] = await Promise.all([
           fetchJson(queryPath("/api/v1/dashboard", { stale_after: 30 })),
           globalHostObservationsRequest,
           hostdHostsRequest,
           knowledgeVaultStatusRequest,
+          protocolRegistryRequest,
         ]);
         const globalObservationItems = hostObservationItemsFromPayload(
           globalHostObservationsPayload,
@@ -2297,6 +2493,7 @@ function App() {
         setGlobalHostObservations(globalHostObservationsPayload);
         setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
         setKnowledgeVaultStatus(knowledgeVaultStatusPayload);
+        setProtocolRegistry(protocolRegistryPayload);
         setMetricHistory((current) =>
           appendMetricHistory(
             current,
@@ -2329,6 +2526,7 @@ function App() {
         interactionPayload,
         hostdHostsPayload,
         knowledgeVaultStatusPayload,
+        protocolRegistryPayload,
       ] = await Promise.all([
         fetchJson(planePath(planeName)),
         fetchJson(planePath(planeName, "dashboard")),
@@ -2356,6 +2554,7 @@ function App() {
         fetchJson(interactionPath(planeName, "status")),
         hostdHostsRequest,
         knowledgeVaultStatusRequest,
+        protocolRegistryRequest,
       ]);
 
       setPlaneDetail(planePayload);
@@ -2363,6 +2562,7 @@ function App() {
       setHostObservations(hostObservationsPayload);
       setGlobalHostObservations(globalHostObservationsPayload);
       setHostdHosts(Array.isArray(hostdHostsPayload.items) ? hostdHostsPayload.items : []);
+      setProtocolRegistry(protocolRegistryPayload);
       setDiskState(diskPayload);
       setRolloutState(rolloutPayload);
       setRebalancePlan(rebalancePayload);
@@ -3092,6 +3292,7 @@ function App() {
         error: "",
         session: null,
         browsing: null,
+        enrichment: null,
       },
     ]);
     setChatInput("");
@@ -3234,6 +3435,7 @@ function App() {
                 ? {
                     ...item,
                     browsing: payload.browsing || session.browsing || item.browsing || null,
+                    enrichment: buildChatEnrichmentMeta(payload, session, item.enrichment),
                     metrics: {
                       latencyMs,
                       completionTokens,
@@ -3276,6 +3478,7 @@ function App() {
                     ...item,
                     error: message,
                     browsing: payload.browsing || payload.session?.browsing || item.browsing || null,
+                    enrichment: buildChatEnrichmentMeta(payload, payload.session || {}, item.enrichment),
                     session: {
                       ...(item.session || {}),
                       status: payload.status || "failed",
@@ -3361,6 +3564,13 @@ function App() {
     return () => clearInterval(timer);
   }, [authState.authenticated, selectedPage]);
 
+  useEffect(() => {
+    if (!authState.authenticated || !selectedPlane || selectedTab !== "knowledge") {
+      return;
+    }
+    refreshPlaneKnowledge();
+  }, [authState.authenticated, selectedPlane, selectedTab, planeDetail]);
+
   const hasActiveModelJobsForPolling = Array.isArray(modelLibrary.jobs)
     ? modelLibrary.jobs.some((job) => {
         const status = String(job?.status || "").toLowerCase();
@@ -3433,6 +3643,14 @@ function App() {
     setSelectedTab("status");
     setChatMessages([]);
     setChatError("");
+    setPlaneKnowledge((current) => ({
+      ...current,
+      results: [],
+      graph: { nodes: [], edges: [], warnings: [] },
+      error: "",
+      resolverResult: null,
+      resolverError: "",
+    }));
     if (chatAbortRef.current) {
       chatAbortRef.current.abort();
       chatAbortRef.current = null;
@@ -3493,6 +3711,10 @@ function App() {
     Boolean(desiredStateV2?.skills?.enabled) || Boolean(desiredState?.skills?.enabled);
   const browsingEnabled =
     Boolean(desiredStateV2?.browsing?.enabled) || Boolean(desiredState?.browsing?.enabled);
+  const knowledgeEnabled =
+    Boolean(desiredStateV2?.knowledge?.enabled) || Boolean(desiredState?.knowledge?.enabled);
+  const selectedKnowledgeIds = selectedKnowledgeIdsFromDesiredState(desiredStateV2 || desiredState);
+  const knowledgeContextPolicy = knowledgeContextPolicyFromDesiredState(desiredStateV2 || desiredState);
   const dashboardSkillsSummary = dashboard?.skills || {
     enabled: skillsEnabled,
     enabled_count: 0,
@@ -4519,6 +4741,12 @@ function App() {
     const storageTotalBytes = Number(capacity.storage_total_bytes || 0);
     const storageFreeBytes = Number(capacity.storage_free_bytes || 0);
     const showStorageDetails = storageSelected || storageEligible || storageTotalBytes > 0;
+    const transportCapabilities = registry?.transport_capabilities || {};
+    const supportedControlTransports = Array.isArray(
+      transportCapabilities.supported_control_transports,
+    )
+      ? transportCapabilities.supported_control_transports.join(", ")
+      : "http-long-poll";
 
     return (
       <div className="modal-backdrop" role="presentation" onClick={closeHostOverview}>
@@ -4548,6 +4776,9 @@ function App() {
             <div className="metric-row"><span>Role reason</span><strong>{registry?.role_reason || "n/a"}</strong></div>
             <div className="metric-row"><span>Execution</span><strong>{registry?.execution_mode || "n/a"}</strong></div>
             <div className="metric-row"><span>Transport</span><strong>{registry?.transport_mode || "n/a"}</strong></div>
+            <div className="metric-row"><span>Control</span><strong>{transportCapabilities.preferred_control_transport || "http-long-poll"}</strong></div>
+            <div className="metric-row"><span>Supported control</span><strong>{supportedControlTransports}</strong></div>
+            <div className="metric-row"><span>Resumable bulk</span><strong>{yesNo(transportCapabilities.supports_resumable_transfer)}</strong></div>
             <div className="metric-row"><span>Advertised</span><strong>{registry?.advertised_address || "n/a"}</strong></div>
             <div className="metric-row"><span>Heartbeat</span><strong>{formatTimestamp(host?.observed_at || host?.heartbeat_at || registry?.last_heartbeat_at)}</strong></div>
           </div>
@@ -4801,6 +5032,170 @@ function App() {
     );
   }
 
+  function renderPlaneKnowledgeTab() {
+    const graphSummary = summarizeKnowledgeGraph(planeKnowledge.graph);
+    const resolverSelectedSkills = Array.isArray(planeKnowledge.resolverResult?.selected_skills)
+      ? planeKnowledge.resolverResult.selected_skills
+      : [];
+    return (
+      <div className="dashboard-plane-detail-scroll">
+        <div className="summary-grid">
+          <SummaryCard
+            label="Knowledge"
+            value={knowledgeEnabled ? "enabled" : "disabled"}
+            meta={`${selectedKnowledgeIds.length} selected`}
+          />
+          <SummaryCard
+            label="Graph nodes"
+            value={graphSummary.nodeCount}
+            meta={`${graphSummary.edgeCount} relations`}
+          />
+          <SummaryCard
+            label="Context budget"
+            value={knowledgeContextPolicy.token_budget ?? "default"}
+            meta={`graph ${knowledgeContextPolicy.include_graph === false ? "off" : "on"} / depth ${knowledgeContextPolicy.max_graph_depth ?? 1}`}
+          />
+        </div>
+
+        {planeKnowledge.error ? <div className="error-banner">{planeKnowledge.error}</div> : null}
+        {!knowledgeEnabled ? (
+          <EmptyState
+            title="Knowledge Base disabled"
+            detail="Enable Knowledge Base in the plane editor to attach canonical records to interaction context."
+          />
+        ) : null}
+
+        <div className="panel-grid plane-knowledge-grid">
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Selected records</h3>
+              <span className="subpanel-meta">{selectedKnowledgeIds.length} id(s)</span>
+            </div>
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={refreshPlaneKnowledge}
+                disabled={planeKnowledge.busy}
+              >
+                Refresh knowledge
+              </button>
+            </div>
+            <div className="list-column">
+              {selectedKnowledgeIds.length === 0 ? (
+                <EmptyState
+                  title="No selected records"
+                  detail="The graph falls back to plane-scoped search results."
+                />
+              ) : (
+                selectedKnowledgeIds.map((knowledgeId) => (
+                  <article className="list-card" key={knowledgeId}>
+                    <div className="factory-skill-table-id">{knowledgeId}</div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Plane Knowledge Graph</h3>
+              <span className="subpanel-meta">
+                {planeKnowledge.busy ? "loading" : `${graphSummary.nodeCount} node(s)`}
+              </span>
+            </div>
+            <div className="knowledge-vault-graph-panel">
+              <KnowledgeCubeGraph graph={planeKnowledge.graph} variant="lattice" />
+            </div>
+          </section>
+
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Search results</h3>
+              <span className="subpanel-meta">{planeKnowledge.results.length} item(s)</span>
+            </div>
+            <div className="list-column">
+              {planeKnowledge.results.length === 0 ? (
+                <EmptyState title="No plane knowledge records" />
+              ) : (
+                planeKnowledge.results.slice(0, 12).map((item) => (
+                  <article className="list-card" key={`${item.knowledge_id || item.id}:${item.block_id || ""}`}>
+                    <div className="card-row">
+                      <strong>{item.title || item.knowledge_id || item.block_id}</strong>
+                      <span className="tag">{item.type || "knowledge"}</span>
+                    </div>
+                    <div className="list-detail">
+                      <div className="factory-skill-table-id">{item.knowledge_id || item.id || item.block_id}</div>
+                      <div>{item.summary || "No summary"}</div>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Enrichment resolver</h3>
+              <span className="subpanel-meta">Plane-owned SkillsFactory replica</span>
+            </div>
+            <textarea
+              className="editor-textarea plane-form-textarea"
+              value={planeKnowledge.resolverPrompt}
+              onChange={(event) =>
+                setPlaneKnowledge((current) => ({
+                  ...current,
+                  resolverPrompt: event.target.value,
+                }))
+              }
+              placeholder="Type a prompt to see which plane skills would be selected"
+            />
+            <div className="toolbar">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={planeKnowledge.resolverBusy || !planeKnowledge.resolverPrompt.trim()}
+                onClick={resolvePlaneEnrichment}
+              >
+                Resolve enrichment
+              </button>
+            </div>
+            {planeKnowledge.resolverError ? (
+              <div className="error-banner">{planeKnowledge.resolverError}</div>
+            ) : null}
+            {planeKnowledge.resolverResult ? (
+              <div className="list-card">
+                <div className="metric-grid compact-metric-grid">
+                  <div className="metric-row"><span>Mode</span><strong>{planeKnowledge.resolverResult.skill_resolution_mode || "none"}</strong></div>
+                  <div className="metric-row"><span>Candidates</span><strong>{planeKnowledge.resolverResult.candidate_count ?? 0}</strong></div>
+                  <div className="metric-row"><span>Selected</span><strong>{resolverSelectedSkills.length}</strong></div>
+                </div>
+                <div className="list-column">
+                  {resolverSelectedSkills.length === 0 ? (
+                    <EmptyState title="No skills matched" detail="This prompt should not trigger Skills enrichment." />
+                  ) : (
+                    resolverSelectedSkills.map((skill) => (
+                      <article className="list-card" key={skill.id}>
+                        <div className="card-row">
+                          <strong>{skill.name || skill.id}</strong>
+                          <span className="tag">{skill.score ?? 0}</span>
+                        </div>
+                        <div className="list-detail">
+                          <div className="factory-skill-table-id">{skill.id}</div>
+                          <div>{skill.rationale || "No rationale"}</div>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   function renderDashboardPlaneDetailModal() {
     if (!selectedPlane || !planeRecord || !dashboard) {
       return null;
@@ -4901,6 +5296,18 @@ function App() {
               >
                 <span className="tab-button-title">Interaction</span>
                 <span className="tab-button-meta">Chat with the running model</span>
+              </button>
+            ) : null}
+            {llmPlane ? (
+              <button
+                className={`tab-button ${selectedTab === "knowledge" ? "is-active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={selectedTab === "knowledge"}
+                onClick={() => setSelectedTab("knowledge")}
+              >
+                <span className="tab-button-title">Knowledge</span>
+                <span className="tab-button-meta">Vault graph and enrichment</span>
               </button>
             ) : null}
           </div>
@@ -5332,6 +5739,8 @@ function App() {
                 </section>
               </div>
             </div>
+          ) : selectedTab === "knowledge" ? (
+            renderPlaneKnowledgeTab()
           ) : (
             <div className="dashboard-plane-detail-scroll">
               <div
@@ -5413,6 +5822,18 @@ function App() {
                               {browsingTraceCompact(message.browsing) ? (
                                 <span className="chat-browsing-trace">{browsingTraceCompact(message.browsing)}</span>
                               ) : null}
+                            </div>
+                          ) : null}
+                          {message.role === "assistant" && message.enrichment ? (
+                            <div className="chat-enrichment-line">
+                              {compactSkillList(message.enrichment.appliedSkills) ? (
+                                <span>skills {compactSkillList(message.enrichment.appliedSkills)}</span>
+                              ) : null}
+                              {compactSkillList(message.enrichment.autoAppliedSkills) ? (
+                                <span>auto {compactSkillList(message.enrichment.autoAppliedSkills)}</span>
+                              ) : null}
+                              {message.enrichment.knowledge ? <span>knowledge context attached</span> : null}
+                              {message.enrichment.compression ? <span>compression active</span> : null}
                             </div>
                           ) : null}
                           <p className="chat-message-text">
@@ -6574,6 +6995,85 @@ function App() {
     );
   }
 
+  function renderProtocolsPage() {
+    const items = Array.isArray(protocolRegistry.items) ? protocolRegistry.items : [];
+    const summary = protocolRegistry.summary || {};
+    const selectedTransport = interactionStatus?.naim?.transport || interactionStatus?.transport || null;
+
+    return (
+      <section className="panel page-panel protocol-registry-page-panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-label">Network</div>
+            <h2>Protocol Registry</h2>
+          </div>
+          <div className="toolbar">
+            <span className="tag">{summary.total ?? items.length} protocols</span>
+            <span className="tag">Direct {summary.direct ?? 0}</span>
+            <span className="tag">Optional {summary.optional ?? 0}</span>
+          </div>
+        </div>
+
+        {selectedTransport ? (
+          <section className="subpanel">
+            <div className="subpanel-header">
+              <h3>Selected plane transport</h3>
+              <span className="subpanel-meta">{selectedPlane || "fleet"}</span>
+            </div>
+            <div className="transport-badge-row">
+              <span className={`tag ${selectedTransport.degraded ? "is-warning" : "is-healthy"}`}>
+                {selectedTransport.mode || "unknown"}
+              </span>
+              <span className="tag">{selectedTransport.protocol_id || "protocol n/a"}</span>
+              {selectedTransport.supports_sse ? <span className="tag">SSE</span> : null}
+              {selectedTransport.supports_rpc ? <span className="tag">RPC</span> : null}
+            </div>
+          </section>
+        ) : null}
+
+        <div className="protocol-registry-grid">
+          {items.length === 0 ? (
+            <EmptyState title="No protocol registry data" />
+          ) : (
+            items.map((item) => {
+              const capabilities = item.capabilities || {};
+              const capabilityLabels = Object.entries(capabilities)
+                .filter(([, value]) => value === true)
+                .map(([key]) => key.replace(/^supports_/, "").replaceAll("_", " "));
+              return (
+                <article className="list-card protocol-card" key={item.protocol_id}>
+                  <div className="card-row">
+                    <strong>{item.protocol_id}</strong>
+                    <span className={`tag ${item.status === "active" ? "is-healthy" : "is-booting"}`}>
+                      {item.status || "unknown"}
+                    </span>
+                  </div>
+                  <div className="metric-grid">
+                    <div className="metric-row"><span>Owner</span><strong>{item.owner || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Transport</span><strong>{item.transport || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Latency</span><strong>{item.latency_class || "n/a"}</strong></div>
+                    <div className="metric-row"><span>Timeout</span><strong>{item.timeout || "n/a"}</strong></div>
+                  </div>
+                  <div className="list-detail">
+                    <div><strong>Fallback:</strong> {item.fallback || "n/a"}</div>
+                    <div><strong>SLO:</strong> {item.slo || "n/a"}</div>
+                  </div>
+                  {capabilityLabels.length > 0 ? (
+                    <div className="transport-badge-row">
+                      {capabilityLabels.map((label) => (
+                        <span className="tag" key={`${item.protocol_id}:${label}`}>{label}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })
+          )}
+        </div>
+      </section>
+    );
+  }
+
   function renderAccessPage() {
     return (
       <section className="panel page-panel">
@@ -6846,11 +7346,11 @@ function App() {
     const nextDefault =
       normalizeChatLanguage(desiredState?.interaction?.default_response_language) ||
       normalizeChatLanguage(interactionStatus?.default_response_language) ||
-      "ru";
+      "en";
     const options = supportedChatLanguageOptions(desiredState, interactionStatus);
     const allowed = options.some((option) => option.value === nextDefault)
       ? nextDefault
-      : options[0]?.value || "ru";
+      : options[0]?.value || "en";
     setChatLanguage((current) => (options.some((option) => option.value === current) ? current : allowed));
   }, [desiredState, interactionStatus]);
 
@@ -6898,7 +7398,7 @@ function App() {
   }, [activeModelCount]);
 
   useEffect(() => {
-    if (!llmPlane && selectedTab === "interaction") {
+    if (!llmPlane && (selectedTab === "interaction" || selectedTab === "knowledge")) {
       setSelectedTab("status");
     }
   }, [llmPlane, selectedTab]);
@@ -7063,6 +7563,19 @@ function App() {
               </span>
             </button>
             <button
+              className={`side-menu-item ${selectedPage === "protocols" ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setSelectedPage("protocols")}
+            >
+              <div className="side-menu-copy">
+                <span className="side-menu-title">Protocols</span>
+                <span className="side-menu-meta">Network registry and plane transport</span>
+              </div>
+              <span className="tag">
+                <span>{protocolRegistry.summary?.total ?? protocolRegistry.items?.length ?? 0} items</span>
+              </span>
+            </button>
+            <button
               className={`side-menu-item ${selectedPage === "skills-factory" ? "is-active" : ""}`}
               type="button"
               onClick={() => setSelectedPage("skills-factory")}
@@ -7100,6 +7613,8 @@ function App() {
           renderModelsLibrary()
         ) : selectedPage === "knowledge-vault" ? (
           renderKnowledgeVaultPage()
+        ) : selectedPage === "protocols" ? (
+          renderProtocolsPage()
         ) : selectedPage === "skills-factory" ? (
           renderSkillsFactoryPage()
         ) : selectedPage === "access" ? (

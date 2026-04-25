@@ -415,48 +415,6 @@ void HostdAppAssignmentSupport::BuildModelArtifactManifest(
       });
 }
 
-void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
-    const nlohmann::json& payload,
-    const std::string& node_name,
-    HostdBackend* backend,
-    const std::optional<int>& assignment_id) const {
-  if (backend == nullptr || !assignment_id.has_value()) {
-    throw std::runtime_error("runtime-http-proxy requires a controller assignment");
-  }
-  const std::string method = payload.value("method", std::string{});
-  const std::string path = payload.value("path", std::string{});
-  const std::string host = payload.value("target_host", std::string("127.0.0.1"));
-  const int port = payload.value("target_port", 0);
-  const std::string body = payload.value("body", std::string{});
-  const std::map<std::string, std::string> headers =
-      runtime_http_proxy_.ParseProxyHeaders(payload.value("headers", nlohmann::json::array()));
-
-  const HostdRuntimeHttpResponse response = runtime_http_proxy_.Send(
-      host,
-      port,
-      method,
-      path,
-      body,
-      headers,
-      HostdRuntimeProxyPolicy::Runtime);
-  backend->UpdateHostAssignmentProgress(
-      *assignment_id,
-      nlohmann::json{
-          {"phase", "response-ready"},
-          {"title", "Runtime proxy response ready"},
-          {"detail", "Hostd executed the runtime HTTP request locally."},
-          {"percent", 100},
-          {"request_id", payload.value("request_id", std::string{})},
-          {"plane_name", payload.value("plane_name", std::string{})},
-          {"node_name", node_name},
-          {"method", method},
-          {"path", path},
-          {"status_code", response.status_code},
-          {"content_type", response.content_type},
-          {"headers", response.headers},
-          {"body", response.body}});
-}
-
 void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
     const nlohmann::json& payload,
     const std::string& node_name,
@@ -514,7 +472,7 @@ void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
       << docker << " run -d"
       << " --name " << quote(container_name)
       << " --restart unless-stopped"
-      << " -p 127.0.0.1:" << port << ":" << port
+      << " -p 0.0.0.0:" << port << ":" << port
       << " -v " << quote(service_root.string()) << ":/naim/knowledge"
       << " -e " << quote("NAIM_KNOWLEDGE_SERVICE_ID=" + service_id)
       << " -e " << quote("NAIM_NODE_NAME=" + node_name)
@@ -538,7 +496,7 @@ void HostdAppAssignmentSupport::ApplyKnowledgeVaultService(
           "/health",
           "",
           {},
-          HostdRuntimeProxyPolicy::KnowledgeVault);
+          HostdRuntimeProxyPolicy::Runtime);
       if (health.status_code >= 200 && health.status_code < 300) {
         ready = true;
         break;
@@ -593,48 +551,6 @@ void HostdAppAssignmentSupport::StopKnowledgeVaultService(
           {"service_id", service_id},
           {"node_name", node_name},
           {"container_name", container_name}});
-}
-
-void HostdAppAssignmentSupport::ExecuteKnowledgeVaultHttpProxy(
-    const nlohmann::json& payload,
-    const std::string& node_name,
-    HostdBackend* backend,
-    const std::optional<int>& assignment_id) const {
-  if (backend == nullptr || !assignment_id.has_value()) {
-    throw std::runtime_error("knowledge-vault-http-proxy requires a controller assignment");
-  }
-  const std::string method = payload.value("method", std::string{});
-  const std::string path = payload.value("path", std::string{});
-  const std::string host = payload.value("target_host", std::string("127.0.0.1"));
-  const int port = payload.value("target_port", 0);
-  const std::string body = payload.value("body", std::string{});
-  const std::map<std::string, std::string> headers =
-      runtime_http_proxy_.ParseProxyHeaders(payload.value("headers", nlohmann::json::array()));
-
-  const HostdRuntimeHttpResponse response = runtime_http_proxy_.Send(
-      host,
-      port,
-      method,
-      path,
-      body,
-      headers,
-      HostdRuntimeProxyPolicy::KnowledgeVault);
-  backend->UpdateHostAssignmentProgress(
-      *assignment_id,
-      nlohmann::json{
-          {"phase", "response-ready"},
-          {"title", "Knowledge vault proxy response ready"},
-          {"detail", "Hostd executed the knowledge vault HTTP request locally."},
-          {"percent", 100},
-          {"relay_id", payload.value("relay_id", std::string{})},
-          {"service_id", payload.value("service_id", std::string{})},
-          {"node_name", node_name},
-          {"method", method},
-          {"path", path},
-          {"status_code", response.status_code},
-          {"content_type", response.content_type},
-          {"headers", response.headers},
-          {"body", response.body}});
 }
 
 void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(

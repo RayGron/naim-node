@@ -109,15 +109,6 @@ int InteractionHttpSupport::CountReadyWorkerMembers(
 bool InteractionHttpSupport::ProbeControllerTargetOk(
     const std::optional<naim::controller::ControllerEndpointTarget>& target,
     const std::string& path) const {
-  if (target.has_value() && target->use_hostd_runtime_relay) {
-    try {
-      const HttpResponse response =
-          hostd_runtime_relay_service_.Send(*target, "GET", path, "", {});
-      return response.status_code >= 200 && response.status_code < 300;
-    } catch (const std::exception&) {
-      return false;
-    }
-  }
   return interaction_runtime_support_service_.ProbeControllerTargetOk(target, path);
 }
 
@@ -135,9 +126,6 @@ HttpResponse InteractionHttpSupport::SendControllerHttpRequest(
     const std::string& path,
     const std::string& body,
     const std::vector<std::pair<std::string, std::string>>& headers) const {
-  if (target.use_hostd_runtime_relay) {
-    return hostd_runtime_relay_service_.Send(target, method, path, body, headers);
-  }
   return ::SendControllerHttpRequest(target, method, path, body, headers);
 }
 

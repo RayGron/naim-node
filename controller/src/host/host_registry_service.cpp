@@ -60,6 +60,30 @@ json ParseCapabilitiesJson(const std::string& capabilities_json) {
              : json::parse(capabilities_json, nullptr, false);
 }
 
+json BuildTransportCapabilities(const naim::RegisteredHostRecord& host) {
+  const json capabilities = ParseCapabilitiesJson(host.capabilities_json);
+  const json transport =
+      capabilities.contains("transport") && capabilities.at("transport").is_object()
+          ? capabilities.at("transport")
+          : json::object();
+  return json{
+      {"preferred_control_transport",
+       transport.value(
+           "preferred_control_transport",
+           host.transport_mode == "out" ? std::string("http-long-poll")
+                                        : host.transport_mode)},
+      {"supported_control_transports",
+       transport.contains("supported_control_transports") &&
+               transport.at("supported_control_transports").is_array()
+           ? transport.at("supported_control_transports")
+           : json::array({"http-long-poll"})},
+      {"supports_keep_alive", transport.value("supports_keep_alive", false)},
+      {"supports_long_poll", transport.value("supports_long_poll", false)},
+      {"supports_resumable_transfer",
+       transport.value("supports_resumable_transfer", false)},
+  };
+}
+
 HostInventorySummary BuildInventorySummary(
     const naim::RegisteredHostRecord& host,
     const std::optional<naim::HostObservation>& observation) {
@@ -228,6 +252,7 @@ json HostRegistryService::BuildPayload(
         {"advertised_address",
          host.advertised_address.empty() ? json(nullptr) : json(host.advertised_address)},
         {"transport_mode", host.transport_mode},
+        {"transport_capabilities", BuildTransportCapabilities(host)},
         {"execution_mode",
          host.execution_mode.empty() ? json("mixed") : json(host.execution_mode)},
         {"registration_state", host.registration_state},
