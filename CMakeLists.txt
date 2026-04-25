@@ -593,6 +593,26 @@ target_link_libraries(
 naim_enable_strict_warnings(naim-host-registry-tests)
 
 add_executable(
+  naim-hostd-http-tests
+  controller/src/app/controller_composition_support.cpp
+  controller/src/app/controller_request_context.cpp
+  controller/src/app/controller_time_support.cpp
+  controller/src/host/host_registry_service.cpp
+  controller/src/host/hostd_http_service.cpp
+  controller/src/host/hostd_http_service_tests.cpp
+  controller/src/host/hostd_http_support.cpp
+  controller/src/infra/controller_action.cpp
+  controller/src/infra/controller_network_manager.cpp
+  controller/src/knowledge/knowledge_vault_service_repository.cpp
+  controller/src/observation/plane_observation_matcher.cpp
+)
+target_include_directories(
+  naim-hostd-http-tests PRIVATE common/include controller/include)
+target_link_libraries(
+  naim-hostd-http-tests PRIVATE naim-common Threads::Threads)
+naim_enable_strict_warnings(naim-hostd-http-tests)
+
+add_executable(
   naim-interaction-browsing-tests
   controller/src/browsing/interaction_browsing_service.cpp
   controller/src/browsing/plane_browsing_service.cpp

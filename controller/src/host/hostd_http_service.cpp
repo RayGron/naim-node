@@ -664,17 +664,26 @@ class HostdRequestContext {
       naim::RegisteredHostRecord* host,
       const std::string& message_type,
       const json& payload) {
+    const std::string response_session_token = host->session_token;
+    const std::string response_node_name = host->node_name;
+    bool persist_response_sequence = true;
     if (const auto latest = store_.LoadRegisteredHost(host->node_name);
         latest.has_value()) {
-      *host = *latest;
+      if (latest->session_token == response_session_token) {
+        *host = *latest;
+      } else {
+        persist_response_sequence = false;
+      }
     }
     host->session_controller_sequence += 1;
-    store_.UpsertRegisteredHost(*host);
+    if (persist_response_sequence) {
+      store_.UpsertRegisteredHost(*host);
+    }
     const naim::EncryptedEnvelope envelope = naim::EncryptEnvelopeBase64(
         payload.dump(),
-        host->session_token,
+        response_session_token,
         BuildHostResponseAad(
-            message_type, host->node_name, host->session_controller_sequence));
+            message_type, response_node_name, host->session_controller_sequence));
     return Json(
         200,
         json{
