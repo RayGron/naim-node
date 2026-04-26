@@ -660,35 +660,14 @@ void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
     script += "export DOCKER_CONFIG=" +
               command_support_.ShellQuote(registry_config_dir.string()) + "\n";
   }
-  script += "python3 - " + command_support_.ShellQuote(compose_file.string()) + " " +
-            command_support_.ShellQuote(hostd_image) + " <<'PY'\n"
-            "import pathlib\n"
-            "import sys\n"
-            "\n"
-            "compose_path = pathlib.Path(sys.argv[1])\n"
-            "target_image = sys.argv[2]\n"
-            "text = compose_path.read_text(encoding='utf-8')\n"
-            "lines = text.splitlines()\n"
-            "in_service = False\n"
-            "service_indent = None\n"
-            "updated = False\n"
-            "for index, line in enumerate(lines):\n"
-            "    stripped = line.lstrip()\n"
-            "    indent = len(line) - len(stripped)\n"
-            "    if stripped == 'naim-hostd:':\n"
-            "        in_service = True\n"
-            "        service_indent = indent\n"
-            "        continue\n"
-            "    if in_service and stripped and not stripped.startswith('#') and indent <= service_indent:\n"
-            "        in_service = False\n"
-            "    if in_service and stripped.startswith('image:'):\n"
-            "        lines[index] = ' ' * indent + 'image: ' + target_image\n"
-            "        updated = True\n"
-            "        break\n"
-            "if not updated:\n"
-            "    raise SystemExit('failed to locate naim-hostd image line in compose file')\n"
-            "compose_path.write_text('\\n'.join(lines) + '\\n', encoding='utf-8')\n"
-            "PY\n"
+  const std::string sed_expression =
+      "s#^([[:space:]]*image:[[:space:]]*)chainzano.com/naim/hostd"
+      "(:[^[:space:]]+|@sha256:[a-f0-9]+)?#\\1" +
+      hostd_image + "#";
+  script += "sed -i -E " + command_support_.ShellQuote(sed_expression) + " " +
+            command_support_.ShellQuote(compose_file.string()) + "\n"
+            "grep -F " + command_support_.ShellQuote("image: " + hostd_image) + " " +
+            command_support_.ShellQuote(compose_file.string()) + " >/dev/null\n"
             "sleep 2\n"
             "docker compose -f " + command_support_.ShellQuote(compose_file.string()) +
             " pull naim-hostd\n"
