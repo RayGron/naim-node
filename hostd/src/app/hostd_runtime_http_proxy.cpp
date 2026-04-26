@@ -182,12 +182,8 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     if (method == "GET" && route == "/health") {
       return true;
     }
-    if (method == "GET" && route == "/v1/status") {
-      return true;
-    }
-    if (method == "POST" &&
-        (route == "/v1/context" || route == "/v1/search" ||
-         route == "/v1/graph-neighborhood")) {
+    if ((method == "GET" || method == "POST" || method == "PUT") &&
+        route.rfind("/v1/", 0) == 0) {
       return true;
     }
     return false;
