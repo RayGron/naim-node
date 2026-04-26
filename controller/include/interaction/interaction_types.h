@@ -19,6 +19,9 @@ struct ControllerEndpointTarget {
   std::string host;
   int port = 0;
   std::string base_path;
+  std::string node_name;
+  bool route_via_hostd_proxy = false;
+  std::string route_mode = "direct-runtime";
 };
 
 struct PlaneInteractionResolution {

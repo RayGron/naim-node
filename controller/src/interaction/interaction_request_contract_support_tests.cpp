@@ -94,6 +94,43 @@ void TestBuildsContractMetadataPreferringRuntimeIdentity() {
   std::cout << "ok: interaction-request-contract-builds-metadata" << '\n';
 }
 
+void TestBuildsHostdProxyTransportMetadata() {
+  const naim::controller::InteractionRequestContractSupport support;
+  naim::controller::PlaneInteractionResolution resolution;
+  resolution.status_payload = {
+      {"plane_name", "demo-plane"},
+      {"reason", "ready"},
+  };
+  resolution.target = naim::controller::ControllerEndpointTarget{
+      "http://127.0.0.1:53156",
+      "127.0.0.1",
+      53156,
+      "",
+      "hpc1",
+      true,
+      "hostd-runtime-proxy",
+  };
+
+  const auto metadata = support.BuildInteractionContractMetadata(resolution, "req-2");
+  const auto transport = metadata.at("transport");
+  Expect(
+      transport.value("mode", std::string{}) == "hostd-runtime-proxy",
+      "metadata should expose hostd runtime proxy mode");
+  Expect(
+      transport.value("supports_hostd_proxy", false),
+      "metadata should expose hostd proxy support");
+  Expect(
+      !transport.value("supports_direct_routing", true),
+      "metadata should not claim direct routing for remote loopback proxy");
+  Expect(
+      !transport.value("supports_sse", true),
+      "metadata should not claim upstream SSE support for assignment proxy");
+  Expect(
+      transport.value("node_name", std::string{}) == "hpc1",
+      "metadata should expose proxy node");
+  std::cout << "ok: interaction-request-contract-hostd-proxy-transport" << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -103,6 +140,7 @@ int main() {
     TestBuildsDefaultBrowsingSummary();
     TestParsesStreamPlaneNameAndHeaders();
     TestBuildsContractMetadataPreferringRuntimeIdentity();
+    TestBuildsHostdProxyTransportMetadata();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "interaction_request_contract_support_tests failed: "

@@ -120,6 +120,7 @@ class InteractionSessionExecutor {
       const ResolvedInteractionPolicy&,
       bool)>;
   using SendInteractionRequestFn = std::function<InteractionUpstreamResponse(
+      const PlaneInteractionResolution&,
       const ControllerEndpointTarget&,
       const std::string&,
       const std::string&)>;
@@ -181,6 +182,7 @@ class InteractionProxyExecutor {
       const ResolvedInteractionPolicy&,
       bool)>;
   using SendProxyRequestFn = std::function<InteractionUpstreamResponse(
+      const PlaneInteractionResolution&,
       const ControllerEndpointTarget&,
       const std::string&,
       const std::string&,
@@ -289,6 +291,7 @@ class InteractionStreamSegmentExecutor {
           const std::string&,
           const std::string&)>;
   using SendFallbackRequestFn = std::function<InteractionUpstreamResponse(
+      const PlaneInteractionResolution&,
       const ControllerEndpointTarget&,
       const std::string&,
       const std::string&)>;

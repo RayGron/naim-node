@@ -177,12 +177,28 @@ bool HostdRuntimeHttpProxy::IsAllowedProxyPath(
     HostdRuntimeProxyPolicy policy,
     const std::string& method,
     const std::string& path) {
-  (void)policy;
+  const std::string route = path.substr(0, path.find('?'));
+  if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
+    if (method == "GET" && route == "/health") {
+      return true;
+    }
+    if (method == "GET" && route == "/v1/status") {
+      return true;
+    }
+    if (method == "POST" &&
+        (route == "/v1/context" || route == "/v1/search" ||
+         route == "/v1/graph-neighborhood")) {
+      return true;
+    }
+    return false;
+  }
   return IsAllowedRuntimeProxyPath(method, path);
 }
 
 std::string HostdRuntimeHttpProxy::PolicyLabel(HostdRuntimeProxyPolicy policy) {
-  (void)policy;
+  if (policy == HostdRuntimeProxyPolicy::KnowledgeVault) {
+    return "knowledge-vault-http";
+  }
   return "runtime-direct-http";
 }
 

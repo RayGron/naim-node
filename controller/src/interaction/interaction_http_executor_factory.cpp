@@ -67,14 +67,17 @@ InteractionSessionExecutor InteractionHttpExecutorFactory::MakeSessionExecutor()
             resolved_policy,
             structured_output_json);
       },
-      [&](const ControllerEndpointTarget& target,
+      [&](const PlaneInteractionResolution& resolution,
+          const ControllerEndpointTarget& target,
           const std::string& request_id,
           const std::string& body) {
-        const ::HttpResponse response = support_.SendControllerHttpRequest(
+        const ::HttpResponse response = support_.SendRuntimeHttpRequest(
+            resolution,
             target,
             "POST",
             "/v1/chat/completions",
             body,
+            request_id,
             {{"Accept", "application/json"},
              {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{
@@ -143,14 +146,17 @@ InteractionHttpExecutorFactory::MakeStreamSegmentExecutor() const {
          const std::string& body) {
         return ::OpenInteractionStreamRequest(target, request_id, body);
       },
-      [&](const ControllerEndpointTarget& target,
+      [&](const PlaneInteractionResolution& resolution,
+          const ControllerEndpointTarget& target,
           const std::string& request_id,
           const std::string& body) {
-        const ::HttpResponse response = support_.SendControllerHttpRequest(
+        const ::HttpResponse response = support_.SendRuntimeHttpRequest(
+            resolution,
             target,
             "POST",
             "/v1/chat/completions",
             body,
+            request_id,
             {{"Accept", "application/json"},
              {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{
@@ -193,16 +199,19 @@ InteractionProxyExecutor InteractionHttpExecutorFactory::MakeProxyExecutor(
             resolved_policy,
             structured_output_json);
       },
-      [&](const ControllerEndpointTarget& target,
+      [&](const PlaneInteractionResolution& resolution,
+          const ControllerEndpointTarget& target,
           const std::string& method,
           const std::string& path,
           const std::string& body,
           const std::string& request_id) {
-        const ::HttpResponse response = support_.SendControllerHttpRequest(
+        const ::HttpResponse response = support_.SendRuntimeHttpRequest(
+            resolution,
             target,
             method,
             path,
             body,
+            request_id,
             {{"Accept", "application/json"},
              {"X-Naim-Request-Id", request_id}});
         return InteractionUpstreamResponse{

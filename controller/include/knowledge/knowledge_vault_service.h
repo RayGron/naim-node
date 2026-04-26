@@ -53,6 +53,13 @@ class KnowledgeVaultService final {
       const std::string& upstream_path,
       const std::string& body,
       const std::map<std::string, std::string>& headers) const;
+  HttpResponse SendHostdRuntimeProxy(
+      const std::string& db_path,
+      const KnowledgeVaultServiceRecord& record,
+      const std::string& method,
+      const std::string& upstream_path,
+      const std::string& body,
+      const std::map<std::string, std::string>& headers) const;
 };
 
 }  // namespace naim::controller

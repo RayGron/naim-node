@@ -1,8 +1,10 @@
 #include "knowledge/knowledge_vault_service.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 #include "http/controller_http_server_support.h"
@@ -88,6 +90,48 @@ std::string NormalizeEndpointHost(std::string value) {
   return value;
 }
 
+bool IsLoopbackEndpointHost(const std::string& host) {
+  return host == "127.0.0.1" || host == "localhost" || host == "::1";
+}
+
+nlohmann::json BuildHeaderArray(const std::map<std::string, std::string>& headers) {
+  nlohmann::json result = nlohmann::json::array();
+  for (const auto& [key, value] : headers) {
+    result.push_back(nlohmann::json::array({key, value}));
+  }
+  return result;
+}
+
+HttpResponse ParseHostdProxyResponsePayload(const nlohmann::json& progress) {
+  if (!progress.is_object() || !progress.contains("response") ||
+      !progress.at("response").is_object()) {
+    return KnowledgeVaultService::BuildJsonResponse(
+        502,
+        nlohmann::json{
+            {"status", "error"},
+            {"code", "knowledge_vault_proxy_response_missing"},
+            {"message", "hostd knowledge vault proxy did not return an upstream response"}});
+  }
+  const auto& response_payload = progress.at("response");
+  HttpResponse response;
+  response.status_code = response_payload.value("status_code", 502);
+  response.content_type =
+      response_payload.value("content_type", std::string("application/json"));
+  response.body = response_payload.value("body", std::string{});
+  if (response_payload.contains("headers") &&
+      response_payload.at("headers").is_object()) {
+    for (const auto& [key, value] : response_payload.at("headers").items()) {
+      if (value.is_string()) {
+        response.headers[key] = value.get<std::string>();
+      }
+    }
+  }
+  if (!response.content_type.empty()) {
+    response.headers["Content-Type"] = response.content_type;
+  }
+  return response;
+}
+
 }  // namespace
 
 nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) const {
@@ -109,7 +153,9 @@ nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) co
       {"node_name", record->node_name},
       {"image", record->image},
       {"endpoint", "http://" + record->endpoint_host + ":" + std::to_string(record->endpoint_port)},
-      {"transport", "direct-http"},
+      {"transport", IsLoopbackEndpointHost(record->endpoint_host)
+                        ? "hostd-runtime-proxy"
+                        : "direct-http"},
       {"schema_version", record->schema_version.empty() ? nlohmann::json(nullptr) : nlohmann::json(record->schema_version)},
       {"index_epoch", record->index_epoch.empty() ? nlohmann::json(nullptr) : nlohmann::json(record->index_epoch)},
       {"latest_event_sequence", record->latest_event_sequence},
@@ -125,12 +171,10 @@ nlohmann::json KnowledgeVaultService::BuildStatus(const std::string& db_path) co
   }
 
   try {
-    const auto live = SendDirectRuntime(
-        *record,
-        "GET",
-        "/v1/status",
-        "",
-        {});
+    const auto live =
+        IsLoopbackEndpointHost(record->endpoint_host)
+            ? SendHostdRuntimeProxy(db_path, *record, "GET", "/v1/status", "", {})
+            : SendDirectRuntime(*record, "GET", "/v1/status", "", {});
     if (live.status_code >= 200 && live.status_code < 300) {
       const auto payload = nlohmann::json::parse(live.body, nullptr, false);
       if (!payload.is_discarded() && payload.is_object()) {
@@ -249,12 +293,16 @@ HttpResponse KnowledgeVaultService::ProxyServiceRequest(
     path += "=";
     path += ControllerHttpServerSupport::UrlEncode(value);
   }
-  return SendDirectRuntime(
-      *record,
-      request.method,
-      path,
-      request.body,
-      headers);
+  if (IsLoopbackEndpointHost(record->endpoint_host)) {
+    return SendHostdRuntimeProxy(
+        db_path,
+        *record,
+        request.method,
+        path,
+        request.body,
+        headers);
+  }
+  return SendDirectRuntime(*record, request.method, path, request.body, headers);
 }
 
 HttpResponse KnowledgeVaultService::BuildJsonResponse(
@@ -376,6 +424,103 @@ HttpResponse KnowledgeVaultService::SendDirectRuntime(
       upstream_path,
       body,
       header_pairs);
+}
+
+HttpResponse KnowledgeVaultService::SendHostdRuntimeProxy(
+    const std::string& db_path,
+    const KnowledgeVaultServiceRecord& record,
+    const std::string& method,
+    const std::string& upstream_path,
+    const std::string& body,
+    const std::map<std::string, std::string>& headers) const {
+  if (record.node_name.empty()) {
+    return BuildJsonResponse(
+        502,
+        nlohmann::json{
+            {"status", "error"},
+            {"code", "knowledge_vault_proxy_route_missing"},
+            {"message", "knowledge vault loopback endpoint has no node binding"}});
+  }
+  const std::string request_id =
+      "kv-" + record.service_id + "-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  const std::string proxy_plane_name =
+      "runtime-http-proxy:knowledge-vault:" + record.service_id + ":" + request_id;
+
+  naim::ControllerStore store(db_path);
+  store.Initialize();
+  naim::HostAssignment assignment;
+  assignment.node_name = record.node_name;
+  assignment.plane_name = proxy_plane_name;
+  assignment.desired_generation = 0;
+  assignment.max_attempts = 1;
+  assignment.assignment_type = "runtime-http-proxy";
+  assignment.desired_state_json =
+      nlohmann::json{
+          {"target_host", record.endpoint_host},
+          {"target_port", record.endpoint_port},
+          {"method", method},
+          {"path", upstream_path},
+          {"body", body},
+          {"headers", BuildHeaderArray(headers)},
+          {"request_id", request_id},
+          {"policy", "knowledge-vault"},
+      }
+          .dump();
+  assignment.artifacts_root = "";
+  assignment.status = naim::HostAssignmentStatus::Pending;
+  assignment.status_message = "proxy knowledge vault HTTP request";
+  store.EnqueueHostAssignments({assignment}, "superseded knowledge vault proxy request");
+
+  const auto assignments = store.LoadHostAssignments(
+      record.node_name,
+      std::nullopt,
+      proxy_plane_name);
+  if (assignments.empty()) {
+    return BuildJsonResponse(
+        500,
+        nlohmann::json{
+            {"status", "error"},
+            {"code", "knowledge_vault_proxy_queue_failed"},
+            {"message", "failed to queue hostd knowledge vault proxy assignment"}});
+  }
+  const int assignment_id = assignments.back().id;
+  const auto started_at = std::chrono::steady_clock::now();
+  while (std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now() - started_at)
+             .count() < 30000) {
+    const auto current = store.LoadHostAssignment(assignment_id);
+    if (!current.has_value()) {
+      return BuildJsonResponse(
+          500,
+          nlohmann::json{
+              {"status", "error"},
+              {"code", "knowledge_vault_proxy_assignment_missing"},
+              {"message", "hostd knowledge vault proxy assignment disappeared"}});
+    }
+    if (current->status == naim::HostAssignmentStatus::Applied) {
+      const auto progress =
+          nlohmann::json::parse(current->progress_json, nullptr, false);
+      return ParseHostdProxyResponsePayload(progress);
+    }
+    if (current->status == naim::HostAssignmentStatus::Failed) {
+      return BuildJsonResponse(
+          502,
+          nlohmann::json{
+              {"status", "error"},
+              {"code", "knowledge_vault_proxy_failed"},
+              {"message", current->status_message.empty()
+                              ? "hostd knowledge vault proxy request failed"
+                              : current->status_message}});
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  return BuildJsonResponse(
+      504,
+      nlohmann::json{
+          {"status", "error"},
+          {"code", "knowledge_vault_proxy_timeout"},
+          {"message", "timed out waiting for hostd knowledge vault proxy response"}});
 }
 
 }  // namespace naim::controller

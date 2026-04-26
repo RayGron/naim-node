@@ -553,6 +553,65 @@ void HostdAppAssignmentSupport::StopKnowledgeVaultService(
           {"container_name", container_name}});
 }
 
+void HostdAppAssignmentSupport::ExecuteRuntimeHttpProxy(
+    const nlohmann::json& payload,
+    const std::string& node_name,
+    HostdBackend* backend,
+    const std::optional<int>& assignment_id) const {
+  if (backend == nullptr || !assignment_id.has_value()) {
+    throw std::runtime_error("runtime-http-proxy requires a controller assignment");
+  }
+
+  const std::string host = payload.value("target_host", std::string{});
+  const int port = payload.value("target_port", 0);
+  const std::string method = payload.value("method", std::string{});
+  const std::string path = payload.value("path", std::string{});
+  const std::string body = payload.value("body", std::string{});
+  const std::string policy_name = payload.value("policy", std::string("runtime"));
+  const HostdRuntimeProxyPolicy policy =
+      policy_name == "knowledge-vault" ? HostdRuntimeProxyPolicy::KnowledgeVault
+                                       : HostdRuntimeProxyPolicy::Runtime;
+  const auto headers = runtime_http_proxy_.ParseProxyHeaders(
+      payload.value("headers", nlohmann::json::array()));
+
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "proxying"},
+          {"title", "Proxying runtime HTTP"},
+          {"detail", "Hostd is forwarding a controller request to a node-local runtime."},
+          {"percent", 50},
+          {"node_name", node_name},
+          {"request_id", payload.value("request_id", std::string{})},
+          {"target_host", host},
+          {"target_port", port},
+          {"method", method},
+          {"path", path},
+          {"policy", policy_name}});
+
+  const HostdRuntimeHttpResponse response =
+      runtime_http_proxy_.Send(host, port, method, path, body, headers, policy);
+  nlohmann::json response_headers = nlohmann::json::object();
+  for (const auto& [key, value] : response.headers) {
+    response_headers[key] = value;
+  }
+  backend->UpdateHostAssignmentProgress(
+      *assignment_id,
+      nlohmann::json{
+          {"phase", "completed"},
+          {"title", "Runtime HTTP proxied"},
+          {"detail", "Hostd received the runtime HTTP response."},
+          {"percent", 100},
+          {"node_name", node_name},
+          {"request_id", payload.value("request_id", std::string{})},
+          {"response",
+           nlohmann::json{
+               {"status_code", response.status_code},
+               {"content_type", response.content_type},
+               {"body", response.body},
+               {"headers", response_headers}}}});
+}
+
 void HostdAppAssignmentSupport::ExecuteHostSelfUpdate(
     const nlohmann::json& payload,
     const std::string& node_name,
